@@ -127,15 +127,6 @@ export const CropPane: React.FC<CropPaneProps> = ({
           ))}
         </div>
       </section>
-
-      <section className="p-4 rounded-xl bg-zinc-900/30 border border-zinc-800/50">
-        <div className="flex gap-3">
-          <CropIcon size={14} className="text-zinc-600 shrink-0 mt-0.5" />
-          <p className="text-[10px] leading-relaxed text-zinc-500 italic">
-            Tip: Use the aspect ratio presets to quickly reframe for social media (9:16) or standard print formats (3:2, 4:3).
-          </p>
-        </div>
-      </section>
     </div>
   );
 };

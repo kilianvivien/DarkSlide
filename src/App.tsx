@@ -1073,7 +1073,6 @@ export default function App() {
                 exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
                 cropImageWidth={cropImageSize.width}
                 cropImageHeight={cropImageSize.height}
-                usesNativeFileDialogs={usesNativeFileDialogs}
                 onLevelInteractionChange={setIsAdjustingLevel}
                 onSettingsChange={handleSettingsChange}
                 onExportOptionsChange={handleExportOptionsChange}

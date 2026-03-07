@@ -53,7 +53,6 @@ describe('Sidebar', () => {
         }}
         cropImageWidth={4032}
         cropImageHeight={6048}
-        usesNativeFileDialogs={false}
         onLevelInteractionChange={vi.fn()}
         onSettingsChange={vi.fn()}
         onExportOptionsChange={vi.fn()}
