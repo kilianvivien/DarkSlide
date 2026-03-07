@@ -8,13 +8,19 @@ type Deferred<T> = {
   reject: (reason?: unknown) => void;
 };
 
-const workerState = {
+const workerState = vi.hoisted(() => ({
   decode: vi.fn(),
   render: vi.fn(),
   export: vi.fn(),
   sampleFilmBase: vi.fn(),
   disposeDocument: vi.fn(async () => ({ disposed: true })),
-};
+}));
+
+const fileBridgeState = vi.hoisted(() => ({
+  isDesktopShell: vi.fn(() => false),
+  openImageFile: vi.fn(),
+  saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
+}));
 
 vi.mock('motion/react', async () => {
   const ReactModule = await import('react');
@@ -67,6 +73,12 @@ vi.mock('./utils/imageWorkerClient', () => ({
 
     terminate = vi.fn();
   },
+}));
+
+vi.mock('./utils/fileBridge', () => ({
+  isDesktopShell: fileBridgeState.isDesktopShell,
+  openImageFile: fileBridgeState.openImageFile,
+  saveExportBlob: fileBridgeState.saveExportBlob,
 }));
 
 import App from './App';
@@ -153,6 +165,10 @@ describe('App import and preview pipeline', () => {
     workerState.export.mockReset();
     workerState.sampleFilmBase.mockReset();
     workerState.disposeDocument.mockClear();
+    fileBridgeState.isDesktopShell.mockReturnValue(false);
+    fileBridgeState.openImageFile.mockReset();
+    fileBridgeState.saveExportBlob.mockReset();
+    fileBridgeState.saveExportBlob.mockResolvedValue('saved');
 
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),
@@ -311,5 +327,185 @@ describe('App import and preview pipeline', () => {
 
     expect(screen.getByText('Drop your negatives here')).toBeInTheDocument();
     expect(putImageData).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds preview image data when the worker-cloned dimensions are zero', async () => {
+    const putImageData = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
+      clearRect: vi.fn(),
+      putImageData,
+    }) as unknown as CanvasRenderingContext2D);
+
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => ({
+      documentId: payload.documentId,
+      revision: payload.revision,
+      width: 80,
+      height: 60,
+      previewLevelId: 'preview-1024',
+      imageData: {
+        data: new Uint8ClampedArray(80 * 60 * 4),
+        width: 0,
+        height: 0,
+      } as ImageData,
+      histogram: {
+        r: new Array(256).fill(0),
+        g: new Array(256).fill(0),
+        b: new Array(256).fill(0),
+        l: new Array(256).fill(0),
+      },
+    }));
+
+    render(<App />);
+    await uploadFile(createFile('webkit-preview.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(putImageData).toHaveBeenCalledTimes(1);
+    expect((putImageData.mock.calls[0]?.[0] as ImageData).width).toBe(80);
+    expect((putImageData.mock.calls[0]?.[0] as ImageData).height).toBe(60);
+  });
+
+  it('falls back to a plain 2d context when WebKit rejects willReadFrequently', async () => {
+    const putImageData = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((contextId, options) => {
+      if (contextId !== '2d') {
+        return null;
+      }
+
+      if (options && typeof options === 'object' && 'willReadFrequently' in options) {
+        return null;
+      }
+
+      return {
+        clearRect: vi.fn(),
+        putImageData,
+      } as unknown as CanvasRenderingContext2D;
+    });
+
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 60)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('webkit-context.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(putImageData).toHaveBeenCalledTimes(1);
+    expect((putImageData.mock.calls[0]?.[0] as ImageData).width).toBe(80);
+    expect((putImageData.mock.calls[0]?.[0] as ImageData).height).toBe(60);
+  });
+
+  it('retries preview drawing when the first canvas context acquisition misses', async () => {
+    const putImageData = vi.fn();
+    let getContextAttempts = 0;
+
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((contextId) => {
+      if (contextId !== '2d') {
+        return null;
+      }
+
+      getContextAttempts += 1;
+      if (getContextAttempts <= 2) {
+        return null;
+      }
+
+      return {
+        clearRect: vi.fn(),
+        putImageData,
+      } as unknown as CanvasRenderingContext2D;
+    });
+
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 60)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('second-open-race.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(putImageData).toHaveBeenCalledTimes(1);
+    expect((putImageData.mock.calls[0]?.[0] as ImageData).width).toBe(80);
+    expect((putImageData.mock.calls[0]?.[0] as ImageData).height).toBe(60);
+  });
+
+  it('opens files through the native dialog when running in the desktop shell', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue(createFile('desktop-open.tiff', 'image/tiff'));
+    workerState.decode.mockResolvedValue(createDecodedImage(640, 480));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Import'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(fileBridgeState.openImageFile).toHaveBeenCalledTimes(1);
+    expect(workerState.decode).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('640×480')).toBeInTheDocument();
+  });
+
+  it('returns to ready when a native export is cancelled', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue(createFile('export-cancel.tiff', 'image/tiff'));
+    fileBridgeState.saveExportBlob.mockResolvedValue('cancelled');
+    workerState.decode.mockResolvedValue(createDecodedImage(512, 512));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 80)
+    ));
+    workerState.export.mockResolvedValue({
+      blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
+      filename: 'export-cancel.jpg',
+    });
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Import'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Export'));
+    });
+    await flushMicrotasks();
+
+    expect(workerState.export).toHaveBeenCalledTimes(1);
+    expect(fileBridgeState.saveExportBlob).toHaveBeenCalledWith(
+      expect.any(Blob),
+      'export-cancel.jpg',
+      'image/jpeg',
+    );
+    expect(screen.getByText('Export')).toBeInTheDocument();
+    expect(screen.queryByText(/Export failed/i)).not.toBeInTheDocument();
   });
 });

@@ -27,6 +27,7 @@ import { ConversionSettings, FilmProfile, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
+import { isDesktopShell, openImageFile, saveExportBlob } from './utils/fileBridge';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
 
@@ -46,7 +47,20 @@ function isRawFile(file: File) {
   return RAW_EXTENSIONS.includes(extension as typeof RAW_EXTENSIONS[number]);
 }
 
+function normalizePreviewImageData(imageData: ImageData, width: number, height: number) {
+  if (imageData.width === width && imageData.height === height) {
+    return imageData;
+  }
+
+  return new ImageData(new Uint8ClampedArray(imageData.data), width, height);
+}
+
+function getCanvas2dContext(canvas: HTMLCanvasElement) {
+  return canvas.getContext('2d', { willReadFrequently: true }) ?? canvas.getContext('2d');
+}
+
 export default function App() {
+  const usesNativeFileDialogs = isDesktopShell();
   const [documentState, setDocumentState] = useState<WorkspaceDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -71,6 +85,8 @@ export default function App() {
   const activeDocumentIdRef = useRef<string | null>(null);
   const activeRenderRequestRef = useRef<{ documentId: string; revision: number } | null>(null);
   const hasVisiblePreviewRef = useRef(false);
+  const pendingPreviewRef = useRef<{ documentId: string; angle: number; imageData: ImageData } | null>(null);
+  const previewRetryFrameRef = useRef<number | null>(null);
 
   const { customPresets, savePreset, deletePreset } = useCustomPresets();
   const allProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
@@ -113,6 +129,9 @@ export default function App() {
   useEffect(() => {
     workerClientRef.current = new ImageWorkerClient();
     return () => {
+      if (previewRetryFrameRef.current !== null) {
+        window.cancelAnimationFrame(previewRetryFrameRef.current);
+      }
       workerClientRef.current?.terminate();
       workerClientRef.current = null;
     };
@@ -133,15 +152,57 @@ export default function App() {
 
   const drawPreview = useCallback((imageData: ImageData) => {
     const canvas = displayCanvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return false;
 
     canvas.width = imageData.width;
     canvas.height = imageData.height;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return;
+    const ctx = getCanvas2dContext(canvas);
+    if (!ctx) return false;
     ctx.putImageData(imageData, 0, 0);
     setCanvasSize({ width: imageData.width, height: imageData.height });
+    return true;
   }, []);
+
+  const cancelPendingPreviewRetry = useCallback(() => {
+    if (previewRetryFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewRetryFrameRef.current);
+      previewRetryFrameRef.current = null;
+    }
+  }, []);
+
+  const flushPendingPreview = useCallback(function attemptPreviewDraw(attempt = 0) {
+    const pendingPreview = pendingPreviewRef.current;
+    if (!pendingPreview || pendingPreview.documentId !== activeDocumentIdRef.current) {
+      previewRetryFrameRef.current = null;
+      return;
+    }
+
+    if (drawPreview(pendingPreview.imageData)) {
+      setRenderedPreviewAngle(pendingPreview.angle);
+      setPreviewVisibility(true);
+      previewRetryFrameRef.current = null;
+      return;
+    }
+
+    if (attempt >= 10) {
+      previewRetryFrameRef.current = null;
+      setPreviewVisibility(false);
+      appendDiagnostic({
+        level: 'error',
+        code: 'PREVIEW_DRAW_FAILED',
+        message: pendingPreview.documentId,
+        context: {
+          attempt,
+          documentId: pendingPreview.documentId,
+        },
+      });
+      return;
+    }
+
+    previewRetryFrameRef.current = window.requestAnimationFrame(() => {
+      attemptPreviewDraw(attempt + 1);
+    });
+  }, [drawPreview, setPreviewVisibility]);
 
   const calculateTargetMaxDimension = useCallback(() => {
     const viewport = viewportRef.current;
@@ -230,9 +291,13 @@ export default function App() {
         return;
       }
 
-      drawPreview(result.imageData);
-      setRenderedPreviewAngle(settings.rotation + settings.levelAngle);
-      setPreviewVisibility(true);
+      pendingPreviewRef.current = {
+        documentId: result.documentId,
+        angle: settings.rotation + settings.levelAngle,
+        imageData: normalizePreviewImageData(result.imageData, result.width, result.height),
+      };
+      cancelPendingPreviewRetry();
+      flushPendingPreview();
       appendDiagnostic({
         level: 'info',
         code: 'RENDER_COMPLETED',
@@ -275,7 +340,7 @@ export default function App() {
       setError(`Processing failed. ${message}`);
       setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'error', errorCode: 'RENDER_FAILED' } : current);
     }
-  }, [drawPreview, setPreviewVisibility]);
+  }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, setPreviewVisibility]);
 
   useEffect(() => {
     if (!documentState || !displaySettings || documentState.previewLevels.length === 0) return;
@@ -329,7 +394,7 @@ export default function App() {
   const clearCanvas = useCallback(() => {
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = getCanvas2dContext(canvas);
     canvas.width = 1;
     canvas.height = 1;
     ctx?.clearRect(0, 0, 1, 1);
@@ -341,6 +406,8 @@ export default function App() {
     importSessionRef.current += 1;
     activeDocumentIdRef.current = null;
     activeRenderRequestRef.current = null;
+    pendingPreviewRef.current = null;
+    cancelPendingPreviewRetry();
     renderRevisionRef.current = 0;
     setPreviewVisibility(false);
     setIsAdjustingLevel(false);
@@ -362,7 +429,7 @@ export default function App() {
     });
     resetHistory(fallbackProfile.defaultSettings);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility]);
+  }, [cancelPendingPreviewRetry, clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility]);
 
   const importFile = useCallback(async (file: File) => {
     const worker = workerClientRef.current;
@@ -389,6 +456,8 @@ export default function App() {
     clearCanvas();
     renderRevisionRef.current = 0;
     activeRenderRequestRef.current = null;
+    pendingPreviewRef.current = null;
+    cancelPendingPreviewRetry();
 
     const importSession = importSessionRef.current + 1;
     importSessionRef.current = importSession;
@@ -525,13 +594,34 @@ export default function App() {
       setPreviewVisibility(false);
       clearCanvas();
     }
-  }, [clearCanvas, disposeDocument, fallbackProfile, resetHistory, setPreviewVisibility]);
+  }, [cancelPendingPreviewRetry, clearCanvas, disposeDocument, fallbackProfile, resetHistory, setPreviewVisibility]);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
     await importFile(file);
   };
+
+  const handleOpenImage = useCallback(async () => {
+    if (!usesNativeFileDialogs) {
+      fileInputRef.current?.click();
+      return;
+    }
+
+    try {
+      const file = await openImageFile();
+      if (!file) {
+        return;
+      }
+
+      await importFile(file);
+    } catch (openError) {
+      const message = formatError(openError);
+      appendDiagnostic({ level: 'error', code: 'OPEN_DIALOG_FAILED', message });
+      setError(`Could not open file. ${message}`);
+    }
+  }, [importFile, usesNativeFileDialogs]);
 
   const handleUndo = useCallback(() => {
     const previousState = undo();
@@ -558,7 +648,7 @@ export default function App() {
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
         event.preventDefault();
-        fileInputRef.current?.click();
+        void handleOpenImage();
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'w' && documentState) {
@@ -569,7 +659,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [documentState, handleCloseImage, handleRedo, handleUndo]);
+  }, [documentState, handleCloseImage, handleOpenImage, handleRedo, handleUndo]);
 
   const handleProfileChange = useCallback((profile: FilmProfile) => {
     updateDocument((current) => ({
@@ -621,14 +711,12 @@ export default function App() {
         options: documentState.exportOptions,
       });
 
-      const url = URL.createObjectURL(result.blob);
-      const link = document.createElement('a');
-      link.download = result.filename;
-      link.href = url;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-
-      appendDiagnostic({ level: 'info', code: 'EXPORT_SUCCESS', message: result.filename, context: { format: documentState.exportOptions.format } });
+      const saveResult = await saveExportBlob(result.blob, result.filename, documentState.exportOptions.format);
+      if (saveResult === 'saved') {
+        appendDiagnostic({ level: 'info', code: 'EXPORT_SUCCESS', message: result.filename, context: { format: documentState.exportOptions.format } });
+      } else {
+        appendDiagnostic({ level: 'info', code: 'EXPORT_CANCELLED', message: result.filename, context: { format: documentState.exportOptions.format } });
+      }
       setDocumentState((current) => current ? { ...current, status: 'ready' } : current);
     } catch (exportError) {
       const message = formatError(exportError);
@@ -733,6 +821,7 @@ export default function App() {
               exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
               cropImageWidth={cropImageSize.width}
               cropImageHeight={cropImageSize.height}
+              usesNativeFileDialogs={usesNativeFileDialogs}
               onLevelInteractionChange={setIsAdjustingLevel}
               onSettingsChange={handleSettingsChange}
               onExportOptionsChange={handleExportOptionsChange}
@@ -827,18 +916,20 @@ export default function App() {
               </>
             )}
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => void handleOpenImage()}
               className="flex items-center gap-2 px-4 py-1.5 bg-zinc-800 text-zinc-200 rounded-lg text-sm font-medium hover:bg-zinc-700 transition-all border border-zinc-700/50"
             >
               <Upload size={16} /> Import
             </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff"
-              className="hidden"
-            />
+            {!usesNativeFileDialogs && (
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff"
+                className="hidden"
+              />
+            )}
             <div className="w-px h-4 bg-zinc-800 mx-1" />
             <button
               onClick={() => setIsRightPaneOpen((current) => !current)}
@@ -875,7 +966,7 @@ export default function App() {
                 <h2 className="text-2xl font-semibold text-zinc-200 mb-3 tracking-tight">Drop your negatives here</h2>
                 <p className="text-zinc-500 text-sm leading-relaxed mb-8">Import TIFF, JPEG, PNG, or WebP scans.</p>
                 <button
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => void handleOpenImage()}
                   className="px-8 py-3 bg-zinc-100 text-zinc-950 rounded-2xl font-semibold hover:bg-white transition-all shadow-xl shadow-black/40"
                 >
                   Select Files

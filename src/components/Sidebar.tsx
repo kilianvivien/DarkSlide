@@ -20,6 +20,7 @@ interface SidebarProps {
   exportOptions: ExportOptions;
   cropImageWidth: number;
   cropImageHeight: number;
+  usesNativeFileDialogs: boolean;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onExportOptionsChange: (options: Partial<ExportOptions>) => void;
@@ -34,6 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   exportOptions,
   cropImageWidth,
   cropImageHeight,
+  usesNativeFileDialogs,
   onLevelInteractionChange,
   onSettingsChange,
   onExportOptionsChange,
@@ -240,7 +242,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="flex gap-3">
                     <Download size={14} className="text-zinc-600 shrink-0 mt-0.5" />
                     <p className="text-[10px] leading-relaxed text-zinc-500 italic">
-                      Export uses the full-resolution source in the worker and downloads a blob with the correct file extension.
+                      Export uses the full-resolution source in the worker and {usesNativeFileDialogs ? 'saves through the desktop file dialog.' : 'downloads a blob with the correct file extension.'}
                     </p>
                   </div>
                 </section>

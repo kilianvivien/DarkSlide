@@ -12,6 +12,7 @@ export default defineConfig(() => {
       },
     },
     server: {
+      strictPort: true,
       hmr: process.env.DISABLE_HMR !== 'true',
     },
     test: {
