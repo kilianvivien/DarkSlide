@@ -6,6 +6,7 @@ export function useHistory<T>(initialState: T) {
   const [history, setHistory] = useState<T[]>([initialState]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const isInternalUpdate = useRef(false);
+  const interactionSnapshotRef = useRef<T | null>(null);
 
   const push = useCallback((newState: T) => {
     if (isInternalUpdate.current) return;
@@ -24,6 +25,21 @@ export function useHistory<T>(initialState: T) {
       return next;
     });
   }, [currentIndex]);
+
+  const beginInteraction = useCallback(() => {
+    const tip = history[currentIndex];
+    if (tip !== undefined) {
+      interactionSnapshotRef.current = structuredClone(tip);
+    }
+  }, [history, currentIndex]);
+
+  const commitInteraction = useCallback((currentState: T) => {
+    const snapshot = interactionSnapshotRef.current;
+    interactionSnapshotRef.current = null;
+    if (snapshot === null) return;
+    if (JSON.stringify(snapshot) === JSON.stringify(currentState)) return;
+    push(currentState);
+  }, [push]);
 
   const undo = useCallback((): T | null => {
     if (currentIndex <= 0) return null;
@@ -51,6 +67,7 @@ export function useHistory<T>(initialState: T) {
 
   const reset = useCallback((state: T) => {
     isInternalUpdate.current = false;
+    interactionSnapshotRef.current = null;
     setHistory([structuredClone(state)]);
     setCurrentIndex(0);
   }, []);
@@ -60,6 +77,8 @@ export function useHistory<T>(initialState: T) {
     undo,
     redo,
     reset,
+    beginInteraction,
+    commitInteraction,
     canUndo: currentIndex > 0,
     canRedo: currentIndex < history.length - 1,
   };

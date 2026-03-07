@@ -14,8 +14,6 @@ import {
   PanelRight,
   PanelRightClose,
   X,
-  Pipette,
-  Copy,
   SplitSquareVertical,
   Crop,
 } from 'lucide-react';
@@ -26,6 +24,8 @@ import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, RAW_EXTENSIONS, SUPPORTED_EXTENS
 import { ConversionSettings, FilmProfile, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
+import { useViewportZoom } from './hooks/useViewportZoom';
+import { ZoomBar } from './components/ZoomBar';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
 import { isDesktopShell, openImageFile, saveExportBlob } from './utils/fileBridge';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
@@ -75,6 +75,11 @@ export default function App() {
   const [targetMaxDimension, setTargetMaxDimension] = useState(1024);
   const [hasVisiblePreview, setHasVisiblePreview] = useState(false);
   const [renderedPreviewAngle, setRenderedPreviewAngle] = useState(0);
+  const [isSpaceHeld, setIsSpaceHeld] = useState(false);
+  const [isPanDragging, setIsPanDragging] = useState(false);
+  const [displayScaleFactor, setDisplayScaleFactor] = useState(() => (
+    typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
+  ));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -87,6 +92,14 @@ export default function App() {
   const hasVisiblePreviewRef = useRef(false);
   const pendingPreviewRef = useRef<{ documentId: string; angle: number; imageData: ImageData } | null>(null);
   const previewRetryFrameRef = useRef<number | null>(null);
+  const handleDownloadRef = useRef<(() => void) | null>(null);
+  const handleResetRef = useRef<(() => void) | null>(null);
+  const handleCopyDebugInfoRef = useRef<(() => Promise<void>) | null>(null);
+  const tauriWindowRef = useRef<{
+    startDragging: () => Promise<void>;
+    scaleFactor: () => Promise<number>;
+    onScaleChanged: (handler: ({ payload }: { payload: { scaleFactor: number } }) => void) => Promise<() => void>;
+  } | null>(null);
 
   const { customPresets, savePreset, deletePreset } = useCustomPresets();
   const allProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
@@ -121,10 +134,83 @@ export default function App() {
     };
   }, [documentState?.settings, isCropOverlayVisible]);
   const displayAngle = displaySettings ? displaySettings.rotation + displaySettings.levelAngle : 0;
-  const renderTargetDimension = isAdjustingLevel ? Math.min(targetMaxDimension, 1024) : targetMaxDimension;
+  const {
+    zoom, pan,
+    zoomToFit, zoomTo100, zoomIn, zoomOut, setZoomLevel,
+    handleWheel: handleZoomWheel,
+    startPan, updatePan, endPan,
+  } = useViewportZoom();
+
+  const fitScale = useMemo(() => {
+    if (!documentState || !displaySettings) return 1;
+    const viewport = viewportRef.current;
+    if (!viewport) return 1;
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight - 48;
+    const rotatedSize = getTransformedDimensions(
+      documentState.source.width,
+      documentState.source.height,
+      displaySettings.rotation + displaySettings.levelAngle,
+    );
+    const displayWidth = Math.max(1, Math.round((rotatedSize.width * displaySettings.crop.width) / displayScaleFactor));
+    const displayHeight = Math.max(1, Math.round((rotatedSize.height * displaySettings.crop.height) / displayScaleFactor));
+    return Math.min(vw / displayWidth, vh / displayHeight, 1);
+  }, [
+    displayScaleFactor,
+    displaySettings,
+    documentState,
+    documentState?.source.height,
+    documentState?.source.width,
+  ]);
+
+  const effectiveZoom = zoom === 'fit' ? fitScale : zoom;
+  const logicalPreviewSize = useMemo(() => {
+    if (!documentState || !displaySettings) {
+      return { width: 1, height: 1 };
+    }
+
+    const rotatedSize = getTransformedDimensions(
+      documentState.source.width,
+      documentState.source.height,
+      displaySettings.rotation + displaySettings.levelAngle,
+    );
+
+    return {
+      width: Math.max(1, Math.round((rotatedSize.width * displaySettings.crop.width) / displayScaleFactor)),
+      height: Math.max(1, Math.round((rotatedSize.height * displaySettings.crop.height) / displayScaleFactor)),
+    };
+  }, [
+    displayScaleFactor,
+    displaySettings,
+    documentState,
+    documentState?.source.height,
+    documentState?.source.width,
+  ]);
+
+  const renderTargetDimension = useMemo(() => {
+    const baseDim = isAdjustingLevel ? Math.min(targetMaxDimension, 1024) : targetMaxDimension;
+    const z = zoom === 'fit' ? 1 : zoom;
+    if (z <= 1) return baseDim;
+    const sourceMax = documentState ? Math.max(documentState.source.width, documentState.source.height) : baseDim;
+    return Math.min(sourceMax, Math.ceil(baseDim * z));
+  }, [isAdjustingLevel, targetMaxDimension, zoom, documentState]);
   const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
 
-  const { push, undo, redo, canUndo, canRedo, reset: resetHistory } = useHistory<ConversionSettings>(fallbackProfile.defaultSettings);
+  const { push, undo, redo, canUndo, canRedo, reset: resetHistory, beginInteraction, commitInteraction } = useHistory<ConversionSettings>(fallbackProfile.defaultSettings);
+
+  const isInteractingRef = useRef(false);
+
+  const handleInteractionStart = useCallback(() => {
+    isInteractingRef.current = true;
+    beginInteraction();
+  }, [beginInteraction]);
+
+  const handleInteractionEnd = useCallback(() => {
+    isInteractingRef.current = false;
+    if (documentState) {
+      commitInteraction(documentState.settings);
+    }
+  }, [commitInteraction, documentState]);
 
   useEffect(() => {
     workerClientRef.current = new ImageWorkerClient();
@@ -138,10 +224,53 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const syncBrowserScale = () => {
+      const next = window.devicePixelRatio || 1;
+      setDisplayScaleFactor((current) => (Math.abs(current - next) < 0.001 ? current : next));
+    };
+
+    syncBrowserScale();
+
+    if (!usesNativeFileDialogs) {
+      window.addEventListener('resize', syncBrowserScale);
+      return () => window.removeEventListener('resize', syncBrowserScale);
+    }
+
+    let cancelled = false;
+    let unlistenScale: (() => void) | null = null;
+
+    (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const appWindow = getCurrentWindow();
+        tauriWindowRef.current = appWindow;
+        const scaleFactor = await appWindow.scaleFactor();
+        if (!cancelled) {
+          setDisplayScaleFactor(scaleFactor);
+        }
+        unlistenScale = await appWindow.onScaleChanged(({ payload }) => {
+          setDisplayScaleFactor(payload.scaleFactor);
+        });
+      } catch {
+        if (!cancelled) {
+          syncBrowserScale();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      tauriWindowRef.current = null;
+      unlistenScale?.();
+    };
+  }, [usesNativeFileDialogs]);
+
+  useEffect(() => {
     if (!documentState) return;
+    if (isInteractingRef.current) return;
     const timer = window.setTimeout(() => {
       push(documentState.settings);
-    }, 400);
+    }, 800);
     return () => window.clearTimeout(timer);
   }, [documentState?.settings, push]);
 
@@ -207,8 +336,8 @@ export default function App() {
   const calculateTargetMaxDimension = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return 1024;
-    return Math.max(512, Math.ceil(Math.max(viewport.clientWidth, viewport.clientHeight) * window.devicePixelRatio));
-  }, []);
+    return Math.max(512, Math.ceil(Math.max(viewport.clientWidth, viewport.clientHeight) * displayScaleFactor));
+  }, [displayScaleFactor]);
 
   useEffect(() => {
     const updateTargetMaxDimension = () => {
@@ -239,6 +368,7 @@ export default function App() {
     isColor: boolean,
     nextComparisonMode: 'processed' | 'original',
     nextTargetMaxDimension: number,
+    maskTuning?: { highlightProtectionBias: number; blackPointBias: number },
   ) => {
     const worker = workerClientRef.current;
     if (!worker) return;
@@ -269,6 +399,7 @@ export default function App() {
         revision,
         targetMaxDimension: nextTargetMaxDimension,
         comparisonMode: nextComparisonMode,
+        maskTuning,
       });
 
       const isLatestResult = activeDocumentIdRef.current === result.documentId
@@ -348,13 +479,14 @@ export default function App() {
     const documentId = documentState.id;
     const settings = displaySettings;
     const isColor = activeProfile.type === 'color';
+    const profileMaskTuning = activeProfile.maskTuning;
     const debounceMs = isAdjustingLevel ? 40 : (hasVisiblePreviewRef.current ? 120 : 0);
     const timer = window.setTimeout(() => {
-      void renderDocument(documentId, settings, isColor, comparisonMode, renderTargetDimension);
+      void renderDocument(documentId, settings, isColor, comparisonMode, renderTargetDimension, profileMaskTuning);
     }, debounceMs);
 
     return () => window.clearTimeout(timer);
-  }, [activeProfile.type, comparisonMode, displaySettings, documentState?.id, documentState?.previewLevels.length, isAdjustingLevel, renderDocument, renderTargetDimension]);
+  }, [activeProfile.type, activeProfile.maskTuning, comparisonMode, displaySettings, documentState?.id, documentState?.previewLevels.length, isAdjustingLevel, renderDocument, renderTargetDimension]);
 
   const updateDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
     setDocumentState((current) => (current ? updater(current) : current));
@@ -418,6 +550,7 @@ export default function App() {
     setComparisonMode('processed');
     setIsPickingFilmBase(false);
     setIsCropOverlayVisible(false);
+    zoomToFit();
     clearCanvas();
     appendDiagnostic({
       level: 'info',
@@ -429,7 +562,7 @@ export default function App() {
     });
     resetHistory(fallbackProfile.defaultSettings);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [cancelPendingPreviewRetry, clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility]);
+  }, [cancelPendingPreviewRetry, clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility, zoomToFit]);
 
   const importFile = useCallback(async (file: File) => {
     const worker = workerClientRef.current;
@@ -635,6 +768,22 @@ export default function App() {
     updateDocument((current) => ({ ...current, settings: structuredClone(nextState), dirty: true }));
   }, [redo, updateDocument]);
 
+  const handleToggleComparison = useCallback(() => {
+    setComparisonMode((current) => current === 'processed' ? 'original' : 'processed');
+  }, []);
+
+  const handleToggleCropOverlay = useCallback(() => {
+    setIsCropOverlayVisible((current) => !current);
+  }, []);
+
+  const handleToggleLeftPane = useCallback(() => {
+    setIsLeftPaneOpen((current) => !current);
+  }, []);
+
+  const handleToggleRightPane = useCallback(() => {
+    setIsRightPaneOpen((current) => !current);
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
@@ -655,11 +804,89 @@ export default function App() {
         event.preventDefault();
         void handleCloseImage();
       }
+
+      if ((event.metaKey || event.ctrlKey) && event.key === '0') {
+        event.preventDefault();
+        zoomToFit();
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === '1') {
+        event.preventDefault();
+        zoomTo100();
+      }
+      if ((event.metaKey || event.ctrlKey) && (event.key === '=' || event.key === '+')) {
+        event.preventDefault();
+        zoomIn();
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === '-') {
+        event.preventDefault();
+        zoomOut();
+      }
+
+      if (event.key === ' ' && !event.repeat) {
+        event.preventDefault();
+        setIsSpaceHeld(true);
+      }
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === ' ') {
+        setIsSpaceHeld(false);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [documentState, handleCloseImage, handleOpenImage, handleRedo, handleUndo]);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [documentState, handleCloseImage, handleOpenImage, handleRedo, handleUndo, zoomToFit, zoomTo100, zoomIn, zoomOut]);
+
+  useEffect(() => {
+    if (!usesNativeFileDialogs) return;
+
+    let unlisten: (() => void) | null = null;
+
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const unlistenFn = await listen<string>('menu-action', (event) => {
+          switch (event.payload) {
+            case 'open': void handleOpenImage(); break;
+            case 'export': void handleDownloadRef.current?.(); break;
+            case 'close-image': void handleCloseImage(); break;
+            case 'reset-adjustments': handleResetRef.current?.(); break;
+            case 'copy-debug-info': void handleCopyDebugInfoRef.current?.(); break;
+            case 'toggle-comparison': handleToggleComparison(); break;
+            case 'toggle-crop-overlay': handleToggleCropOverlay(); break;
+            case 'toggle-adjustments-pane': handleToggleLeftPane(); break;
+            case 'toggle-profiles-pane': handleToggleRightPane(); break;
+            case 'zoom-fit': zoomToFit(); break;
+            case 'zoom-100': zoomTo100(); break;
+            case 'zoom-in': zoomIn(); break;
+            case 'zoom-out': zoomOut(); break;
+          }
+        });
+        unlisten = unlistenFn;
+      } catch {
+        // Not in Tauri environment
+      }
+    })();
+
+    return () => { unlisten?.(); };
+  }, [
+    usesNativeFileDialogs,
+    handleOpenImage,
+    handleCloseImage,
+    handleToggleComparison,
+    handleToggleCropOverlay,
+    handleToggleLeftPane,
+    handleToggleRightPane,
+    zoomToFit,
+    zoomTo100,
+    zoomIn,
+    zoomOut,
+  ]);
 
   const handleProfileChange = useCallback((profile: FilmProfile) => {
     updateDocument((current) => ({
@@ -697,6 +924,7 @@ export default function App() {
     }));
     resetHistory(activeProfile.defaultSettings);
   }, [activeProfile.defaultSettings, documentState, resetHistory, updateDocument]);
+  handleResetRef.current = handleReset;
 
   const handleDownload = useCallback(async () => {
     const worker = workerClientRef.current;
@@ -725,6 +953,8 @@ export default function App() {
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'EXPORT_FAILED' } : current);
     }
   }, [activeProfile.type, documentState]);
+
+  handleDownloadRef.current = handleDownload;
 
   const handleCanvasClick = useCallback(async (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!documentState || !displaySettings || !isPickingFilmBase || !displayCanvasRef.current || !workerClientRef.current) return;
@@ -793,6 +1023,7 @@ export default function App() {
       setError('Could not copy debug info to the clipboard.');
     }
   }, [canvasSize, documentState, hasVisiblePreview, targetMaxDimension]);
+  handleCopyDebugInfoRef.current = handleCopyDebugInfo;
 
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -802,40 +1033,65 @@ export default function App() {
     await importFile(file);
   }, [importFile]);
 
+  const handleTitleBarMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!usesNativeFileDialogs || event.button !== 0) return;
+
+    const appWindow = tauriWindowRef.current;
+    if (!appWindow) return;
+
+    event.preventDefault();
+    void appWindow.startDragging().catch(() => {
+      // Fall back to the native drag region attribute if startDragging fails.
+    });
+  }, [usesNativeFileDialogs]);
+
   const showBlockingOverlay = documentState?.status === 'loading' || (documentState?.status === 'processing' && !hasVisiblePreview);
   const isExporting = documentState?.status === 'exporting';
 
   return (
-    <div className="flex h-screen w-screen bg-zinc-950 font-sans text-zinc-100 overflow-hidden">
-      <AnimatePresence initial={false}>
-        {isLeftPaneOpen && (
-          <motion.div
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 320, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
-            className="h-full shrink-0 border-r border-zinc-800 overflow-hidden"
-          >
-            <Sidebar
-              settings={documentState?.settings ?? fallbackProfile.defaultSettings}
-              exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
-              cropImageWidth={cropImageSize.width}
-              cropImageHeight={cropImageSize.height}
-              usesNativeFileDialogs={usesNativeFileDialogs}
-              onLevelInteractionChange={setIsAdjustingLevel}
-              onSettingsChange={handleSettingsChange}
-              onExportOptionsChange={handleExportOptionsChange}
-              activeProfile={documentState ? activeProfile : null}
-              histogramData={documentState?.histogram ?? null}
-              isPickingFilmBase={isPickingFilmBase}
-              onTogglePicker={() => setIsPickingFilmBase((current) => !current)}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <div className="relative flex h-screen w-screen overflow-hidden bg-zinc-950 font-sans text-zinc-100">
+      {usesNativeFileDialogs && (
+        <div
+          data-tauri-drag-region=""
+          onMouseDownCapture={handleTitleBarMouseDown}
+          className="absolute inset-x-0 top-0 z-30 h-8 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-xl"
+        />
+      )}
 
-      <main className="flex-1 flex flex-col relative overflow-hidden bg-zinc-900/30 min-w-0">
-        <header className="h-14 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 bg-zinc-950/50 backdrop-blur-xl z-20">
+      <div className={`flex min-h-0 w-full flex-1 ${usesNativeFileDialogs ? 'pt-8' : ''}`}>
+        <AnimatePresence initial={false}>
+          {isLeftPaneOpen && (
+            <motion.div
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 320, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
+              className="h-full shrink-0 border-r border-zinc-800 overflow-hidden"
+            >
+              <Sidebar
+                settings={documentState?.settings ?? fallbackProfile.defaultSettings}
+                exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
+                cropImageWidth={cropImageSize.width}
+                cropImageHeight={cropImageSize.height}
+                usesNativeFileDialogs={usesNativeFileDialogs}
+                onLevelInteractionChange={setIsAdjustingLevel}
+                onSettingsChange={handleSettingsChange}
+                onExportOptionsChange={handleExportOptionsChange}
+                onInteractionStart={handleInteractionStart}
+                onInteractionEnd={handleInteractionEnd}
+                activeProfile={documentState ? activeProfile : null}
+                histogramData={documentState?.histogram ?? null}
+                isPickingFilmBase={isPickingFilmBase}
+                onTogglePicker={() => setIsPickingFilmBase((current) => !current)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <main className="flex-1 flex flex-col relative overflow-hidden bg-zinc-900/30 min-w-0">
+          <header
+            className="h-14 border-b border-zinc-800 flex items-center justify-between shrink-0 bg-zinc-950/50 backdrop-blur-xl z-20 px-4"
+          >
           <div className="flex items-center gap-4">
             <button
               onClick={() => setIsLeftPaneOpen((current) => !current)}
@@ -896,13 +1152,6 @@ export default function App() {
                   title="Toggle Crop Overlay"
                 >
                   <Crop size={18} />
-                </button>
-                <button
-                  onClick={handleCopyDebugInfo}
-                  className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg transition-all"
-                  title="Copy Debug Info"
-                >
-                  <Copy size={18} />
                 </button>
                 <div className="w-px h-4 bg-zinc-800 mx-1" />
                 <button
@@ -977,19 +1226,79 @@ export default function App() {
                 key="editor"
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="relative w-full h-full flex flex-col items-center justify-center gap-4"
+                className="relative w-full h-full flex flex-col items-center justify-center gap-2"
               >
-                <div className={`relative max-w-full max-h-full shadow-2xl rounded-sm overflow-hidden border border-zinc-800 bg-black transition-all flex items-center justify-center ${isFullscreen ? 'fixed inset-0 z-50 p-4 bg-zinc-950' : ''}`}>
-                  <div
-                    className="relative inline-block max-w-full max-h-full will-change-transform"
-                    style={previewTransformAngle === 0 ? undefined : { transform: `rotate(${previewTransformAngle}deg)` }}
-                  >
-                    <canvas
-                      ref={displayCanvasRef}
-                      onClick={handleCanvasClick}
-                      className={`block max-w-full max-h-[calc(100vh-12rem)] object-contain transition-opacity duration-300 ${showBlockingOverlay ? 'opacity-30' : 'opacity-100'} ${isPickingFilmBase ? 'cursor-crosshair' : ''}`}
-                      style={canvasSize.width > 0 ? { aspectRatio: `${canvasSize.width} / ${canvasSize.height}` } : undefined}
+                <div
+                  className={`relative flex-1 w-full overflow-hidden border border-zinc-800 bg-black ${isFullscreen ? 'fixed inset-0 z-50 bg-zinc-950' : ''}`}
+                  onWheel={(e) => {
+                    if (!documentState) return;
+                    e.preventDefault();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const normX = (e.clientX - rect.left) / rect.width;
+                    const normY = (e.clientY - rect.top) / rect.height;
+                    handleZoomWheel(e.deltaY, normX, normY);
+                  }}
+                  onMouseDown={(e) => {
+                    if (!documentState) return;
+                    const canPan = (zoom !== 'fit' || isSpaceHeld) && !isPickingFilmBase && !isCropOverlayVisible;
+                    if (canPan && e.button === 0) {
+                      e.preventDefault();
+                      setIsPanDragging(true);
+                      startPan(e.clientX, e.clientY);
+                    }
+                  }}
+                  onMouseMove={(e) => {
+                    if (!isPanDragging) return;
+                    const viewport = viewportRef.current;
+                    if (!viewport) return;
+                    updatePan(e.clientX, e.clientY, viewport.clientWidth, viewport.clientHeight, effectiveZoom);
+                  }}
+                  onMouseUp={() => {
+                    if (isPanDragging) {
+                      setIsPanDragging(false);
+                      endPan();
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    if (isPanDragging) {
+                      setIsPanDragging(false);
+                      endPan();
+                    }
+                  }}
+                  style={{ cursor: isPanDragging ? 'grabbing' : (zoom !== 'fit' && !isPickingFilmBase ? 'grab' : undefined) }}
+                >
+                  <div className="absolute right-4 top-4 z-20">
+                    <ZoomBar
+                      zoom={zoom}
+                      fitScale={fitScale}
+                      onZoomToFit={zoomToFit}
+                      onZoomTo100={zoomTo100}
+                      onZoomIn={zoomIn}
+                      onZoomOut={zoomOut}
+                      onSetZoom={setZoomLevel}
                     />
+                  </div>
+
+                  <div
+                    className="absolute inset-0 flex items-center justify-center will-change-transform"
+                    style={{
+                      transform: `scale(${effectiveZoom}) translate(${(0.5 - pan.x) * 100}%, ${(0.5 - pan.y) * 100}%)`,
+                      transformOrigin: 'center center',
+                    }}
+                  >
+                    <div
+                      className="relative inline-block will-change-transform"
+                      style={previewTransformAngle === 0 ? undefined : { transform: `rotate(${previewTransformAngle}deg)` }}
+                    >
+                      <canvas
+                        ref={displayCanvasRef}
+                        onClick={handleCanvasClick}
+                        className={`block transition-opacity duration-300 ${showBlockingOverlay ? 'opacity-30' : 'opacity-100'} ${isPickingFilmBase ? 'cursor-crosshair' : ''}`}
+                        style={{
+                          width: `${logicalPreviewSize.width}px`,
+                          height: `${logicalPreviewSize.height}px`,
+                        }}
+                      />
                     {isAdjustingLevel && comparisonMode === 'processed' && (
                       <div
                         className="absolute inset-0 pointer-events-none opacity-80"
@@ -1014,46 +1323,45 @@ export default function App() {
                         onChange={(crop) => handleSettingsChange({ crop })}
                       />
                     )}
+                    </div>
                   </div>
 
                   {showBlockingOverlay && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-zinc-950/50 backdrop-blur-sm">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-zinc-950/50 backdrop-blur-sm z-10">
                       <Loader2 className="animate-spin text-zinc-400" size={48} />
                       <p className="text-zinc-400 text-sm font-medium animate-pulse">
                         {documentState.status === 'loading' ? 'Decoding high-resolution file…' : 'Rendering preview…'}
                       </p>
                     </div>
                   )}
+
                 </div>
 
-                <div className="flex items-center justify-center gap-3 flex-wrap">
-                  <button
-                    onClick={() => setIsPickingFilmBase((current) => !current)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all shadow-xl ${isPickingFilmBase ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/60' : 'bg-zinc-950/80 text-zinc-400 border-zinc-800 hover:text-zinc-100'}`}
-                    title="Sample Film Base"
-                  >
-                    <Pipette size={16} />
-                    <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Sample Base</span>
-                  </button>
-                  <div className="flex items-center gap-2 px-3 py-2 bg-zinc-950/80 backdrop-blur-md border border-zinc-800 rounded-2xl shadow-2xl">
-                    <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">{activeProfile.name}</span>
-                    <div className="w-px h-4 bg-zinc-800 mx-1" />
-                    <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">
-                      {comparisonMode === 'processed' ? 'Processed' : 'Original'}
-                    </span>
-                    <div className="w-px h-4 bg-zinc-800 mx-1" />
-                    <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">
-                      {documentState.source.width}×{documentState.source.height}
-                    </span>
+                <div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 px-3 py-2 bg-zinc-950/80 backdrop-blur-md border border-zinc-800 rounded-2xl shadow-2xl">
+                      <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">{activeProfile.name}</span>
+                      <div className="w-px h-4 bg-zinc-800 mx-1" />
+                      <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">
+                        {comparisonMode === 'processed' ? 'Processed' : 'Original'}
+                      </span>
+                      <div className="w-px h-4 bg-zinc-800 mx-1" />
+                      <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">
+                        {documentState.source.width}×{documentState.source.height}
+                      </span>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => void handleCloseImage()}
-                    className="flex items-center gap-2 px-3 py-2 bg-zinc-950/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 backdrop-blur-md rounded-xl border border-zinc-800 transition-all shadow-xl"
-                    title="Close Image"
-                  >
-                    <X size={16} />
-                    <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Close</span>
-                  </button>
+
+                  <div className="flex items-center gap-3 flex-wrap justify-end">
+                    <button
+                      onClick={() => void handleCloseImage()}
+                      className="flex items-center gap-2 px-3 py-2 bg-zinc-950/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 backdrop-blur-md rounded-xl border border-zinc-800 transition-all shadow-xl"
+                      title="Close Image"
+                    >
+                      <X size={16} />
+                      <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Close</span>
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -1070,28 +1378,29 @@ export default function App() {
               <button onClick={() => setError(null)} className="ml-2 opacity-50 hover:opacity-100">✕</button>
             </motion.div>
           )}
-        </div>
-      </main>
+          </div>
+        </main>
 
-      <AnimatePresence initial={false}>
-        {isRightPaneOpen && (
-          <motion.div
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 320, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
-            className="h-full shrink-0 border-l border-zinc-800 overflow-hidden"
-          >
-            <PresetsPane
-              activeStockId={documentState?.profileId ?? fallbackProfile.id}
-              onStockChange={handleProfileChange}
-              customPresets={customPresets}
-              onSavePreset={handleSavePreset}
-              onDeletePreset={handleDeletePreset}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+        <AnimatePresence initial={false}>
+          {isRightPaneOpen && (
+            <motion.div
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 320, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
+              className="h-full shrink-0 border-l border-zinc-800 overflow-hidden"
+            >
+              <PresetsPane
+                activeStockId={documentState?.profileId ?? fallbackProfile.id}
+                onStockChange={handleProfileChange}
+                customPresets={customPresets}
+                onSavePreset={handleSavePreset}
+                onDeletePreset={handleDeletePreset}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }

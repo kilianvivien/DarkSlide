@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
-import { Layers, Info, Plus, Trash2, Check, X } from 'lucide-react';
+import { Layers, Plus, Trash2, Check, X, SlidersHorizontal, Film } from 'lucide-react';
 import { FILM_PROFILES } from '../constants';
 import { FilmProfile } from '../types';
+
+const GENERIC_IDS = new Set(['generic-bw', 'generic-color']);
+const GENERIC_PROFILES = FILM_PROFILES.filter((p) => GENERIC_IDS.has(p.id));
+const STOCK_PROFILES = FILM_PROFILES.filter((p) => !GENERIC_IDS.has(p.id));
 
 interface PresetsPaneProps {
   activeStockId: string;
@@ -20,9 +24,6 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
 }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
-
-  const allStocks = [...FILM_PROFILES, ...customPresets];
-  const activeStock = allStocks.find((s) => s.id === activeStockId);
 
   const handleSave = () => {
     if (newPresetName.trim()) {
@@ -109,35 +110,56 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         )}
 
         <div className="space-y-3">
-          <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Built-in Presets</h3>
+          <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
+            <SlidersHorizontal size={10} /> Generic
+          </h3>
           <div className="space-y-2">
-            {FILM_PROFILES.map((stock) => (
+            {GENERIC_PROFILES.map((stock) => (
               <button
                 key={stock.id}
                 onClick={() => onStockChange(stock)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex flex-col gap-0.5 ${
+                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
                   activeStockId === stock.id
                     ? 'bg-zinc-100 text-zinc-950 shadow-lg'
                     : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
                 }`}
               >
-                <span className="font-medium">{stock.name}</span>
-                <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
-                  {stock.type === 'color' ? 'Color Negative' : 'Black & White'}
-                </span>
+                <SlidersHorizontal size={14} className={`shrink-0 ${activeStockId === stock.id ? 'text-zinc-600' : 'text-zinc-600'}`} />
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-medium">{stock.name}</span>
+                  <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
+                    {stock.type === 'color' ? 'Color Negative' : 'Black & White'}
+                  </span>
+                </div>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="pt-4">
-          <div className="p-4 rounded-xl bg-zinc-900/30 border border-zinc-800/50">
-            <div className="flex gap-3">
-              <Info size={14} className="text-zinc-600 shrink-0 mt-0.5" />
-              <p className="text-[10px] leading-relaxed text-zinc-500 italic">
-                {activeStock?.description || 'Custom user preset.'}
-              </p>
-            </div>
+        <div className="space-y-3">
+          <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
+            <Film size={10} /> Film Stocks
+          </h3>
+          <div className="space-y-2">
+            {STOCK_PROFILES.map((stock) => (
+              <button
+                key={stock.id}
+                onClick={() => onStockChange(stock)}
+                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
+                  activeStockId === stock.id
+                    ? 'bg-zinc-100 text-zinc-950 shadow-lg'
+                    : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                }`}
+              >
+                <Film size={14} className={`shrink-0 ${activeStockId === stock.id ? 'text-zinc-600' : 'text-zinc-600'}`} />
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-medium">{stock.name}</span>
+                  <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
+                    {stock.type === 'color' ? 'Color Negative' : 'Black & White'}
+                  </span>
+                </div>
+              </button>
+            ))}
           </div>
         </div>
       </div>

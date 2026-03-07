@@ -5,11 +5,13 @@ interface CurvesControlProps {
   curves: Curves;
   onChange: (curves: Curves) => void;
   isColor: boolean;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
 }
 
 type Channel = keyof Curves;
 
-export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, isColor }) => {
+export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, isColor, onInteractionStart, onInteractionEnd }) => {
   const [activeChannel, setActiveChannel] = useState<Channel>('rgb');
   const [draggingPoint, setDraggingPoint] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -18,6 +20,7 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
   const size = 200;
 
   const handleMouseDown = (index: number) => {
+    onInteractionStart?.();
     setDraggingPoint(index);
   };
 
@@ -46,6 +49,7 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
 
   const handleMouseUp = () => {
     setDraggingPoint(null);
+    onInteractionEnd?.();
   };
 
   const handleDoubleClick = (e: React.MouseEvent) => {

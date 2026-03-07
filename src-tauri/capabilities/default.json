@@ -7,6 +7,8 @@
   ],
   "permissions": [
     "core:default",
+    "core:menu:default",
+    "core:window:allow-start-dragging",
     "dialog:default",
     "fs:default",
     "fs:allow-write-file"

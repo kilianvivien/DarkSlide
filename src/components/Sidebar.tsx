@@ -7,7 +7,8 @@ import {
   Activity,
   Pipette,
   Download,
-  Sparkles,
+  Focus,
+  Eraser,
 } from 'lucide-react';
 import { ConversionSettings, ExportFormat, ExportOptions, FilmProfile, HistogramData } from '../types';
 import { Slider } from './Slider';
@@ -24,6 +25,8 @@ interface SidebarProps {
   onLevelInteractionChange?: (isInteracting: boolean) => void;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onExportOptionsChange: (options: Partial<ExportOptions>) => void;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
   activeProfile: FilmProfile | null;
   histogramData: HistogramData | null;
   isPickingFilmBase: boolean;
@@ -39,6 +42,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onLevelInteractionChange,
   onSettingsChange,
   onExportOptionsChange,
+  onInteractionStart,
+  onInteractionEnd,
   activeProfile,
   histogramData,
   isPickingFilmBase,
@@ -109,10 +114,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <SlidersHorizontal size={12} /> Basic Adjustments
                   </h2>
 
-                  <Slider label="Exposure" value={settings.exposure} min={-100} max={100} onChange={(value) => onSettingsChange({ exposure: value })} />
-                  <Slider label="Contrast" value={settings.contrast} min={-100} max={100} onChange={(value) => onSettingsChange({ contrast: value })} />
-                  <Slider label="Black Point" value={settings.blackPoint} min={0} max={80} onChange={(value) => onSettingsChange({ blackPoint: value })} />
-                  <Slider label="White Point" value={settings.whitePoint} min={180} max={255} onChange={(value) => onSettingsChange({ whitePoint: value })} />
+                  <Slider label="Exposure" value={settings.exposure} min={-100} max={100} onChange={(value) => onSettingsChange({ exposure: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="Contrast" value={settings.contrast} min={-100} max={100} onChange={(value) => onSettingsChange({ contrast: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="Black Point" value={settings.blackPoint} min={0} max={80} onChange={(value) => onSettingsChange({ blackPoint: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="White Point" value={settings.whitePoint} min={180} max={255} onChange={(value) => onSettingsChange({ whitePoint: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   <Slider
                     label="Highlight Protection"
                     value={settings.highlightProtection}
@@ -120,13 +125,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     max={100}
                     onChange={(value) => onSettingsChange({ highlightProtection: value })}
                     unit="%"
+                    onInteractionStart={onInteractionStart}
+                    onInteractionEnd={onInteractionEnd}
                   />
 
                   {isColor && (
                     <>
-                      <Slider label="Saturation" value={settings.saturation} min={0} max={200} onChange={(value) => onSettingsChange({ saturation: value })} unit="%" />
-                      <Slider label="Temperature" value={settings.temperature} min={-100} max={100} onChange={(value) => onSettingsChange({ temperature: value })} />
-                      <Slider label="Tint" value={settings.tint} min={-100} max={100} onChange={(value) => onSettingsChange({ tint: value })} />
+                      <Slider label="Saturation" value={settings.saturation} min={0} max={200} onChange={(value) => onSettingsChange({ saturation: value })} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                      <Slider label="Temperature" value={settings.temperature} min={-100} max={100} onChange={(value) => onSettingsChange({ temperature: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                      <Slider label="Tint" value={settings.tint} min={-100} max={100} onChange={(value) => onSettingsChange({ tint: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                     </>
                   )}
                 </section>
@@ -136,19 +143,49 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
                       <Settings2 size={12} /> Color Balance
                     </h2>
-                    <Slider label="Red Balance" value={settings.redBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ redBalance: value })} />
-                    <Slider label="Green Balance" value={settings.greenBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ greenBalance: value })} />
-                    <Slider label="Blue Balance" value={settings.blueBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ blueBalance: value })} />
+                    <Slider label="Red Balance" value={settings.redBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ redBalance: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Green Balance" value={settings.greenBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ greenBalance: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Blue Balance" value={settings.blueBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ blueBalance: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   </section>
                 )}
 
-                <section className="p-4 rounded-xl bg-zinc-900/30 border border-zinc-800/50">
-                  <div className="flex gap-3">
-                    <Sparkles size={14} className="text-zinc-600 shrink-0 mt-0.5" />
-                    <p className="text-[10px] leading-relaxed text-zinc-500 italic">
-                      Profiles are now versioned presets with tonal defaults. They are starting points, not hard-locked looks.
-                    </p>
-                  </div>
+                <section>
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                    <Focus size={12} /> Sharpen
+                  </h2>
+                  <label className="flex items-center gap-2 mb-4 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settings.sharpen.enabled}
+                      onChange={(e) => onSettingsChange({ sharpen: { ...settings.sharpen, enabled: e.target.checked } })}
+                      className="accent-zinc-200"
+                    />
+                    <span className="text-[11px] text-zinc-400">Enable</span>
+                  </label>
+                  {settings.sharpen.enabled && (
+                    <>
+                      <Slider label="Amount" value={settings.sharpen.amount} min={0} max={200} onChange={(value) => onSettingsChange({ sharpen: { ...settings.sharpen, amount: value } })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                      <Slider label="Radius" value={settings.sharpen.radius} min={0.5} max={3} step={0.1} onChange={(value) => onSettingsChange({ sharpen: { ...settings.sharpen, radius: value } })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    </>
+                  )}
+                </section>
+
+                <section>
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                    <Eraser size={12} /> Noise Reduction
+                  </h2>
+                  <label className="flex items-center gap-2 mb-4 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settings.noiseReduction.enabled}
+                      onChange={(e) => onSettingsChange({ noiseReduction: { ...settings.noiseReduction, enabled: e.target.checked } })}
+                      className="accent-zinc-200"
+                    />
+                    <span className="text-[11px] text-zinc-400">Enable</span>
+                  </label>
+                  {settings.noiseReduction.enabled && (
+                    <Slider label="Luminance" value={settings.noiseReduction.luminanceStrength} min={0} max={100} onChange={(value) => onSettingsChange({ noiseReduction: { ...settings.noiseReduction, luminanceStrength: value } })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  )}
                 </section>
               </motion.div>
             ) : activeTab === 'curves' ? (
@@ -163,7 +200,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
                     <Activity size={12} /> RGB Curves
                   </h2>
-                  <CurvesControl curves={settings.curves} onChange={(curves) => onSettingsChange({ curves })} isColor={isColor} />
+                  <CurvesControl curves={settings.curves} onChange={(curves) => onSettingsChange({ curves })} isColor={isColor} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                 </section>
               </motion.div>
             ) : activeTab === 'crop' ? (

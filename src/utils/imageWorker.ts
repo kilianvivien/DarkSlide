@@ -234,7 +234,7 @@ function handleRender(payload: RenderRequest) {
   if (!ctx) throw new Error('Could not read rendered preview.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  const histogram = processImageData(imageData, payload.settings, payload.isColor, payload.comparisonMode);
+  const histogram = processImageData(imageData, payload.settings, payload.isColor, payload.comparisonMode, payload.maskTuning);
   ctx.putImageData(imageData, 0, 0);
 
   return {

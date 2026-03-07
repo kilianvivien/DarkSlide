@@ -28,6 +28,17 @@ export interface FilmBaseSample {
   b: number;
 }
 
+export interface SharpenSettings {
+  enabled: boolean;
+  radius: number;   // 0.5 - 3.0
+  amount: number;    // 0 - 200
+}
+
+export interface NoiseReductionSettings {
+  enabled: boolean;
+  luminanceStrength: number; // 0 - 100
+}
+
 export interface ConversionSettings {
   exposure: number;
   contrast: number;
@@ -45,6 +56,8 @@ export interface ConversionSettings {
   levelAngle: number;
   crop: CropSettings;
   filmBaseSample: FilmBaseSample | null;
+  sharpen: SharpenSettings;
+  noiseReduction: NoiseReductionSettings;
 }
 
 export interface ExportOptions {
@@ -125,6 +138,10 @@ export interface RenderRequest {
   revision: number;
   targetMaxDimension: number;
   comparisonMode: 'processed' | 'original';
+  maskTuning?: {
+    highlightProtectionBias: number;
+    blackPointBias: number;
+  };
 }
 
 export interface RenderResult {

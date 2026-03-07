@@ -129,6 +129,8 @@ describe('ImageWorkerClient', () => {
           aspectRatio: null,
         },
         filmBaseSample: null,
+        sharpen: { enabled: false, radius: 1.0, amount: 50 },
+        noiseReduction: { enabled: false, luminanceStrength: 0 },
       },
       isColor: true,
       revision: 1,

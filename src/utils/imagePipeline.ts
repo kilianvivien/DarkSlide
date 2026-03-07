@@ -193,22 +193,115 @@ export function buildEmptyHistogram(): HistogramData {
   };
 }
 
+function gaussianBlur1D(
+  src: Uint8ClampedArray,
+  dst: Float32Array,
+  width: number,
+  height: number,
+  horizontal: boolean,
+  kernelRadius: number,
+): void {
+  const size = Math.max(1, Math.round(kernelRadius));
+  const kernelSize = size * 2 + 1;
+  const kernel = new Float32Array(kernelSize);
+  const sigma = kernelRadius * 0.65 + 0.35;
+  let kernelSum = 0;
+  for (let i = 0; i < kernelSize; i++) {
+    const d = i - size;
+    kernel[i] = Math.exp(-(d * d) / (2 * sigma * sigma));
+    kernelSum += kernel[i];
+  }
+  for (let i = 0; i < kernelSize; i++) kernel[i] /= kernelSum;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sumR = 0, sumG = 0, sumB = 0;
+      for (let k = -size; k <= size; k++) {
+        const sx = horizontal ? clamp(x + k, 0, width - 1) : x;
+        const sy = horizontal ? y : clamp(y + k, 0, height - 1);
+        const idx = (sy * width + sx) * 4;
+        const w = kernel[k + size];
+        sumR += src[idx] * w;
+        sumG += src[idx + 1] * w;
+        sumB += src[idx + 2] * w;
+      }
+      const dIdx = (y * width + x) * 4;
+      dst[dIdx] = sumR;
+      dst[dIdx + 1] = sumG;
+      dst[dIdx + 2] = sumB;
+    }
+  }
+}
+
+function separableGaussianBlur(data: Uint8ClampedArray, width: number, height: number, radius: number): Float32Array {
+  const len = width * height * 4;
+  const temp = new Uint8ClampedArray(len);
+  const hPass = new Float32Array(len);
+  gaussianBlur1D(data, hPass, width, height, true, radius);
+  for (let i = 0; i < len; i++) temp[i] = clamp(Math.round(hPass[i]), 0, 255);
+  const result = new Float32Array(len);
+  gaussianBlur1D(temp, result, width, height, false, radius);
+  return result;
+}
+
+function applyNoiseReduction(imageData: ImageData, strength: number): void {
+  if (strength <= 0) return;
+  const { data, width, height } = imageData;
+  const factor = strength / 100;
+  const blurred = separableGaussianBlur(data, width, height, 1.5);
+
+  for (let i = 0; i < data.length; i += 4) {
+    const lumOrig = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    const lumBlur = 0.299 * blurred[i] + 0.587 * blurred[i + 1] + 0.114 * blurred[i + 2];
+    const lumNew = lumOrig + (lumBlur - lumOrig) * factor;
+    const lumScale = lumOrig > 0.001 ? lumNew / lumOrig : 1;
+    data[i] = clamp(Math.round(data[i] * lumScale), 0, 255);
+    data[i + 1] = clamp(Math.round(data[i + 1] * lumScale), 0, 255);
+    data[i + 2] = clamp(Math.round(data[i + 2] * lumScale), 0, 255);
+  }
+}
+
+function applySharpen(imageData: ImageData, radius: number, amount: number): void {
+  if (amount <= 0) return;
+  const { data, width, height } = imageData;
+  const factor = amount / 100;
+  const blurred = separableGaussianBlur(data, width, height, radius);
+
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = clamp(Math.round(data[i] + factor * (data[i] - blurred[i])), 0, 255);
+    data[i + 1] = clamp(Math.round(data[i + 1] + factor * (data[i + 1] - blurred[i + 1])), 0, 255);
+    data[i + 2] = clamp(Math.round(data[i + 2] + factor * (data[i + 2] - blurred[i + 2])), 0, 255);
+  }
+}
+
+export interface MaskTuning {
+  highlightProtectionBias: number;
+  blackPointBias: number;
+}
+
 export function processImageData(
   imageData: ImageData,
   settings: ConversionSettings,
   isColor: boolean,
   comparisonMode: 'processed' | 'original',
+  maskTuning?: MaskTuning,
 ): HistogramData {
+  const effectiveSettings = maskTuning ? {
+    ...settings,
+    highlightProtection: clamp(settings.highlightProtection + maskTuning.highlightProtectionBias * 100, 0, 100),
+    blackPoint: clamp(settings.blackPoint + maskTuning.blackPointBias * 100, 0, 80),
+  } : settings;
+
   const data = imageData.data;
-  const lutRGB = createCurveLut(settings.curves.rgb);
-  const lutR = createCurveLut(settings.curves.red);
-  const lutG = createCurveLut(settings.curves.green);
-  const lutB = createCurveLut(settings.curves.blue);
+  const lutRGB = createCurveLut(effectiveSettings.curves.rgb);
+  const lutR = createCurveLut(effectiveSettings.curves.red);
+  const lutG = createCurveLut(effectiveSettings.curves.green);
+  const lutB = createCurveLut(effectiveSettings.curves.blue);
   const histogram = buildEmptyHistogram();
-  const exposureFactor = Math.pow(2, settings.exposure / 50);
-  const contrastFactor = (259 * (settings.contrast + 255)) / (255 * (259 - settings.contrast));
-  const saturationFactor = settings.saturation / 100;
-  const filmBaseBalance = getFilmBaseBalance(settings.filmBaseSample);
+  const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
+  const contrastFactor = (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast));
+  const saturationFactor = effectiveSettings.saturation / 100;
+  const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index];
@@ -225,12 +318,12 @@ export function processImageData(
       b *= filmBaseBalance.blue;
 
       if (isColor) {
-        r *= settings.redBalance;
-        g *= settings.greenBalance;
-        b *= settings.blueBalance;
-        r += settings.temperature;
-        b -= settings.temperature;
-        g += settings.tint;
+        r *= effectiveSettings.redBalance;
+        g *= effectiveSettings.greenBalance;
+        b *= effectiveSettings.blueBalance;
+        r += effectiveSettings.temperature;
+        b -= effectiveSettings.temperature;
+        g += effectiveSettings.tint;
       } else {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
         r = gray;
@@ -242,17 +335,17 @@ export function processImageData(
       g *= exposureFactor;
       b *= exposureFactor;
 
-      r = applyWhiteBlackPoint(r, settings.blackPoint, settings.whitePoint);
-      g = applyWhiteBlackPoint(g, settings.blackPoint, settings.whitePoint);
-      b = applyWhiteBlackPoint(b, settings.blackPoint, settings.whitePoint);
+      r = applyWhiteBlackPoint(r, effectiveSettings.blackPoint, effectiveSettings.whitePoint);
+      g = applyWhiteBlackPoint(g, effectiveSettings.blackPoint, effectiveSettings.whitePoint);
+      b = applyWhiteBlackPoint(b, effectiveSettings.blackPoint, effectiveSettings.whitePoint);
 
       r = contrastFactor * (r - 128) + 128;
       g = contrastFactor * (g - 128) + 128;
       b = contrastFactor * (b - 128) + 128;
 
-      r = applyHighlightProtection(r, settings.highlightProtection);
-      g = applyHighlightProtection(g, settings.highlightProtection);
-      b = applyHighlightProtection(b, settings.highlightProtection);
+      r = applyHighlightProtection(r, effectiveSettings.highlightProtection);
+      g = applyHighlightProtection(g, effectiveSettings.highlightProtection);
+      b = applyHighlightProtection(b, effectiveSettings.highlightProtection);
 
       if (isColor) {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -282,11 +375,24 @@ export function processImageData(
     data[index] = finalR;
     data[index + 1] = finalG;
     data[index + 2] = finalB;
+  }
 
-    histogram.r[finalR] += 1;
-    histogram.g[finalG] += 1;
-    histogram.b[finalB] += 1;
-    histogram.l[Math.round(0.299 * finalR + 0.587 * finalG + 0.114 * finalB)] += 1;
+  // Spatial operations (after per-pixel pipeline)
+  if (comparisonMode === 'processed') {
+    if (effectiveSettings.noiseReduction.enabled && effectiveSettings.noiseReduction.luminanceStrength > 0) {
+      applyNoiseReduction(imageData, effectiveSettings.noiseReduction.luminanceStrength);
+    }
+    if (effectiveSettings.sharpen.enabled && effectiveSettings.sharpen.amount > 0) {
+      applySharpen(imageData, effectiveSettings.sharpen.radius, effectiveSettings.sharpen.amount);
+    }
+  }
+
+  // Build histogram from final pixel data
+  for (let index = 0; index < data.length; index += 4) {
+    histogram.r[data[index]] += 1;
+    histogram.g[data[index + 1]] += 1;
+    histogram.b[data[index + 2]] += 1;
+    histogram.l[Math.round(0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2])] += 1;
   }
 
   return histogram;
