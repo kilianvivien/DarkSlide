@@ -26,11 +26,11 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 - Keep browser deployment working alongside the desktop build through the shared file bridge fallback.
 - Continue reserving RAW decoding for a later desktop-native path behind the existing stable decode interface.
 
-## Phase 4: Editing Polish
-- **Zoom and pan viewport**: let users inspect at 100% for sharpness and grain evaluation. Render the appropriate preview pyramid level based on zoom.
-- **Better film profiles**: expand the built-in set with more popular stocks (e.g., Portra 160, Gold 200, Superia, CineStill, Delta 3200). Refine mask-tuning parameters against real scans.
-- **Per-slider undo**: make undo granularity match individual control changes rather than debounce-grouped batches.
-- **Sharpen / grain / noise reduction**: add post-conversion sharpening (unsharp mask or similar), optional grain overlay, and basic luminance noise reduction.
+## Phase 4: Editing Polish [complete]
+- **Zoom and pan viewport**: users can inspect at fit, 50%, 100%, and 200%, pan the image directly, and keep preview selection tied to the effective zoom level.
+- **Better film profiles**: the built-in profile set now covers a broader mix of color and black-and-white stocks, with tuned defaults and mask compensation metadata per stock.
+- **Per-slider undo**: history is committed at interaction boundaries so individual slider drags and toggle changes undo cleanly instead of collapsing broad batches together.
+- **Sharpen / noise reduction**: post-conversion sharpening and basic luminance noise reduction are now part of the editing pipeline and sidebar controls.
 
 ## Phase 5: UI Polish
 - **Toolbar clarity**: toolbar icon buttons have tooltips but no visible labels; add labels or a keyboard shortcut reference panel (`?` button). Move "Copy Debug Info" out of the main toolbar into a diagnostics/settings panel.
@@ -56,6 +56,6 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 - RAW decoding via desktop-native backend (LibRaw or similar behind the Tauri bridge).
 
 ## Current Implementation Status
-- **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, 7 built-in film profiles, custom preset persistence, Tauri desktop shell scaffold, and native desktop file dialogs with browser fallback.
-- **Next up**: zoom/pan, expanded profiles, per-slider undo, sharpen/grain/noise, toolbar/UI polish.
+- **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, zoom and pan controls, expanded built-in film profiles, custom preset persistence, sharpening and luminance noise reduction controls, Tauri desktop shell scaffold, and native desktop file dialogs with browser fallback.
+- **Next up**: toolbar/UI polish, persistent preferences, recent files, and broader regression coverage.
 - **Deferred**: multi-document tabs, batch processing, ICC profiles, RAW decoding, session recovery.
