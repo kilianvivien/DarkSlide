@@ -1,0 +1,112 @@
+import React from 'react';
+import { RotateCw, Crop as CropIcon, Square, Smartphone, Image as ImageIcon, Monitor } from 'lucide-react';
+import { ConversionSettings, CropSettings } from '../types';
+import { ASPECT_RATIOS } from '../constants';
+
+interface CropPaneProps {
+  settings: ConversionSettings;
+  onSettingsChange: (settings: Partial<ConversionSettings>) => void;
+}
+
+export const CropPane: React.FC<CropPaneProps> = ({
+  settings,
+  onSettingsChange,
+}) => {
+  const handleRotate = () => {
+    const nextRotation = (settings.rotation + 90) % 360;
+    onSettingsChange({ rotation: nextRotation });
+  };
+
+  const handleAspectChange = (aspect: number | null) => {
+    const newCrop: CropSettings = { ...settings.crop, aspectRatio: aspect };
+    
+    if (aspect) {
+      // Adjust width/height to match aspect ratio while staying within bounds
+      if (aspect > 1) {
+        newCrop.width = 1;
+        newCrop.height = 1 / aspect;
+      } else {
+        newCrop.height = 1;
+        newCrop.width = aspect;
+      }
+      // Center the crop
+      newCrop.x = (1 - newCrop.width) / 2;
+      newCrop.y = (1 - newCrop.height) / 2;
+    } else {
+      newCrop.x = 0;
+      newCrop.y = 0;
+      newCrop.width = 1;
+      newCrop.height = 1;
+    }
+    
+    onSettingsChange({ crop: newCrop });
+  };
+
+  const getIcon = (name: string) => {
+    switch (name) {
+      case '1:1': return <Square size={14} />;
+      case '9:16': return <Smartphone size={14} />;
+      case '16:9': return <Monitor size={14} />;
+      default: return <ImageIcon size={14} />;
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      <section>
+        <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+          <RotateCw size={12} /> Orientation
+        </h2>
+        <button
+          onClick={handleRotate}
+          className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 rounded-xl border border-zinc-800 transition-all"
+        >
+          <RotateCw size={18} className="text-zinc-400" />
+          <span className="text-sm font-medium">Rotate 90° Clockwise</span>
+          <span className="text-[10px] text-zinc-500 ml-auto bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
+            {settings.rotation}°
+          </span>
+        </button>
+      </section>
+
+      <section>
+        <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+          <CropIcon size={12} /> Aspect Ratio Presets
+        </h2>
+        
+        <div className="grid grid-cols-2 gap-2">
+          {ASPECT_RATIOS.map((ratio) => (
+            <button
+              key={ratio.name}
+              onClick={() => handleAspectChange(ratio.value)}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all border ${
+                settings.crop.aspectRatio === ratio.value
+                  ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
+                  : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
+              }`}
+            >
+              <span className="opacity-60">{getIcon(ratio.name)}</span>
+              <div className="flex flex-col items-start leading-tight">
+                <span className="font-medium">{ratio.name}</span>
+                {ratio.category && (
+                  <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${settings.crop.aspectRatio === ratio.value ? 'text-zinc-900' : 'text-zinc-500'}`}>
+                    {ratio.category}
+                  </span>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="p-4 rounded-xl bg-zinc-900/30 border border-zinc-800/50">
+        <div className="flex gap-3">
+          <CropIcon size={14} className="text-zinc-600 shrink-0 mt-0.5" />
+          <p className="text-[10px] leading-relaxed text-zinc-500 italic">
+            Tip: Use the aspect ratio presets to quickly reframe for social media (9:16) or standard print formats (3:2, 4:3).
+          </p>
+        </div>
+      </section>
+    </div>
+  );
+};

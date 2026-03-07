@@ -1,0 +1,31 @@
+import React from 'react';
+
+interface SliderProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+  unit?: string;
+}
+
+export const Slider: React.FC<SliderProps> = ({ label, value, min, max, step = 1, onChange, unit = '' }) => {
+  return (
+    <div className="flex flex-col gap-1.5 mb-4">
+      <div className="flex justify-between items-center px-1">
+        <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">{label}</label>
+        <span className="text-[11px] font-mono text-zinc-500">{value}{unit}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-zinc-200 hover:accent-white transition-all"
+      />
+    </div>
+  );
+};
