@@ -18,6 +18,8 @@ import { CropPane } from './CropPane';
 interface SidebarProps {
   settings: ConversionSettings;
   exportOptions: ExportOptions;
+  cropImageWidth: number;
+  cropImageHeight: number;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onExportOptionsChange: (options: Partial<ExportOptions>) => void;
   activeProfile: FilmProfile | null;
@@ -29,6 +31,8 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   settings,
   exportOptions,
+  cropImageWidth,
+  cropImageHeight,
   onSettingsChange,
   onExportOptionsChange,
   activeProfile,
@@ -165,7 +169,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
               >
-                <CropPane settings={settings} onSettingsChange={onSettingsChange} />
+                <CropPane
+                  settings={settings}
+                  imageWidth={cropImageWidth}
+                  imageHeight={cropImageHeight}
+                  onSettingsChange={onSettingsChange}
+                />
               </motion.div>
             ) : (
               <motion.div

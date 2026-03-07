@@ -2,14 +2,19 @@ import React from 'react';
 import { RotateCw, Crop as CropIcon, Square, Smartphone, Image as ImageIcon, Monitor } from 'lucide-react';
 import { ConversionSettings, CropSettings } from '../types';
 import { ASPECT_RATIOS } from '../constants';
+import { createCenteredAspectCrop } from '../utils/imagePipeline';
 
 interface CropPaneProps {
   settings: ConversionSettings;
+  imageWidth: number;
+  imageHeight: number;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
 }
 
 export const CropPane: React.FC<CropPaneProps> = ({
   settings,
+  imageWidth,
+  imageHeight,
   onSettingsChange,
 }) => {
   const handleRotate = () => {
@@ -19,19 +24,9 @@ export const CropPane: React.FC<CropPaneProps> = ({
 
   const handleAspectChange = (aspect: number | null) => {
     const newCrop: CropSettings = { ...settings.crop, aspectRatio: aspect };
-    
+
     if (aspect) {
-      // Adjust width/height to match aspect ratio while staying within bounds
-      if (aspect > 1) {
-        newCrop.width = 1;
-        newCrop.height = 1 / aspect;
-      } else {
-        newCrop.height = 1;
-        newCrop.width = aspect;
-      }
-      // Center the crop
-      newCrop.x = (1 - newCrop.width) / 2;
-      newCrop.y = (1 - newCrop.height) / 2;
+      Object.assign(newCrop, createCenteredAspectCrop(aspect, imageWidth, imageHeight));
     } else {
       newCrop.x = 0;
       newCrop.y = 0;

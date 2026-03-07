@@ -51,6 +51,8 @@ describe('Sidebar', () => {
           quality: 0.92,
           filenameBase: 'test',
         }}
+        cropImageWidth={4032}
+        cropImageHeight={6048}
         onSettingsChange={vi.fn()}
         onExportOptionsChange={vi.fn()}
         activeProfile={bwProfile ?? null}

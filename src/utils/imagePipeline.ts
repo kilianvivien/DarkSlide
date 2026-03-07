@@ -1,6 +1,7 @@
 import {
   ConversionSettings,
   CurvePoint,
+  CropSettings,
   ExportFormat,
   FilmBaseSample,
   HistogramData,
@@ -87,6 +88,36 @@ export function normalizeCrop(settings: ConversionSettings) {
     y,
     width,
     height,
+  };
+}
+
+export function getRotatedDimensions(width: number, height: number, rotation: number) {
+  const normalizedRotation = ((rotation % 360) + 360) % 360;
+  const isQuarterTurn = normalizedRotation === 90 || normalizedRotation === 270;
+
+  return {
+    width: isQuarterTurn ? height : width,
+    height: isQuarterTurn ? width : height,
+  };
+}
+
+export function getNormalizedAspectRatio(aspectRatio: number, imageWidth: number, imageHeight: number) {
+  const safeWidth = Math.max(1, imageWidth);
+  const safeHeight = Math.max(1, imageHeight);
+  return aspectRatio / (safeWidth / safeHeight);
+}
+
+export function createCenteredAspectCrop(aspectRatio: number, imageWidth: number, imageHeight: number): CropSettings {
+  const normalizedAspectRatio = getNormalizedAspectRatio(aspectRatio, imageWidth, imageHeight);
+  const width = normalizedAspectRatio > 1 ? 1 : normalizedAspectRatio;
+  const height = normalizedAspectRatio > 1 ? 1 / normalizedAspectRatio : 1;
+
+  return {
+    x: (1 - width) / 2,
+    y: (1 - height) / 2,
+    width,
+    height,
+    aspectRatio,
   };
 }
 

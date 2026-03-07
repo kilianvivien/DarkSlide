@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CropSettings } from '../types';
+import { getNormalizedAspectRatio } from '../utils/imagePipeline';
 
 interface CropOverlayProps {
   crop: CropSettings;
+  imageWidth: number;
+  imageHeight: number;
   onChange: (crop: CropSettings) => void;
 }
 
@@ -19,7 +22,7 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, onChange }) => {
+export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, imageWidth, imageHeight, onChange }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
 
@@ -65,10 +68,22 @@ export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, onChange }) => {
         handleResize();
 
         if (aspectRatio) {
+          const normalizedAspectRatio = getNormalizedAspectRatio(aspectRatio, imageWidth, imageHeight);
+
           if (dragState.mode === 'nw' || dragState.mode === 'se') {
-            next.height = clamp(next.width / aspectRatio, 0.05, 1);
+            const maxHeight = dragState.mode === 'nw'
+              ? dragState.origin.y + dragState.origin.height
+              : 1 - dragState.origin.y;
+
+            next.height = clamp(next.width / normalizedAspectRatio, 0.05, maxHeight);
+            next.width = next.height * normalizedAspectRatio;
           } else {
-            next.width = clamp(next.height * aspectRatio, 0.05, 1);
+            const maxWidth = dragState.mode === 'sw'
+              ? dragState.origin.x + dragState.origin.width
+              : 1 - dragState.origin.x;
+
+            next.width = clamp(next.height * normalizedAspectRatio, 0.05, maxWidth);
+            next.height = next.width / normalizedAspectRatio;
           }
 
           if (dragState.mode?.includes('w')) {
@@ -97,7 +112,7 @@ export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, onChange }) => {
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
-  }, [dragState, onChange]);
+  }, [dragState, imageHeight, imageWidth, onChange]);
 
   const frameStyle = {
     left: `${crop.x * 100}%`,

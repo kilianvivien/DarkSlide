@@ -55,9 +55,9 @@ export const ASPECT_RATIOS = [
   { name: '4:5', value: 0.8, category: 'Social' },
   { name: '9:16', value: 0.5625, category: 'Social' },
   { name: '3:2', value: 1.5, category: 'Print' },
-  { name: '4:3', value: 1.333, category: 'Print' },
-  { name: '5:7', value: 0.714, category: 'Print' },
-  { name: '16:9', value: 1.777, category: 'Digital' },
+  { name: '4:3', value: 4 / 3, category: 'Print' },
+  { name: '5:7', value: 5 / 7, category: 'Print' },
+  { name: '16:9', value: 16 / 9, category: 'Digital' },
 ];
 
 export const FILM_PROFILES: FilmProfile[] = [

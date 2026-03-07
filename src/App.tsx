@@ -28,7 +28,7 @@ import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
-import { clamp, getFileExtension, sanitizeFilenameBase } from './utils/imagePipeline';
+import { clamp, getFileExtension, getRotatedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
 
 function formatError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -76,6 +76,28 @@ export default function App() {
   const activeProfile = documentState
     ? allProfiles.find((profile) => profile.id === documentState.profileId) ?? fallbackProfile
     : fallbackProfile;
+  const cropImageSize = useMemo(() => {
+    if (!documentState) {
+      return { width: 1, height: 1 };
+    }
+
+    return getRotatedDimensions(documentState.source.width, documentState.source.height, documentState.settings.rotation);
+  }, [documentState?.settings.rotation, documentState?.source.height, documentState?.source.width]);
+  const displaySettings = useMemo(() => {
+    if (!documentState) return null;
+    if (!isCropOverlayVisible) return documentState.settings;
+
+    return {
+      ...documentState.settings,
+      crop: {
+        ...documentState.settings.crop,
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+      },
+    };
+  }, [documentState?.settings, isCropOverlayVisible]);
 
   const { push, undo, redo, canUndo, canRedo, reset: resetHistory } = useHistory<ConversionSettings>(fallbackProfile.defaultSettings);
 
@@ -246,10 +268,10 @@ export default function App() {
   }, [drawPreview, setPreviewVisibility]);
 
   useEffect(() => {
-    if (!documentState || documentState.previewLevels.length === 0) return;
+    if (!documentState || !displaySettings || documentState.previewLevels.length === 0) return;
 
     const documentId = documentState.id;
-    const settings = documentState.settings;
+    const settings = displaySettings;
     const isColor = activeProfile.type === 'color';
     const debounceMs = hasVisiblePreviewRef.current ? 120 : 0;
     const timer = window.setTimeout(() => {
@@ -257,7 +279,7 @@ export default function App() {
     }, debounceMs);
 
     return () => window.clearTimeout(timer);
-  }, [activeProfile.type, comparisonMode, documentState?.id, documentState?.settings, documentState?.previewLevels.length, renderDocument, targetMaxDimension]);
+  }, [activeProfile.type, comparisonMode, displaySettings, documentState?.id, documentState?.previewLevels.length, renderDocument, targetMaxDimension]);
 
   const updateDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
     setDocumentState((current) => (current ? updater(current) : current));
@@ -603,7 +625,7 @@ export default function App() {
   }, [activeProfile.type, documentState]);
 
   const handleCanvasClick = useCallback(async (event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!documentState || !isPickingFilmBase || !displayCanvasRef.current || !workerClientRef.current) return;
+    if (!documentState || !displaySettings || !isPickingFilmBase || !displayCanvasRef.current || !workerClientRef.current) return;
 
     const canvas = displayCanvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -615,7 +637,7 @@ export default function App() {
     try {
       const sample = await workerClientRef.current.sampleFilmBase({
         documentId: documentState.id,
-        settings: documentState.settings,
+        settings: displaySettings,
         targetMaxDimension,
         x,
         y,
@@ -644,7 +666,7 @@ export default function App() {
       setError(`Film-base sampling failed. ${message}`);
       setIsPickingFilmBase(false);
     }
-  }, [documentState, handleSettingsChange, isPickingFilmBase, targetMaxDimension]);
+  }, [displaySettings, documentState, handleSettingsChange, isPickingFilmBase, targetMaxDimension]);
 
   const handleCopyDebugInfo = useCallback(async () => {
     const report = {
@@ -695,6 +717,8 @@ export default function App() {
             <Sidebar
               settings={documentState?.settings ?? fallbackProfile.defaultSettings}
               exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
+              cropImageWidth={cropImageSize.width}
+              cropImageHeight={cropImageSize.height}
               onSettingsChange={handleSettingsChange}
               onExportOptionsChange={handleExportOptionsChange}
               activeProfile={documentState ? activeProfile : null}
@@ -709,11 +733,6 @@ export default function App() {
       <main className="flex-1 flex flex-col relative overflow-hidden bg-zinc-900/30 min-w-0">
         <header className="h-14 border-b border-zinc-800 flex items-center justify-between px-4 shrink-0 bg-zinc-950/50 backdrop-blur-xl z-20">
           <div className="flex items-center gap-4">
-            <div className="flex gap-1.5 mr-2">
-              <div className="w-3 h-3 rounded-full bg-zinc-800" />
-              <div className="w-3 h-3 rounded-full bg-zinc-800" />
-              <div className="w-3 h-3 rounded-full bg-zinc-800" />
-            </div>
             <button
               onClick={() => setIsLeftPaneOpen((current) => !current)}
               className="p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-all"
@@ -867,6 +886,8 @@ export default function App() {
                     {isCropOverlayVisible && comparisonMode === 'processed' && (
                       <CropOverlay
                         crop={documentState.settings.crop}
+                        imageWidth={cropImageSize.width}
+                        imageHeight={cropImageSize.height}
                         onChange={(crop) => handleSettingsChange({ crop })}
                       />
                     )}
