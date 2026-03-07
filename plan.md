@@ -32,16 +32,18 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 - **Per-slider undo**: history is committed at interaction boundaries so individual slider drags and toggle changes undo cleanly instead of collapsing broad batches together.
 - **Sharpen / noise reduction**: post-conversion sharpening and basic luminance noise reduction are now part of the editing pipeline and sidebar controls.
 
-## Phase 5: UI Polish
-- **Toolbar clarity**: toolbar icon buttons have tooltips but no visible labels; add labels or a keyboard shortcut reference panel (`?` button). Move "Copy Debug Info" out of the main toolbar into a diagnostics/settings panel.
-- **Export flow**: add an "Export" action button directly inside the Export tab so settings and the trigger are co-located; the header button can remain as a shortcut.
-- **Reset Adjustments safeguard**: require confirmation (or at minimum an undo-friendly approach) for the reset action to prevent accidental data loss.
-- **Before/After deduplication**: consolidate the before/after toggle to one place (toolbar button); remove the redundant "PROCESSED" status chip.
-- **Histogram legend**: add channel color swatches (R/G/B/L) and min/max axis markers so the chart is self-explanatory.
-- **Status bar readability**: format pixel dimensions with separator (e.g., 4017 × 5048), label the resolution chip clearly, and remove or explain the "SAMPLE BASE" chip.
-- **Film Base section compactness**: collapse the description text to a tooltip or `(i)` icon; let the Sample button stand alone so adjustments appear higher without scrolling.
-- **Crop UX clarity**: add a visible "Done" / "Reset Crop" affordance inside the Crop tab so the non-destructive workflow is obvious to new users.
-- **Custom presets discoverability**: label the custom presets section explicitly (e.g., a "Custom" tab header next to "Built-in") rather than relying solely on the `+` icon.
+## Phase 5: UI Polish [complete]
+- **Toolbar clarity**: Settings modal (⌘,) with General / Shortcuts / Diagnostics tabs replaces the old debug toolbar button; gear icon pinned to sidebar bottom; Tauri native menu entry wired up.
+- **Export flow**: Export button added inside the Export tab (co-located with format/quality settings); Cmd+E shortcut triggers export from anywhere; sidebar tab state lifted to App so the export tab can be targeted programmatically.
+- **Reset Adjustments safeguard**: Reset now pushes the current settings onto the undo stack before applying defaults, making it fully undoable with Cmd+Z.
+- **Before/After deduplication**: Comparison toggle lives only in the toolbar; redundant "PROCESSED" status chip removed; toggle button shows dynamic tooltip indicating current state.
+- **Histogram legend**: R/G/B/L channel color swatches and 0 / 255 axis labels added below the histogram SVG.
+- **Status bar readability**: Pixel dimensions formatted with toLocaleString() + "px" suffix; comparison chip removed from status bar.
+- **Film Base section compactness**: Description paragraph replaced by an `(i)` icon button with a tooltip; Sample button now stands alone.
+- **Crop UX clarity**: Done and Reset Crop buttons added to the Crop tab; opening the Crop tab auto-shows the crop overlay.
+- **Custom presets discoverability**: Built-in / Custom tab bar added to the Presets panel with an empty-state prompt for the Custom tab.
+- **Curves auto-balance**: Auto button (wand icon) in the Curves tab stretches levels to histogram data range and corrects per-channel color balance using 0.1% percentile clipping.
+- **Custom tooltips**: TooltipPortal component (React portal + event delegation on `[data-tip]`) replaces unreliable native `title` attributes throughout, fixing tooltip display in Tauri's WKWebView.
 
 ## Phase 6: Beta Product Finish
 - Persistent user preferences (last-used profile, export settings, pane layout).
@@ -56,6 +58,6 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 - RAW decoding via desktop-native backend (LibRaw or similar behind the Tauri bridge).
 
 ## Current Implementation Status
-- **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, zoom and pan controls, expanded built-in film profiles, custom preset persistence, sharpening and luminance noise reduction controls, Tauri desktop shell scaffold, and native desktop file dialogs with browser fallback.
-- **Next up**: toolbar/UI polish, persistent preferences, recent files, and broader regression coverage.
+- **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, zoom and pan controls, expanded built-in film profiles, custom preset persistence, sharpening and luminance noise reduction controls, Tauri desktop shell scaffold, native desktop file dialogs with browser fallback, settings modal, export tab button, undoable reset, histogram legend, crop UX improvements, custom presets tabs, curves auto-balance, and portal-based custom tooltips.
+- **Next up**: persistent preferences, recent files, and broader regression coverage.
 - **Deferred**: multi-document tabs, batch processing, ICC profiles, RAW decoding, session recovery.

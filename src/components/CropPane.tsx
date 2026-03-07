@@ -11,6 +11,8 @@ interface CropPaneProps {
   imageHeight: number;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
+  onDone: () => void;
+  onResetCrop: () => void;
 }
 
 export const CropPane: React.FC<CropPaneProps> = ({
@@ -19,6 +21,8 @@ export const CropPane: React.FC<CropPaneProps> = ({
   imageHeight,
   onSettingsChange,
   onLevelInteractionChange,
+  onDone,
+  onResetCrop,
 }) => {
   const handleRotate = () => {
     const nextRotation = (settings.rotation + 90) % 360;
@@ -127,6 +131,21 @@ export const CropPane: React.FC<CropPaneProps> = ({
           ))}
         </div>
       </section>
+
+      <div className="flex gap-3 pt-2">
+        <button
+          onClick={onResetCrop}
+          className="flex-1 px-4 py-2.5 rounded-xl border border-zinc-800 bg-zinc-900/50 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 text-sm font-medium transition-all"
+        >
+          Reset Crop
+        </button>
+        <button
+          onClick={onDone}
+          className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-100 text-zinc-950 hover:bg-white text-sm font-semibold transition-all shadow-lg shadow-black/20"
+        >
+          Done
+        </button>
+      </div>
     </div>
   );
 };

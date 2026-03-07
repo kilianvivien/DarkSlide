@@ -21,6 +21,9 @@ pub fn run() {
                 MenuItemBuilder::with_id("reset-adjustments", "Reset Adjustments")
                     .accelerator("CmdOrCtrl+Shift+R")
                     .build(app)?;
+            let settings_item = MenuItemBuilder::with_id("show-settings", "Settings…")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?;
             let copy_debug_info_help_item =
                 MenuItemBuilder::with_id("copy-debug-info", "Copy Debug Info").build(app)?;
             let toggle_compare_item = MenuItemBuilder::with_id("toggle-comparison", "Toggle Before/After")
@@ -97,6 +100,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             let app_menu = SubmenuBuilder::new(app, "DarkSlide")
                 .about(None)
+                .separator()
+                .item(&settings_item)
                 .separator()
                 .services()
                 .separator()

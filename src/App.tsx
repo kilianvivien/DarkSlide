@@ -20,6 +20,7 @@ import {
 import { Sidebar } from './components/Sidebar';
 import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
+import { SettingsModal } from './components/SettingsModal';
 import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from './constants';
 import { ConversionSettings, FilmProfile, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
@@ -67,6 +68,7 @@ export default function App() {
   const [isLeftPaneOpen, setIsLeftPaneOpen] = useState(true);
   const [isRightPaneOpen, setIsRightPaneOpen] = useState(true);
   const [isPickingFilmBase, setIsPickingFilmBase] = useState(false);
+  const [activePointPicker, setActivePointPicker] = useState<'black' | 'white' | 'grey' | null>(null);
   const [comparisonMode, setComparisonMode] = useState<'processed' | 'original'>('processed');
   const [isDragActive, setIsDragActive] = useState(false);
   const [isCropOverlayVisible, setIsCropOverlayVisible] = useState(false);
@@ -77,6 +79,9 @@ export default function App() {
   const [renderedPreviewAngle, setRenderedPreviewAngle] = useState(0);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanDragging, setIsPanDragging] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'export'>('adjust');
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+
   const [displayScaleFactor, setDisplayScaleFactor] = useState(() => (
     typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
   ));
@@ -503,6 +508,25 @@ export default function App() {
     }));
   }, [updateDocument]);
 
+  const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'export') => {
+    setSidebarTab(tab);
+    if (tab === 'crop') {
+      setIsCropOverlayVisible(true);
+    }
+  }, []);
+
+  const handleCropDone = useCallback(() => {
+    setSidebarTab('adjust');
+    setIsCropOverlayVisible(false);
+  }, []);
+
+  const handleResetCrop = useCallback(() => {
+    handleSettingsChange({
+      crop: { x: 0, y: 0, width: 1, height: 1, aspectRatio: null },
+      levelAngle: 0,
+    });
+  }, [handleSettingsChange]);
+
   const handleExportOptionsChange = useCallback((options: Partial<WorkspaceDocument['exportOptions']>) => {
     updateDocument((current) => ({
       ...current,
@@ -822,6 +846,16 @@ export default function App() {
         zoomOut();
       }
 
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e' && documentState) {
+        event.preventDefault();
+        void handleDownloadRef.current?.();
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+        event.preventDefault();
+        setShowSettingsModal((current) => !current);
+      }
+
       if (event.key === ' ' && !event.repeat) {
         event.preventDefault();
         setIsSpaceHeld(true);
@@ -865,6 +899,7 @@ export default function App() {
             case 'zoom-100': zoomTo100(); break;
             case 'zoom-in': zoomIn(); break;
             case 'zoom-out': zoomOut(); break;
+            case 'show-settings': setShowSettingsModal(true); break;
           }
         });
         unlisten = unlistenFn;
@@ -917,13 +952,14 @@ export default function App() {
 
   const handleReset = useCallback(() => {
     if (!documentState) return;
+    // Push current state before resetting so Cmd+Z can restore it.
+    push(documentState.settings);
     updateDocument((current) => ({
       ...current,
       settings: structuredClone(activeProfile.defaultSettings),
       dirty: false,
     }));
-    resetHistory(activeProfile.defaultSettings);
-  }, [activeProfile.defaultSettings, documentState, resetHistory, updateDocument]);
+  }, [activeProfile.defaultSettings, documentState, push, updateDocument]);
   handleResetRef.current = handleReset;
 
   const handleDownload = useCallback(async () => {
@@ -957,7 +993,8 @@ export default function App() {
   handleDownloadRef.current = handleDownload;
 
   const handleCanvasClick = useCallback(async (event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!documentState || !displaySettings || !isPickingFilmBase || !displayCanvasRef.current || !workerClientRef.current) return;
+    if (!documentState || !displaySettings || !displayCanvasRef.current || !workerClientRef.current) return;
+    if (!isPickingFilmBase && !activePointPicker) return;
 
     const canvas = displayCanvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -966,39 +1003,87 @@ export default function App() {
     const x = clamp((event.clientX - rect.left) / rect.width, 0, 1);
     const y = clamp((event.clientY - rect.top) / rect.height, 0, 1);
 
-    try {
-      const sample = await workerClientRef.current.sampleFilmBase({
-        documentId: documentState.id,
-        settings: displaySettings,
-        targetMaxDimension,
-        x,
-        y,
-      });
+    if (isPickingFilmBase) {
+      try {
+        const sample = await workerClientRef.current.sampleFilmBase({
+          documentId: documentState.id,
+          settings: displaySettings,
+          targetMaxDimension,
+          x,
+          y,
+        });
 
-      const safeRed = Math.max(sample.r, 1);
-      const safeBlue = Math.max(sample.b, 1);
-      const safeGreen = Math.max(sample.g, 1);
+        const safeRed = Math.max(sample.r, 1);
+        const safeBlue = Math.max(sample.b, 1);
+        const safeGreen = Math.max(sample.g, 1);
 
-      handleSettingsChange({
-        filmBaseSample: sample,
-        redBalance: clamp(safeGreen / safeRed, 0.5, 1.5),
-        greenBalance: 1,
-        blueBalance: clamp(safeGreen / safeBlue, 0.5, 1.5),
-      });
+        handleSettingsChange({
+          filmBaseSample: sample,
+          redBalance: clamp(safeGreen / safeRed, 0.5, 1.5),
+          greenBalance: 1,
+          blueBalance: clamp(safeGreen / safeBlue, 0.5, 1.5),
+        });
 
-      setIsPickingFilmBase(false);
-      appendDiagnostic({
-        level: 'info',
-        code: 'FILM_BASE_SAMPLED',
-        message: `Sampled ${sample.r}/${sample.g}/${sample.b}`,
-      });
-    } catch (sampleError) {
-      const message = formatError(sampleError);
-      appendDiagnostic({ level: 'error', code: 'FILM_BASE_FAILED', message });
-      setError(`Film-base sampling failed. ${message}`);
-      setIsPickingFilmBase(false);
+        setIsPickingFilmBase(false);
+        appendDiagnostic({
+          level: 'info',
+          code: 'FILM_BASE_SAMPLED',
+          message: `Sampled ${sample.r}/${sample.g}/${sample.b}`,
+        });
+      } catch (sampleError) {
+        const message = formatError(sampleError);
+        appendDiagnostic({ level: 'error', code: 'FILM_BASE_FAILED', message });
+        setError(`Film-base sampling failed. ${message}`);
+        setIsPickingFilmBase(false);
+      }
+      return;
     }
-  }, [displaySettings, documentState, handleSettingsChange, isPickingFilmBase, targetMaxDimension]);
+
+    if (activePointPicker) {
+      try {
+        const sample = await workerClientRef.current.sampleFilmBase({
+          documentId: documentState.id,
+          settings: displaySettings,
+          targetMaxDimension,
+          x,
+          y,
+        });
+
+        if (activePointPicker === 'black') {
+          const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
+          handleSettingsChange({ blackPoint: clamp(luminance, 0, 80) });
+        } else if (activePointPicker === 'white') {
+          const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
+          handleSettingsChange({ whitePoint: clamp(luminance, 180, 255) });
+        } else if (activePointPicker === 'grey') {
+          // Compute temperature/tint correction to neutralize the sampled pixel
+          const safeR = Math.max(sample.r, 1);
+          const safeG = Math.max(sample.g, 1);
+          const safeB = Math.max(sample.b, 1);
+          // Temperature: R vs B cast. Tint: G vs RB average cast.
+          const rbAvg = (safeR + safeB) / 2;
+          const temperatureOffset = clamp(Math.round((safeB - safeR) * 0.4), -100, 100);
+          const tintOffset = clamp(Math.round((rbAvg - safeG) * 0.4), -100, 100);
+          handleSettingsChange({
+            temperature: clamp(documentState.settings.temperature + temperatureOffset, -100, 100),
+            tint: clamp(documentState.settings.tint + tintOffset, -100, 100),
+          });
+        }
+
+        setActivePointPicker(null);
+        appendDiagnostic({
+          level: 'info',
+          code: 'POINT_SAMPLED',
+          message: `${activePointPicker} point sampled at ${sample.r}/${sample.g}/${sample.b}`,
+        });
+      } catch (sampleError) {
+        const message = formatError(sampleError);
+        appendDiagnostic({ level: 'error', code: 'POINT_SAMPLE_FAILED', message });
+        setError(`Point sampling failed. ${message}`);
+        setActivePointPicker(null);
+      }
+    }
+  }, [activePointPicker, displaySettings, documentState, handleSettingsChange, isPickingFilmBase, targetMaxDimension]);
 
   const handleCopyDebugInfo = useCallback(async () => {
     const report = {
@@ -1082,6 +1167,15 @@ export default function App() {
                 histogramData={documentState?.histogram ?? null}
                 isPickingFilmBase={isPickingFilmBase}
                 onTogglePicker={() => setIsPickingFilmBase((current) => !current)}
+                onExport={() => void handleDownload()}
+                isExporting={isExporting}
+                activeTab={sidebarTab}
+                onTabChange={handleSidebarTabChange}
+                onCropDone={handleCropDone}
+                onResetCrop={handleResetCrop}
+                activePointPicker={activePointPicker}
+                onSetPointPicker={setActivePointPicker}
+                onOpenSettings={() => setShowSettingsModal(true)}
               />
             </motion.div>
           )}
@@ -1095,7 +1189,7 @@ export default function App() {
             <button
               onClick={() => setIsLeftPaneOpen((current) => !current)}
               className="p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-all"
-              title="Toggle Adjustments"
+              data-tip="Toggle Adjustments"
             >
               {isLeftPaneOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
             </button>
@@ -1115,7 +1209,7 @@ export default function App() {
                     className={`p-2 rounded-lg transition-all ${
                       canUndo ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-700 cursor-not-allowed'
                     }`}
-                    title="Undo (Cmd+Z)"
+                    data-tip="Undo (Cmd+Z)"
                   >
                     <Undo2 size={18} />
                   </button>
@@ -1125,7 +1219,7 @@ export default function App() {
                     className={`p-2 rounded-lg transition-all ${
                       canRedo ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-700 cursor-not-allowed'
                     }`}
-                    title="Redo (Cmd+Shift+Z)"
+                    data-tip="Redo (Cmd+Shift+Z)"
                   >
                     <Redo2 size={18} />
                   </button>
@@ -1134,21 +1228,21 @@ export default function App() {
                 <button
                   onClick={handleReset}
                   className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg transition-all"
-                  title="Reset Adjustments"
+                  data-tip="Reset Adjustments (undoable)"
                 >
                   <RotateCcw size={18} />
                 </button>
                 <button
                   onClick={() => setComparisonMode((current) => current === 'processed' ? 'original' : 'processed')}
                   className={`p-2 rounded-lg transition-all ${comparisonMode === 'original' ? 'bg-zinc-100 text-zinc-950' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800'}`}
-                  title="Toggle Before/After"
+                  data-tip={comparisonMode === 'original' ? 'Showing Original — click to return' : 'Toggle Before/After'}
                 >
                   <SplitSquareVertical size={18} />
                 </button>
                 <button
                   onClick={() => setIsCropOverlayVisible((current) => !current)}
                   className={`p-2 rounded-lg transition-all ${isCropOverlayVisible ? 'bg-zinc-100 text-zinc-950' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800'}`}
-                  title="Toggle Crop Overlay"
+                  data-tip="Toggle Crop Overlay"
                 >
                   <Crop size={18} />
                 </button>
@@ -1182,7 +1276,7 @@ export default function App() {
             <button
               onClick={() => setIsRightPaneOpen((current) => !current)}
               className="p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-all"
-              title="Toggle Profiles"
+              data-tip="Toggle Profiles"
             >
               {isRightPaneOpen ? <PanelRightClose size={18} /> : <PanelRight size={18} />}
             </button>
@@ -1239,7 +1333,7 @@ export default function App() {
                   }}
                   onMouseDown={(e) => {
                     if (!documentState) return;
-                    const canPan = (zoom !== 'fit' || isSpaceHeld) && !isPickingFilmBase && !isCropOverlayVisible;
+                    const canPan = (zoom !== 'fit' || isSpaceHeld) && !isPickingFilmBase && !activePointPicker && !isCropOverlayVisible;
                     if (canPan && e.button === 0) {
                       e.preventDefault();
                       setIsPanDragging(true);
@@ -1292,7 +1386,7 @@ export default function App() {
                       <canvas
                         ref={displayCanvasRef}
                         onClick={handleCanvasClick}
-                        className={`block transition-opacity duration-300 ${showBlockingOverlay ? 'opacity-30' : 'opacity-100'} ${isPickingFilmBase ? 'cursor-crosshair' : ''}`}
+                        className={`block transition-opacity duration-300 ${showBlockingOverlay ? 'opacity-30' : 'opacity-100'} ${(isPickingFilmBase || activePointPicker) ? 'cursor-crosshair' : ''}`}
                         style={{
                           width: `${logicalPreviewSize.width}px`,
                           height: `${logicalPreviewSize.height}px`,
@@ -1342,11 +1436,7 @@ export default function App() {
                       <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">{activeProfile.name}</span>
                       <div className="w-px h-4 bg-zinc-800 mx-1" />
                       <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">
-                        {comparisonMode === 'processed' ? 'Processed' : 'Original'}
-                      </span>
-                      <div className="w-px h-4 bg-zinc-800 mx-1" />
-                      <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">
-                        {documentState.source.width}×{documentState.source.height}
+                        {documentState.source.width.toLocaleString()} × {documentState.source.height.toLocaleString()} px
                       </span>
                     </div>
                   </div>
@@ -1355,7 +1445,7 @@ export default function App() {
                     <button
                       onClick={() => void handleCloseImage()}
                       className="flex items-center gap-2 px-3 py-2 bg-zinc-950/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 backdrop-blur-md rounded-xl border border-zinc-800 transition-all shadow-xl"
-                      title="Close Image"
+                      data-tip="Close Image"
                     >
                       <X size={16} />
                       <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Close</span>
@@ -1400,6 +1490,12 @@ export default function App() {
           )}
         </AnimatePresence>
       </div>
+
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        onCopyDebugInfo={handleCopyDebugInfo}
+      />
     </div>
   );
 }

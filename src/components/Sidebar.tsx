@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Settings2,
@@ -9,8 +9,47 @@ import {
   Download,
   Focus,
   Eraser,
+  Info,
+  Settings,
+  Wand2,
 } from 'lucide-react';
-import { ConversionSettings, ExportFormat, ExportOptions, FilmProfile, HistogramData } from '../types';
+import { ConversionSettings, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData } from '../types';
+
+function histPercentile(bins: number[], p: number): number {
+  const total = bins.reduce((a, b) => a + b, 0);
+  if (total === 0) return p < 0.5 ? 0 : 255;
+  const target = total * p;
+  let cumsum = 0;
+  for (let i = 0; i < bins.length; i++) {
+    cumsum += bins[i];
+    if (cumsum >= target) return i;
+  }
+  return bins.length - 1;
+}
+
+function computeAutoBalance(data: HistogramData, isColor: boolean): Curves {
+  const lo_l = histPercentile(data.l, 0.001);
+  const hi_l = histPercentile(data.l, 0.999);
+  // Guard: if range is degenerate, fall back to identity
+  const safeRgb = hi_l > lo_l
+    ? [{ x: lo_l, y: 0 }, { x: hi_l, y: 255 }]
+    : [{ x: 0, y: 0 }, { x: 255, y: 255 }];
+
+  if (!isColor) {
+    return { rgb: safeRgb, red: [{ x: 0, y: 0 }, { x: 255, y: 255 }], green: [{ x: 0, y: 0 }, { x: 255, y: 255 }], blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }] };
+  }
+
+  const lo_r = histPercentile(data.r, 0.001); const hi_r = histPercentile(data.r, 0.999);
+  const lo_g = histPercentile(data.g, 0.001); const hi_g = histPercentile(data.g, 0.999);
+  const lo_b = histPercentile(data.b, 0.001); const hi_b = histPercentile(data.b, 0.999);
+
+  return {
+    rgb: safeRgb,
+    red:   hi_r > lo_r ? [{ x: lo_r, y: 0 }, { x: hi_r, y: 255 }] : [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    green: hi_g > lo_g ? [{ x: lo_g, y: 0 }, { x: hi_g, y: 255 }] : [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    blue:  hi_b > lo_b ? [{ x: lo_b, y: 0 }, { x: hi_b, y: 255 }] : [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+  };
+}
 import { Slider } from './Slider';
 import { Histogram } from './Histogram';
 import { CurvesControl } from './CurvesControl';
@@ -30,6 +69,15 @@ interface SidebarProps {
   histogramData: HistogramData | null;
   isPickingFilmBase: boolean;
   onTogglePicker: () => void;
+  onExport: () => void;
+  isExporting: boolean;
+  activeTab: 'adjust' | 'curves' | 'crop' | 'export';
+  onTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'export') => void;
+  onCropDone: () => void;
+  onResetCrop: () => void;
+  activePointPicker: 'black' | 'white' | 'grey' | null;
+  onSetPointPicker: (mode: 'black' | 'white' | 'grey' | null) => void;
+  onOpenSettings: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -46,8 +94,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   histogramData,
   isPickingFilmBase,
   onTogglePicker,
+  onExport,
+  isExporting,
+  activeTab,
+  onTabChange,
+  onCropDone,
+  onResetCrop,
+  activePointPicker,
+  onSetPointPicker,
+  onOpenSettings,
 }) => {
-  const [activeTab, setActiveTab] = useState<'adjust' | 'curves' | 'crop' | 'export'>('adjust');
   const isColor = activeProfile?.type === 'color';
   const filmBaseInstruction = isPickingFilmBase
     ? 'Click an unexposed film-base area…'
@@ -66,7 +122,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {(['adjust', 'curves', 'crop', 'export'] as const).map((tab) => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => onTabChange(tab)}
             className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all ${
               activeTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
             }`}
@@ -90,6 +146,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <section>
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                     <Pipette size={12} /> Film Base
+                    <button
+                      data-tip="Sample an unexposed area of the negative to set the film base color used during inversion."
+                      className="ml-1 text-zinc-700 hover:text-zinc-500 transition-colors"
+                      tabIndex={-1}
+                    >
+                      <Info size={10} />
+                    </button>
                   </h2>
                   <button
                     onClick={onTogglePicker}
@@ -102,9 +165,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <Pipette size={16} className={isPickingFilmBase ? 'animate-pulse' : ''} />
                     <span className="text-sm font-medium">{filmBaseInstruction}</span>
                   </button>
-                  <p className="mt-3 text-[10px] text-zinc-500 leading-relaxed italic">
-                    Sample an unexposed section of the negative. DarkSlide uses that film-base color before inversion for both color and B&W conversions.
-                  </p>
                 </section>
 
                 <section>
@@ -200,6 +260,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </h2>
                   <CurvesControl curves={settings.curves} onChange={(curves) => onSettingsChange({ curves })} isColor={isColor} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                 </section>
+
+                <section>
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center justify-between">
+                    <span className="flex items-center gap-2"><Pipette size={12} /> Point Pickers</span>
+                    {histogramData && (
+                      <button
+                        data-tip="Auto-balance: stretch levels to histogram data range, correct color balance"
+                        onClick={() => onSettingsChange({ curves: computeAutoBalance(histogramData, isColor) })}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 text-[10px] font-semibold uppercase tracking-widest transition-all"
+                      >
+                        <Wand2 size={10} />
+                        Auto
+                      </button>
+                    )}
+                  </h2>
+                  <div className="flex gap-2">
+                    {([
+                      { mode: 'black' as const, label: 'Black', swatchClass: 'bg-zinc-950 border-zinc-700' },
+                      { mode: 'grey' as const, label: 'Grey', swatchClass: 'bg-zinc-500 border-zinc-400' },
+                      { mode: 'white' as const, label: 'White', swatchClass: 'bg-white border-zinc-300' },
+                    ]).map(({ mode, label, swatchClass }) => (
+                      <button
+                        key={mode}
+                        data-tip={`Set ${label} Point — click a pixel on the image`}
+                        onClick={() => onSetPointPicker(activePointPicker === mode ? null : mode)}
+                        className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border text-[11px] font-medium transition-all ${
+                          activePointPicker === mode
+                            ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
+                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                        }`}
+                      >
+                        <span className={`inline-block w-2.5 h-2.5 rounded-full border shrink-0 ${swatchClass}`} />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
               </motion.div>
             ) : activeTab === 'crop' ? (
               <motion.div
@@ -214,6 +311,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   imageHeight={cropImageHeight}
                   onLevelInteractionChange={onLevelInteractionChange}
                   onSettingsChange={onSettingsChange}
+                  onDone={onCropDone}
+                  onResetCrop={onResetCrop}
                 />
               </motion.div>
             ) : (
@@ -272,10 +371,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     )}
                   </div>
                 </section>
+
+                <button
+                  onClick={onExport}
+                  disabled={isExporting}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-950 rounded-xl text-sm font-semibold hover:bg-white transition-all shadow-lg shadow-black/20 disabled:opacity-50"
+                >
+                  {isExporting ? (
+                    <>
+                      <Download size={16} className="animate-bounce" />
+                      Exporting…
+                    </>
+                  ) : (
+                    <>
+                      <Download size={16} />
+                      Export Image
+                    </>
+                  )}
+                </button>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
+      </div>
+
+      {/* Settings button pinned to sidebar bottom */}
+      <div className="shrink-0 px-6 py-3 border-t border-zinc-800/50 flex items-center justify-end">
+        <button
+          onClick={onOpenSettings}
+          data-tip="Settings (⌘,)"
+          className="p-1.5 text-zinc-700 hover:text-zinc-400 hover:bg-zinc-800 rounded-lg transition-all"
+        >
+          <Settings size={16} />
+        </button>
       </div>
     </div>
   );
