@@ -20,11 +20,11 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 - Add controls for black point, white point, highlight protection, and before/after comparison.
 - Keep crop non-destructive and editable via an overlay.
 
-## Phase 3: Tauri Desktop Shell
-- Scaffold the Tauri project around the existing Vite frontend.
-- Implement native file open/save dialogs replacing browser download-based export.
-- Keep browser deployment working alongside the desktop build (shared codebase).
-- Reserve RAW decoding for a later phase behind the existing stable decode interface.
+## Phase 3: Tauri Desktop Shell [complete]
+- Scaffold the Tauri project around the existing Vite frontend and bundle configuration.
+- Route import/export through native desktop open/save dialogs when running in Tauri.
+- Keep browser deployment working alongside the desktop build through the shared file bridge fallback.
+- Continue reserving RAW decoding for a later desktop-native path behind the existing stable decode interface.
 
 ## Phase 4: Editing Polish
 - **Zoom and pan viewport**: let users inspect at 100% for sharpness and grain evaluation. Render the appropriate preview pyramid level based on zoom.
@@ -56,6 +56,6 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 - RAW decoding via desktop-native backend (LibRaw or similar behind the Tauri bridge).
 
 ## Current Implementation Status
-- **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, 7 built-in film profiles, custom preset persistence.
-- **Next up**: Tauri scaffold, native file dialogs, zoom/pan, expanded profiles, per-slider undo, sharpen/grain/noise, toolbar/UI polish.
+- **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, 7 built-in film profiles, custom preset persistence, Tauri desktop shell scaffold, and native desktop file dialogs with browser fallback.
+- **Next up**: zoom/pan, expanded profiles, per-slider undo, sharpen/grain/noise, toolbar/UI polish.
 - **Deferred**: multi-document tabs, batch processing, ICC profiles, RAW decoding, session recovery.
