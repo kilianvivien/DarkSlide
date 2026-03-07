@@ -38,6 +38,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'adjust' | 'curves' | 'crop' | 'export'>('adjust');
   const isColor = activeProfile?.type === 'color';
+  const filmBaseInstruction = isPickingFilmBase
+    ? 'Click an unexposed film-base area…'
+    : 'Sample Film Base';
 
   return (
     <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden select-none">
@@ -73,29 +76,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 exit={{ opacity: 0, x: 10 }}
                 className="space-y-8"
               >
-                {isColor && (
-                  <section>
-                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
-                      <Pipette size={12} /> Film Base
-                    </h2>
-                    <button
-                      onClick={onTogglePicker}
-                      className={`w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border transition-all ${
-                        isPickingFilmBase
-                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
-                          : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-zinc-800'
-                      }`}
-                    >
-                      <Pipette size={16} className={isPickingFilmBase ? 'animate-pulse' : ''} />
-                      <span className="text-sm font-medium">
-                        {isPickingFilmBase ? 'Click the orange mask…' : 'Sample Film Base'}
-                      </span>
-                    </button>
-                    <p className="mt-3 text-[10px] text-zinc-500 leading-relaxed italic">
-                      Sample an unexposed section of the negative. The worker reads from source-space before inversion.
-                    </p>
-                  </section>
-                )}
+                <section>
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                    <Pipette size={12} /> Film Base
+                  </h2>
+                  <button
+                    onClick={onTogglePicker}
+                    className={`w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border transition-all ${
+                      isPickingFilmBase
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                        : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-zinc-800'
+                    }`}
+                  >
+                    <Pipette size={16} className={isPickingFilmBase ? 'animate-pulse' : ''} />
+                    <span className="text-sm font-medium">{filmBaseInstruction}</span>
+                  </button>
+                  <p className="mt-3 text-[10px] text-zinc-500 leading-relaxed italic">
+                    Sample an unexposed section of the negative. DarkSlide uses that film-base color before inversion for both color and B&W conversions.
+                  </p>
+                </section>
 
                 <section>
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">

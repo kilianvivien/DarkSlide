@@ -882,15 +882,13 @@ export default function App() {
                   )}
 
                   <div className="absolute top-4 right-4 flex gap-2">
-                    {activeProfile.type === 'color' && (
-                      <button
-                        onClick={() => setIsPickingFilmBase((current) => !current)}
-                        className={`p-2 rounded-full border transition-all shadow-xl ${isPickingFilmBase ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/60' : 'bg-zinc-950/80 text-zinc-400 border-zinc-800 hover:text-zinc-100'}`}
-                        title="Sample Film Base"
-                      >
-                        <Pipette size={18} />
-                      </button>
-                    )}
+                    <button
+                      onClick={() => setIsPickingFilmBase((current) => !current)}
+                      className={`p-2 rounded-full border transition-all shadow-xl ${isPickingFilmBase ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/60' : 'bg-zinc-950/80 text-zinc-400 border-zinc-800 hover:text-zinc-100'}`}
+                      title="Sample Film Base"
+                    >
+                      <Pipette size={18} />
+                    </button>
                     <button
                       onClick={() => void handleCloseImage()}
                       className="p-2 bg-zinc-950/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 backdrop-blur-md rounded-full border border-zinc-800 transition-all shadow-xl"

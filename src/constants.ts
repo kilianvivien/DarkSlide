@@ -1,10 +1,10 @@
 import { ConversionSettings, CropSettings, Curves, ExportOptions, FilmProfile } from './types';
 
 const DEFAULT_CROP: CropSettings = {
-  x: 0.05,
-  y: 0.05,
-  width: 0.9,
-  height: 0.9,
+  x: 0,
+  y: 0,
+  width: 1,
+  height: 1,
   aspectRatio: null,
 };
 

@@ -158,11 +158,14 @@ export function processImageData(
       g = 255 - g;
       b = 255 - b;
 
-      if (isColor) {
-        r *= filmBaseBalance.red * settings.redBalance;
-        g *= filmBaseBalance.green * settings.greenBalance;
-        b *= filmBaseBalance.blue * settings.blueBalance;
+      r *= filmBaseBalance.red;
+      g *= filmBaseBalance.green;
+      b *= filmBaseBalance.blue;
 
+      if (isColor) {
+        r *= settings.redBalance;
+        g *= settings.greenBalance;
+        b *= settings.blueBalance;
         r += settings.temperature;
         b -= settings.temperature;
         g += settings.tint;
