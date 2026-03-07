@@ -32,10 +32,21 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 - **Per-slider undo**: make undo granularity match individual control changes rather than debounce-grouped batches.
 - **Sharpen / grain / noise reduction**: add post-conversion sharpening (unsharp mask or similar), optional grain overlay, and basic luminance noise reduction.
 
-## Phase 5: Beta Product Finish
+## Phase 5: UI Polish
+- **Toolbar clarity**: toolbar icon buttons have tooltips but no visible labels; add labels or a keyboard shortcut reference panel (`?` button). Move "Copy Debug Info" out of the main toolbar into a diagnostics/settings panel.
+- **Export flow**: add an "Export" action button directly inside the Export tab so settings and the trigger are co-located; the header button can remain as a shortcut.
+- **Reset Adjustments safeguard**: require confirmation (or at minimum an undo-friendly approach) for the reset action to prevent accidental data loss.
+- **Before/After deduplication**: consolidate the before/after toggle to one place (toolbar button); remove the redundant "PROCESSED" status chip.
+- **Histogram legend**: add channel color swatches (R/G/B/L) and min/max axis markers so the chart is self-explanatory.
+- **Status bar readability**: format pixel dimensions with separator (e.g., 4017 × 5048), label the resolution chip clearly, and remove or explain the "SAMPLE BASE" chip.
+- **Film Base section compactness**: collapse the description text to a tooltip or `(i)` icon; let the Sample button stand alone so adjustments appear higher without scrolling.
+- **Crop UX clarity**: add a visible "Done" / "Reset Crop" affordance inside the Crop tab so the non-destructive workflow is obvious to new users.
+- **Custom presets discoverability**: label the custom presets section explicitly (e.g., a "Custom" tab header next to "Built-in") rather than relying solely on the `+` icon.
+
+## Phase 6: Beta Product Finish
 - Persistent user preferences (last-used profile, export settings, pane layout).
 - Recent files list for quick re-open.
-- Diagnostics polish: structured error reports users can copy for bug filing.
+- Diagnostics panel: structured error reports users can copy for bug filing (move debug tools here).
 - Automated regression tests for import, render, export, and profile behavior.
 
 ## Post-Beta Horizon
@@ -46,5 +57,5 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 
 ## Current Implementation Status
 - **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, 7 built-in film profiles, custom preset persistence.
-- **Next up**: Tauri scaffold, native file dialogs, zoom/pan, expanded profiles, per-slider undo, sharpen/grain/noise.
+- **Next up**: Tauri scaffold, native file dialogs, zoom/pan, expanded profiles, per-slider undo, sharpen/grain/noise, toolbar/UI polish.
 - **Deferred**: multi-document tabs, batch processing, ICC profiles, RAW decoding, session recovery.
