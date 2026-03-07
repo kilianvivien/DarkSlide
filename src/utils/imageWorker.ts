@@ -25,6 +25,7 @@ import {
   selectPreviewLevel,
 } from './imagePipeline';
 import { PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constants';
+import { decodeTiffRaster, TiffDecodeError } from './tiff';
 
 type WorkerRequest =
   | { id: string; type: 'decode'; payload: DecodeRequest }
@@ -81,21 +82,13 @@ async function decodeRasterBlob(buffer: ArrayBuffer, mime: string) {
 }
 
 function decodeTiff(buffer: ArrayBuffer) {
-  const ifds = UTIF.decode(buffer);
-  const ifd = ifds[0];
-  if (!ifd) {
-    throw new Error('The TIFF file does not contain any readable frames.');
-  }
-
-  UTIF.decodeImage(buffer, ifd);
-  const rgba = UTIF.toRGBA8(ifd);
-  const width = Number(ifd.width);
-  const height = Number(ifd.height);
+  const decoded = decodeTiffRaster(buffer, UTIF);
+  const { width, height, data } = decoded;
   const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not create TIFF canvas.');
 
-  const imageData = new ImageData(new Uint8ClampedArray(rgba.buffer.slice(0)), width, height);
+  const imageData = new ImageData(data, width, height);
   ctx.putImageData(imageData, 0, 0);
   return canvas;
 }
@@ -197,7 +190,17 @@ async function handleDecode(payload: DecodeRequest) {
   }
 
   const isTiff = extension === '.tif' || extension === '.tiff' || payload.mime === 'image/tiff';
-  const decodedCanvas = isTiff ? decodeTiff(payload.buffer) : await decodeRasterBlob(payload.buffer, payload.mime);
+  let decodedCanvas: OffscreenCanvas;
+
+  try {
+    decodedCanvas = isTiff ? decodeTiff(payload.buffer) : await decodeRasterBlob(payload.buffer, payload.mime);
+  } catch (error) {
+    if (error instanceof TiffDecodeError) {
+      throw createError(error.code, error.message);
+    }
+    throw error;
+  }
+
   assertSupportedDimensions(decodedCanvas.width, decodedCanvas.height);
 
   const previewStore = buildPreviewLevels(decodedCanvas);

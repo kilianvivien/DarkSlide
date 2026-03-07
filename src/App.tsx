@@ -57,12 +57,18 @@ export default function App() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isCropOverlayVisible, setIsCropOverlayVisible] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [targetMaxDimension, setTargetMaxDimension] = useState(1024);
+  const [hasVisiblePreview, setHasVisiblePreview] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const workerClientRef = useRef<ImageWorkerClient | null>(null);
   const renderRevisionRef = useRef(0);
+  const importSessionRef = useRef(0);
+  const activeDocumentIdRef = useRef<string | null>(null);
+  const activeRenderRequestRef = useRef<{ documentId: string; revision: number } | null>(null);
+  const hasVisiblePreviewRef = useRef(false);
 
   const { customPresets, savePreset, deletePreset } = useCustomPresets();
   const allProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
@@ -89,6 +95,11 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [documentState?.settings, push]);
 
+  const setPreviewVisibility = useCallback((next: boolean) => {
+    hasVisiblePreviewRef.current = next;
+    setHasVisiblePreview(next);
+  }, []);
+
   const drawPreview = useCallback((imageData: ImageData) => {
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
@@ -101,36 +112,109 @@ export default function App() {
     setCanvasSize({ width: imageData.width, height: imageData.height });
   }, []);
 
-  const getTargetMaxDimension = useCallback(() => {
+  const calculateTargetMaxDimension = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return 1024;
     return Math.max(512, Math.ceil(Math.max(viewport.clientWidth, viewport.clientHeight) * window.devicePixelRatio));
   }, []);
 
-  const renderDocument = useCallback(async (nextDocument: WorkspaceDocument, nextComparisonMode: 'processed' | 'original') => {
+  useEffect(() => {
+    const updateTargetMaxDimension = () => {
+      const nextValue = calculateTargetMaxDimension();
+      setTargetMaxDimension((current) => (current === nextValue ? current : nextValue));
+    };
+
+    updateTargetMaxDimension();
+    window.addEventListener('resize', updateTargetMaxDimension);
+
+    const viewport = viewportRef.current;
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateTargetMaxDimension);
+    if (viewport && resizeObserver) {
+      resizeObserver.observe(viewport);
+    }
+
+    return () => {
+      window.removeEventListener('resize', updateTargetMaxDimension);
+      resizeObserver?.disconnect();
+    };
+  }, [calculateTargetMaxDimension]);
+
+  const renderDocument = useCallback(async (
+    documentId: string,
+    settings: ConversionSettings,
+    isColor: boolean,
+    nextComparisonMode: 'processed' | 'original',
+    nextTargetMaxDimension: number,
+  ) => {
     const worker = workerClientRef.current;
     if (!worker) return;
 
     const revision = renderRevisionRef.current + 1;
     renderRevisionRef.current = revision;
+    activeRenderRequestRef.current = { documentId, revision };
 
-    setDocumentState((current) => current && current.id === nextDocument.id ? { ...current, status: 'processing', renderRevision: revision } : current);
+    appendDiagnostic({
+      level: 'info',
+      code: 'RENDER_REQUESTED',
+      message: documentId,
+      context: {
+        comparisonMode: nextComparisonMode,
+        documentId,
+        revision,
+        targetMaxDimension: nextTargetMaxDimension,
+      },
+    });
+
+    setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'processing', renderRevision: revision } : current);
 
     try {
       const result = await worker.render({
-        documentId: nextDocument.id,
-        settings: nextDocument.settings,
-        isColor: activeProfile.type === 'color',
+        documentId,
+        settings,
+        isColor,
         revision,
-        targetMaxDimension: getTargetMaxDimension(),
+        targetMaxDimension: nextTargetMaxDimension,
         comparisonMode: nextComparisonMode,
       });
 
-      if (result.revision !== renderRevisionRef.current) return;
+      const isLatestResult = activeDocumentIdRef.current === result.documentId
+        && activeRenderRequestRef.current?.documentId === result.documentId
+        && activeRenderRequestRef.current?.revision === result.revision
+        && result.revision === renderRevisionRef.current;
+
+      if (!isLatestResult) {
+        appendDiagnostic({
+          level: 'info',
+          code: 'RENDER_STALE_IGNORED',
+          message: result.documentId,
+          context: {
+            documentId: result.documentId,
+            revision: result.revision,
+            activeDocumentId: activeDocumentIdRef.current,
+            activeRevision: activeRenderRequestRef.current?.revision ?? null,
+          },
+        });
+        return;
+      }
 
       drawPreview(result.imageData);
+      setPreviewVisibility(true);
+      appendDiagnostic({
+        level: 'info',
+        code: 'RENDER_COMPLETED',
+        message: result.documentId,
+        context: {
+          documentId: result.documentId,
+          height: result.height,
+          previewLevelId: result.previewLevelId,
+          revision: result.revision,
+          width: result.width,
+        },
+      });
       setDocumentState((current) => {
-        if (!current || current.id !== nextDocument.id) return current;
+        if (!current || current.id !== documentId) return current;
         return {
           ...current,
           histogram: result.histogram,
@@ -139,21 +223,41 @@ export default function App() {
         };
       });
     } catch (renderError) {
+      const isLatestRequest = activeDocumentIdRef.current === documentId
+        && activeRenderRequestRef.current?.documentId === documentId
+        && activeRenderRequestRef.current?.revision === revision;
+      if (!isLatestRequest) return;
+
       const message = formatError(renderError);
-      appendDiagnostic({ level: 'error', code: 'RENDER_FAILED', message, context: { comparisonMode: nextComparisonMode } });
+      appendDiagnostic({
+        level: 'error',
+        code: 'RENDER_FAILED',
+        message,
+        context: {
+          comparisonMode: nextComparisonMode,
+          documentId,
+          revision,
+          targetMaxDimension: nextTargetMaxDimension,
+        },
+      });
       setError(`Processing failed. ${message}`);
-      setDocumentState((current) => current && current.id === nextDocument.id ? { ...current, status: 'error', errorCode: 'RENDER_FAILED' } : current);
+      setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'error', errorCode: 'RENDER_FAILED' } : current);
     }
-  }, [activeProfile.type, drawPreview, getTargetMaxDimension]);
+  }, [drawPreview, setPreviewVisibility]);
 
   useEffect(() => {
-    if (!documentState) return;
+    if (!documentState || documentState.previewLevels.length === 0) return;
+
+    const documentId = documentState.id;
+    const settings = documentState.settings;
+    const isColor = activeProfile.type === 'color';
+    const debounceMs = hasVisiblePreviewRef.current ? 120 : 0;
     const timer = window.setTimeout(() => {
-      void renderDocument(documentState, comparisonMode);
-    }, 120);
+      void renderDocument(documentId, settings, isColor, comparisonMode, targetMaxDimension);
+    }, debounceMs);
 
     return () => window.clearTimeout(timer);
-  }, [comparisonMode, documentState, renderDocument]);
+  }, [activeProfile.type, comparisonMode, documentState?.id, documentState?.settings, documentState?.previewLevels.length, renderDocument, targetMaxDimension]);
 
   const updateDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
     setDocumentState((current) => (current ? updater(current) : current));
@@ -181,16 +285,16 @@ export default function App() {
     }));
   }, [updateDocument]);
 
-  const disposeCurrentDocument = useCallback(async () => {
-    if (!documentState || !workerClientRef.current) return;
+  const disposeDocument = useCallback(async (documentId: string | null | undefined) => {
+    if (!documentId || !workerClientRef.current) return;
     try {
-      await workerClientRef.current.disposeDocument(documentState.id);
+      await workerClientRef.current.disposeDocument(documentId);
     } catch {
       // Ignore worker disposal failures while resetting the UI.
     }
-  }, [documentState]);
+  }, []);
 
-  const clearCanvas = () => {
+  const clearCanvas = useCallback(() => {
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -198,20 +302,33 @@ export default function App() {
     canvas.height = 1;
     ctx?.clearRect(0, 0, 1, 1);
     setCanvasSize({ width: 0, height: 0 });
-  };
+  }, []);
 
   const handleCloseImage = useCallback(async () => {
-    await disposeCurrentDocument();
+    const documentId = activeDocumentIdRef.current;
+    importSessionRef.current += 1;
+    activeDocumentIdRef.current = null;
+    activeRenderRequestRef.current = null;
     renderRevisionRef.current = 0;
+    setPreviewVisibility(false);
+    await disposeDocument(documentId);
     setDocumentState(null);
     setError(null);
     setComparisonMode('processed');
     setIsPickingFilmBase(false);
     setIsCropOverlayVisible(false);
     clearCanvas();
+    appendDiagnostic({
+      level: 'info',
+      code: 'IMAGE_CLOSED',
+      message: documentId ?? 'none',
+      context: {
+        documentId,
+      },
+    });
     resetHistory(fallbackProfile.defaultSettings);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [disposeCurrentDocument, fallbackProfile.defaultSettings, resetHistory]);
+  }, [clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility]);
 
   const importFile = useCallback(async (file: File) => {
     const worker = workerClientRef.current;
@@ -231,14 +348,32 @@ export default function App() {
 
     setError(null);
     setIsPickingFilmBase(false);
+    setIsCropOverlayVisible(false);
+    setPreviewVisibility(false);
+    clearCanvas();
     renderRevisionRef.current = 0;
+    activeRenderRequestRef.current = null;
 
-    if (documentState) {
-      await disposeCurrentDocument();
-    }
+    const importSession = importSessionRef.current + 1;
+    importSessionRef.current = importSession;
+    const previousDocumentId = activeDocumentIdRef.current;
+    await disposeDocument(previousDocumentId);
 
     const documentId = crypto.randomUUID();
     const initialProfile = fallbackProfile;
+    activeDocumentIdRef.current = documentId;
+
+    appendDiagnostic({
+      level: 'info',
+      code: 'IMPORT_STARTED',
+      message: file.name,
+      context: {
+        documentId,
+        extension: getFileExtension(file.name),
+        importSession,
+        size: file.size,
+      },
+    });
 
     setDocumentState({
       id: documentId,
@@ -266,6 +401,20 @@ export default function App() {
 
     try {
       const buffer = await file.arrayBuffer();
+      if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
+        appendDiagnostic({
+          level: 'info',
+          code: 'IMPORT_STALE_IGNORED',
+          message: file.name,
+          context: {
+            documentId,
+            importSession,
+            stage: 'array-buffer',
+          },
+        });
+        return;
+      }
+
       const decoded = await worker.decode({
         documentId,
         buffer,
@@ -273,6 +422,21 @@ export default function App() {
         mime: file.type || 'application/octet-stream',
         size: file.size,
       });
+
+      if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
+        await disposeDocument(documentId);
+        appendDiagnostic({
+          level: 'info',
+          code: 'IMPORT_STALE_IGNORED',
+          message: file.name,
+          context: {
+            documentId,
+            importSession,
+            stage: 'decode',
+          },
+        });
+        return;
+      }
 
       const nextDocument: WorkspaceDocument = {
         id: documentId,
@@ -296,16 +460,36 @@ export default function App() {
         level: 'info',
         code: 'FILE_IMPORTED',
         message: file.name,
-        context: { width: decoded.metadata.width, height: decoded.metadata.height, size: decoded.metadata.size },
+        context: {
+          documentId,
+          height: decoded.metadata.height,
+          importSession,
+          previewLevels: decoded.previewLevels.length,
+          size: decoded.metadata.size,
+          width: decoded.metadata.width,
+        },
       });
     } catch (importError) {
+      if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) return;
+
       const message = formatError(importError);
-      appendDiagnostic({ level: 'error', code: 'IMPORT_FAILED', message, context: { fileName: file.name } });
+      activeDocumentIdRef.current = null;
+      appendDiagnostic({
+        level: 'error',
+        code: 'IMPORT_FAILED',
+        message,
+        context: {
+          documentId,
+          fileName: file.name,
+          importSession,
+        },
+      });
       setError(`Import failed. ${message}`);
       setDocumentState(null);
+      setPreviewVisibility(false);
       clearCanvas();
     }
-  }, [disposeCurrentDocument, documentState, fallbackProfile, resetHistory]);
+  }, [clearCanvas, disposeDocument, fallbackProfile, resetHistory, setPreviewVisibility]);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -432,7 +616,7 @@ export default function App() {
       const sample = await workerClientRef.current.sampleFilmBase({
         documentId: documentState.id,
         settings: documentState.settings,
-        targetMaxDimension: getTargetMaxDimension(),
+        targetMaxDimension,
         x,
         y,
       });
@@ -460,12 +644,22 @@ export default function App() {
       setError(`Film-base sampling failed. ${message}`);
       setIsPickingFilmBase(false);
     }
-  }, [documentState, getTargetMaxDimension, handleSettingsChange, isPickingFilmBase]);
+  }, [documentState, handleSettingsChange, isPickingFilmBase, targetMaxDimension]);
 
   const handleCopyDebugInfo = useCallback(async () => {
     const report = {
+      canvas: {
+        hasVisiblePreview,
+        ...canvasSize,
+      },
       document: documentState,
       diagnostics: getDiagnosticsReport(),
+      pipeline: {
+        activeDocumentId: activeDocumentIdRef.current,
+        activeImportSession: importSessionRef.current,
+        activeRenderRequest: activeRenderRequestRef.current,
+        targetMaxDimension,
+      },
     };
 
     try {
@@ -474,7 +668,7 @@ export default function App() {
     } catch {
       setError('Could not copy debug info to the clipboard.');
     }
-  }, [documentState]);
+  }, [canvasSize, documentState, hasVisiblePreview, targetMaxDimension]);
 
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -484,7 +678,7 @@ export default function App() {
     await importFile(file);
   }, [importFile]);
 
-  const isBusy = documentState?.status === 'loading' || documentState?.status === 'processing';
+  const showBlockingOverlay = documentState?.status === 'loading' || (documentState?.status === 'processing' && !hasVisiblePreview);
   const isExporting = documentState?.status === 'exporting';
 
   return (
@@ -667,7 +861,7 @@ export default function App() {
                     <canvas
                       ref={displayCanvasRef}
                       onClick={handleCanvasClick}
-                      className={`block max-w-full max-h-[calc(100vh-12rem)] object-contain transition-opacity duration-300 ${isBusy ? 'opacity-30' : 'opacity-100'} ${isPickingFilmBase ? 'cursor-crosshair' : ''}`}
+                      className={`block max-w-full max-h-[calc(100vh-12rem)] object-contain transition-opacity duration-300 ${showBlockingOverlay ? 'opacity-30' : 'opacity-100'} ${isPickingFilmBase ? 'cursor-crosshair' : ''}`}
                       style={canvasSize.width > 0 ? { aspectRatio: `${canvasSize.width} / ${canvasSize.height}` } : undefined}
                     />
                     {isCropOverlayVisible && comparisonMode === 'processed' && (
@@ -678,7 +872,7 @@ export default function App() {
                     )}
                   </div>
 
-                  {isBusy && (
+                  {showBlockingOverlay && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-zinc-950/50 backdrop-blur-sm">
                       <Loader2 className="animate-spin text-zinc-400" size={48} />
                       <p className="text-zinc-400 text-sm font-medium animate-pulse">

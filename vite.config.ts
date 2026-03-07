@@ -14,5 +14,9 @@ export default defineConfig(() => {
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
     },
+    test: {
+      environment: 'jsdom',
+      setupFiles: './vitest.setup.ts',
+    },
   };
 });
