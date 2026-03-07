@@ -36,6 +36,7 @@ export function createDefaultSettings(overrides: Partial<ConversionSettings> = {
     highlightProtection: 20,
     curves: structuredClone(DEFAULT_CURVES),
     rotation: 0,
+    levelAngle: 0,
     crop: structuredClone(DEFAULT_CROP),
     filmBaseSample: null,
     ...overrides,

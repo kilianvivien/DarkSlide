@@ -19,6 +19,7 @@ import {
   clamp,
   getExtensionFromFormat,
   getFileExtension,
+  getTransformedDimensions,
   normalizeCrop,
   processImageData,
   sanitizeFilenameBase,
@@ -138,10 +139,12 @@ function buildPreviewLevels(sourceCanvas: OffscreenCanvas): StoredPreview[] {
 
 function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
   const crop = normalizeCrop(settings);
-  const rotation = settings.rotation % 360;
-  const isQuarterTurn = rotation === 90 || rotation === 270;
-  const rotatedWidth = isQuarterTurn ? sourceCanvas.height : sourceCanvas.width;
-  const rotatedHeight = isQuarterTurn ? sourceCanvas.width : sourceCanvas.height;
+  const rotation = settings.rotation + settings.levelAngle;
+  const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
+    sourceCanvas.width,
+    sourceCanvas.height,
+    rotation,
+  );
   const cropX = Math.floor(crop.x * rotatedWidth);
   const cropY = Math.floor(crop.y * rotatedHeight);
   const cropWidth = Math.max(1, Math.floor(crop.width * rotatedWidth));
@@ -155,11 +158,7 @@ function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
   rotateCtx.clearRect(0, 0, rotatedWidth, rotatedHeight);
   rotateCtx.translate(rotatedWidth / 2, rotatedHeight / 2);
   rotateCtx.rotate((rotation * Math.PI) / 180);
-  if (isQuarterTurn) {
-    rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
-  } else {
-    rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2);
-  }
+  rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
   rotateCtx.setTransform(1, 0, 0, 1, 0, 0);
 
   outputCanvas = ensureCanvas(outputCanvas, cropWidth, cropHeight);

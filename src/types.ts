@@ -42,6 +42,7 @@ export interface ConversionSettings {
   highlightProtection: number;
   curves: Curves;
   rotation: number;
+  levelAngle: number;
   crop: CropSettings;
   filmBaseSample: FilmBaseSample | null;
 }

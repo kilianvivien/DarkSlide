@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
-import { createCenteredAspectCrop, getRotatedDimensions, processImageData } from './imagePipeline';
+import { createCenteredAspectCrop, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -61,5 +61,32 @@ describe('createCenteredAspectCrop', () => {
     expect(crop.x).toBeCloseTo(7 / 30, 5);
     expect(crop.y).toBeCloseTo(0, 5);
     expect(renderedAspectRatio).toBeCloseTo(4 / 5, 5);
+  });
+});
+
+describe('rotateCropClockwise', () => {
+  it('rotates the crop rectangle with the image and inverts the locked aspect ratio', () => {
+    const rotated = rotateCropClockwise({
+      x: 0.1,
+      y: 0.2,
+      width: 0.3,
+      height: 0.5,
+      aspectRatio: 4 / 5,
+    });
+
+    expect(rotated.x).toBeCloseTo(0.2, 5);
+    expect(rotated.y).toBeCloseTo(0.6, 5);
+    expect(rotated.width).toBeCloseTo(0.5, 5);
+    expect(rotated.height).toBeCloseTo(0.3, 5);
+    expect(rotated.aspectRatio).toBeCloseTo(5 / 4, 5);
+  });
+});
+
+describe('getTransformedDimensions', () => {
+  it('expands the image bounds for arbitrary leveling angles', () => {
+    const transformed = getTransformedDimensions(4032, 6048, 2.5);
+
+    expect(transformed.width).toBeGreaterThan(4032);
+    expect(transformed.height).toBeGreaterThan(6048);
   });
 });

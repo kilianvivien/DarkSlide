@@ -120,6 +120,7 @@ describe('ImageWorkerClient', () => {
           blue: [],
         },
         rotation: 0,
+        levelAngle: 0,
         crop: {
           x: 0,
           y: 0,

@@ -91,10 +91,26 @@ export function normalizeCrop(settings: ConversionSettings) {
   };
 }
 
-export function getRotatedDimensions(width: number, height: number, rotation: number) {
-  const normalizedRotation = ((rotation % 360) + 360) % 360;
-  const isQuarterTurn = normalizedRotation === 90 || normalizedRotation === 270;
+export function normalizeAngle(angle: number) {
+  const normalized = angle % 360;
+  return normalized < 0 ? normalized + 360 : normalized;
+}
 
+export function getTransformedDimensions(width: number, height: number, angle: number) {
+  const normalizedAngle = normalizeAngle(angle);
+  const radians = (normalizedAngle * Math.PI) / 180;
+  const cosine = Math.abs(Math.cos(radians)) < 1e-10 ? 0 : Math.cos(radians);
+  const sine = Math.abs(Math.sin(radians)) < 1e-10 ? 0 : Math.sin(radians);
+
+  return {
+    width: Math.max(1, Math.ceil(Math.abs(width * cosine) + Math.abs(height * sine))),
+    height: Math.max(1, Math.ceil(Math.abs(width * sine) + Math.abs(height * cosine))),
+  };
+}
+
+export function getRotatedDimensions(width: number, height: number, rotation: number) {
+  const normalizedRotation = normalizeAngle(rotation);
+  const isQuarterTurn = normalizedRotation === 90 || normalizedRotation === 270;
   return {
     width: isQuarterTurn ? height : width,
     height: isQuarterTurn ? width : height,
@@ -118,6 +134,21 @@ export function createCenteredAspectCrop(aspectRatio: number, imageWidth: number
     width,
     height,
     aspectRatio,
+  };
+}
+
+export function rotateCropClockwise(crop: CropSettings): CropSettings {
+  const width = clamp(crop.width, 0.01, 1);
+  const height = clamp(crop.height, 0.01, 1);
+  const x = clamp(crop.x, 0, 1 - width);
+  const y = clamp(crop.y, 0, 1 - height);
+
+  return {
+    x: y,
+    y: 1 - x - width,
+    width: height,
+    height: width,
+    aspectRatio: crop.aspectRatio ? 1 / crop.aspectRatio : null,
   };
 }
 

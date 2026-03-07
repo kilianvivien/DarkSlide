@@ -2,13 +2,15 @@ import React from 'react';
 import { RotateCw, Crop as CropIcon, Square, Smartphone, Image as ImageIcon, Monitor } from 'lucide-react';
 import { ConversionSettings, CropSettings } from '../types';
 import { ASPECT_RATIOS } from '../constants';
-import { createCenteredAspectCrop } from '../utils/imagePipeline';
+import { createCenteredAspectCrop, rotateCropClockwise } from '../utils/imagePipeline';
+import { Slider } from './Slider';
 
 interface CropPaneProps {
   settings: ConversionSettings;
   imageWidth: number;
   imageHeight: number;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
+  onLevelInteractionChange?: (isInteracting: boolean) => void;
 }
 
 export const CropPane: React.FC<CropPaneProps> = ({
@@ -16,10 +18,14 @@ export const CropPane: React.FC<CropPaneProps> = ({
   imageWidth,
   imageHeight,
   onSettingsChange,
+  onLevelInteractionChange,
 }) => {
   const handleRotate = () => {
     const nextRotation = (settings.rotation + 90) % 360;
-    onSettingsChange({ rotation: nextRotation });
+    onSettingsChange({
+      rotation: nextRotation,
+      crop: rotateCropClockwise(settings.crop),
+    });
   };
 
   const handleAspectChange = (aspect: number | null) => {
@@ -46,6 +52,13 @@ export const CropPane: React.FC<CropPaneProps> = ({
     }
   };
 
+  const isAspectSelected = (preset: number | null) => {
+    if (preset === null) return settings.crop.aspectRatio === null;
+    const currentAspect = settings.crop.aspectRatio;
+    if (!currentAspect) return false;
+    return Math.abs(currentAspect - preset) < 0.0001 || Math.abs(currentAspect - 1 / preset) < 0.0001;
+  };
+
   return (
     <div className="space-y-8">
       <section>
@@ -62,6 +75,27 @@ export const CropPane: React.FC<CropPaneProps> = ({
             {settings.rotation}°
           </span>
         </button>
+        <div className="mt-4 rounded-xl border border-zinc-800/70 bg-zinc-900/30 p-4">
+          <Slider
+            label="Level"
+            value={settings.levelAngle}
+            min={-10}
+            max={10}
+            step={0.1}
+            valueLabel={`${settings.levelAngle.toFixed(1)}°`}
+            onChange={(value) => onSettingsChange({ levelAngle: value })}
+            onInteractionStart={() => onLevelInteractionChange?.(true)}
+            onInteractionEnd={() => onLevelInteractionChange?.(false)}
+          />
+          <button
+            type="button"
+            onClick={() => onSettingsChange({ levelAngle: 0 })}
+            disabled={Math.abs(settings.levelAngle) < 0.05}
+            className="mt-1 text-[10px] uppercase tracking-[0.2em] text-zinc-500 transition-colors hover:text-zinc-300 disabled:cursor-default disabled:text-zinc-700"
+          >
+            Reset Level
+          </button>
+        </div>
       </section>
 
       <section>
@@ -75,7 +109,7 @@ export const CropPane: React.FC<CropPaneProps> = ({
               key={ratio.name}
               onClick={() => handleAspectChange(ratio.value)}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all border ${
-                settings.crop.aspectRatio === ratio.value
+                isAspectSelected(ratio.value)
                   ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
                   : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
               }`}
@@ -84,7 +118,7 @@ export const CropPane: React.FC<CropPaneProps> = ({
               <div className="flex flex-col items-start leading-tight">
                 <span className="font-medium">{ratio.name}</span>
                 {ratio.category && (
-                  <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${settings.crop.aspectRatio === ratio.value ? 'text-zinc-900' : 'text-zinc-500'}`}>
+                  <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${isAspectSelected(ratio.value) ? 'text-zinc-900' : 'text-zinc-500'}`}>
                     {ratio.category}
                   </span>
                 )}

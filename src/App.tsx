@@ -28,7 +28,7 @@ import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
-import { clamp, getFileExtension, getRotatedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
+import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
 
 function formatError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -56,9 +56,11 @@ export default function App() {
   const [comparisonMode, setComparisonMode] = useState<'processed' | 'original'>('processed');
   const [isDragActive, setIsDragActive] = useState(false);
   const [isCropOverlayVisible, setIsCropOverlayVisible] = useState(false);
+  const [isAdjustingLevel, setIsAdjustingLevel] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [targetMaxDimension, setTargetMaxDimension] = useState(1024);
   const [hasVisiblePreview, setHasVisiblePreview] = useState(false);
+  const [renderedPreviewAngle, setRenderedPreviewAngle] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -81,8 +83,12 @@ export default function App() {
       return { width: 1, height: 1 };
     }
 
-    return getRotatedDimensions(documentState.source.width, documentState.source.height, documentState.settings.rotation);
-  }, [documentState?.settings.rotation, documentState?.source.height, documentState?.source.width]);
+    return getTransformedDimensions(
+      documentState.source.width,
+      documentState.source.height,
+      documentState.settings.rotation + documentState.settings.levelAngle,
+    );
+  }, [documentState?.settings.levelAngle, documentState?.settings.rotation, documentState?.source.height, documentState?.source.width]);
   const displaySettings = useMemo(() => {
     if (!documentState) return null;
     if (!isCropOverlayVisible) return documentState.settings;
@@ -98,6 +104,9 @@ export default function App() {
       },
     };
   }, [documentState?.settings, isCropOverlayVisible]);
+  const displayAngle = displaySettings ? displaySettings.rotation + displaySettings.levelAngle : 0;
+  const renderTargetDimension = isAdjustingLevel ? Math.min(targetMaxDimension, 1024) : targetMaxDimension;
+  const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
 
   const { push, undo, redo, canUndo, canRedo, reset: resetHistory } = useHistory<ConversionSettings>(fallbackProfile.defaultSettings);
 
@@ -222,6 +231,7 @@ export default function App() {
       }
 
       drawPreview(result.imageData);
+      setRenderedPreviewAngle(settings.rotation + settings.levelAngle);
       setPreviewVisibility(true);
       appendDiagnostic({
         level: 'info',
@@ -273,13 +283,13 @@ export default function App() {
     const documentId = documentState.id;
     const settings = displaySettings;
     const isColor = activeProfile.type === 'color';
-    const debounceMs = hasVisiblePreviewRef.current ? 120 : 0;
+    const debounceMs = isAdjustingLevel ? 40 : (hasVisiblePreviewRef.current ? 120 : 0);
     const timer = window.setTimeout(() => {
-      void renderDocument(documentId, settings, isColor, comparisonMode, targetMaxDimension);
+      void renderDocument(documentId, settings, isColor, comparisonMode, renderTargetDimension);
     }, debounceMs);
 
     return () => window.clearTimeout(timer);
-  }, [activeProfile.type, comparisonMode, displaySettings, documentState?.id, documentState?.previewLevels.length, renderDocument, targetMaxDimension]);
+  }, [activeProfile.type, comparisonMode, displaySettings, documentState?.id, documentState?.previewLevels.length, isAdjustingLevel, renderDocument, renderTargetDimension]);
 
   const updateDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
     setDocumentState((current) => (current ? updater(current) : current));
@@ -333,6 +343,8 @@ export default function App() {
     activeRenderRequestRef.current = null;
     renderRevisionRef.current = 0;
     setPreviewVisibility(false);
+    setIsAdjustingLevel(false);
+    setRenderedPreviewAngle(0);
     await disposeDocument(documentId);
     setDocumentState(null);
     setError(null);
@@ -371,6 +383,8 @@ export default function App() {
     setError(null);
     setIsPickingFilmBase(false);
     setIsCropOverlayVisible(false);
+    setIsAdjustingLevel(false);
+    setRenderedPreviewAngle(0);
     setPreviewVisibility(false);
     clearCanvas();
     renderRevisionRef.current = 0;
@@ -719,6 +733,7 @@ export default function App() {
               exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
               cropImageWidth={cropImageSize.width}
               cropImageHeight={cropImageSize.height}
+              onLevelInteractionChange={setIsAdjustingLevel}
               onSettingsChange={handleSettingsChange}
               onExportOptionsChange={handleExportOptionsChange}
               activeProfile={documentState ? activeProfile : null}
@@ -858,9 +873,7 @@ export default function App() {
                   <ImageIcon size={32} className="text-zinc-600" />
                 </div>
                 <h2 className="text-2xl font-semibold text-zinc-200 mb-3 tracking-tight">Drop your negatives here</h2>
-                <p className="text-zinc-500 text-sm leading-relaxed mb-8">
-                  Import TIFF, JPEG, PNG, or WebP scans. DarkSlide keeps decode, preview render, and export work off the React thread.
-                </p>
+                <p className="text-zinc-500 text-sm leading-relaxed mb-8">Import TIFF, JPEG, PNG, or WebP scans.</p>
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="px-8 py-3 bg-zinc-100 text-zinc-950 rounded-2xl font-semibold hover:bg-white transition-all shadow-xl shadow-black/40"
@@ -873,16 +886,35 @@ export default function App() {
                 key="editor"
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="relative w-full h-full flex items-center justify-center"
+                className="relative w-full h-full flex flex-col items-center justify-center gap-4"
               >
                 <div className={`relative max-w-full max-h-full shadow-2xl rounded-sm overflow-hidden border border-zinc-800 bg-black transition-all flex items-center justify-center ${isFullscreen ? 'fixed inset-0 z-50 p-4 bg-zinc-950' : ''}`}>
-                  <div className="relative inline-block max-w-full max-h-full">
+                  <div
+                    className="relative inline-block max-w-full max-h-full will-change-transform"
+                    style={previewTransformAngle === 0 ? undefined : { transform: `rotate(${previewTransformAngle}deg)` }}
+                  >
                     <canvas
                       ref={displayCanvasRef}
                       onClick={handleCanvasClick}
                       className={`block max-w-full max-h-[calc(100vh-12rem)] object-contain transition-opacity duration-300 ${showBlockingOverlay ? 'opacity-30' : 'opacity-100'} ${isPickingFilmBase ? 'cursor-crosshair' : ''}`}
                       style={canvasSize.width > 0 ? { aspectRatio: `${canvasSize.width} / ${canvasSize.height}` } : undefined}
                     />
+                    {isAdjustingLevel && comparisonMode === 'processed' && (
+                      <div
+                        className="absolute inset-0 pointer-events-none opacity-80"
+                        style={{
+                          backgroundImage: [
+                            'linear-gradient(to right, transparent 24.35%, rgba(0,0,0,0.28) 24.7%, rgba(255,255,255,0.58) 25%, rgba(0,0,0,0.28) 25.3%, transparent 25.65%)',
+                            'linear-gradient(to right, transparent 49.2%, rgba(0,0,0,0.34) 49.65%, rgba(255,255,255,0.82) 50%, rgba(0,0,0,0.34) 50.35%, transparent 50.8%)',
+                            'linear-gradient(to right, transparent 74.35%, rgba(0,0,0,0.28) 74.7%, rgba(255,255,255,0.58) 75%, rgba(0,0,0,0.28) 75.3%, transparent 75.65%)',
+                            'linear-gradient(to bottom, transparent 24.35%, rgba(0,0,0,0.28) 24.7%, rgba(255,255,255,0.58) 25%, rgba(0,0,0,0.28) 25.3%, transparent 25.65%)',
+                            'linear-gradient(to bottom, transparent 49.2%, rgba(0,0,0,0.34) 49.65%, rgba(255,255,255,0.82) 50%, rgba(0,0,0,0.34) 50.35%, transparent 50.8%)',
+                            'linear-gradient(to bottom, transparent 74.35%, rgba(0,0,0,0.28) 74.7%, rgba(255,255,255,0.58) 75%, rgba(0,0,0,0.28) 75.3%, transparent 75.65%)',
+                          ].join(','),
+                          boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.28)',
+                        }}
+                      />
+                    )}
                     {isCropOverlayVisible && comparisonMode === 'processed' && (
                       <CropOverlay
                         crop={documentState.settings.crop}
@@ -901,25 +933,18 @@ export default function App() {
                       </p>
                     </div>
                   )}
+                </div>
 
-                  <div className="absolute top-4 right-4 flex gap-2">
-                    <button
-                      onClick={() => setIsPickingFilmBase((current) => !current)}
-                      className={`p-2 rounded-full border transition-all shadow-xl ${isPickingFilmBase ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/60' : 'bg-zinc-950/80 text-zinc-400 border-zinc-800 hover:text-zinc-100'}`}
-                      title="Sample Film Base"
-                    >
-                      <Pipette size={18} />
-                    </button>
-                    <button
-                      onClick={() => void handleCloseImage()}
-                      className="p-2 bg-zinc-950/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 backdrop-blur-md rounded-full border border-zinc-800 transition-all shadow-xl"
-                      title="Close Image"
-                    >
-                      <X size={18} />
-                    </button>
-                  </div>
-
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-2 bg-zinc-950/80 backdrop-blur-md border border-zinc-800 rounded-2xl shadow-2xl">
+                <div className="flex items-center justify-center gap-3 flex-wrap">
+                  <button
+                    onClick={() => setIsPickingFilmBase((current) => !current)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all shadow-xl ${isPickingFilmBase ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/60' : 'bg-zinc-950/80 text-zinc-400 border-zinc-800 hover:text-zinc-100'}`}
+                    title="Sample Film Base"
+                  >
+                    <Pipette size={16} />
+                    <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Sample Base</span>
+                  </button>
+                  <div className="flex items-center gap-2 px-3 py-2 bg-zinc-950/80 backdrop-blur-md border border-zinc-800 rounded-2xl shadow-2xl">
                     <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">{activeProfile.name}</span>
                     <div className="w-px h-4 bg-zinc-800 mx-1" />
                     <span className="text-[10px] font-mono text-zinc-500 px-2 uppercase tracking-widest">
@@ -930,6 +955,14 @@ export default function App() {
                       {documentState.source.width}×{documentState.source.height}
                     </span>
                   </div>
+                  <button
+                    onClick={() => void handleCloseImage()}
+                    className="flex items-center gap-2 px-3 py-2 bg-zinc-950/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 backdrop-blur-md rounded-xl border border-zinc-800 transition-all shadow-xl"
+                    title="Close Image"
+                  >
+                    <X size={16} />
+                    <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Close</span>
+                  </button>
                 </div>
               </motion.div>
             )}

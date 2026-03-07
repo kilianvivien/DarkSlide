@@ -20,6 +20,7 @@ interface SidebarProps {
   exportOptions: ExportOptions;
   cropImageWidth: number;
   cropImageHeight: number;
+  onLevelInteractionChange?: (isInteracting: boolean) => void;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onExportOptionsChange: (options: Partial<ExportOptions>) => void;
   activeProfile: FilmProfile | null;
@@ -33,6 +34,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   exportOptions,
   cropImageWidth,
   cropImageHeight,
+  onLevelInteractionChange,
   onSettingsChange,
   onExportOptionsChange,
   activeProfile,
@@ -173,6 +175,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   settings={settings}
                   imageWidth={cropImageWidth}
                   imageHeight={cropImageHeight}
+                  onLevelInteractionChange={onLevelInteractionChange}
                   onSettingsChange={onSettingsChange}
                 />
               </motion.div>

@@ -10,5 +10,6 @@ describe('createDefaultSettings', () => {
       height: 1,
       aspectRatio: null,
     });
+    expect(createDefaultSettings().levelAngle).toBe(0);
   });
 });

@@ -8,14 +8,28 @@ interface SliderProps {
   step?: number;
   onChange: (value: number) => void;
   unit?: string;
+  valueLabel?: string;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
 }
 
-export const Slider: React.FC<SliderProps> = ({ label, value, min, max, step = 1, onChange, unit = '' }) => {
+export const Slider: React.FC<SliderProps> = ({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+  unit = '',
+  valueLabel,
+  onInteractionStart,
+  onInteractionEnd,
+}) => {
   return (
     <div className="flex flex-col gap-1.5 mb-4">
       <div className="flex justify-between items-center px-1">
         <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">{label}</label>
-        <span className="text-[11px] font-mono text-zinc-500">{value}{unit}</span>
+        <span className="text-[11px] font-mono text-zinc-500">{valueLabel ?? `${value}${unit}`}</span>
       </div>
       <input
         type="range"
@@ -24,6 +38,12 @@ export const Slider: React.FC<SliderProps> = ({ label, value, min, max, step = 1
         step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
+        onPointerDown={onInteractionStart}
+        onPointerUp={onInteractionEnd}
+        onPointerCancel={onInteractionEnd}
+        onKeyDown={onInteractionStart}
+        onKeyUp={onInteractionEnd}
+        onBlur={onInteractionEnd}
         className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-zinc-200 hover:accent-white transition-all"
       />
     </div>
