@@ -10,6 +10,7 @@ const gpuState = vi.hoisted(() => ({
       maxStorageBufferBindingSize: 512 * 1024 * 1024,
       maxBufferSize: 1024 * 1024 * 1024,
     },
+    processPreviewImage: vi.fn(),
     processTile: vi.fn(),
     destroy: vi.fn(),
     isLost: vi.fn(() => false),
@@ -62,6 +63,8 @@ describe('ImageWorkerClient', () => {
     MockWorker.instances = [];
     gpuState.create.mockReset();
     gpuState.create.mockResolvedValue(null);
+    gpuState.instance.processPreviewImage.mockReset();
+    gpuState.instance.processPreviewImage.mockResolvedValue(new ImageData(new Uint8ClampedArray(4), 1, 1));
     gpuState.instance.processTile.mockReset();
     gpuState.instance.processTile.mockResolvedValue(new ImageData(new Uint8ClampedArray(4), 1, 1));
     gpuState.instance.destroy.mockReset();
@@ -189,7 +192,7 @@ describe('ImageWorkerClient', () => {
     const { ImageWorkerClient } = await import('./imageWorkerClient');
     const client = new ImageWorkerClient();
     const worker = MockWorker.instances[0];
-    gpuState.instance.processTile.mockResolvedValueOnce(
+    gpuState.instance.processPreviewImage.mockResolvedValueOnce(
       new ImageData(new Uint8ClampedArray([
         10, 20, 30, 255,
       ]), 1, 1),
@@ -252,6 +255,7 @@ describe('ImageWorkerClient', () => {
           previewLevelId: 'preview-1024',
           tileSize: 1024,
           halo: 0,
+          geometryCacheHit: false,
         },
       },
     } as MessageEvent);
@@ -304,7 +308,7 @@ describe('ImageWorkerClient', () => {
       height: 1,
       imageData: expect.any(ImageData),
     });
-    expect(gpuState.instance.processTile).toHaveBeenCalledTimes(1);
+    expect(gpuState.instance.processPreviewImage).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to the CPU worker render when GPU processing fails', async () => {
@@ -313,7 +317,7 @@ describe('ImageWorkerClient', () => {
       value: {},
     });
     gpuState.create.mockResolvedValue(gpuState.instance);
-    gpuState.instance.processTile.mockRejectedValueOnce(new Error('gpu exploded'));
+    gpuState.instance.processPreviewImage.mockRejectedValueOnce(new Error('gpu exploded'));
 
     const { ImageWorkerClient } = await import('./imageWorkerClient');
     const client = new ImageWorkerClient();
@@ -374,6 +378,7 @@ describe('ImageWorkerClient', () => {
           previewLevelId: 'preview-1024',
           tileSize: 1024,
           halo: 0,
+          geometryCacheHit: true,
         },
       },
     } as MessageEvent);

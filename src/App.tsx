@@ -64,6 +64,18 @@ function getCanvas2dContext(canvas: HTMLCanvasElement) {
   return canvas.getContext('2d', { willReadFrequently: true }) ?? canvas.getContext('2d');
 }
 
+type QueuedPreviewRender = {
+  documentId: string;
+  settings: ConversionSettings;
+  isColor: boolean;
+  comparisonMode: 'processed' | 'original';
+  targetMaxDimension: number;
+  previewMode: 'draft' | 'settled';
+  maskTuning?: MaskTuning;
+  colorMatrix?: ColorMatrix;
+  tonalCharacter?: TonalCharacter;
+};
+
 export default function App() {
   const initialPreferences = useMemo(() => loadPreferences(), []);
   const usesNativeFileDialogs = isDesktopShell();
@@ -78,6 +90,7 @@ export default function App() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isCropOverlayVisible, setIsCropOverlayVisible] = useState(false);
   const [isAdjustingLevel, setIsAdjustingLevel] = useState(false);
+  const [isInteractingWithPreviewControls, setIsInteractingWithPreviewControls] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [targetMaxDimension, setTargetMaxDimension] = useState(1024);
   const [hasVisiblePreview, setHasVisiblePreview] = useState(false);
@@ -94,6 +107,8 @@ export default function App() {
     gpuAdapterName: null,
     backendMode: 'cpu-worker',
     sourceKind: null,
+    previewMode: null,
+    previewLevelId: null,
     tileSize: null,
     halo: null,
     tileCount: null,
@@ -101,6 +116,12 @@ export default function App() {
     usedCpuFallback: false,
     fallbackReason: null,
     jobDurationMs: null,
+    geometryCacheHit: null,
+    coalescedPreviewRequests: 0,
+    cancelledPreviewJobs: 0,
+    previewBackend: null,
+    lastPreviewJob: null,
+    lastExportJob: null,
     maxStorageBufferBindingSize: null,
     maxBufferSize: null,
     gpuDisabledReason: (typeof navigator === 'undefined' || !('gpu' in navigator)) ? 'unsupported' : ((initialPreferences?.gpuRendering ?? true) ? null : 'user'),
@@ -122,6 +143,8 @@ export default function App() {
   const hasVisiblePreviewRef = useRef(false);
   const pendingPreviewRef = useRef<{ documentId: string; angle: number; imageData: ImageData } | null>(null);
   const previewRetryFrameRef = useRef<number | null>(null);
+  const previewRenderInFlightRef = useRef(false);
+  const queuedPreviewRenderRef = useRef<QueuedPreviewRender | null>(null);
   const handleDownloadRef = useRef<(() => void) | null>(null);
   const handleResetRef = useRef<(() => void) | null>(null);
   const handleCopyDebugInfoRef = useRef<(() => Promise<void>) | null>(null);
@@ -241,13 +264,22 @@ export default function App() {
     documentState?.source.width,
   ]);
 
-  const renderTargetDimension = useMemo(() => {
-    const baseDim = isAdjustingLevel ? Math.min(targetMaxDimension, 1024) : targetMaxDimension;
+  const fullRenderTargetDimension = useMemo(() => {
     const z = zoom === 'fit' ? 1 : zoom;
-    if (z <= 1) return baseDim;
-    const sourceMax = documentState ? Math.max(documentState.source.width, documentState.source.height) : baseDim;
-    return Math.min(sourceMax, Math.ceil(baseDim * z));
-  }, [isAdjustingLevel, targetMaxDimension, zoom, documentState]);
+    if (z <= 1) return targetMaxDimension;
+    const sourceMax = documentState ? Math.max(documentState.source.width, documentState.source.height) : targetMaxDimension;
+    return Math.min(sourceMax, Math.ceil(targetMaxDimension * z));
+  }, [targetMaxDimension, zoom, documentState]);
+  const isDraftPreview = comparisonMode === 'processed' && (isAdjustingLevel || isInteractingWithPreviewControls);
+  const renderTargetDimension = useMemo(() => {
+    if (!isDraftPreview) {
+      return fullRenderTargetDimension;
+    }
+
+    // During active adjustments, force the preview pyramid down to the 1024 level.
+    // Using logicalPreviewSize here overestimates demand back to source resolution.
+    return Math.min(fullRenderTargetDimension, 1024);
+  }, [fullRenderTargetDimension, isDraftPreview]);
   const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
   const showMagnifier = Boolean((isPickingFilmBase || activePointPicker) && documentState?.status === 'ready');
 
@@ -257,11 +289,13 @@ export default function App() {
 
   const handleInteractionStart = useCallback(() => {
     isInteractingRef.current = true;
+    setIsInteractingWithPreviewControls(true);
     beginInteraction();
   }, [beginInteraction]);
 
   const handleInteractionEnd = useCallback(() => {
     isInteractingRef.current = false;
+    setIsInteractingWithPreviewControls(false);
     if (documentState) {
       commitInteraction(documentState.settings);
     }
@@ -445,12 +479,13 @@ export default function App() {
     };
   }, [calculateTargetMaxDimension]);
 
-  const renderDocument = useCallback(async (
+  const executePreviewRender = useCallback(async (
     documentId: string,
     settings: ConversionSettings,
     isColor: boolean,
     nextComparisonMode: 'processed' | 'original',
     nextTargetMaxDimension: number,
+    previewMode: 'draft' | 'settled',
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
@@ -469,6 +504,7 @@ export default function App() {
       context: {
         comparisonMode: nextComparisonMode,
         documentId,
+        previewMode,
         revision,
         targetMaxDimension: nextTargetMaxDimension,
       },
@@ -484,6 +520,7 @@ export default function App() {
         revision,
         targetMaxDimension: nextTargetMaxDimension,
         comparisonMode: nextComparisonMode,
+        previewMode,
         maskTuning,
         colorMatrix,
         tonalCharacter,
@@ -545,6 +582,9 @@ export default function App() {
       if (!isLatestRequest) return;
 
       const message = formatError(renderError);
+      if (message.includes('JOB_CANCELLED')) {
+        return;
+      }
       appendDiagnostic({
         level: 'error',
         code: 'RENDER_FAILED',
@@ -552,6 +592,7 @@ export default function App() {
         context: {
           comparisonMode: nextComparisonMode,
           documentId,
+          previewMode,
           revision,
           targetMaxDimension: nextTargetMaxDimension,
         },
@@ -562,6 +603,48 @@ export default function App() {
     }
   }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, setPreviewVisibility]);
 
+  const drainPreviewRenderQueue = useCallback(async () => {
+    if (previewRenderInFlightRef.current) {
+      return;
+    }
+
+    while (queuedPreviewRenderRef.current) {
+      const next = queuedPreviewRenderRef.current;
+      queuedPreviewRenderRef.current = null;
+      previewRenderInFlightRef.current = true;
+      try {
+        await executePreviewRender(
+          next.documentId,
+          next.settings,
+          next.isColor,
+          next.comparisonMode,
+          next.targetMaxDimension,
+          next.previewMode,
+          next.maskTuning,
+          next.colorMatrix,
+          next.tonalCharacter,
+        );
+      } finally {
+        previewRenderInFlightRef.current = false;
+      }
+    }
+  }, [executePreviewRender]);
+
+  const schedulePreviewRender = useCallback((next: QueuedPreviewRender) => {
+    const hadQueuedPreview = queuedPreviewRenderRef.current !== null;
+    queuedPreviewRenderRef.current = next;
+
+    if (previewRenderInFlightRef.current) {
+      if (hadQueuedPreview || activeRenderRequestRef.current?.documentId === next.documentId) {
+        workerClientRef.current?.noteCoalescedPreviewRequest();
+      }
+      void workerClientRef.current?.cancelActivePreviewRender(next.documentId);
+      return;
+    }
+
+    void drainPreviewRenderQueue();
+  }, [drainPreviewRenderQueue]);
+
   useEffect(() => {
     if (!documentState || !displaySettings || documentState.previewLevels.length === 0) return;
 
@@ -571,18 +654,20 @@ export default function App() {
     const profileMaskTuning = activeProfile.maskTuning;
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
-    const debounceMs = isAdjustingLevel ? 40 : (hasVisiblePreviewRef.current ? 120 : 0);
+    const previewMode = isDraftPreview ? 'draft' : 'settled';
+    const debounceMs = isDraftPreview ? 40 : (hasVisiblePreviewRef.current ? 120 : 0);
     const timer = window.setTimeout(() => {
-      void renderDocument(
+      schedulePreviewRender({
         documentId,
         settings,
         isColor,
         comparisonMode,
-        renderTargetDimension,
-        profileMaskTuning,
-        profileColorMatrix,
-        profileTonalCharacter,
-      );
+        targetMaxDimension: renderTargetDimension,
+        previewMode,
+        maskTuning: profileMaskTuning,
+        colorMatrix: profileColorMatrix,
+        tonalCharacter: profileTonalCharacter,
+      });
     }, debounceMs);
 
     return () => window.clearTimeout(timer);
@@ -595,9 +680,9 @@ export default function App() {
     displaySettings,
     documentState?.id,
     documentState?.previewLevels.length,
-    isAdjustingLevel,
-    renderDocument,
+    isDraftPreview,
     renderTargetDimension,
+    schedulePreviewRender,
   ]);
 
   const updateDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
@@ -681,11 +766,17 @@ export default function App() {
     activeDocumentIdRef.current = null;
     activeRenderRequestRef.current = null;
     pendingPreviewRef.current = null;
+    queuedPreviewRenderRef.current = null;
+    previewRenderInFlightRef.current = false;
     cancelPendingPreviewRetry();
     renderRevisionRef.current = 0;
     setPreviewVisibility(false);
     setIsAdjustingLevel(false);
+    setIsInteractingWithPreviewControls(false);
     setRenderedPreviewAngle(0);
+    if (documentId) {
+      void workerClientRef.current?.cancelActivePreviewRender(documentId);
+    }
     await disposeDocument(documentId);
     setDocumentState(null);
     setError(null);
@@ -726,17 +817,23 @@ export default function App() {
     setIsPickingFilmBase(false);
     setIsCropOverlayVisible(false);
     setIsAdjustingLevel(false);
+    setIsInteractingWithPreviewControls(false);
     setRenderedPreviewAngle(0);
     setPreviewVisibility(false);
     clearCanvas();
     renderRevisionRef.current = 0;
     activeRenderRequestRef.current = null;
     pendingPreviewRef.current = null;
+    queuedPreviewRenderRef.current = null;
+    previewRenderInFlightRef.current = false;
     cancelPendingPreviewRetry();
 
     const importSession = importSessionRef.current + 1;
     importSessionRef.current = importSession;
     const previousDocumentId = activeDocumentIdRef.current;
+    if (previousDocumentId) {
+      void workerClientRef.current?.cancelActivePreviewRender(previousDocumentId);
+    }
     await disposeDocument(previousDocumentId);
 
     const documentId = crypto.randomUUID();

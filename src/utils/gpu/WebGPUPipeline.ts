@@ -45,6 +45,10 @@ function copyTrimmedTile(
   return new ImageData(result, width, height);
 }
 
+function copyWholeImage(source: Uint8ClampedArray, width: number, height: number) {
+  return new ImageData(new Uint8ClampedArray(source), width, height);
+}
+
 export class WebGPUPipeline {
   readonly adapterName: string | null;
 
@@ -415,8 +419,8 @@ export class WebGPUPipeline {
     return result;
   }
 
-  async processTile(
-    tile: ReadTileResult,
+  private async processImageData(
+    imageData: ImageData,
     settings: ConversionSettings,
     isColor: boolean,
     comparisonMode: 'processed' | 'original',
@@ -427,19 +431,11 @@ export class WebGPUPipeline {
     this.assertUsable();
 
     if (comparisonMode === 'original') {
-      return copyTrimmedTile(
-        tile.imageData.data,
-        tile.imageData.width,
-        tile.imageData.height,
-        tile.haloLeft,
-        tile.haloTop,
-        tile.haloRight,
-        tile.haloBottom,
-      );
+      return copyWholeImage(imageData.data, imageData.width, imageData.height);
     }
 
-    const expandedWidth = tile.imageData.width;
-    const expandedHeight = tile.imageData.height;
+    const expandedWidth = imageData.width;
+    const expandedHeight = imageData.height;
     this.ensureTextures(expandedWidth, expandedHeight);
     this.ensureReadbackBuffer(expandedWidth, expandedHeight);
 
@@ -462,7 +458,7 @@ export class WebGPUPipeline {
 
     this.device.queue.writeTexture(
       { texture: this.sourceTexture },
-      tile.imageData.data,
+      imageData.data,
       {
         offset: 0,
         bytesPerRow: expandedWidth * 4,
@@ -581,10 +577,51 @@ export class WebGPUPipeline {
     await this.readbackBuffer.mapAsync(GPUMapMode.READ);
 
     const pixels = this.extractPixels(expandedWidth, expandedHeight);
+    return copyWholeImage(pixels, expandedWidth, expandedHeight);
+  }
+
+  async processPreviewImage(
+    imageData: ImageData,
+    settings: ConversionSettings,
+    isColor: boolean,
+    comparisonMode: 'processed' | 'original',
+    maskTuning?: MaskTuning,
+    colorMatrix?: ColorMatrix,
+    tonalCharacter?: TonalCharacter,
+  ) {
+    return this.processImageData(
+      imageData,
+      settings,
+      isColor,
+      comparisonMode,
+      maskTuning,
+      colorMatrix,
+      tonalCharacter,
+    );
+  }
+
+  async processTile(
+    tile: ReadTileResult,
+    settings: ConversionSettings,
+    isColor: boolean,
+    comparisonMode: 'processed' | 'original',
+    maskTuning?: MaskTuning,
+    colorMatrix?: ColorMatrix,
+    tonalCharacter?: TonalCharacter,
+  ) {
+    const processed = await this.processImageData(
+      tile.imageData,
+      settings,
+      isColor,
+      comparisonMode,
+      maskTuning,
+      colorMatrix,
+      tonalCharacter,
+    );
     return copyTrimmedTile(
-      pixels,
-      expandedWidth,
-      expandedHeight,
+      processed.data,
+      processed.width,
+      processed.height,
       tile.haloLeft,
       tile.haloTop,
       tile.haloRight,

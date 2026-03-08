@@ -22,6 +22,8 @@ const workerState = vi.hoisted(() => ({
     gpuAdapterName: null,
     backendMode: 'cpu-worker',
     sourceKind: null,
+    previewMode: null,
+    previewLevelId: null,
     tileSize: null,
     halo: null,
     tileCount: null,
@@ -29,6 +31,12 @@ const workerState = vi.hoisted(() => ({
     usedCpuFallback: false,
     fallbackReason: null,
     jobDurationMs: null,
+    geometryCacheHit: null,
+    coalescedPreviewRequests: 0,
+    cancelledPreviewJobs: 0,
+    previewBackend: null,
+    lastPreviewJob: null,
+    lastExportJob: null,
     maxStorageBufferBindingSize: null,
     maxBufferSize: null,
     gpuDisabledReason: 'unsupported',
@@ -113,6 +121,10 @@ vi.mock('./utils/imageWorkerClient', () => ({
     setGPUEnabled = workerState.setGPUEnabled;
 
     getGPUDiagnostics = workerState.getGPUDiagnostics;
+
+    noteCoalescedPreviewRequest = vi.fn();
+
+    cancelActivePreviewRender = vi.fn(async () => undefined);
 
     terminate = vi.fn();
   },
@@ -294,7 +306,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
   });
 
-  it('drops stale render revisions when a newer preview finishes first', async () => {
+  it('queues only the latest preview render while another render is in flight', async () => {
     const putImageData = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),
@@ -327,17 +339,20 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(workerState.render).toHaveBeenCalledTimes(2);
+    expect(workerState.render).toHaveBeenCalledTimes(1);
 
-    const [firstPayload, secondPayload] = workerState.render.mock.calls.map(([payload]) => payload);
-    secondRender.resolve(createRenderResult(secondPayload.documentId, secondPayload.revision, 77, 55));
-    await flushMicrotasks();
-
+    const [firstPayload] = workerState.render.mock.calls.map(([payload]) => payload);
     firstRender.resolve(createRenderResult(firstPayload.documentId, firstPayload.revision, 55, 44));
     await flushMicrotasks();
 
-    expect(putImageData).toHaveBeenCalledTimes(1);
-    expect((putImageData.mock.calls[0]?.[0] as ImageData).width).toBe(77);
+    expect(workerState.render).toHaveBeenCalledTimes(2);
+
+    const secondPayload = workerState.render.mock.calls[1]?.[0];
+    secondRender.resolve(createRenderResult(secondPayload.documentId, secondPayload.revision, 77, 55));
+    await flushMicrotasks();
+
+    expect(putImageData).toHaveBeenCalledTimes(2);
+    expect((putImageData.mock.calls.at(-1)?.[0] as ImageData).width).toBe(77);
     expect(document.querySelector('[data-tip="Showing Original — click to return"]')).toBeTruthy();
   });
 

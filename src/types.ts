@@ -22,6 +22,8 @@ export interface CropSettings {
 
 export type ExportFormat = 'image/jpeg' | 'image/png' | 'image/webp';
 export type TileSourceKind = 'preview' | 'source';
+export type PreviewMode = 'draft' | 'settled';
+export type RenderBackendMode = 'gpu-preview' | 'gpu-tiled-render' | 'cpu-worker';
 
 export interface FilmBaseSample {
   r: number;
@@ -155,6 +157,7 @@ export interface RenderRequest {
   revision: number;
   targetMaxDimension: number;
   comparisonMode: 'processed' | 'original';
+  previewMode?: PreviewMode;
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
@@ -214,6 +217,7 @@ export interface PreparedTileJobResult {
   previewLevelId: string | null;
   tileSize: number;
   halo: number;
+  geometryCacheHit: boolean;
 }
 
 export interface ReadTileRequest {
@@ -244,13 +248,11 @@ export interface CancelTileJobRequest {
   jobId: string;
 }
 
-export interface RenderBackendDiagnostics {
-  gpuAvailable: boolean;
-  gpuEnabled: boolean;
-  gpuActive: boolean;
-  gpuAdapterName: string | null;
-  backendMode: 'gpu-tiled-render' | 'cpu-worker';
-  sourceKind: TileSourceKind | null;
+export interface RenderJobDiagnosticsSnapshot {
+  backendMode: RenderBackendMode;
+  sourceKind: TileSourceKind;
+  previewMode: PreviewMode | null;
+  previewLevelId: string | null;
   tileSize: number | null;
   halo: number | null;
   tileCount: number | null;
@@ -258,6 +260,31 @@ export interface RenderBackendDiagnostics {
   usedCpuFallback: boolean;
   fallbackReason: string | null;
   jobDurationMs: number | null;
+  geometryCacheHit: boolean | null;
+}
+
+export interface RenderBackendDiagnostics {
+  gpuAvailable: boolean;
+  gpuEnabled: boolean;
+  gpuActive: boolean;
+  gpuAdapterName: string | null;
+  backendMode: RenderBackendMode;
+  sourceKind: TileSourceKind | null;
+  previewMode: PreviewMode | null;
+  previewLevelId: string | null;
+  tileSize: number | null;
+  halo: number | null;
+  tileCount: number | null;
+  intermediateFormat: 'rgba16float' | null;
+  usedCpuFallback: boolean;
+  fallbackReason: string | null;
+  jobDurationMs: number | null;
+  geometryCacheHit: boolean | null;
+  coalescedPreviewRequests: number;
+  cancelledPreviewJobs: number;
+  previewBackend: RenderBackendMode | null;
+  lastPreviewJob: RenderJobDiagnosticsSnapshot | null;
+  lastExportJob: RenderJobDiagnosticsSnapshot | null;
   maxStorageBufferBindingSize: number | null;
   maxBufferSize: number | null;
   gpuDisabledReason: 'user' | 'unsupported' | 'initialization-failed' | 'device-lost' | null;

@@ -8,9 +8,12 @@ import {
   FilmBaseSample,
   PrepareTileJobRequest,
   PreparedTileJobResult,
+  PreviewMode,
   ReadTileRequest,
   ReadTileResult,
+  RenderBackendMode,
   RenderBackendDiagnostics,
+  RenderJobDiagnosticsSnapshot,
   RenderRequest,
   RenderResult,
   SampleRequest,
@@ -97,6 +100,36 @@ function buildTileRects(width: number, height: number, tileSize: number) {
   return tiles;
 }
 
+function createJobSnapshot(
+  backendMode: RenderBackendMode,
+  sourceKind: TileSourceKind,
+  previewMode: PreviewMode | null,
+  previewLevelId: string | null,
+  tileSize: number | null,
+  halo: number | null,
+  tileCount: number | null,
+  intermediateFormat: RenderBackendDiagnostics['intermediateFormat'],
+  usedCpuFallback: boolean,
+  fallbackReason: string | null,
+  jobDurationMs: number | null,
+  geometryCacheHit: boolean | null,
+): RenderJobDiagnosticsSnapshot {
+  return {
+    backendMode,
+    sourceKind,
+    previewMode,
+    previewLevelId,
+    tileSize,
+    halo,
+    tileCount,
+    intermediateFormat,
+    usedCpuFallback,
+    fallbackReason,
+    jobDurationMs,
+    geometryCacheHit,
+  };
+}
+
 export class FatalImageWorkerError extends Error {
   code: string;
 
@@ -128,6 +161,10 @@ export class ImageWorkerClient {
 
   private sourceKind: TileSourceKind | null = null;
 
+  private previewMode: PreviewMode | null = null;
+
+  private previewLevelId: string | null = null;
+
   private tileSize: number | null = null;
 
   private halo: number | null = null;
@@ -141,6 +178,18 @@ export class ImageWorkerClient {
   private fallbackReason: string | null = null;
 
   private jobDurationMs: number | null = null;
+
+  private geometryCacheHit: boolean | null = null;
+
+  private coalescedPreviewRequests = 0;
+
+  private cancelledPreviewJobs = 0;
+
+  private previewBackend: RenderBackendMode | null = null;
+
+  private lastPreviewJob: RenderJobDiagnosticsSnapshot | null = null;
+
+  private lastExportJob: RenderJobDiagnosticsSnapshot | null = null;
 
   private activePreviewJobId: string | null = null;
 
@@ -221,6 +270,8 @@ export class ImageWorkerClient {
     RenderBackendDiagnostics,
     'backendMode'
     | 'sourceKind'
+    | 'previewMode'
+    | 'previewLevelId'
     | 'tileSize'
     | 'halo'
     | 'tileCount'
@@ -228,9 +279,12 @@ export class ImageWorkerClient {
     | 'usedCpuFallback'
     | 'fallbackReason'
     | 'jobDurationMs'
+    | 'geometryCacheHit'
   >>) {
     if (update.backendMode !== undefined) this.backendMode = update.backendMode;
     if (update.sourceKind !== undefined) this.sourceKind = update.sourceKind;
+    if (update.previewMode !== undefined) this.previewMode = update.previewMode;
+    if (update.previewLevelId !== undefined) this.previewLevelId = update.previewLevelId;
     if (update.tileSize !== undefined) this.tileSize = update.tileSize;
     if (update.halo !== undefined) this.halo = update.halo;
     if (update.tileCount !== undefined) this.tileCount = update.tileCount;
@@ -238,6 +292,7 @@ export class ImageWorkerClient {
     if (update.usedCpuFallback !== undefined) this.usedCpuFallback = update.usedCpuFallback;
     if (update.fallbackReason !== undefined) this.fallbackReason = update.fallbackReason;
     if (update.jobDurationMs !== undefined) this.jobDurationMs = update.jobDurationMs;
+    if (update.geometryCacheHit !== undefined) this.geometryCacheHit = update.geometryCacheHit;
   }
 
   private async ensureGPU() {
@@ -292,6 +347,7 @@ export class ImageWorkerClient {
     try {
       await this.request<{ cancelled: true }>('cancel-job', { documentId, jobId });
       if (logCancellation) {
+        this.cancelledPreviewJobs += 1;
         appendDiagnostic({
           level: 'info',
           code: 'GPU_TILE_JOB_CANCELLED',
@@ -305,6 +361,14 @@ export class ImageWorkerClient {
     } catch {
       // Ignore cancellation races.
     }
+  }
+
+  noteCoalescedPreviewRequest() {
+    this.coalescedPreviewRequests += 1;
+  }
+
+  async cancelActivePreviewRender(documentId: string) {
+    await this.cancelTileJob(documentId, this.activePreviewJobId, true);
   }
 
   private createJobId(documentId: string, revision: number | string, sourceKind: TileSourceKind) {
@@ -362,6 +426,46 @@ export class ImageWorkerClient {
     };
   }
 
+  private async assemblePreviewJob(
+    prepared: PreparedTileJobResult,
+    settings: ConversionSettings,
+    isColor: boolean,
+    comparisonMode: 'processed' | 'original',
+    maskTuning?: RenderRequest['maskTuning'],
+    colorMatrix?: RenderRequest['colorMatrix'],
+    tonalCharacter?: RenderRequest['tonalCharacter'],
+  ) {
+    const rawPreview = await this.readTile({
+      documentId: prepared.documentId,
+      jobId: prepared.jobId,
+      x: 0,
+      y: 0,
+      width: prepared.width,
+      height: prepared.height,
+    });
+
+    const imageData = comparisonMode === 'processed' && this.gpuPipeline
+      ? await this.gpuPipeline.processPreviewImage(
+        rawPreview.imageData,
+        settings,
+        isColor,
+        comparisonMode,
+        maskTuning,
+        colorMatrix,
+        tonalCharacter,
+      )
+      : trimTileImageData(rawPreview);
+
+    const histogram = buildEmptyHistogram();
+    accumulateHistogram(histogram, imageData.data);
+
+    return {
+      imageData,
+      histogram,
+      tileCount: 1,
+    };
+  }
+
   private async createBlobFromImageData(
     imageData: ImageData,
     format: ExportRequest['options']['format'],
@@ -408,6 +512,8 @@ export class ImageWorkerClient {
     this.updateBackendState({
       backendMode: 'cpu-worker',
       sourceKind,
+      previewMode: sourceKind === 'preview' ? this.previewMode : null,
+      previewLevelId: null,
       tileSize: null,
       halo: null,
       tileCount: null,
@@ -415,6 +521,7 @@ export class ImageWorkerClient {
       usedCpuFallback,
       fallbackReason,
       jobDurationMs: null,
+      geometryCacheHit: null,
     });
   }
 
@@ -443,6 +550,8 @@ export class ImageWorkerClient {
       gpuAdapterName: gpu?.adapterName ?? null,
       backendMode: this.backendMode,
       sourceKind: this.sourceKind,
+      previewMode: this.previewMode,
+      previewLevelId: this.previewLevelId,
       tileSize: this.tileSize,
       halo: this.halo,
       tileCount: this.tileCount,
@@ -450,6 +559,12 @@ export class ImageWorkerClient {
       usedCpuFallback: this.usedCpuFallback,
       fallbackReason: this.fallbackReason,
       jobDurationMs: this.jobDurationMs,
+      geometryCacheHit: this.geometryCacheHit,
+      coalescedPreviewRequests: this.coalescedPreviewRequests,
+      cancelledPreviewJobs: this.cancelledPreviewJobs,
+      previewBackend: this.previewBackend,
+      lastPreviewJob: this.lastPreviewJob,
+      lastExportJob: this.lastExportJob,
       maxStorageBufferBindingSize: gpu?.limits.maxStorageBufferBindingSize ?? null,
       maxBufferSize: gpu?.limits.maxBufferSize ?? null,
       gpuDisabledReason: this.gpuDisabledReason,
@@ -470,12 +585,48 @@ export class ImageWorkerClient {
     if (payload.comparisonMode === 'processed') {
       if (!this.canAttemptGPU()) {
         this.markCpuWorkerBackend('preview');
+        this.previewBackend = 'cpu-worker';
+        this.lastPreviewJob = createJobSnapshot(
+          'cpu-worker',
+          'preview',
+          payload.previewMode ?? 'settled',
+          null,
+          null,
+          null,
+          null,
+          null,
+          false,
+          null,
+          null,
+          null,
+        );
+        if (this.activePreviewJobId === jobId) {
+          this.activePreviewJobId = null;
+        }
         return this.request<RenderResult>('render', payload);
       }
 
       const gpu = await this.ensureGPU();
       if (!gpu) {
         this.markCpuWorkerBackend('preview', this.lastGPUError ?? 'WebGPU unavailable.', true);
+        this.previewBackend = 'cpu-worker';
+        this.lastPreviewJob = createJobSnapshot(
+          'cpu-worker',
+          'preview',
+          payload.previewMode ?? 'settled',
+          null,
+          null,
+          null,
+          null,
+          null,
+          true,
+          this.lastGPUError ?? 'WebGPU unavailable.',
+          null,
+          null,
+        );
+        if (this.activePreviewJobId === jobId) {
+          this.activePreviewJobId = null;
+        }
         appendDiagnostic({
           level: 'info',
           code: 'GPU_FALLBACK_CPU',
@@ -499,6 +650,7 @@ export class ImageWorkerClient {
       context: {
         documentId: payload.documentId,
         jobId,
+        previewMode: payload.previewMode ?? 'settled',
         sourceKind: 'preview',
       },
     });
@@ -513,7 +665,7 @@ export class ImageWorkerClient {
         targetMaxDimension: payload.targetMaxDimension,
       });
 
-      const assembled = await this.assembleTileJob(
+      const assembled = await this.assemblePreviewJob(
         prepared,
         payload.settings,
         payload.isColor,
@@ -528,9 +680,26 @@ export class ImageWorkerClient {
       }
 
       const jobDurationMs = Math.round(performance.now() - startedAt);
+      const backendMode: RenderBackendMode = payload.comparisonMode === 'processed' ? 'gpu-preview' : 'cpu-worker';
+      const snapshot = createJobSnapshot(
+        backendMode,
+        'preview',
+        payload.previewMode ?? 'settled',
+        prepared.previewLevelId,
+        prepared.tileSize,
+        prepared.halo,
+        assembled.tileCount,
+        payload.comparisonMode === 'processed' ? 'rgba16float' : null,
+        false,
+        null,
+        jobDurationMs,
+        prepared.geometryCacheHit,
+      );
       this.updateBackendState({
-        backendMode: payload.comparisonMode === 'processed' ? 'gpu-tiled-render' : 'cpu-worker',
+        backendMode,
         sourceKind: 'preview',
+        previewMode: payload.previewMode ?? 'settled',
+        previewLevelId: prepared.previewLevelId,
         tileSize: prepared.tileSize,
         halo: prepared.halo,
         tileCount: assembled.tileCount,
@@ -538,7 +707,10 @@ export class ImageWorkerClient {
         usedCpuFallback: false,
         fallbackReason: null,
         jobDurationMs,
+        geometryCacheHit: prepared.geometryCacheHit,
       });
+      this.previewBackend = backendMode;
+      this.lastPreviewJob = snapshot;
 
       appendDiagnostic({
         level: 'info',
@@ -546,9 +718,11 @@ export class ImageWorkerClient {
         message: payload.documentId,
         context: {
           documentId: payload.documentId,
+          geometryCacheHit: prepared.geometryCacheHit,
           halo: prepared.halo,
           jobDurationMs,
           jobId,
+          previewMode: payload.previewMode ?? 'settled',
           sourceKind: 'preview',
           tileCount: assembled.tileCount,
           tileSize: prepared.tileSize,
@@ -577,6 +751,21 @@ export class ImageWorkerClient {
 
       this.handleGPUFailure(error);
       this.markCpuWorkerBackend('preview', message, true);
+      this.previewBackend = 'cpu-worker';
+      this.lastPreviewJob = createJobSnapshot(
+        'cpu-worker',
+        'preview',
+        payload.previewMode ?? 'settled',
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        message,
+        null,
+        null,
+      );
       appendDiagnostic({
         level: 'info',
         code: 'GPU_FALLBACK_CPU',
@@ -584,10 +773,14 @@ export class ImageWorkerClient {
         context: {
           documentId: payload.documentId,
           jobId,
+          previewMode: payload.previewMode ?? 'settled',
           reason: message,
           sourceKind: 'preview',
         },
       });
+      if (this.activePreviewJobId === jobId) {
+        this.activePreviewJobId = null;
+      }
       return this.request<RenderResult>('render', payload);
     }
   }
@@ -656,9 +849,25 @@ export class ImageWorkerClient {
         payload.options.quality,
       );
       const jobDurationMs = Math.round(performance.now() - startedAt);
+      const snapshot = createJobSnapshot(
+        'gpu-tiled-render',
+        'source',
+        null,
+        prepared.previewLevelId,
+        prepared.tileSize,
+        prepared.halo,
+        assembled.tileCount,
+        'rgba16float',
+        false,
+        null,
+        jobDurationMs,
+        prepared.geometryCacheHit,
+      );
       this.updateBackendState({
         backendMode: 'gpu-tiled-render',
         sourceKind: 'source',
+        previewMode: null,
+        previewLevelId: prepared.previewLevelId,
         tileSize: prepared.tileSize,
         halo: prepared.halo,
         tileCount: assembled.tileCount,
@@ -666,7 +875,9 @@ export class ImageWorkerClient {
         usedCpuFallback: false,
         fallbackReason: null,
         jobDurationMs,
+        geometryCacheHit: prepared.geometryCacheHit,
       });
+      this.lastExportJob = snapshot;
 
       appendDiagnostic({
         level: 'info',
@@ -674,6 +885,7 @@ export class ImageWorkerClient {
         message: payload.documentId,
         context: {
           documentId: payload.documentId,
+          geometryCacheHit: prepared.geometryCacheHit,
           halo: prepared.halo,
           jobDurationMs,
           jobId,
@@ -692,6 +904,20 @@ export class ImageWorkerClient {
       const message = error instanceof Error ? error.message : String(error);
       this.handleGPUFailure(error);
       this.markCpuWorkerBackend('source', message, true);
+      this.lastExportJob = createJobSnapshot(
+        'cpu-worker',
+        'source',
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        message,
+        null,
+        null,
+      );
       appendDiagnostic({
         level: 'info',
         code: 'GPU_FALLBACK_CPU',

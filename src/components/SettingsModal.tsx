@@ -12,6 +12,13 @@ interface SettingsModalProps {
   onToggleGPURendering: (enabled: boolean) => void;
 }
 
+type DiagnosticCardItem = {
+  label: string;
+  value: string | number;
+  mono: boolean;
+  valueClass?: string;
+};
+
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 const mod = isMac ? '⌘' : 'Ctrl';
 
@@ -35,6 +42,11 @@ function getRenderBackendLabel(diagnostics: RenderBackendDiagnostics) {
   }
 
   if (diagnostics.gpuActive) {
+    if (diagnostics.backendMode === 'gpu-preview') {
+      return diagnostics.gpuAdapterName
+        ? `Active — GPU preview on ${diagnostics.gpuAdapterName}`
+        : 'Active — GPU preview';
+    }
     if (diagnostics.backendMode === 'gpu-tiled-render') {
       return diagnostics.gpuAdapterName
         ? `Active — GPU tiled render on ${diagnostics.gpuAdapterName}`
@@ -65,6 +77,9 @@ function getRenderBackendDetail(diagnostics: RenderBackendDiagnostics) {
   if (diagnostics.gpuDisabledReason === 'initialization-failed') {
     return diagnostics.lastError ?? 'WebGPU initialization failed, so rendering fell back to the CPU path.';
   }
+  if (diagnostics.backendMode === 'gpu-preview') {
+    return 'WebGPU is processing the full preview frame in a single pass for faster interactive updates.';
+  }
   if (diagnostics.backendMode === 'gpu-tiled-render') {
     return 'WebGPU is processing texture-backed tiles on the main thread and assembling the final image tile by tile.';
   }
@@ -74,6 +89,12 @@ function getRenderBackendDetail(diagnostics: RenderBackendDiagnostics) {
   }
 
   return diagnostics.gpuActive ? 'WebGPU is active on the main thread.' : 'The CPU worker path is currently active.';
+}
+
+function getBackendModeLabel(value: RenderBackendDiagnostics['backendMode'] | RenderBackendDiagnostics['previewBackend']) {
+  if (value === 'gpu-preview') return 'GPU preview';
+  if (value === 'gpu-tiled-render') return 'GPU tiled render';
+  return 'CPU worker';
 }
 
 function formatBytes(value: number | null) {
@@ -268,45 +289,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     red: 'bg-red-400',
                     zinc: 'bg-zinc-500',
                   }[statusColor];
-
+                  const previewItems: DiagnosticCardItem[] = [
+                    { label: 'Backend', value: d.lastPreviewJob ? getBackendModeLabel(d.lastPreviewJob.backendMode) : '—', mono: false },
+                    { label: 'Mode', value: d.lastPreviewJob?.previewMode ?? '—', mono: false },
+                    { label: 'Preview level', value: d.lastPreviewJob?.previewLevelId ?? '—', mono: true },
+                    { label: 'Duration', value: d.lastPreviewJob?.jobDurationMs !== null && d.lastPreviewJob ? `${d.lastPreviewJob.jobDurationMs} ms` : '—', mono: true, valueClass: getJobDurationColor(d.lastPreviewJob?.jobDurationMs ?? null) },
+                    { label: 'Cache hit', value: d.lastPreviewJob?.geometryCacheHit === null || d.lastPreviewJob?.geometryCacheHit === undefined ? '—' : (d.lastPreviewJob.geometryCacheHit ? 'Yes' : 'No'), mono: false },
+                    { label: 'Fallback', value: d.lastPreviewJob?.usedCpuFallback ? (d.lastPreviewJob.fallbackReason ?? 'Yes') : 'No', mono: false, valueClass: d.lastPreviewJob?.usedCpuFallback ? 'text-amber-400' : 'text-zinc-200' },
+                  ];
+                  const exportItems: DiagnosticCardItem[] = [
+                    { label: 'Backend', value: d.lastExportJob ? getBackendModeLabel(d.lastExportJob.backendMode) : '—', mono: false },
+                    { label: 'Source kind', value: d.lastExportJob?.sourceKind ?? '—', mono: false },
+                    { label: 'Tile count', value: d.lastExportJob?.tileCount ?? '—', mono: true },
+                    { label: 'Duration', value: d.lastExportJob?.jobDurationMs !== null && d.lastExportJob ? `${d.lastExportJob.jobDurationMs} ms` : '—', mono: true, valueClass: getJobDurationColor(d.lastExportJob?.jobDurationMs ?? null) },
+                    { label: 'Cache hit', value: d.lastExportJob?.geometryCacheHit === null || d.lastExportJob?.geometryCacheHit === undefined ? '—' : (d.lastExportJob.geometryCacheHit ? 'Yes' : 'No'), mono: false },
+                    { label: 'Fallback', value: d.lastExportJob?.usedCpuFallback ? (d.lastExportJob.fallbackReason ?? 'Yes') : 'No', mono: false, valueClass: d.lastExportJob?.usedCpuFallback ? 'text-amber-400' : 'text-zinc-200' },
+                  ];
+                  const sharedItems: DiagnosticCardItem[] = [
+                    { label: 'Adapter', value: d.gpuAdapterName ?? '—', mono: false },
+                    { label: 'GPU toggle', value: d.gpuEnabled ? 'Enabled' : 'Disabled', mono: false },
+                    { label: 'Preview backend', value: d.previewBackend ? getBackendModeLabel(d.previewBackend) : '—', mono: false },
+                    { label: 'Coalesced previews', value: d.coalescedPreviewRequests, mono: true },
+                    { label: 'Cancelled previews', value: d.cancelledPreviewJobs, mono: true },
+                    { label: 'Storage limit', value: formatBytes(d.maxStorageBufferBindingSize), mono: true },
+                    { label: 'Max buffer', value: formatBytes(d.maxBufferSize), mono: true },
+                    { label: 'Current path', value: getBackendModeLabel(d.backendMode), mono: false },
+                  ];
                   const groups = [
-                    {
-                      title: 'Render Path',
-                      items: [
-                        { label: 'Path', value: d.backendMode === 'gpu-tiled-render' ? 'GPU tiled render' : 'CPU worker', mono: false },
-                        { label: 'Adapter', value: d.gpuAdapterName ?? '—', mono: false },
-                        { label: 'GPU toggle', value: d.gpuEnabled ? 'Enabled' : 'Disabled', mono: false },
-                        { label: 'Source kind', value: d.sourceKind ?? '—', mono: false },
-                      ],
-                    },
-                    {
-                      title: 'Tile Config',
-                      items: [
-                        { label: 'Tile size', value: d.tileSize ? `${d.tileSize}px` : '—', mono: true },
-                        { label: 'Tile count', value: d.tileCount ?? '—', mono: true },
-                        { label: 'Halo', value: d.halo !== null ? `${d.halo}px` : '—', mono: true },
-                        { label: 'Intermediate', value: d.intermediateFormat ?? '—', mono: true },
-                      ],
-                    },
-                    {
-                      title: 'Performance',
-                      items: [
-                        {
-                          label: 'Job duration',
-                          value: d.jobDurationMs !== null ? `${d.jobDurationMs} ms` : '—',
-                          mono: true,
-                          valueClass: getJobDurationColor(d.jobDurationMs),
-                        },
-                        {
-                          label: 'CPU fallback',
-                          value: d.usedCpuFallback ? 'Yes' : 'No',
-                          mono: false,
-                          valueClass: d.usedCpuFallback ? 'text-amber-400' : 'text-zinc-200',
-                        },
-                        { label: 'Storage limit', value: formatBytes(d.maxStorageBufferBindingSize), mono: true },
-                        { label: 'Max buffer', value: formatBytes(d.maxBufferSize), mono: true },
-                      ],
-                    },
+                    { title: 'Last Preview Render', items: previewItems },
+                    { title: 'Last Export Render', items: exportItems },
+                    { title: 'GPU State', items: sharedItems },
                   ];
 
                   return (
@@ -332,11 +344,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <div key={group.title} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
                           <p className="mb-3 text-[10px] uppercase tracking-[0.18em] font-semibold text-zinc-600">{group.title}</p>
                           <div className="grid grid-cols-2 gap-2">
-                            {group.items.map(({ label, value, mono, valueClass }) => (
-                              <div key={label} className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5">
-                                <p className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">{label}</p>
-                                <p className={`mt-1 text-[11px] break-words ${valueClass ?? 'text-zinc-200'} ${mono ? 'font-mono' : ''}`}>
-                                  {String(value)}
+                            {group.items.map((item) => (
+                              <div key={item.label} className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5">
+                                <p className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">{item.label}</p>
+                                <p className={`mt-1 text-[11px] break-words ${item.valueClass ?? 'text-zinc-200'} ${item.mono ? 'font-mono' : ''}`}>
+                                  {String(item.value)}
                                 </p>
                               </div>
                             ))}

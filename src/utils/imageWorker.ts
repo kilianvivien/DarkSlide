@@ -61,6 +61,8 @@ interface StoredDocument {
   metadata: SourceMetadata;
   sourceCanvas: OffscreenCanvas;
   previews: StoredPreview[];
+  previewGeometryCache: Map<string, StoredTileJob>;
+  sourceGeometryCache: Map<string, StoredTileJob>;
 }
 
 interface StoredTileJob {
@@ -277,6 +279,25 @@ function getTileSource(document: StoredDocument, payload: PrepareTileJobRequest)
   };
 }
 
+function createGeometryCacheKey(
+  sourceKind: TileSourceKind,
+  previewLevelId: string | null,
+  settings: ConversionSettings,
+) {
+  const crop = normalizeCrop(settings);
+  return JSON.stringify({
+    sourceKind,
+    previewLevelId,
+    crop,
+    rotation: settings.rotation,
+    levelAngle: settings.levelAngle,
+  });
+}
+
+function getGeometryCache(document: StoredDocument, sourceKind: TileSourceKind) {
+  return sourceKind === 'preview' ? document.previewGeometryCache : document.sourceGeometryCache;
+}
+
 function clearTileJob(jobId: string) {
   tileJobs.delete(jobId);
   cancelledJobs.delete(jobId);
@@ -317,6 +338,8 @@ async function handleDecode(payload: DecodeRequest) {
     metadata,
     sourceCanvas: decodedCanvas,
     previews: previewStore,
+    previewGeometryCache: new Map(),
+    sourceGeometryCache: new Map(),
   });
 
   return {
@@ -329,16 +352,30 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
   const document = getStoredDocument(payload.documentId);
   clearTileJob(payload.jobId);
   const source = getTileSource(document, payload);
-  const transformed = renderTransformedCanvasForJob(source.canvas, payload.settings);
-  const halo = getHalo(payload.settings, payload.comparisonMode);
+  const cache = getGeometryCache(document, payload.sourceKind);
+  const geometryCacheKey = createGeometryCacheKey(payload.sourceKind, source.previewLevelId, payload.settings);
+  let storedJob = cache.get(geometryCacheKey);
+  let geometryCacheHit = true;
 
+  if (!storedJob) {
+    const transformed = renderTransformedCanvasForJob(source.canvas, payload.settings);
+    storedJob = {
+      documentId: payload.documentId,
+      sourceKind: payload.sourceKind,
+      previewLevelId: source.previewLevelId,
+      transformedCanvas: transformed.canvas,
+      width: transformed.width,
+      height: transformed.height,
+      halo: 0,
+    };
+    cache.clear();
+    cache.set(geometryCacheKey, storedJob);
+    geometryCacheHit = false;
+  }
+
+  const halo = getHalo(payload.settings, payload.comparisonMode);
   tileJobs.set(payload.jobId, {
-    documentId: payload.documentId,
-    sourceKind: payload.sourceKind,
-    previewLevelId: source.previewLevelId,
-    transformedCanvas: transformed.canvas,
-    width: transformed.width,
-    height: transformed.height,
+    ...storedJob,
     halo,
   });
 
@@ -346,11 +383,12 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
     documentId: payload.documentId,
     jobId: payload.jobId,
     sourceKind: payload.sourceKind,
-    width: transformed.width,
-    height: transformed.height,
+    width: storedJob.width,
+    height: storedJob.height,
     previewLevelId: source.previewLevelId,
     tileSize: TILE_SIZE,
     halo,
+    geometryCacheHit,
   } satisfies PreparedTileJobResult;
 }
 
