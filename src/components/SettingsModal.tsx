@@ -90,6 +90,14 @@ function formatBytes(value: number | null) {
   return `${mib.toFixed(0)} MiB`;
 }
 
+function getRenderBackendReason(diagnostics: RenderBackendDiagnostics) {
+  if (diagnostics.usedCpuFallback) {
+    return diagnostics.fallbackReason ?? 'CPU fallback';
+  }
+
+  return diagnostics.gpuDisabledReason ?? 'Active';
+}
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
@@ -100,6 +108,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [tab, setTab] = useState<'general' | 'shortcuts' | 'diagnostics'>('general');
   const [copied, setCopied] = useState(false);
+  const diagnosticItems = [
+    { label: 'Path', value: renderBackendDiagnostics.backendMode === 'gpu-tiled-render' ? 'GPU tiled render' : 'CPU worker' },
+    { label: 'Adapter', value: renderBackendDiagnostics.gpuAdapterName ?? 'Unavailable' },
+    { label: 'GPU toggle', value: renderBackendDiagnostics.gpuEnabled ? 'Enabled' : 'Disabled' },
+    { label: 'Source kind', value: renderBackendDiagnostics.sourceKind ?? 'Unavailable' },
+    { label: 'Tile size', value: renderBackendDiagnostics.tileSize ? `${renderBackendDiagnostics.tileSize}px` : 'Unavailable' },
+    { label: 'Tile count', value: renderBackendDiagnostics.tileCount ?? 'Unavailable' },
+    { label: 'Halo', value: renderBackendDiagnostics.halo !== null ? `${renderBackendDiagnostics.halo}px` : 'Unavailable' },
+    { label: 'Job duration', value: renderBackendDiagnostics.jobDurationMs !== null ? `${renderBackendDiagnostics.jobDurationMs} ms` : 'Unavailable' },
+    { label: 'Intermediate', value: renderBackendDiagnostics.intermediateFormat ?? 'Unavailable' },
+    { label: 'CPU fallback', value: renderBackendDiagnostics.usedCpuFallback ? 'Yes' : 'No' },
+    { label: 'Storage limit', value: formatBytes(renderBackendDiagnostics.maxStorageBufferBindingSize) },
+    { label: 'Max buffer', value: formatBytes(renderBackendDiagnostics.maxBufferSize) },
+  ];
 
   // Close on Escape
   useEffect(() => {
@@ -142,7 +164,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"
           >
             <div
-              className="pointer-events-auto w-[520px] max-h-[80vh] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/60 flex flex-col overflow-hidden"
+              className="pointer-events-auto w-[min(680px,calc(100vw-2rem))] max-h-[80vh] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/60 flex flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
@@ -239,87 +261,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {tab === 'diagnostics' && (
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-                      <h3 className="text-sm font-semibold text-zinc-100">Render Backend</h3>
-                      <div className="mt-4 space-y-2 text-[11px]">
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Path</span>
-                          <span className="text-zinc-200">{renderBackendDiagnostics.backendMode === 'gpu-tiled-render' ? 'GPU tiled render' : 'CPU worker'}</span>
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-zinc-100">Render Backend</h3>
+                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                            {getRenderBackendDetail(renderBackendDiagnostics)}
+                          </p>
                         </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Adapter</span>
-                          <span className="text-right text-zinc-200">{renderBackendDiagnostics.gpuAdapterName ?? 'Unavailable'}</span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">GPU toggle</span>
-                          <span className="text-zinc-200">{renderBackendDiagnostics.gpuEnabled ? 'Enabled' : 'Disabled'}</span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Tile size</span>
-                          <span className="text-right text-zinc-200">
-                            {renderBackendDiagnostics.tileSize ? `${renderBackendDiagnostics.tileSize}px` : 'Unavailable'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Halo</span>
-                          <span className="text-right text-zinc-200">
-                            {renderBackendDiagnostics.halo !== null ? `${renderBackendDiagnostics.halo}px` : 'Unavailable'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Tile count</span>
-                          <span className="text-right text-zinc-200">
-                            {renderBackendDiagnostics.tileCount ?? 'Unavailable'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Intermediate format</span>
-                          <span className="text-right text-zinc-200">
-                            {renderBackendDiagnostics.intermediateFormat ?? 'Unavailable'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Source kind</span>
-                          <span className="text-right text-zinc-200">
-                            {renderBackendDiagnostics.sourceKind ?? 'Unavailable'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Job duration</span>
-                          <span className="text-right text-zinc-200">
-                            {renderBackendDiagnostics.jobDurationMs !== null ? `${renderBackendDiagnostics.jobDurationMs} ms` : 'Unavailable'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Storage buffer limit</span>
-                          <span className="text-right text-zinc-200">
-                            {formatBytes(renderBackendDiagnostics.maxStorageBufferBindingSize)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Max buffer size</span>
-                          <span className="text-right text-zinc-200">
-                            {formatBytes(renderBackendDiagnostics.maxBufferSize)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">CPU fallback</span>
-                          <span className="text-right text-zinc-200">
-                            {renderBackendDiagnostics.usedCpuFallback ? (renderBackendDiagnostics.fallbackReason ?? 'Yes') : 'No'}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-zinc-500">Reason</span>
-                          <span className="text-right text-zinc-200">{renderBackendDiagnostics.gpuDisabledReason ?? 'Active'}</span>
+                        <div className="shrink-0 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-right">
+                          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Status</p>
+                          <p className="mt-1 text-sm font-medium text-zinc-100">{getRenderBackendReason(renderBackendDiagnostics)}</p>
                         </div>
                       </div>
-                    </div>
 
-                    <p className="text-[11px] text-zinc-500 leading-relaxed">
+                      <div className="mt-4 grid grid-cols-2 gap-2 text-[11px]">
+                        {diagnosticItems.map(({ label, value }) => (
+                          <div
+                            key={label}
+                            className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5"
+                          >
+                            <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{label}</p>
+                            <p className="mt-1 break-words text-zinc-200">{value}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {tab === 'diagnostics' && (
+                <div className="shrink-0 border-t border-zinc-800 bg-zinc-950/95 px-6 py-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
                       Copy a diagnostic report to your clipboard to share when reporting issues.
                     </p>
                     <button
                       onClick={handleCopy}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                      className={`flex shrink-0 items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${
                         copied
                           ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
                           : 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
@@ -329,8 +308,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {copied ? 'Copied!' : 'Copy Debug Info'}
                     </button>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </motion.div>
         </>
