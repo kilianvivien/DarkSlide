@@ -2,6 +2,7 @@
 
 <div align="center">
   <p>A clean, hobbyist-friendly film negative converter as both a web app and a Tauri desktop binary.</p>
+  <img src="./.github/assets/screenshot.png" alt="DarkSlide Screenshot" width="800" />
 </div>
 
 ## ✨ Features
