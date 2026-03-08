@@ -1,0 +1,9 @@
+{
+  "profile": "cinestill-800t",
+  "patches": [
+    { "name": "highlight", "x": 0, "y": 0, "source": [210, 180, 165], "expected": [38, 90, 130] },
+    { "name": "midtone", "x": 1, "y": 0, "source": [128, 120, 115], "expected": [170, 164, 197] },
+    { "name": "shadow", "x": 0, "y": 1, "source": [60, 55, 50], "expected": [243, 228, 249] },
+    { "name": "near-highlight", "x": 1, "y": 1, "source": [200, 190, 185], "expected": [59, 76, 100] }
+  ]
+}

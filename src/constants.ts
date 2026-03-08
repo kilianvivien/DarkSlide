@@ -1,4 +1,4 @@
-import { ConversionSettings, CropSettings, Curves, ExportOptions, FilmProfile } from './types';
+import { ColorMatrix, ConversionSettings, CropSettings, Curves, ExportOptions, FilmProfile, TonalCharacter } from './types';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -57,11 +57,45 @@ export const ASPECT_RATIOS = [
   { name: '1:1', value: 1, category: 'Social' },
   { name: '4:5', value: 0.8, category: 'Social' },
   { name: '9:16', value: 0.5625, category: 'Social' },
+  { name: '2:3', value: 2 / 3, category: 'Print' },
   { name: '3:2', value: 1.5, category: 'Print' },
+  { name: '3:4', value: 3 / 4, category: 'Print' },
   { name: '4:3', value: 4 / 3, category: 'Print' },
   { name: '5:7', value: 5 / 7, category: 'Print' },
   { name: '16:9', value: 16 / 9, category: 'Digital' },
 ];
+
+const IDENTITY_COLOR_MATRIX: ColorMatrix = [
+  1, 0, 0,
+  0, 1, 0,
+  0, 0, 1,
+];
+
+const TONAL_CHARACTERS: Record<string, TonalCharacter> = {
+  'generic-color': { shadowLift: 0.05, highlightRolloff: 0.5, midtoneAnchor: 0 },
+  'portra-400': { shadowLift: 0.15, highlightRolloff: 0.7, midtoneAnchor: 0.01 },
+  'portra-160': { shadowLift: 0.12, highlightRolloff: 0.65, midtoneAnchor: 0 },
+  'ektar-100': { shadowLift: 0.03, highlightRolloff: 0.3, midtoneAnchor: 0 },
+  'gold-200': { shadowLift: 0.08, highlightRolloff: 0.4, midtoneAnchor: 0.02 },
+  'fuji-400h': { shadowLift: 0.1, highlightRolloff: 0.55, midtoneAnchor: -0.01 },
+  'superia-400': { shadowLift: 0.06, highlightRolloff: 0.4, midtoneAnchor: 0 },
+  'cinestill-800t': { shadowLift: 0.12, highlightRolloff: 0.6, midtoneAnchor: 0 },
+  'generic-bw': { shadowLift: 0.04, highlightRolloff: 0.5, midtoneAnchor: 0 },
+  hp5: { shadowLift: 0.08, highlightRolloff: 0.5, midtoneAnchor: 0 },
+  'tri-x': { shadowLift: 0.05, highlightRolloff: 0.35, midtoneAnchor: 0 },
+  'delta-3200': { shadowLift: 0.02, highlightRolloff: 0.25, midtoneAnchor: -0.02 },
+};
+
+const COLOR_MATRICES: Record<string, ColorMatrix> = {
+  'generic-color': IDENTITY_COLOR_MATRIX,
+  'portra-400': [1.15, -0.1, -0.05, -0.04, 1.08, -0.04, -0.02, -0.06, 1.08],
+  'portra-160': [1.12, -0.08, -0.04, -0.03, 1.06, -0.03, -0.02, -0.05, 1.07],
+  'ektar-100': [1.2, -0.12, -0.08, -0.05, 1.1, -0.05, -0.03, -0.08, 1.11],
+  'gold-200': [1.18, -0.11, -0.07, -0.05, 1.09, -0.04, -0.03, -0.07, 1.1],
+  'fuji-400h': [1.1, -0.06, -0.04, -0.02, 1.05, -0.03, -0.01, -0.04, 1.05],
+  'superia-400': [1.12, -0.07, -0.05, -0.03, 1.06, -0.03, -0.02, -0.05, 1.07],
+  'cinestill-800t': [1.08, -0.05, -0.03, -0.02, 1.04, -0.02, -0.01, -0.03, 1.04],
+};
 
 export const FILM_PROFILES: FilmProfile[] = [
   {
@@ -75,6 +109,7 @@ export const FILM_PROFILES: FilmProfile[] = [
       contrast: 14,
       highlightProtection: 25,
     }),
+    tonalCharacter: TONAL_CHARACTERS['generic-bw'],
   },
   {
     id: 'generic-color',
@@ -88,6 +123,8 @@ export const FILM_PROFILES: FilmProfile[] = [
       blueBalance: 0.9,
       highlightProtection: 26,
     }),
+    colorMatrix: COLOR_MATRICES['generic-color'],
+    tonalCharacter: TONAL_CHARACTERS['generic-color'],
   },
   {
     id: 'hp5',
@@ -101,6 +138,7 @@ export const FILM_PROFILES: FilmProfile[] = [
       highlightProtection: 30,
       blackPoint: 12,
     }),
+    tonalCharacter: TONAL_CHARACTERS.hp5,
   },
   {
     id: 'tri-x',
@@ -114,6 +152,7 @@ export const FILM_PROFILES: FilmProfile[] = [
       highlightProtection: 22,
       blackPoint: 14,
     }),
+    tonalCharacter: TONAL_CHARACTERS['tri-x'],
   },
   {
     id: 'portra-400',
@@ -135,6 +174,8 @@ export const FILM_PROFILES: FilmProfile[] = [
       highlightProtectionBias: 0.08,
       blackPointBias: -0.02,
     },
+    colorMatrix: COLOR_MATRICES['portra-400'],
+    tonalCharacter: TONAL_CHARACTERS['portra-400'],
   },
   {
     id: 'ektar-100',
@@ -149,6 +190,8 @@ export const FILM_PROFILES: FilmProfile[] = [
       blueBalance: 0.92,
       highlightProtection: 18,
     }),
+    colorMatrix: COLOR_MATRICES['ektar-100'],
+    tonalCharacter: TONAL_CHARACTERS['ektar-100'],
   },
   {
     id: 'fuji-400h',
@@ -166,6 +209,8 @@ export const FILM_PROFILES: FilmProfile[] = [
       blueBalance: 1.14,
       highlightProtection: 30,
     }),
+    colorMatrix: COLOR_MATRICES['fuji-400h'],
+    tonalCharacter: TONAL_CHARACTERS['fuji-400h'],
   },
   {
     id: 'portra-160',
@@ -188,6 +233,8 @@ export const FILM_PROFILES: FilmProfile[] = [
       highlightProtectionBias: 0.06,
       blackPointBias: -0.01,
     },
+    colorMatrix: COLOR_MATRICES['portra-160'],
+    tonalCharacter: TONAL_CHARACTERS['portra-160'],
   },
   {
     id: 'gold-200',
@@ -206,6 +253,8 @@ export const FILM_PROFILES: FilmProfile[] = [
       highlightProtection: 20,
       blackPoint: 10,
     }),
+    colorMatrix: COLOR_MATRICES['gold-200'],
+    tonalCharacter: TONAL_CHARACTERS['gold-200'],
   },
   {
     id: 'superia-400',
@@ -224,6 +273,8 @@ export const FILM_PROFILES: FilmProfile[] = [
       blueBalance: 0.96,
       highlightProtection: 22,
     }),
+    colorMatrix: COLOR_MATRICES['superia-400'],
+    tonalCharacter: TONAL_CHARACTERS['superia-400'],
   },
   {
     id: 'cinestill-800t',
@@ -247,6 +298,8 @@ export const FILM_PROFILES: FilmProfile[] = [
       highlightProtectionBias: 0.10,
       blackPointBias: -0.03,
     },
+    colorMatrix: COLOR_MATRICES['cinestill-800t'],
+    tonalCharacter: TONAL_CHARACTERS['cinestill-800t'],
   },
   {
     id: 'delta-3200',
@@ -261,5 +314,6 @@ export const FILM_PROFILES: FilmProfile[] = [
       blackPoint: 18,
       whitePoint: 240,
     }),
+    tonalCharacter: TONAL_CHARACTERS['delta-3200'],
   },
 ];

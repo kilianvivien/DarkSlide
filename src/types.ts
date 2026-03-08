@@ -28,6 +28,23 @@ export interface FilmBaseSample {
   b: number;
 }
 
+export type ColorMatrix = [
+  number, number, number,
+  number, number, number,
+  number, number, number,
+];
+
+export interface TonalCharacter {
+  shadowLift: number;
+  highlightRolloff: number;
+  midtoneAnchor: number;
+}
+
+export interface MaskTuning {
+  highlightProtectionBias: number;
+  blackPointBias: number;
+}
+
 export interface SharpenSettings {
   enabled: boolean;
   radius: number;   // 0.5 - 3.0
@@ -73,10 +90,9 @@ export interface FilmProfile {
   type: FilmType;
   description: string;
   defaultSettings: ConversionSettings;
-  maskTuning?: {
-    highlightProtectionBias: number;
-    blackPointBias: number;
-  };
+  maskTuning?: MaskTuning;
+  colorMatrix?: ColorMatrix;
+  tonalCharacter?: TonalCharacter;
   isCustom?: boolean;
 }
 
@@ -138,10 +154,9 @@ export interface RenderRequest {
   revision: number;
   targetMaxDimension: number;
   comparisonMode: 'processed' | 'original';
-  maskTuning?: {
-    highlightProtectionBias: number;
-    blackPointBias: number;
-  };
+  maskTuning?: MaskTuning;
+  colorMatrix?: ColorMatrix;
+  tonalCharacter?: TonalCharacter;
 }
 
 export interface RenderResult {
@@ -159,6 +174,9 @@ export interface ExportRequest {
   settings: ConversionSettings;
   isColor: boolean;
   options: ExportOptions;
+  maskTuning?: MaskTuning;
+  colorMatrix?: ColorMatrix;
+  tonalCharacter?: TonalCharacter;
 }
 
 export interface ExportResult {

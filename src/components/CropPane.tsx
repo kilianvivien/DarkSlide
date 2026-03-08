@@ -1,5 +1,5 @@
-import React from 'react';
-import { RotateCw, Crop as CropIcon, Square, Smartphone, Image as ImageIcon, Monitor } from 'lucide-react';
+import React, { useState } from 'react';
+import { RotateCw, Crop as CropIcon, Square, Smartphone, Image as ImageIcon, Monitor, ChevronDown } from 'lucide-react';
 import { ConversionSettings, CropSettings } from '../types';
 import { ASPECT_RATIOS } from '../constants';
 import { createCenteredAspectCrop, rotateCropClockwise } from '../utils/imagePipeline';
@@ -24,6 +24,10 @@ export const CropPane: React.FC<CropPaneProps> = ({
   onDone,
   onResetCrop,
 }) => {
+  const [customWidth, setCustomWidth] = useState('2');
+  const [customHeight, setCustomHeight] = useState('3');
+  const [isCustomRatioOpen, setIsCustomRatioOpen] = useState(false);
+
   const handleRotate = () => {
     const nextRotation = (settings.rotation + 90) % 360;
     onSettingsChange({
@@ -50,7 +54,10 @@ export const CropPane: React.FC<CropPaneProps> = ({
   const getIcon = (name: string) => {
     switch (name) {
       case '1:1': return <Square size={14} />;
+      case '2:3':
       case '9:16': return <Smartphone size={14} />;
+      case '3:4':
+      case '4:5': return <ImageIcon size={14} />;
       case '16:9': return <Monitor size={14} />;
       default: return <ImageIcon size={14} />;
     }
@@ -60,7 +67,17 @@ export const CropPane: React.FC<CropPaneProps> = ({
     if (preset === null) return settings.crop.aspectRatio === null;
     const currentAspect = settings.crop.aspectRatio;
     if (!currentAspect) return false;
-    return Math.abs(currentAspect - preset) < 0.0001 || Math.abs(currentAspect - 1 / preset) < 0.0001;
+    return Math.abs(currentAspect - preset) < 0.0001;
+  };
+
+  const handleCustomAspectApply = () => {
+    const width = Number(customWidth);
+    const height = Number(customHeight);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return;
+    }
+
+    handleAspectChange(width / height);
   };
 
   return (
@@ -129,6 +146,62 @@ export const CropPane: React.FC<CropPaneProps> = ({
               </div>
             </button>
           ))}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-zinc-800/70 bg-zinc-900/30">
+          <button
+            type="button"
+            onClick={() => setIsCustomRatioOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-zinc-900/40"
+          >
+            <h3 className="text-sm font-medium text-zinc-200">Custom Ratio</h3>
+            <ChevronDown
+              size={16}
+              className={`shrink-0 text-zinc-500 transition-transform ${isCustomRatioOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
+
+          {isCustomRatioOpen && (
+            <div className="border-t border-zinc-800/70 p-4">
+              <div className="mb-3 flex items-center justify-end">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                  Width / Height
+                </span>
+              </div>
+
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+                <input
+                  aria-label="Custom crop width"
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={customWidth}
+                  onChange={(event) => setCustomWidth(event.target.value)}
+                  className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-zinc-500"
+                />
+                <span className="text-sm text-zinc-500">×</span>
+                <div className="min-w-0">
+                  <input
+                    aria-label="Custom crop height"
+                    type="number"
+                    min="0.1"
+                    step="0.1"
+                    value={customHeight}
+                    onChange={(event) => setCustomHeight(event.target.value)}
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-zinc-500"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCustomAspectApply}
+                className="mt-3 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm font-medium text-zinc-200 transition-all hover:bg-zinc-900 hover:text-white"
+              >
+                Apply Custom Ratio
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

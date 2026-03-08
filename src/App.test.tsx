@@ -40,7 +40,26 @@ vi.mock('motion/react', async () => {
 });
 
 vi.mock('./components/Sidebar', () => ({
-  Sidebar: () => <div data-testid="sidebar" />,
+  Sidebar: ({
+    exportOptions,
+    onExportOptionsChange,
+    onExport,
+  }: {
+    exportOptions: { filenameBase: string };
+    onExportOptionsChange: (options: { filenameBase?: string }) => void;
+    onExport: () => void;
+  }) => (
+    <div data-testid="sidebar">
+      <input
+        aria-label="Filename"
+        value={exportOptions.filenameBase}
+        onChange={(event) => onExportOptionsChange({ filenameBase: event.target.value })}
+      />
+      <button type="button" onClick={onExport}>
+        Sidebar Export
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('./components/PresetsPane', () => ({
@@ -507,5 +526,34 @@ describe('App import and preview pipeline', () => {
     );
     expect(screen.getByText('Export')).toBeInTheDocument();
     expect(screen.queryByText(/Export failed/i)).not.toBeInTheDocument();
+  });
+
+  it('passes an edited export filename to the worker export request', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(4032, 6048));
+    workerState.render.mockResolvedValue(createRenderResult('doc-1', 1, 64, 48));
+    workerState.export.mockResolvedValue({
+      blob: new Blob(['ok'], { type: 'image/jpeg' }),
+      filename: 'renamed.jpg',
+    });
+
+    render(<App />);
+    await uploadFile(createFile('scan-a.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.change(screen.getByLabelText('Filename'), { target: { value: 'renamed-export' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Sidebar Export' }));
+    });
+
+    expect(workerState.export).toHaveBeenCalledWith(expect.objectContaining({
+      options: expect.objectContaining({
+        filenameBase: 'renamed-export',
+      }),
+    }));
   });
 });

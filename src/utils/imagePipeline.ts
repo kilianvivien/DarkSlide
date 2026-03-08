@@ -1,11 +1,14 @@
 import {
+  ColorMatrix,
   ConversionSettings,
   CurvePoint,
   CropSettings,
   ExportFormat,
   FilmBaseSample,
   HistogramData,
+  MaskTuning,
   PreviewLevel,
+  TonalCharacter,
 } from '../types';
 import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
 
@@ -158,15 +161,46 @@ export function selectPreviewLevel(levels: PreviewLevel[], targetMaxDimension: n
 }
 
 function applyWhiteBlackPoint(value: number, blackPoint: number, whitePoint: number) {
-  const range = Math.max(1, whitePoint - blackPoint);
-  return ((value - blackPoint) / range) * 255;
+  const range = Math.max(1 / 255, whitePoint - blackPoint);
+  return (value - blackPoint) / range;
 }
 
-function applyHighlightProtection(value: number, amount: number) {
-  if (amount <= 0 || value <= 200) return value;
-  const protection = clamp(amount / 100, 0, 0.95);
-  const shoulder = (value - 200) / 55;
-  return 200 + shoulder * 55 * (1 - protection * shoulder);
+function applyColorMatrix(
+  r: number,
+  g: number,
+  b: number,
+  matrix: ColorMatrix,
+): [number, number, number] {
+  return [
+    matrix[0] * r + matrix[1] * g + matrix[2] * b,
+    matrix[3] * r + matrix[4] * g + matrix[5] * b,
+    matrix[6] * r + matrix[7] * g + matrix[8] * b,
+  ];
+}
+
+function applyTonalCharacter(value: number, highlightProtection: number, character?: TonalCharacter) {
+  let next = value;
+
+  if (character && character.shadowLift > 0 && next < 0.5) {
+    const t = next / 0.5;
+    const gamma = 1 - character.shadowLift * 0.6;
+    next = 0.5 * Math.pow(clamp(t, 0, 1), gamma);
+  }
+
+  if (character?.midtoneAnchor) {
+    next += character.midtoneAnchor;
+  }
+
+  const rolloff = character?.highlightRolloff ?? 0.5;
+  const threshold = 200 / 255;
+  if (highlightProtection > 0 && next > threshold) {
+    const protection = clamp(highlightProtection / 100, 0, 0.95);
+    const shoulder = (next - threshold) / (1 - threshold);
+    const softness = 1 - protection * Math.pow(clamp(shoulder, 0, 1), Math.max(rolloff, 0.05));
+    next = threshold + shoulder * (1 - threshold) * softness;
+  }
+
+  return clamp(next, 0, 1);
 }
 
 function getFilmBaseBalance(sample: FilmBaseSample | null) {
@@ -274,17 +308,14 @@ function applySharpen(imageData: ImageData, radius: number, amount: number): voi
   }
 }
 
-export interface MaskTuning {
-  highlightProtectionBias: number;
-  blackPointBias: number;
-}
-
 export function processImageData(
   imageData: ImageData,
   settings: ConversionSettings,
   isColor: boolean,
   comparisonMode: 'processed' | 'original',
   maskTuning?: MaskTuning,
+  colorMatrix?: ColorMatrix,
+  tonalCharacter?: TonalCharacter,
 ): HistogramData {
   const effectiveSettings = maskTuning ? {
     ...settings,
@@ -302,16 +333,24 @@ export function processImageData(
   const contrastFactor = (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast));
   const saturationFactor = effectiveSettings.saturation / 100;
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
+  const blackPoint = effectiveSettings.blackPoint / 255;
+  const whitePoint = effectiveSettings.whitePoint / 255;
+  const temperatureShift = effectiveSettings.temperature / 255;
+  const tintShift = effectiveSettings.tint / 255;
 
   for (let index = 0; index < data.length; index += 4) {
-    let r = data[index];
-    let g = data[index + 1];
-    let b = data[index + 2];
+    let r = data[index] / 255;
+    let g = data[index + 1] / 255;
+    let b = data[index + 2] / 255;
 
     if (comparisonMode === 'processed') {
-      r = 255 - r;
-      g = 255 - g;
-      b = 255 - b;
+      r = 1 - r;
+      g = 1 - g;
+      b = 1 - b;
+
+      if (colorMatrix) {
+        [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);
+      }
 
       r *= filmBaseBalance.red;
       g *= filmBaseBalance.green;
@@ -321,9 +360,9 @@ export function processImageData(
         r *= effectiveSettings.redBalance;
         g *= effectiveSettings.greenBalance;
         b *= effectiveSettings.blueBalance;
-        r += effectiveSettings.temperature;
-        b -= effectiveSettings.temperature;
-        g += effectiveSettings.tint;
+        r += temperatureShift;
+        b -= temperatureShift;
+        g += tintShift;
       } else {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
         r = gray;
@@ -335,17 +374,17 @@ export function processImageData(
       g *= exposureFactor;
       b *= exposureFactor;
 
-      r = applyWhiteBlackPoint(r, effectiveSettings.blackPoint, effectiveSettings.whitePoint);
-      g = applyWhiteBlackPoint(g, effectiveSettings.blackPoint, effectiveSettings.whitePoint);
-      b = applyWhiteBlackPoint(b, effectiveSettings.blackPoint, effectiveSettings.whitePoint);
+      r = applyWhiteBlackPoint(r, blackPoint, whitePoint);
+      g = applyWhiteBlackPoint(g, blackPoint, whitePoint);
+      b = applyWhiteBlackPoint(b, blackPoint, whitePoint);
 
-      r = contrastFactor * (r - 128) + 128;
-      g = contrastFactor * (g - 128) + 128;
-      b = contrastFactor * (b - 128) + 128;
+      r = contrastFactor * (r - 0.5) + 0.5;
+      g = contrastFactor * (g - 0.5) + 0.5;
+      b = contrastFactor * (b - 0.5) + 0.5;
 
-      r = applyHighlightProtection(r, effectiveSettings.highlightProtection);
-      g = applyHighlightProtection(g, effectiveSettings.highlightProtection);
-      b = applyHighlightProtection(b, effectiveSettings.highlightProtection);
+      r = applyTonalCharacter(r, effectiveSettings.highlightProtection, tonalCharacter);
+      g = applyTonalCharacter(g, effectiveSettings.highlightProtection, tonalCharacter);
+      b = applyTonalCharacter(b, effectiveSettings.highlightProtection, tonalCharacter);
 
       if (isColor) {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -359,18 +398,18 @@ export function processImageData(
         b = gray;
       }
 
-      const mappedR = clamp(Math.round(r), 0, 255);
-      const mappedG = clamp(Math.round(g), 0, 255);
-      const mappedB = clamp(Math.round(b), 0, 255);
+      const mappedR = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
+      const mappedG = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
+      const mappedB = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
 
-      r = lutR[lutRGB[mappedR]];
-      g = lutG[lutRGB[mappedG]];
-      b = lutB[lutRGB[mappedB]];
+      r = lutR[lutRGB[mappedR]] / 255;
+      g = lutG[lutRGB[mappedG]] / 255;
+      b = lutB[lutRGB[mappedB]] / 255;
     }
 
-    const finalR = clamp(Math.round(r), 0, 255);
-    const finalG = clamp(Math.round(g), 0, 255);
-    const finalB = clamp(Math.round(b), 0, 255);
+    const finalR = clamp(Math.round(r * 255), 0, 255);
+    const finalG = clamp(Math.round(g * 255), 0, 255);
+    const finalB = clamp(Math.round(b * 255), 0, 255);
 
     data[index] = finalR;
     data[index + 1] = finalG;

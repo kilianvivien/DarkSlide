@@ -234,7 +234,15 @@ function handleRender(payload: RenderRequest) {
   if (!ctx) throw new Error('Could not read rendered preview.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  const histogram = processImageData(imageData, payload.settings, payload.isColor, payload.comparisonMode, payload.maskTuning);
+  const histogram = processImageData(
+    imageData,
+    payload.settings,
+    payload.isColor,
+    payload.comparisonMode,
+    payload.maskTuning,
+    payload.colorMatrix,
+    payload.tonalCharacter,
+  );
   ctx.putImageData(imageData, 0, 0);
 
   return {
@@ -274,7 +282,15 @@ async function handleExport(payload: ExportRequest) {
   if (!ctx) throw new Error('Could not create export canvas.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  processImageData(imageData, payload.settings, payload.isColor, 'processed');
+  processImageData(
+    imageData,
+    payload.settings,
+    payload.isColor,
+    'processed',
+    payload.maskTuning,
+    payload.colorMatrix,
+    payload.tonalCharacter,
+  );
   ctx.putImageData(imageData, 0, 0);
 
   const blob = await transformed.canvas.convertToBlob({

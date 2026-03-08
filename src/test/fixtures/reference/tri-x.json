@@ -1,0 +1,9 @@
+{
+  "profile": "tri-x",
+  "patches": [
+    { "name": "highlight", "x": 0, "y": 0, "source": [210, 180, 165], "expected": [40, 40, 40] },
+    { "name": "midtone", "x": 1, "y": 0, "source": [128, 120, 115], "expected": [133, 133, 133] },
+    { "name": "shadow", "x": 0, "y": 1, "source": [60, 55, 50], "expected": [223, 223, 223] },
+    { "name": "near-highlight", "x": 1, "y": 1, "source": [200, 190, 185], "expected": [32, 32, 32] }
+  ]
+}

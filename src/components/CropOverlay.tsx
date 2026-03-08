@@ -141,17 +141,17 @@ export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, imageWidth, imag
       >
         {(['nw', 'ne', 'sw', 'se'] as const).map((handle) => {
           const positionClasses = {
-            nw: '-left-2 -top-2 cursor-nwse-resize',
-            ne: '-right-2 -top-2 cursor-nesw-resize',
-            sw: '-left-2 -bottom-2 cursor-nesw-resize',
-            se: '-right-2 -bottom-2 cursor-nwse-resize',
+            nw: 'left-0 top-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize',
+            ne: 'right-0 top-0 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize',
+            sw: 'left-0 bottom-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize',
+            se: 'right-0 bottom-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize',
           }[handle];
 
           return (
             <button
               key={handle}
               type="button"
-              className={`absolute h-4 w-4 rounded-full border border-zinc-950 bg-zinc-100 ${positionClasses}`}
+              className={`absolute z-10 h-10 w-10 rounded-full border-2 border-zinc-950 bg-zinc-100 shadow-lg shadow-black/40 outline-none before:absolute before:-inset-2 before:content-[''] ${positionClasses}`}
               onMouseDown={beginDrag(handle)}
             />
           );

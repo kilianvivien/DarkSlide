@@ -11,6 +11,10 @@ interface CurvesControlProps {
 
 type Channel = keyof Curves;
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, isColor, onInteractionStart, onInteractionEnd }) => {
   const [activeChannel, setActiveChannel] = useState<Channel>('rgb');
   const [draggingPoint, setDraggingPoint] = useState<number | null>(null);
@@ -28,20 +32,28 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
     if (draggingPoint === null || !svgRef.current) return;
 
     const rect = svgRef.current.getBoundingClientRect();
-    const x = Math.min(255, Math.max(0, Math.round(((e.clientX - rect.left) / rect.width) * 255)));
-    const y = Math.min(255, Math.max(0, Math.round(255 - ((e.clientY - rect.top) / rect.height) * 255)));
+    const x = clamp(Math.round(((e.clientX - rect.left) / rect.width) * 255), 0, 255);
+    let y = clamp(Math.round(255 - ((e.clientY - rect.top) / rect.height) * 255), 0, 255);
+    if (e.shiftKey) {
+      y = clamp(Math.round(y / 16) * 16, 0, 255);
+    }
 
     const newPoints = [...points];
-    
-    // Constraints: points must be ordered by x
+
     if (draggingPoint === 0) {
-      newPoints[0] = { x: 0, y };
+      newPoints[0] = {
+        x: clamp(x, 0, newPoints[1].x - 1),
+        y,
+      };
     } else if (draggingPoint === points.length - 1) {
-      newPoints[points.length - 1] = { x: 255, y };
+      newPoints[points.length - 1] = {
+        x: clamp(x, newPoints[draggingPoint - 1].x + 1, 255),
+        y,
+      };
     } else {
       const prevX = points[draggingPoint - 1].x;
       const nextX = points[draggingPoint + 1].x;
-      newPoints[draggingPoint] = { x: Math.min(nextX - 1, Math.max(prevX + 1, x)), y };
+      newPoints[draggingPoint] = { x: clamp(x, prevX + 1, nextX - 1), y };
     }
 
     onChange({ ...curves, [activeChannel]: newPoints });
@@ -102,8 +114,14 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
     rgb: 'white',
     red: '#ef4444',
     green: '#22c55e',
-    blue: '#3b82f6'
+    blue: '#3b82f6',
   };
+
+  const buildPath = (channelPoints: CurvePoint[]) => channelPoints.reduce((acc, point, index) => {
+    const pointX = (point.x / 255) * size;
+    const pointY = size - (point.y / 255) * size;
+    return acc + (index === 0 ? `M ${pointX} ${pointY}` : ` L ${pointX} ${pointY}`);
+  }, '');
 
   return (
     <div className="flex flex-col gap-4">
@@ -148,27 +166,64 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
             className="transition-colors duration-300"
           />
 
+          {activeChannel !== 'rgb' && (Object.entries(curves) as [Channel, CurvePoint[]][]).map(([channel, channelPoints]) => {
+            if (channel === 'rgb' || channel === activeChannel) {
+              return null;
+            }
+
+            return (
+              <path
+                key={channel}
+                d={buildPath(channelPoints)}
+                fill="none"
+                stroke={channelColors[channel]}
+                strokeWidth="1"
+                opacity="0.15"
+              />
+            );
+          })}
+
           {/* Points */}
           {points.map((p, i) => (
-            <circle
-              key={i}
-              cx={(p.x / 255) * size}
-              cy={size - (p.y / 255) * size}
-              r={draggingPoint === i ? 5 : 4}
-              fill={channelColors[activeChannel]}
-              stroke="#09090b"
-              strokeWidth="2"
-              className="cursor-pointer hover:r-6 transition-all"
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                handleMouseDown(i);
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                removePoint(i);
-              }}
-            />
+            <g key={i}>
+              <circle
+                cx={(p.x / 255) * size}
+                cy={size - (p.y / 255) * size}
+                r={12}
+                fill="transparent"
+                className="cursor-pointer"
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  handleMouseDown(i);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  removePoint(i);
+                }}
+              />
+              <circle
+                cx={(p.x / 255) * size}
+                cy={size - (p.y / 255) * size}
+                r={draggingPoint === i ? 7 : 5}
+                fill={channelColors[activeChannel]}
+                stroke="#09090b"
+                strokeWidth="2"
+                className="pointer-events-none transition-all"
+              />
+            </g>
           ))}
+
+          {draggingPoint !== null && (
+            <text
+              x={Math.min(size - 4, ((points[draggingPoint].x / 255) * size) + 8)}
+              y={Math.max(12, size - ((points[draggingPoint].y / 255) * size) - 8)}
+              fill="white"
+              fontSize="10"
+              className="pointer-events-none select-none"
+            >
+              {points[draggingPoint].x}, {points[draggingPoint].y}
+            </text>
+          )}
         </svg>
         
         <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">

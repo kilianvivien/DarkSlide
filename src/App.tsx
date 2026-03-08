@@ -22,11 +22,12 @@ import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
 import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from './constants';
-import { ConversionSettings, FilmProfile, WorkspaceDocument } from './types';
+import { ColorMatrix, ConversionSettings, FilmProfile, MaskTuning, TonalCharacter, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useViewportZoom } from './hooks/useViewportZoom';
 import { ZoomBar } from './components/ZoomBar';
+import { MagnifierLoupe } from './components/MagnifierLoupe';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
 import { isDesktopShell, openImageFile, saveExportBlob } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
@@ -225,6 +226,7 @@ export default function App() {
     return Math.min(sourceMax, Math.ceil(baseDim * z));
   }, [isAdjustingLevel, targetMaxDimension, zoom, documentState]);
   const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
+  const showMagnifier = Boolean((isPickingFilmBase || activePointPicker) && documentState?.status === 'ready');
 
   const { push, undo, redo, canUndo, canRedo, reset: resetHistory, beginInteraction, commitInteraction } = useHistory<ConversionSettings>(fallbackProfile.defaultSettings);
 
@@ -410,7 +412,9 @@ export default function App() {
     isColor: boolean,
     nextComparisonMode: 'processed' | 'original',
     nextTargetMaxDimension: number,
-    maskTuning?: { highlightProtectionBias: number; blackPointBias: number },
+    maskTuning?: MaskTuning,
+    colorMatrix?: ColorMatrix,
+    tonalCharacter?: TonalCharacter,
   ) => {
     const worker = workerClientRef.current;
     if (!worker) return;
@@ -442,6 +446,8 @@ export default function App() {
         targetMaxDimension: nextTargetMaxDimension,
         comparisonMode: nextComparisonMode,
         maskTuning,
+        colorMatrix,
+        tonalCharacter,
       });
 
       const isLatestResult = activeDocumentIdRef.current === result.documentId
@@ -522,13 +528,36 @@ export default function App() {
     const settings = displaySettings;
     const isColor = activeProfile.type === 'color';
     const profileMaskTuning = activeProfile.maskTuning;
+    const profileColorMatrix = activeProfile.colorMatrix;
+    const profileTonalCharacter = activeProfile.tonalCharacter;
     const debounceMs = isAdjustingLevel ? 40 : (hasVisiblePreviewRef.current ? 120 : 0);
     const timer = window.setTimeout(() => {
-      void renderDocument(documentId, settings, isColor, comparisonMode, renderTargetDimension, profileMaskTuning);
+      void renderDocument(
+        documentId,
+        settings,
+        isColor,
+        comparisonMode,
+        renderTargetDimension,
+        profileMaskTuning,
+        profileColorMatrix,
+        profileTonalCharacter,
+      );
     }, debounceMs);
 
     return () => window.clearTimeout(timer);
-  }, [activeProfile.type, activeProfile.maskTuning, comparisonMode, displaySettings, documentState?.id, documentState?.previewLevels.length, isAdjustingLevel, renderDocument, renderTargetDimension]);
+  }, [
+    activeProfile.colorMatrix,
+    activeProfile.maskTuning,
+    activeProfile.tonalCharacter,
+    activeProfile.type,
+    comparisonMode,
+    displaySettings,
+    documentState?.id,
+    documentState?.previewLevels.length,
+    isAdjustingLevel,
+    renderDocument,
+    renderTargetDimension,
+  ]);
 
   const updateDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
     setDocumentState((current) => (current ? updater(current) : current));
@@ -1042,6 +1071,9 @@ export default function App() {
         settings: documentState.settings,
         isColor: activeProfile.type === 'color',
         options: documentState.exportOptions,
+        maskTuning: activeProfile.maskTuning,
+        colorMatrix: activeProfile.colorMatrix,
+        tonalCharacter: activeProfile.tonalCharacter,
       });
 
       const saveResult = await saveExportBlob(result.blob, result.filename, documentState.exportOptions.format);
@@ -1057,7 +1089,7 @@ export default function App() {
       setError(`Export failed. ${message}`);
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'EXPORT_FAILED' } : current);
     }
-  }, [activeProfile.type, documentState]);
+  }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState]);
 
   handleDownloadRef.current = handleDownload;
 
@@ -1431,7 +1463,7 @@ export default function App() {
                       endPan();
                     }
                   }}
-                  style={{ cursor: isPanDragging ? 'grabbing' : (zoom !== 'fit' && !isPickingFilmBase ? 'grab' : undefined) }}
+                  style={{ cursor: isPanDragging ? 'grabbing' : (zoom !== 'fit' && !isPickingFilmBase && !activePointPicker ? 'grab' : undefined) }}
                 >
                   <div className="absolute right-4 top-4 z-20">
                     <ZoomBar
@@ -1459,7 +1491,7 @@ export default function App() {
                       <canvas
                         ref={displayCanvasRef}
                         onClick={handleCanvasClick}
-                        className={`block transition-opacity duration-300 ${showBlockingOverlay ? 'opacity-30' : 'opacity-100'} ${(isPickingFilmBase || activePointPicker) ? 'cursor-crosshair' : ''}`}
+                        className={`block transition-opacity duration-300 ${showBlockingOverlay ? 'opacity-30' : 'opacity-100'} ${showMagnifier ? 'cursor-none' : ''}`}
                         style={{
                           width: `${logicalPreviewSize.width}px`,
                           height: `${logicalPreviewSize.height}px`,
@@ -1559,10 +1591,19 @@ export default function App() {
                 onSavePreset={handleSavePreset}
                 onDeletePreset={handleDeletePreset}
               />
-            </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {showMagnifier && (
+            <MagnifierLoupe
+              sourceCanvas={displayCanvasRef.current}
+              containerRef={viewportRef}
+              magnification={6}
+              size={120}
+            />
           )}
-        </AnimatePresence>
-      </div>
+        </div>
 
       <SettingsModal
         isOpen={showSettingsModal}

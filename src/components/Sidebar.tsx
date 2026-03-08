@@ -110,7 +110,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     : 'Sample Film Base';
 
   return (
-    <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden select-none">
+    <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden">
       <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900/20 shrink-0">
         <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
           <BarChart3 size={12} /> Histogram
@@ -354,8 +354,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         type="text"
                         value={exportOptions.filenameBase}
                         onChange={(event) => onExportOptionsChange({ filenameBase: event.target.value })}
-                        className="w-full px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 outline-none focus:border-zinc-600"
+                        className="w-full select-text px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 outline-none focus:border-zinc-600"
                         placeholder="darkslide-converted"
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
                       />
                     </div>
 
