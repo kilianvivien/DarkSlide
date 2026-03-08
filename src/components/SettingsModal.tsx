@@ -90,12 +90,21 @@ function formatBytes(value: number | null) {
   return `${mib.toFixed(0)} MiB`;
 }
 
-function getRenderBackendReason(diagnostics: RenderBackendDiagnostics) {
-  if (diagnostics.usedCpuFallback) {
-    return diagnostics.fallbackReason ?? 'CPU fallback';
-  }
+function getStatusBadge(diagnostics: RenderBackendDiagnostics): { label: string; color: 'green' | 'amber' | 'red' | 'zinc' } {
+  if (!diagnostics.gpuAvailable) return { label: 'Unavailable', color: 'red' };
+  if (diagnostics.usedCpuFallback) return { label: 'CPU Fallback', color: 'amber' };
+  if (diagnostics.gpuDisabledReason === 'device-lost') return { label: 'Device Lost', color: 'red' };
+  if (diagnostics.gpuDisabledReason === 'initialization-failed') return { label: 'Init Failed', color: 'red' };
+  if (diagnostics.gpuDisabledReason === 'user') return { label: 'GPU Disabled', color: 'zinc' };
+  if (diagnostics.gpuActive) return { label: 'Active', color: 'green' };
+  return { label: 'CPU', color: 'zinc' };
+}
 
-  return diagnostics.gpuDisabledReason ?? 'Active';
+function getJobDurationColor(ms: number | null): string {
+  if (ms === null) return 'text-zinc-400';
+  if (ms < 100) return 'text-emerald-400';
+  if (ms < 300) return 'text-amber-400';
+  return 'text-red-400';
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -108,20 +117,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [tab, setTab] = useState<'general' | 'shortcuts' | 'diagnostics'>('general');
   const [copied, setCopied] = useState(false);
-  const diagnosticItems = [
-    { label: 'Path', value: renderBackendDiagnostics.backendMode === 'gpu-tiled-render' ? 'GPU tiled render' : 'CPU worker' },
-    { label: 'Adapter', value: renderBackendDiagnostics.gpuAdapterName ?? 'Unavailable' },
-    { label: 'GPU toggle', value: renderBackendDiagnostics.gpuEnabled ? 'Enabled' : 'Disabled' },
-    { label: 'Source kind', value: renderBackendDiagnostics.sourceKind ?? 'Unavailable' },
-    { label: 'Tile size', value: renderBackendDiagnostics.tileSize ? `${renderBackendDiagnostics.tileSize}px` : 'Unavailable' },
-    { label: 'Tile count', value: renderBackendDiagnostics.tileCount ?? 'Unavailable' },
-    { label: 'Halo', value: renderBackendDiagnostics.halo !== null ? `${renderBackendDiagnostics.halo}px` : 'Unavailable' },
-    { label: 'Job duration', value: renderBackendDiagnostics.jobDurationMs !== null ? `${renderBackendDiagnostics.jobDurationMs} ms` : 'Unavailable' },
-    { label: 'Intermediate', value: renderBackendDiagnostics.intermediateFormat ?? 'Unavailable' },
-    { label: 'CPU fallback', value: renderBackendDiagnostics.usedCpuFallback ? 'Yes' : 'No' },
-    { label: 'Storage limit', value: formatBytes(renderBackendDiagnostics.maxStorageBufferBindingSize) },
-    { label: 'Max buffer', value: formatBytes(renderBackendDiagnostics.maxBufferSize) },
-  ];
 
   // Close on Escape
   useEffect(() => {
@@ -258,36 +253,99 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
 
-                {tab === 'diagnostics' && (
-                  <div className="space-y-4">
-                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <h3 className="text-sm font-semibold text-zinc-100">Render Backend</h3>
-                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-                            {getRenderBackendDetail(renderBackendDiagnostics)}
-                          </p>
-                        </div>
-                        <div className="shrink-0 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-right">
-                          <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Status</p>
-                          <p className="mt-1 text-sm font-medium text-zinc-100">{getRenderBackendReason(renderBackendDiagnostics)}</p>
+                {tab === 'diagnostics' && (() => {
+                  const d = renderBackendDiagnostics;
+                  const { label: statusLabel, color: statusColor } = getStatusBadge(d);
+                  const statusClasses = {
+                    green: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400',
+                    amber: 'bg-amber-500/15 border-amber-500/30 text-amber-400',
+                    red: 'bg-red-500/15 border-red-500/30 text-red-400',
+                    zinc: 'bg-zinc-800 border-zinc-700 text-zinc-400',
+                  }[statusColor];
+                  const dotClasses = {
+                    green: 'bg-emerald-400',
+                    amber: 'bg-amber-400',
+                    red: 'bg-red-400',
+                    zinc: 'bg-zinc-500',
+                  }[statusColor];
+
+                  const groups = [
+                    {
+                      title: 'Render Path',
+                      items: [
+                        { label: 'Path', value: d.backendMode === 'gpu-tiled-render' ? 'GPU tiled render' : 'CPU worker', mono: false },
+                        { label: 'Adapter', value: d.gpuAdapterName ?? '—', mono: false },
+                        { label: 'GPU toggle', value: d.gpuEnabled ? 'Enabled' : 'Disabled', mono: false },
+                        { label: 'Source kind', value: d.sourceKind ?? '—', mono: false },
+                      ],
+                    },
+                    {
+                      title: 'Tile Config',
+                      items: [
+                        { label: 'Tile size', value: d.tileSize ? `${d.tileSize}px` : '—', mono: true },
+                        { label: 'Tile count', value: d.tileCount ?? '—', mono: true },
+                        { label: 'Halo', value: d.halo !== null ? `${d.halo}px` : '—', mono: true },
+                        { label: 'Intermediate', value: d.intermediateFormat ?? '—', mono: true },
+                      ],
+                    },
+                    {
+                      title: 'Performance',
+                      items: [
+                        {
+                          label: 'Job duration',
+                          value: d.jobDurationMs !== null ? `${d.jobDurationMs} ms` : '—',
+                          mono: true,
+                          valueClass: getJobDurationColor(d.jobDurationMs),
+                        },
+                        {
+                          label: 'CPU fallback',
+                          value: d.usedCpuFallback ? 'Yes' : 'No',
+                          mono: false,
+                          valueClass: d.usedCpuFallback ? 'text-amber-400' : 'text-zinc-200',
+                        },
+                        { label: 'Storage limit', value: formatBytes(d.maxStorageBufferBindingSize), mono: true },
+                        { label: 'Max buffer', value: formatBytes(d.maxBufferSize), mono: true },
+                      ],
+                    },
+                  ];
+
+                  return (
+                    <div className="space-y-3">
+                      {/* Header card */}
+                      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <h3 className="text-sm font-semibold text-zinc-100">Render Backend</h3>
+                            <p className="mt-1 text-[11px] leading-relaxed text-zinc-500 max-w-sm">
+                              {getRenderBackendDetail(d)}
+                            </p>
+                          </div>
+                          <span className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium ${statusClasses}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${dotClasses}`} />
+                            {statusLabel}
+                          </span>
                         </div>
                       </div>
 
-                      <div className="mt-4 grid grid-cols-2 gap-2 text-[11px]">
-                        {diagnosticItems.map(({ label, value }) => (
-                          <div
-                            key={label}
-                            className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5"
-                          >
-                            <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{label}</p>
-                            <p className="mt-1 break-words text-zinc-200">{value}</p>
+                      {/* Grouped metric sections */}
+                      {groups.map((group) => (
+                        <div key={group.title} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                          <p className="mb-3 text-[10px] uppercase tracking-[0.18em] font-semibold text-zinc-600">{group.title}</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {group.items.map(({ label, value, mono, valueClass }) => (
+                              <div key={label} className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5">
+                                <p className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">{label}</p>
+                                <p className={`mt-1 text-[11px] break-words ${valueClass ?? 'text-zinc-200'} ${mono ? 'font-mono' : ''}`}>
+                                  {String(value)}
+                                </p>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      ))}
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
 
               {tab === 'diagnostics' && (
