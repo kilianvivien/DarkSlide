@@ -163,7 +163,7 @@ Same pattern — round-trip, corruption, missing fields.
 
 ---
 
-## Phase 7: Color Negative Science Refinement
+## Phase 7: Color Negative Science Refinement (implemented, with calibration follow-up)
 
 ### Overview
 
