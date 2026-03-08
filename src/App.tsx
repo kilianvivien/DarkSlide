@@ -92,6 +92,15 @@ export default function App() {
     gpuEnabled: initialPreferences?.gpuRendering ?? true,
     gpuActive: false,
     gpuAdapterName: null,
+    backendMode: 'cpu-worker',
+    sourceKind: null,
+    tileSize: null,
+    halo: null,
+    tileCount: null,
+    intermediateFormat: null,
+    usedCpuFallback: false,
+    fallbackReason: null,
+    jobDurationMs: null,
     maxStorageBufferBindingSize: null,
     maxBufferSize: null,
     gpuDisabledReason: (typeof navigator === 'undefined' || !('gpu' in navigator)) ? 'unsupported' : ((initialPreferences?.gpuRendering ?? true) ? null : 'user'),
@@ -528,6 +537,7 @@ export default function App() {
           status: 'ready',
         };
       });
+      void refreshRenderBackendDiagnostics();
     } catch (renderError) {
       const isLatestRequest = activeDocumentIdRef.current === documentId
         && activeRenderRequestRef.current?.documentId === documentId
@@ -548,8 +558,9 @@ export default function App() {
       });
       setError(`Processing failed. ${message}`);
       setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'error', errorCode: 'RENDER_FAILED' } : current);
+      void refreshRenderBackendDiagnostics();
     }
-  }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, setPreviewVisibility]);
+  }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, setPreviewVisibility]);
 
   useEffect(() => {
     if (!documentState || !displaySettings || documentState.previewLevels.length === 0) return;
@@ -1120,13 +1131,15 @@ export default function App() {
         appendDiagnostic({ level: 'info', code: 'EXPORT_CANCELLED', message: result.filename, context: { format: documentState.exportOptions.format } });
       }
       setDocumentState((current) => current ? { ...current, status: 'ready' } : current);
+      void refreshRenderBackendDiagnostics();
     } catch (exportError) {
       const message = formatError(exportError);
       appendDiagnostic({ level: 'error', code: 'EXPORT_FAILED', message });
       setError(`Export failed. ${message}`);
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'EXPORT_FAILED' } : current);
+      void refreshRenderBackendDiagnostics();
     }
-  }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState]);
+  }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, refreshRenderBackendDiagnostics]);
 
   handleDownloadRef.current = handleDownload;
 

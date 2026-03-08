@@ -10,7 +10,7 @@ const gpuState = vi.hoisted(() => ({
       maxStorageBufferBindingSize: 512 * 1024 * 1024,
       maxBufferSize: 1024 * 1024 * 1024,
     },
-    processImageData: vi.fn(),
+    processTile: vi.fn(),
     destroy: vi.fn(),
     isLost: vi.fn(() => false),
   },
@@ -62,13 +62,8 @@ describe('ImageWorkerClient', () => {
     MockWorker.instances = [];
     gpuState.create.mockReset();
     gpuState.create.mockResolvedValue(null);
-    gpuState.instance.processImageData.mockReset();
-    gpuState.instance.processImageData.mockResolvedValue({
-      r: new Array(256).fill(0),
-      g: new Array(256).fill(0),
-      b: new Array(256).fill(0),
-      l: new Array(256).fill(0),
-    });
+    gpuState.instance.processTile.mockReset();
+    gpuState.instance.processTile.mockResolvedValue(new ImageData(new Uint8ClampedArray(4), 1, 1));
     gpuState.instance.destroy.mockReset();
     gpuState.instance.isLost.mockReset();
     gpuState.instance.isLost.mockReturnValue(false);
@@ -177,6 +172,7 @@ describe('ImageWorkerClient', () => {
       comparisonMode: 'processed',
     });
 
+    await flushAsyncWork(8);
     firstWorker.onmessageerror?.({} as MessageEvent);
 
     await expect(pending).rejects.toBeInstanceOf(FatalImageWorkerError);
@@ -193,13 +189,11 @@ describe('ImageWorkerClient', () => {
     const { ImageWorkerClient } = await import('./imageWorkerClient');
     const client = new ImageWorkerClient();
     const worker = MockWorker.instances[0];
-    const histogram = {
-      r: new Array(256).fill(1),
-      g: new Array(256).fill(2),
-      b: new Array(256).fill(3),
-      l: new Array(256).fill(4),
-    };
-    gpuState.instance.processImageData.mockResolvedValueOnce(histogram);
+    gpuState.instance.processTile.mockResolvedValueOnce(
+      new ImageData(new Uint8ClampedArray([
+        10, 20, 30, 255,
+      ]), 1, 1),
+    );
 
     const pending = client.render({
       documentId: 'doc-1',
@@ -242,27 +236,63 @@ describe('ImageWorkerClient', () => {
 
     await flushAsyncWork();
 
-    const request = worker.postedMessages[0];
-    expect(request?.type).toBe('render');
-    expect(request?.payload).toMatchObject({ skipProcessing: true });
+    const prepareRequest = worker.postedMessages[0];
+    expect(prepareRequest?.type).toBe('prepare-tile-job');
 
     worker.onmessage?.({
       data: {
-        id: request?.id,
+        id: prepareRequest?.id,
         ok: true,
         payload: {
           documentId: 'doc-1',
-          revision: 3,
-          width: 10,
-          height: 10,
+          jobId: 'doc-1:3:preview',
+          sourceKind: 'preview',
+          width: 1,
+          height: 1,
           previewLevelId: 'preview-1024',
-          imageData: new ImageData(new Uint8ClampedArray(400), 10, 10),
-          histogram: {
-            r: new Array(256).fill(0),
-            g: new Array(256).fill(0),
-            b: new Array(256).fill(0),
-            l: new Array(256).fill(0),
-          },
+          tileSize: 1024,
+          halo: 0,
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const tileRequest = worker.postedMessages[1];
+    expect(tileRequest?.type).toBe('read-tile');
+
+    worker.onmessage?.({
+      data: {
+        id: tileRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:3:preview',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          haloLeft: 0,
+          haloTop: 0,
+          haloRight: 0,
+          haloBottom: 0,
+          imageData: new ImageData(new Uint8ClampedArray([
+            0, 0, 0, 255,
+          ]), 1, 1),
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const cancelRequest = worker.postedMessages[2];
+    expect(cancelRequest?.type).toBe('cancel-job');
+    worker.onmessage?.({
+      data: {
+        id: cancelRequest?.id,
+        ok: true,
+        payload: {
+          cancelled: true,
         },
       },
     } as MessageEvent);
@@ -270,9 +300,11 @@ describe('ImageWorkerClient', () => {
     await expect(pending).resolves.toMatchObject({
       documentId: 'doc-1',
       revision: 3,
-      histogram,
+      width: 1,
+      height: 1,
+      imageData: expect.any(ImageData),
     });
-    expect(gpuState.instance.processImageData).toHaveBeenCalledTimes(1);
+    expect(gpuState.instance.processTile).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to the CPU worker render when GPU processing fails', async () => {
@@ -281,7 +313,7 @@ describe('ImageWorkerClient', () => {
       value: {},
     });
     gpuState.create.mockResolvedValue(gpuState.instance);
-    gpuState.instance.processImageData.mockRejectedValueOnce(new Error('gpu exploded'));
+    gpuState.instance.processTile.mockRejectedValueOnce(new Error('gpu exploded'));
 
     const { ImageWorkerClient } = await import('./imageWorkerClient');
     const client = new ImageWorkerClient();
@@ -328,32 +360,69 @@ describe('ImageWorkerClient', () => {
 
     await flushAsyncWork();
 
-    const gpuRequest = worker.postedMessages[0];
+    const prepareRequest = worker.postedMessages[0];
     worker.onmessage?.({
       data: {
-        id: gpuRequest?.id,
+        id: prepareRequest?.id,
         ok: true,
         payload: {
           documentId: 'doc-1',
-          revision: 4,
-          width: 8,
-          height: 8,
+          jobId: 'doc-1:4:preview',
+          sourceKind: 'preview',
+          width: 1,
+          height: 1,
           previewLevelId: 'preview-1024',
-          imageData: new ImageData(new Uint8ClampedArray(256), 8, 8),
-          histogram: {
-            r: new Array(256).fill(0),
-            g: new Array(256).fill(0),
-            b: new Array(256).fill(0),
-            l: new Array(256).fill(0),
-          },
+          tileSize: 1024,
+          halo: 0,
         },
       },
     } as MessageEvent);
 
     await flushAsyncWork();
 
-    const cpuRetryRequest = worker.postedMessages[1];
-    expect(cpuRetryRequest?.payload).not.toMatchObject({ skipProcessing: true });
+    const tileRequest = worker.postedMessages[1];
+    expect(tileRequest?.type).toBe('read-tile');
+
+    worker.onmessage?.({
+      data: {
+        id: tileRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:4:preview',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          haloLeft: 0,
+          haloTop: 0,
+          haloRight: 0,
+          haloBottom: 0,
+          imageData: new ImageData(new Uint8ClampedArray([
+            0, 0, 0, 255,
+          ]), 1, 1),
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork(8);
+
+    const cancelRequest = worker.postedMessages[2];
+    expect(cancelRequest?.type).toBe('cancel-job');
+    worker.onmessage?.({
+      data: {
+        id: cancelRequest?.id,
+        ok: true,
+        payload: {
+          cancelled: true,
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork(8);
+
+    const cpuRetryRequest = worker.postedMessages.find((message, index) => index > 2 && message.type === 'render');
+    expect(cpuRetryRequest).toBeTruthy();
 
     worker.onmessage?.({
       data: {

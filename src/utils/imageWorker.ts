@@ -2,18 +2,24 @@
 
 import UTIF from 'utif';
 import {
+  CancelTileJobRequest,
   ConversionSettings,
   DecodeRequest,
   DecodedImage,
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  PreparedTileJobResult,
   PreviewLevel,
+  PrepareTileJobRequest,
   RawExportResult,
+  ReadTileRequest,
+  ReadTileResult,
   RenderRequest,
   RenderResult,
   SampleRequest,
   SourceMetadata,
+  TileSourceKind,
 } from '../types';
 import {
   assertSupportedDimensions,
@@ -33,6 +39,9 @@ import { decodeTiffRaster, TiffDecodeError } from './tiff';
 type WorkerRequest =
   | { id: string; type: 'decode'; payload: DecodeRequest }
   | { id: string; type: 'render'; payload: RenderRequest }
+  | { id: string; type: 'prepare-tile-job'; payload: PrepareTileJobRequest }
+  | { id: string; type: 'read-tile'; payload: ReadTileRequest }
+  | { id: string; type: 'cancel-job'; payload: CancelTileJobRequest }
   | { id: string; type: 'sample-film-base'; payload: SampleRequest }
   | { id: string; type: 'export'; payload: ExportRequest }
   | { id: string; type: 'dispose'; payload: { documentId: string } };
@@ -40,7 +49,7 @@ type WorkerRequest =
 type WorkerError = { code: string; message: string };
 
 type WorkerResponse =
-  | { id: string; ok: true; payload: DecodedImage | RenderResult | ExportResult | RawExportResult | FilmBaseSample | { disposed: true } }
+  | { id: string; ok: true; payload: DecodedImage | RenderResult | PreparedTileJobResult | ReadTileResult | ExportResult | RawExportResult | FilmBaseSample | { disposed: true } | { cancelled: true } }
   | { id: string; ok: false; error: WorkerError };
 
 interface StoredPreview {
@@ -54,9 +63,22 @@ interface StoredDocument {
   previews: StoredPreview[];
 }
 
+interface StoredTileJob {
+  documentId: string;
+  sourceKind: TileSourceKind;
+  previewLevelId: string | null;
+  transformedCanvas: OffscreenCanvas;
+  width: number;
+  height: number;
+  halo: number;
+}
+
 const documents = new Map<string, StoredDocument>();
+const tileJobs = new Map<string, StoredTileJob>();
+const cancelledJobs = new Set<string>();
 let rotateCanvas: OffscreenCanvas | null = null;
 let outputCanvas: OffscreenCanvas | null = null;
+const TILE_SIZE = 1024;
 
 function reply(response: WorkerResponse) {
   self.postMessage(response);
@@ -176,12 +198,88 @@ function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
   };
 }
 
+function renderTransformedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
+  const crop = normalizeCrop(settings);
+  const rotation = settings.rotation + settings.levelAngle;
+  const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
+    sourceCanvas.width,
+    sourceCanvas.height,
+    rotation,
+  );
+  const cropX = Math.floor(crop.x * rotatedWidth);
+  const cropY = Math.floor(crop.y * rotatedHeight);
+  const cropWidth = Math.max(1, Math.floor(crop.width * rotatedWidth));
+  const cropHeight = Math.max(1, Math.floor(crop.height * rotatedHeight));
+
+  const localRotateCanvas = new OffscreenCanvas(rotatedWidth, rotatedHeight);
+  const rotateCtx = localRotateCanvas.getContext('2d', { willReadFrequently: true });
+  if (!rotateCtx) throw new Error('Could not create rotation canvas.');
+
+  rotateCtx.setTransform(1, 0, 0, 1, 0, 0);
+  rotateCtx.clearRect(0, 0, rotatedWidth, rotatedHeight);
+  rotateCtx.translate(rotatedWidth / 2, rotatedHeight / 2);
+  rotateCtx.rotate((rotation * Math.PI) / 180);
+  rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
+  rotateCtx.setTransform(1, 0, 0, 1, 0, 0);
+
+  const localOutputCanvas = new OffscreenCanvas(cropWidth, cropHeight);
+  const outputCtx = localOutputCanvas.getContext('2d', { willReadFrequently: true });
+  if (!outputCtx) throw new Error('Could not create output canvas.');
+  outputCtx.clearRect(0, 0, cropWidth, cropHeight);
+  outputCtx.drawImage(localRotateCanvas, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+  return {
+    canvas: localOutputCanvas,
+    width: cropWidth,
+    height: cropHeight,
+  };
+}
+
 function getStoredDocument(documentId: string) {
   const document = documents.get(documentId);
   if (!document) {
     throw new Error('The image document is no longer available.');
   }
   return document;
+}
+
+function getHalo(settings: ConversionSettings, comparisonMode: 'processed' | 'original') {
+  if (comparisonMode === 'original') {
+    return 0;
+  }
+
+  const sharpenHalo = settings.sharpen.enabled && settings.sharpen.amount > 0
+    ? Math.ceil(settings.sharpen.radius)
+    : 0;
+  const noiseHalo = settings.noiseReduction.enabled && settings.noiseReduction.luminanceStrength > 0
+    ? 2
+    : 0;
+
+  return Math.max(sharpenHalo, noiseHalo);
+}
+
+function getTileSource(document: StoredDocument, payload: PrepareTileJobRequest) {
+  if (payload.sourceKind === 'source') {
+    return {
+      canvas: document.sourceCanvas,
+      previewLevelId: null,
+    };
+  }
+
+  const level = selectPreviewLevel(
+    document.previews.map((preview) => preview.level),
+    payload.targetMaxDimension ?? Math.max(document.metadata.width, document.metadata.height),
+  );
+  const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
+  return {
+    canvas: preview.canvas,
+    previewLevelId: preview.level.id,
+  };
+}
+
+function clearTileJob(jobId: string) {
+  tileJobs.delete(jobId);
+  cancelledJobs.delete(jobId);
 }
 
 async function handleDecode(payload: DecodeRequest) {
@@ -225,6 +323,84 @@ async function handleDecode(payload: DecodeRequest) {
     metadata,
     previewLevels: previewStore.map((preview) => preview.level),
   } satisfies DecodedImage;
+}
+
+function handlePrepareTileJob(payload: PrepareTileJobRequest) {
+  const document = getStoredDocument(payload.documentId);
+  clearTileJob(payload.jobId);
+  const source = getTileSource(document, payload);
+  const transformed = renderTransformedCanvasForJob(source.canvas, payload.settings);
+  const halo = getHalo(payload.settings, payload.comparisonMode);
+
+  tileJobs.set(payload.jobId, {
+    documentId: payload.documentId,
+    sourceKind: payload.sourceKind,
+    previewLevelId: source.previewLevelId,
+    transformedCanvas: transformed.canvas,
+    width: transformed.width,
+    height: transformed.height,
+    halo,
+  });
+
+  return {
+    documentId: payload.documentId,
+    jobId: payload.jobId,
+    sourceKind: payload.sourceKind,
+    width: transformed.width,
+    height: transformed.height,
+    previewLevelId: source.previewLevelId,
+    tileSize: TILE_SIZE,
+    halo,
+  } satisfies PreparedTileJobResult;
+}
+
+function handleReadTile(payload: ReadTileRequest) {
+  if (cancelledJobs.has(payload.jobId)) {
+    throw createError('JOB_CANCELLED', 'The tile job was cancelled.');
+  }
+
+  const job = tileJobs.get(payload.jobId);
+  if (!job || job.documentId !== payload.documentId) {
+    throw createError('JOB_MISSING', 'The requested tile job is no longer available.');
+  }
+
+  const ctx = job.transformedCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Could not read tile canvas.');
+
+  const haloLeft = Math.min(job.halo, payload.x);
+  const haloTop = Math.min(job.halo, payload.y);
+  const haloRight = Math.min(job.halo, Math.max(0, job.width - (payload.x + payload.width)));
+  const haloBottom = Math.min(job.halo, Math.max(0, job.height - (payload.y + payload.height)));
+
+  const readX = payload.x - haloLeft;
+  const readY = payload.y - haloTop;
+  const readWidth = payload.width + haloLeft + haloRight;
+  const readHeight = payload.height + haloTop + haloBottom;
+  const imageData = ctx.getImageData(readX, readY, readWidth, readHeight);
+
+  if (cancelledJobs.has(payload.jobId)) {
+    throw createError('JOB_CANCELLED', 'The tile job was cancelled.');
+  }
+
+  return {
+    documentId: payload.documentId,
+    jobId: payload.jobId,
+    x: payload.x,
+    y: payload.y,
+    width: payload.width,
+    height: payload.height,
+    haloLeft,
+    haloTop,
+    haloRight,
+    haloBottom,
+    imageData,
+  } satisfies ReadTileResult;
+}
+
+function handleCancelJob(payload: CancelTileJobRequest) {
+  cancelledJobs.add(payload.jobId);
+  tileJobs.delete(payload.jobId);
+  return { cancelled: true } as const;
 }
 
 function handleRender(payload: RenderRequest) {
@@ -330,6 +506,9 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     if (request.type === 'dispose') {
       documents.delete(request.payload.documentId);
+      Array.from(tileJobs.entries())
+        .filter(([, job]) => job.documentId === request.payload.documentId)
+        .forEach(([jobId]) => clearTileJob(jobId));
       reply({ id: request.id, ok: true, payload: { disposed: true } });
       return;
     }
@@ -341,6 +520,21 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
     if (request.type === 'render') {
       reply({ id: request.id, ok: true, payload: handleRender(request.payload) });
+      return;
+    }
+
+    if (request.type === 'prepare-tile-job') {
+      reply({ id: request.id, ok: true, payload: handlePrepareTileJob(request.payload) });
+      return;
+    }
+
+    if (request.type === 'read-tile') {
+      reply({ id: request.id, ok: true, payload: handleReadTile(request.payload) });
+      return;
+    }
+
+    if (request.type === 'cancel-job') {
+      reply({ id: request.id, ok: true, payload: handleCancelJob(request.payload) });
       return;
     }
 

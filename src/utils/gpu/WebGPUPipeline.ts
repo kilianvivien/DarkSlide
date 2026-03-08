@@ -1,8 +1,8 @@
 import {
   ColorMatrix,
   ConversionSettings,
-  HistogramData,
   MaskTuning,
+  ReadTileResult,
   TonalCharacter,
 } from '../../types';
 import {
@@ -10,26 +10,39 @@ import {
   buildProcessingUniforms,
   clamp,
 } from '../imagePipeline';
-import blurShader from './shaders/blur.wgsl?raw';
-import conversionShader from './shaders/conversion.wgsl?raw';
-import histogramShader from './shaders/histogram.wgsl?raw';
-import noiseReductionShader from './shaders/noiseReduction.wgsl?raw';
-import sharpenShader from './shaders/sharpen.wgsl?raw';
+import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
-const WORKGROUP_SIZE = 256;
-const HISTOGRAM_BIN_COUNT = 1024;
 const PROCESSING_UNIFORM_BYTES = 40 * 4;
-const DISPATCH_UNIFORM_BYTES = 16;
-const BLUR_UNIFORM_BYTES = 48;
-const EFFECT_UNIFORM_BYTES = 32;
+const CURVE_LUT_BYTES = 1024 * 4;
+const BLUR_UNIFORM_BYTES = 32;
+const EFFECT_UNIFORM_BYTES = 16;
+const TILE_SIZE = 1024;
+const INTERMEDIATE_FORMAT = 'rgba16float';
 
-function createHistogramFromBuffer(data: Uint32Array): HistogramData {
-  return {
-    r: Array.from(data.subarray(0, 256)),
-    g: Array.from(data.subarray(256, 512)),
-    b: Array.from(data.subarray(512, 768)),
-    l: Array.from(data.subarray(768, 1024)),
-  };
+function alignTo256(value: number) {
+  return Math.ceil(value / 256) * 256;
+}
+
+function copyTrimmedTile(
+  source: Uint8ClampedArray,
+  sourceWidth: number,
+  sourceHeight: number,
+  trimLeft: number,
+  trimTop: number,
+  trimRight: number,
+  trimBottom: number,
+) {
+  const width = Math.max(1, sourceWidth - trimLeft - trimRight);
+  const height = Math.max(1, sourceHeight - trimTop - trimBottom);
+  const result = new Uint8ClampedArray(width * height * 4);
+
+  for (let y = 0; y < height; y += 1) {
+    const sourceOffset = ((y + trimTop) * sourceWidth + trimLeft) * 4;
+    const targetOffset = y * width * 4;
+    result.set(source.subarray(sourceOffset, sourceOffset + width * 4), targetOffset);
+  }
+
+  return new ImageData(result, width, height);
 }
 
 export class WebGPUPipeline {
@@ -40,100 +53,140 @@ export class WebGPUPipeline {
     maxBufferSize: number;
   };
 
+  readonly tileSize = TILE_SIZE;
+
+  readonly intermediateFormat = INTERMEDIATE_FORMAT;
+
   private readonly device: GPUDevice;
 
-  private readonly maxStorageBufferBindingSize: number;
+  private readonly conversionPipeline: GPURenderPipeline;
 
-  private readonly maxBufferSize: number;
+  private readonly blurPipeline: GPURenderPipeline;
 
-  private readonly conversionPipeline: GPUComputePipeline;
+  private readonly sharpenPipeline: GPURenderPipeline;
 
-  private readonly blurPipeline: GPUComputePipeline;
+  private readonly noiseReductionPipeline: GPURenderPipeline;
 
-  private readonly histogramPipeline: GPUComputePipeline;
+  private readonly copyPipeline: GPURenderPipeline;
 
-  private readonly sharpenPipeline: GPUComputePipeline;
-
-  private readonly noiseReductionPipeline: GPUComputePipeline;
-
-  private readonly uniformBuffer: GPUBuffer;
+  private readonly processingUniformBuffer: GPUBuffer;
 
   private readonly curveLutBuffer: GPUBuffer;
 
-  private readonly dispatchParamsBuffer: GPUBuffer;
+  private readonly blurUniformBuffer: GPUBuffer;
 
-  private readonly blurParamsBuffer: GPUBuffer;
+  private readonly effectUniformBuffer: GPUBuffer;
 
-  private readonly effectParamsBuffer: GPUBuffer;
+  private sourceTexture: GPUTexture | null = null;
 
-  private readonly histogramBuffer: GPUBuffer;
+  private sourceTextureView: GPUTextureView | null = null;
 
-  private readonly histogramReadBuffer: GPUBuffer;
+  private workTextureA: GPUTexture | null = null;
 
-  private pixelBuffer: GPUBuffer | null = null;
+  private workTextureAView: GPUTextureView | null = null;
 
-  private blurTempBuffer: GPUBuffer | null = null;
+  private workTextureB: GPUTexture | null = null;
 
-  private blurOutputBuffer: GPUBuffer | null = null;
+  private workTextureBView: GPUTextureView | null = null;
 
-  private pixelReadBuffer: GPUBuffer | null = null;
+  private workTextureC: GPUTexture | null = null;
 
-  private currentPixelCapacity = 0;
+  private workTextureCView: GPUTextureView | null = null;
+
+  private outputTexture: GPUTexture | null = null;
+
+  private outputTextureView: GPUTextureView | null = null;
+
+  private readbackBuffer: GPUBuffer | null = null;
+
+  private currentTextureWidth = 0;
+
+  private currentTextureHeight = 0;
+
+  private currentReadbackSize = 0;
 
   private lost = false;
 
   private destroyed = false;
 
-  private constructor(
-    device: GPUDevice,
-    adapterName: string | null,
-    conversionPipeline: GPUComputePipeline,
-    blurPipeline: GPUComputePipeline,
-    histogramPipeline: GPUComputePipeline,
-    sharpenPipeline: GPUComputePipeline,
-    noiseReductionPipeline: GPUComputePipeline,
-  ) {
+  private constructor(device: GPUDevice, adapterName: string | null, module: GPUShaderModule) {
     this.device = device;
     this.adapterName = adapterName;
-    this.maxStorageBufferBindingSize = Number(device.limits.maxStorageBufferBindingSize);
-    this.maxBufferSize = Number(device.limits.maxBufferSize);
     this.limits = {
-      maxStorageBufferBindingSize: this.maxStorageBufferBindingSize,
-      maxBufferSize: this.maxBufferSize,
+      maxStorageBufferBindingSize: Number(device.limits.maxStorageBufferBindingSize),
+      maxBufferSize: Number(device.limits.maxBufferSize),
     };
-    this.conversionPipeline = conversionPipeline;
-    this.blurPipeline = blurPipeline;
-    this.histogramPipeline = histogramPipeline;
-    this.sharpenPipeline = sharpenPipeline;
-    this.noiseReductionPipeline = noiseReductionPipeline;
 
-    this.uniformBuffer = device.createBuffer({
+    this.processingUniformBuffer = device.createBuffer({
       size: PROCESSING_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.curveLutBuffer = device.createBuffer({
-      size: 1024 * 4,
+      size: CURVE_LUT_BYTES,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
-    this.dispatchParamsBuffer = device.createBuffer({
-      size: DISPATCH_UNIFORM_BYTES,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.blurParamsBuffer = device.createBuffer({
+    this.blurUniformBuffer = device.createBuffer({
       size: BLUR_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.effectParamsBuffer = device.createBuffer({
+    this.effectUniformBuffer = device.createBuffer({
       size: EFFECT_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.histogramBuffer = device.createBuffer({
-      size: HISTOGRAM_BIN_COUNT * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+
+    this.conversionPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'fullscreenVertex' },
+      fragment: {
+        module,
+        entryPoint: 'conversionFragment',
+        targets: [{ format: INTERMEDIATE_FORMAT }],
+      },
+      primitive: { topology: 'triangle-list' },
     });
-    this.histogramReadBuffer = device.createBuffer({
-      size: HISTOGRAM_BIN_COUNT * 4,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+
+    this.blurPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'fullscreenVertex' },
+      fragment: {
+        module,
+        entryPoint: 'blurFragment',
+        targets: [{ format: INTERMEDIATE_FORMAT }],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+
+    this.sharpenPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'fullscreenVertex' },
+      fragment: {
+        module,
+        entryPoint: 'sharpenFragment',
+        targets: [{ format: INTERMEDIATE_FORMAT }],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+
+    this.noiseReductionPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'fullscreenVertex' },
+      fragment: {
+        module,
+        entryPoint: 'noiseReductionFragment',
+        targets: [{ format: INTERMEDIATE_FORMAT }],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+
+    this.copyPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'fullscreenVertex' },
+      fragment: {
+        module,
+        entryPoint: 'copyFragment',
+        targets: [{ format: 'rgba8unorm' }],
+      },
+      primitive: { topology: 'triangle-list' },
     });
 
     void this.device.lost.then(() => {
@@ -146,100 +199,41 @@ export class WebGPUPipeline {
       return null;
     }
 
-    const gpu = navigator.gpu;
-    const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) {
       return null;
     }
 
     try {
       const device = await adapter.requestDevice();
-      const adapterInfo = await WebGPUPipeline.readAdapterName(adapter);
-
-      const conversionModule = device.createShaderModule({ code: conversionShader });
-      const blurModule = device.createShaderModule({ code: blurShader });
-      const histogramModule = device.createShaderModule({ code: histogramShader });
-      const sharpenModule = device.createShaderModule({ code: sharpenShader });
-      const noiseReductionModule = device.createShaderModule({ code: noiseReductionShader });
-
-      return new WebGPUPipeline(
-        device,
-        adapterInfo,
-        device.createComputePipeline({
-          layout: 'auto',
-          compute: { module: conversionModule, entryPoint: 'main' },
-        }),
-        device.createComputePipeline({
-          layout: 'auto',
-          compute: { module: blurModule, entryPoint: 'main' },
-        }),
-        device.createComputePipeline({
-          layout: 'auto',
-          compute: { module: histogramModule, entryPoint: 'main' },
-        }),
-        device.createComputePipeline({
-          layout: 'auto',
-          compute: { module: sharpenModule, entryPoint: 'main' },
-        }),
-        device.createComputePipeline({
-          layout: 'auto',
-          compute: { module: noiseReductionModule, entryPoint: 'main' },
-        }),
-      );
+      const adapterName = await WebGPUPipeline.readAdapterName(adapter);
+      const module = device.createShaderModule({ code: tiledRenderShader });
+      return new WebGPUPipeline(device, adapterName, module);
     } catch {
       return null;
     }
   }
 
   private static async readAdapterName(adapter: GPUAdapter) {
-    type AdapterInfo = { vendor?: string; description?: string; device?: string; architecture?: string };
     const infoProvider = adapter as GPUAdapter & {
-      requestAdapterInfo?: () => Promise<AdapterInfo>;
-      info?: AdapterInfo;
+      requestAdapterInfo?: () => Promise<{ vendor?: string; description?: string; device?: string; architecture?: string }>;
+      info?: { vendor?: string; description?: string; device?: string; architecture?: string };
     };
 
-    let info: AdapterInfo | null = null;
-
+    let info = infoProvider.info ?? null;
     try {
-      if (typeof infoProvider.requestAdapterInfo === 'function') {
+      if (!info && typeof infoProvider.requestAdapterInfo === 'function') {
         info = await infoProvider.requestAdapterInfo();
       }
     } catch {
-      // Ignore adapter info lookup failures.
+      // Ignore adapter info failures.
     }
 
-    if (!info && infoProvider.info) {
-      info = infoProvider.info;
+    if (!info) {
+      return null;
     }
 
-    if (!info) return null;
-
-    return WebGPUPipeline.buildAdapterLabel(info);
-  }
-
-  private static buildAdapterLabel(info: { vendor?: string; description?: string; device?: string; architecture?: string }): string | null {
-    const capitalize = (s: string) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-    const vendor = info.vendor?.trim() ?? '';
-    const description = info.description?.trim() ?? '';
-    const device = info.device?.trim() ?? '';
-    const architecture = info.architecture?.trim() ?? '';
-
-    // Prefer description if it's more than just the vendor name
-    if (description && description.toLowerCase() !== vendor.toLowerCase()) {
-      return capitalize(description);
-    }
-
-    // Use device if available
-    if (device) {
-      return capitalize(device);
-    }
-
-    // Combine vendor + architecture for a more informative label (e.g. "Apple (common-3)")
-    if (vendor && architecture) {
-      return `${capitalize(vendor)} (${architecture})`;
-    }
-
-    return capitalize(vendor) || capitalize(architecture) || null;
+    return info.description ?? info.device ?? info.vendor ?? info.architecture ?? null;
   }
 
   private assertUsable() {
@@ -255,251 +249,347 @@ export class WebGPUPipeline {
     return this.lost;
   }
 
-  private ensurePixelBuffers(pixelCount: number) {
-    if (this.pixelBuffer && this.currentPixelCapacity >= pixelCount) {
+  private ensureTextures(width: number, height: number) {
+    if (
+      this.sourceTexture
+      && this.currentTextureWidth === width
+      && this.currentTextureHeight === height
+    ) {
       return;
     }
 
-    const byteSize = pixelCount * 4 * 4;
-    if (byteSize > this.maxStorageBufferBindingSize || byteSize > this.maxBufferSize) {
-      throw new Error('Image is too large for the current WebGPU buffer limits.');
+    this.sourceTexture?.destroy();
+    this.workTextureA?.destroy();
+    this.workTextureB?.destroy();
+    this.workTextureC?.destroy();
+    this.outputTexture?.destroy();
+
+    const baseUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT;
+    this.sourceTexture = this.device.createTexture({
+      size: { width, height, depthOrArrayLayers: 1 },
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.sourceTextureView = this.sourceTexture.createView();
+
+    this.workTextureA = this.device.createTexture({
+      size: { width, height, depthOrArrayLayers: 1 },
+      format: INTERMEDIATE_FORMAT,
+      usage: baseUsage,
+    });
+    this.workTextureAView = this.workTextureA.createView();
+
+    this.workTextureB = this.device.createTexture({
+      size: { width, height, depthOrArrayLayers: 1 },
+      format: INTERMEDIATE_FORMAT,
+      usage: baseUsage,
+    });
+    this.workTextureBView = this.workTextureB.createView();
+
+    this.workTextureC = this.device.createTexture({
+      size: { width, height, depthOrArrayLayers: 1 },
+      format: INTERMEDIATE_FORMAT,
+      usage: baseUsage,
+    });
+    this.workTextureCView = this.workTextureC.createView();
+
+    this.outputTexture = this.device.createTexture({
+      size: { width, height, depthOrArrayLayers: 1 },
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    });
+    this.outputTextureView = this.outputTexture.createView();
+
+    this.currentTextureWidth = width;
+    this.currentTextureHeight = height;
+  }
+
+  private ensureReadbackBuffer(width: number, height: number) {
+    const paddedBytesPerRow = alignTo256(width * 4);
+    const size = paddedBytesPerRow * height;
+
+    if (this.readbackBuffer && this.currentReadbackSize >= size) {
+      return;
     }
 
-    this.pixelBuffer?.destroy();
-    this.blurTempBuffer?.destroy();
-    this.blurOutputBuffer?.destroy();
-    this.pixelReadBuffer?.destroy();
-
-    this.pixelBuffer = this.device.createBuffer({
-      size: byteSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-    });
-    this.blurTempBuffer = this.device.createBuffer({
-      size: byteSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
-    this.blurOutputBuffer = this.device.createBuffer({
-      size: byteSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
-    this.pixelReadBuffer = this.device.createBuffer({
-      size: byteSize,
+    this.readbackBuffer?.destroy();
+    this.readbackBuffer = this.device.createBuffer({
+      size,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
-    this.currentPixelCapacity = pixelCount;
+    this.currentReadbackSize = size;
   }
 
-  private createFloatPixels(imageData: ImageData) {
-    const { data } = imageData;
-    const floatPixels = new Float32Array(data.length);
-    for (let index = 0; index < data.length; index += 1) {
-      floatPixels[index] = data[index] / 255;
-    }
-    return floatPixels;
+  private beginRenderPass(encoder: GPUCommandEncoder, view: GPUTextureView) {
+    return encoder.beginRenderPass({
+      colorAttachments: [{
+        view,
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+      }],
+    });
   }
 
-  private writeDispatchParams(pixelCount: number) {
-    this.device.queue.writeBuffer(
-      this.dispatchParamsBuffer,
-      0,
-      new Uint32Array([pixelCount, 0, 0, 0]),
-    );
-  }
-
-  private encodeBlur(
+  private renderSingleInput(
     encoder: GPUCommandEncoder,
-    pixelCount: number,
-    width: number,
-    height: number,
-    radius: number,
+    pipeline: GPURenderPipeline,
+    inputView: GPUTextureView,
+    outputView: GPUTextureView,
+    extraEntries: GPUBindGroupEntry[] = [],
   ) {
-    if (!this.pixelBuffer || !this.blurTempBuffer || !this.blurOutputBuffer) {
-      throw new Error('WebGPU blur buffers are unavailable.');
-    }
-
-    const radiusValue = Math.max(1, Math.round(radius));
-    const sigma = radius * 0.65 + 0.35;
-    const workgroupCount = Math.ceil(pixelCount / WORKGROUP_SIZE);
-
-    this.device.queue.writeBuffer(
-      this.blurParamsBuffer,
-      0,
-      new Uint32Array([pixelCount, width, height, radiusValue, 1, 0, 0, 0]),
-    );
-    this.device.queue.writeBuffer(
-      this.blurParamsBuffer,
-      32,
-      new Float32Array([sigma, 0, 0, 0]),
-    );
-    const horizontalPass = encoder.beginComputePass();
-    horizontalPass.setPipeline(this.blurPipeline);
-    horizontalPass.setBindGroup(0, this.device.createBindGroup({
-      layout: this.blurPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.pixelBuffer } },
-        { binding: 1, resource: { buffer: this.blurTempBuffer } },
-        { binding: 2, resource: { buffer: this.blurParamsBuffer } },
-      ],
-    }));
-    horizontalPass.dispatchWorkgroups(workgroupCount);
-    horizontalPass.end();
-
-    this.device.queue.writeBuffer(
-      this.blurParamsBuffer,
-      0,
-      new Uint32Array([pixelCount, width, height, radiusValue, 0, 0, 0, 0]),
-    );
-    this.device.queue.writeBuffer(
-      this.blurParamsBuffer,
-      32,
-      new Float32Array([sigma, 0, 0, 0]),
-    );
-    const verticalPass = encoder.beginComputePass();
-    verticalPass.setPipeline(this.blurPipeline);
-    verticalPass.setBindGroup(0, this.device.createBindGroup({
-      layout: this.blurPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.blurTempBuffer } },
-        { binding: 1, resource: { buffer: this.blurOutputBuffer } },
-        { binding: 2, resource: { buffer: this.blurParamsBuffer } },
-      ],
-    }));
-    verticalPass.dispatchWorkgroups(workgroupCount);
-    verticalPass.end();
-  }
-
-  private encodeEffect(
-    encoder: GPUCommandEncoder,
-    pipeline: GPUComputePipeline,
-    pixelCount: number,
-    factor: number,
-  ) {
-    if (!this.pixelBuffer || !this.blurOutputBuffer) {
-      throw new Error('WebGPU effect buffers are unavailable.');
-    }
-
-    this.device.queue.writeBuffer(
-      this.effectParamsBuffer,
-      0,
-      new Uint32Array([pixelCount, 0, 0, 0]),
-    );
-    this.device.queue.writeBuffer(
-      this.effectParamsBuffer,
-      16,
-      new Float32Array([factor, 0, 0, 0]),
-    );
-
-    const pass = encoder.beginComputePass();
+    const pass = this.beginRenderPass(encoder, outputView);
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, this.device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: { buffer: this.pixelBuffer } },
-        { binding: 1, resource: { buffer: this.blurOutputBuffer } },
-        { binding: 2, resource: { buffer: this.effectParamsBuffer } },
+        { binding: 0, resource: inputView },
+        ...extraEntries,
       ],
     }));
-    pass.dispatchWorkgroups(Math.ceil(pixelCount / WORKGROUP_SIZE));
+    pass.draw(3, 1, 0, 0);
     pass.end();
   }
 
-  async processImageData(
-    imageData: ImageData,
+  private renderDoubleInput(
+    encoder: GPUCommandEncoder,
+    pipeline: GPURenderPipeline,
+    firstView: GPUTextureView,
+    secondView: GPUTextureView,
+    outputView: GPUTextureView,
+    extraEntries: GPUBindGroupEntry[] = [],
+  ) {
+    const pass = this.beginRenderPass(encoder, outputView);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, this.device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: firstView },
+        { binding: 1, resource: secondView },
+        ...extraEntries,
+      ],
+    }));
+    pass.draw(3, 1, 0, 0);
+    pass.end();
+  }
+
+  private writeBlurParams(radius: number, direction: 0 | 1) {
+    const radiusValue = Math.max(1, Math.round(radius));
+    const sigma = radius * 0.65 + 0.35;
+    this.device.queue.writeBuffer(
+      this.blurUniformBuffer,
+      0,
+      new Uint32Array([radiusValue, direction, 0, 0]),
+    );
+    this.device.queue.writeBuffer(
+      this.blurUniformBuffer,
+      16,
+      new Float32Array([sigma, 0, 0, 0]),
+    );
+  }
+
+  private writeEffectFactor(factor: number) {
+    this.device.queue.writeBuffer(
+      this.effectUniformBuffer,
+      0,
+      new Float32Array([factor, 0, 0, 0]),
+    );
+  }
+
+  private extractPixels(width: number, height: number) {
+    if (!this.readbackBuffer) {
+      throw new Error('Readback buffer is unavailable.');
+    }
+
+    const paddedBytesPerRow = alignTo256(width * 4);
+    const mapped = new Uint8Array(this.readbackBuffer.getMappedRange());
+    const result = new Uint8ClampedArray(width * height * 4);
+
+    for (let row = 0; row < height; row += 1) {
+      const sourceStart = row * paddedBytesPerRow;
+      const targetStart = row * width * 4;
+      result.set(mapped.subarray(sourceStart, sourceStart + width * 4), targetStart);
+    }
+
+    this.readbackBuffer.unmap();
+    return result;
+  }
+
+  async processTile(
+    tile: ReadTileResult,
     settings: ConversionSettings,
     isColor: boolean,
     comparisonMode: 'processed' | 'original',
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
-  ): Promise<HistogramData> {
+  ) {
     this.assertUsable();
 
-    const pixelCount = imageData.width * imageData.height;
-    this.ensurePixelBuffers(pixelCount);
-    if (!this.pixelBuffer || !this.pixelReadBuffer) {
-      throw new Error('WebGPU pixel buffers are unavailable.');
+    if (comparisonMode === 'original') {
+      return copyTrimmedTile(
+        tile.imageData.data,
+        tile.imageData.width,
+        tile.imageData.height,
+        tile.haloLeft,
+        tile.haloTop,
+        tile.haloRight,
+        tile.haloBottom,
+      );
     }
 
-    if (this.pixelReadBuffer.mapState !== 'unmapped') {
-      this.pixelReadBuffer.unmap();
-    }
-    if (this.histogramReadBuffer.mapState !== 'unmapped') {
-      this.histogramReadBuffer.unmap();
+    const expandedWidth = tile.imageData.width;
+    const expandedHeight = tile.imageData.height;
+    this.ensureTextures(expandedWidth, expandedHeight);
+    this.ensureReadbackBuffer(expandedWidth, expandedHeight);
+
+    if (
+      !this.sourceTexture
+      || !this.sourceTextureView
+      || !this.workTextureAView
+      || !this.workTextureBView
+      || !this.workTextureCView
+      || !this.outputTexture
+      || !this.outputTextureView
+      || !this.readbackBuffer
+    ) {
+      throw new Error('WebGPU tile resources are unavailable.');
     }
 
-    this.device.queue.writeBuffer(this.pixelBuffer, 0, this.createFloatPixels(imageData));
+    if (this.readbackBuffer.mapState !== 'unmapped') {
+      this.readbackBuffer.unmap();
+    }
+
+    this.device.queue.writeTexture(
+      { texture: this.sourceTexture },
+      tile.imageData.data,
+      {
+        offset: 0,
+        bytesPerRow: expandedWidth * 4,
+        rowsPerImage: expandedHeight,
+      },
+      {
+        width: expandedWidth,
+        height: expandedHeight,
+        depthOrArrayLayers: 1,
+      },
+    );
+
     this.device.queue.writeBuffer(
-      this.uniformBuffer,
+      this.processingUniformBuffer,
       0,
       buildProcessingUniforms(settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter),
     );
     this.device.queue.writeBuffer(this.curveLutBuffer, 0, buildCurveLutBuffer(settings));
-    this.writeDispatchParams(pixelCount);
 
     const encoder = this.device.createCommandEncoder();
 
-    if (comparisonMode === 'processed') {
-      const conversionPass = encoder.beginComputePass();
-      conversionPass.setPipeline(this.conversionPipeline);
-      conversionPass.setBindGroup(0, this.device.createBindGroup({
-        layout: this.conversionPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: this.pixelBuffer } },
-          { binding: 1, resource: { buffer: this.uniformBuffer } },
-          { binding: 2, resource: { buffer: this.curveLutBuffer } },
-          { binding: 3, resource: { buffer: this.dispatchParamsBuffer } },
-        ],
-      }));
-      conversionPass.dispatchWorkgroups(Math.ceil(pixelCount / WORKGROUP_SIZE));
-      conversionPass.end();
-
-      if (settings.noiseReduction.enabled && settings.noiseReduction.luminanceStrength > 0) {
-        this.encodeBlur(encoder, pixelCount, imageData.width, imageData.height, 1.5);
-        this.encodeEffect(encoder, this.noiseReductionPipeline, pixelCount, settings.noiseReduction.luminanceStrength / 100);
-      }
-
-      if (settings.sharpen.enabled && settings.sharpen.amount > 0) {
-        this.encodeBlur(encoder, pixelCount, imageData.width, imageData.height, settings.sharpen.radius);
-        this.encodeEffect(encoder, this.sharpenPipeline, pixelCount, settings.sharpen.amount / 100);
-      }
-    }
-
-    encoder.clearBuffer(this.histogramBuffer);
-    const histogramPass = encoder.beginComputePass();
-    histogramPass.setPipeline(this.histogramPipeline);
-    histogramPass.setBindGroup(0, this.device.createBindGroup({
-      layout: this.histogramPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.pixelBuffer } },
-        { binding: 1, resource: { buffer: this.histogramBuffer } },
-        { binding: 2, resource: { buffer: this.dispatchParamsBuffer } },
+    this.renderSingleInput(
+      encoder,
+      this.conversionPipeline,
+      this.sourceTextureView,
+      this.workTextureAView,
+      [
+        { binding: 1, resource: { buffer: this.processingUniformBuffer } },
+        { binding: 2, resource: { buffer: this.curveLutBuffer } },
       ],
-    }));
-    histogramPass.dispatchWorkgroups(Math.ceil(pixelCount / WORKGROUP_SIZE));
-    histogramPass.end();
+    );
 
-    encoder.copyBufferToBuffer(this.pixelBuffer, 0, this.pixelReadBuffer, 0, pixelCount * 4 * 4);
-    encoder.copyBufferToBuffer(this.histogramBuffer, 0, this.histogramReadBuffer, 0, HISTOGRAM_BIN_COUNT * 4);
-    this.device.queue.submit([encoder.finish()]);
+    let currentView = this.workTextureAView;
 
-    await Promise.all([
-      this.pixelReadBuffer.mapAsync(GPUMapMode.READ),
-      this.histogramReadBuffer.mapAsync(GPUMapMode.READ),
-    ]);
+    if (settings.noiseReduction.enabled && settings.noiseReduction.luminanceStrength > 0) {
+      this.writeBlurParams(1.5, 0);
+      this.renderSingleInput(
+        encoder,
+        this.blurPipeline,
+        currentView,
+        this.workTextureBView,
+        [{ binding: 1, resource: { buffer: this.blurUniformBuffer } }],
+      );
 
-    const resultPixels = new Float32Array(this.pixelReadBuffer.getMappedRange());
-    for (let index = 0; index < imageData.data.length; index += 4) {
-      imageData.data[index] = Math.round(clamp(resultPixels[index], 0, 1) * 255);
-      imageData.data[index + 1] = Math.round(clamp(resultPixels[index + 1], 0, 1) * 255);
-      imageData.data[index + 2] = Math.round(clamp(resultPixels[index + 2], 0, 1) * 255);
-      imageData.data[index + 3] = Math.round(clamp(resultPixels[index + 3], 0, 1) * 255);
+      this.writeBlurParams(1.5, 1);
+      this.renderSingleInput(
+        encoder,
+        this.blurPipeline,
+        this.workTextureBView,
+        this.workTextureCView,
+        [{ binding: 1, resource: { buffer: this.blurUniformBuffer } }],
+      );
+
+      this.writeEffectFactor(settings.noiseReduction.luminanceStrength / 100);
+      this.renderDoubleInput(
+        encoder,
+        this.noiseReductionPipeline,
+        currentView,
+        this.workTextureCView,
+        this.workTextureBView,
+        [{ binding: 2, resource: { buffer: this.effectUniformBuffer } }],
+      );
+      currentView = this.workTextureBView;
     }
 
-    const histogramCopy = new Uint32Array(this.histogramReadBuffer.getMappedRange().slice(0));
-    this.pixelReadBuffer.unmap();
-    this.histogramReadBuffer.unmap();
+    if (settings.sharpen.enabled && settings.sharpen.amount > 0) {
+      this.writeBlurParams(settings.sharpen.radius, 0);
+      this.renderSingleInput(
+        encoder,
+        this.blurPipeline,
+        currentView,
+        this.workTextureCView,
+        [{ binding: 1, resource: { buffer: this.blurUniformBuffer } }],
+      );
 
-    return createHistogramFromBuffer(histogramCopy);
+      this.writeBlurParams(settings.sharpen.radius, 1);
+      this.renderSingleInput(
+        encoder,
+        this.blurPipeline,
+        this.workTextureCView,
+        this.workTextureAView,
+        [{ binding: 1, resource: { buffer: this.blurUniformBuffer } }],
+      );
+
+      this.writeEffectFactor(settings.sharpen.amount / 100);
+      this.renderDoubleInput(
+        encoder,
+        this.sharpenPipeline,
+        currentView,
+        this.workTextureAView,
+        this.workTextureCView,
+        [{ binding: 2, resource: { buffer: this.effectUniformBuffer } }],
+      );
+      currentView = this.workTextureCView;
+    }
+
+    this.renderSingleInput(encoder, this.copyPipeline, currentView, this.outputTextureView);
+
+    const paddedBytesPerRow = alignTo256(expandedWidth * 4);
+    encoder.copyTextureToBuffer(
+      { texture: this.outputTexture },
+      {
+        buffer: this.readbackBuffer,
+        offset: 0,
+        bytesPerRow: paddedBytesPerRow,
+        rowsPerImage: expandedHeight,
+      },
+      {
+        width: expandedWidth,
+        height: expandedHeight,
+        depthOrArrayLayers: 1,
+      },
+    );
+
+    this.device.queue.submit([encoder.finish()]);
+    await this.readbackBuffer.mapAsync(GPUMapMode.READ);
+
+    const pixels = this.extractPixels(expandedWidth, expandedHeight);
+    return copyTrimmedTile(
+      pixels,
+      expandedWidth,
+      expandedHeight,
+      tile.haloLeft,
+      tile.haloTop,
+      tile.haloRight,
+      tile.haloBottom,
+    );
   }
 
   destroy() {
@@ -508,17 +598,16 @@ export class WebGPUPipeline {
     }
 
     this.destroyed = true;
-    this.pixelBuffer?.destroy();
-    this.blurTempBuffer?.destroy();
-    this.blurOutputBuffer?.destroy();
-    this.pixelReadBuffer?.destroy();
-    this.uniformBuffer.destroy();
+    this.sourceTexture?.destroy();
+    this.workTextureA?.destroy();
+    this.workTextureB?.destroy();
+    this.workTextureC?.destroy();
+    this.outputTexture?.destroy();
+    this.readbackBuffer?.destroy();
+    this.processingUniformBuffer.destroy();
     this.curveLutBuffer.destroy();
-    this.dispatchParamsBuffer.destroy();
-    this.blurParamsBuffer.destroy();
-    this.effectParamsBuffer.destroy();
-    this.histogramBuffer.destroy();
-    this.histogramReadBuffer.destroy();
+    this.blurUniformBuffer.destroy();
+    this.effectUniformBuffer.destroy();
     this.device.destroy();
   }
 }

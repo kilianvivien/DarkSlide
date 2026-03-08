@@ -21,6 +21,7 @@ export interface CropSettings {
 }
 
 export type ExportFormat = 'image/jpeg' | 'image/png' | 'image/webp';
+export type TileSourceKind = 'preview' | 'source';
 
 export interface FilmBaseSample {
   r: number;
@@ -195,11 +196,68 @@ export interface RawExportResult {
   quality: number;
 }
 
+export interface PrepareTileJobRequest {
+  documentId: string;
+  jobId: string;
+  sourceKind: TileSourceKind;
+  settings: ConversionSettings;
+  comparisonMode: 'processed' | 'original';
+  targetMaxDimension?: number;
+}
+
+export interface PreparedTileJobResult {
+  documentId: string;
+  jobId: string;
+  sourceKind: TileSourceKind;
+  width: number;
+  height: number;
+  previewLevelId: string | null;
+  tileSize: number;
+  halo: number;
+}
+
+export interface ReadTileRequest {
+  documentId: string;
+  jobId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ReadTileResult {
+  documentId: string;
+  jobId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  haloLeft: number;
+  haloTop: number;
+  haloRight: number;
+  haloBottom: number;
+  imageData: ImageData;
+}
+
+export interface CancelTileJobRequest {
+  documentId: string;
+  jobId: string;
+}
+
 export interface RenderBackendDiagnostics {
   gpuAvailable: boolean;
   gpuEnabled: boolean;
   gpuActive: boolean;
   gpuAdapterName: string | null;
+  backendMode: 'gpu-tiled-render' | 'cpu-worker';
+  sourceKind: TileSourceKind | null;
+  tileSize: number | null;
+  halo: number | null;
+  tileCount: number | null;
+  intermediateFormat: 'rgba16float' | null;
+  usedCpuFallback: boolean;
+  fallbackReason: string | null;
+  jobDurationMs: number | null;
   maxStorageBufferBindingSize: number | null;
   maxBufferSize: number | null;
   gpuDisabledReason: 'user' | 'unsupported' | 'initialization-failed' | 'device-lost' | null;

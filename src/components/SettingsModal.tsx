@@ -35,6 +35,11 @@ function getRenderBackendLabel(diagnostics: RenderBackendDiagnostics) {
   }
 
   if (diagnostics.gpuActive) {
+    if (diagnostics.backendMode === 'gpu-tiled-render') {
+      return diagnostics.gpuAdapterName
+        ? `Active — GPU tiled render on ${diagnostics.gpuAdapterName}`
+        : 'Active — GPU tiled render';
+    }
     return diagnostics.gpuAdapterName
       ? `Active — GPU (WebGPU) on ${diagnostics.gpuAdapterName}`
       : 'Active — GPU (WebGPU)';
@@ -60,7 +65,15 @@ function getRenderBackendDetail(diagnostics: RenderBackendDiagnostics) {
   if (diagnostics.gpuDisabledReason === 'initialization-failed') {
     return diagnostics.lastError ?? 'WebGPU initialization failed, so rendering fell back to the CPU path.';
   }
-  return diagnostics.gpuActive ? 'WebGPU is handling conversion, blur, and histogram work on the main thread.' : 'The CPU worker path is currently active.';
+  if (diagnostics.backendMode === 'gpu-tiled-render') {
+    return 'WebGPU is processing texture-backed tiles on the main thread and assembling the final image tile by tile.';
+  }
+
+  if (diagnostics.usedCpuFallback) {
+    return diagnostics.fallbackReason ?? 'The tiled GPU path failed and DarkSlide fell back to the CPU worker path.';
+  }
+
+  return diagnostics.gpuActive ? 'WebGPU is active on the main thread.' : 'The CPU worker path is currently active.';
 }
 
 function formatBytes(value: number | null) {
@@ -75,15 +88,6 @@ function formatBytes(value: number | null) {
 
   const mib = value / (1024 ** 2);
   return `${mib.toFixed(0)} MiB`;
-}
-
-function estimateMaxMegapixels(storageLimit: number | null) {
-  if (storageLimit === null) {
-    return 'Unavailable';
-  }
-
-  const maxPixels = Math.floor(storageLimit / 16);
-  return `${(maxPixels / 1_000_000).toFixed(1)} MP`;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -239,7 +243,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="mt-4 space-y-2 text-[11px]">
                         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
                           <span className="text-zinc-500">Path</span>
-                          <span className="text-zinc-200">{renderBackendDiagnostics.gpuActive ? 'GPU (WebGPU)' : 'CPU'}</span>
+                          <span className="text-zinc-200">{renderBackendDiagnostics.backendMode === 'gpu-tiled-render' ? 'GPU tiled render' : 'CPU worker'}</span>
                         </div>
                         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
                           <span className="text-zinc-500">Adapter</span>
@@ -248,6 +252,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
                           <span className="text-zinc-500">GPU toggle</span>
                           <span className="text-zinc-200">{renderBackendDiagnostics.gpuEnabled ? 'Enabled' : 'Disabled'}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Tile size</span>
+                          <span className="text-right text-zinc-200">
+                            {renderBackendDiagnostics.tileSize ? `${renderBackendDiagnostics.tileSize}px` : 'Unavailable'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Halo</span>
+                          <span className="text-right text-zinc-200">
+                            {renderBackendDiagnostics.halo !== null ? `${renderBackendDiagnostics.halo}px` : 'Unavailable'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Tile count</span>
+                          <span className="text-right text-zinc-200">
+                            {renderBackendDiagnostics.tileCount ?? 'Unavailable'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Intermediate format</span>
+                          <span className="text-right text-zinc-200">
+                            {renderBackendDiagnostics.intermediateFormat ?? 'Unavailable'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Source kind</span>
+                          <span className="text-right text-zinc-200">
+                            {renderBackendDiagnostics.sourceKind ?? 'Unavailable'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Job duration</span>
+                          <span className="text-right text-zinc-200">
+                            {renderBackendDiagnostics.jobDurationMs !== null ? `${renderBackendDiagnostics.jobDurationMs} ms` : 'Unavailable'}
+                          </span>
                         </div>
                         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
                           <span className="text-zinc-500">Storage buffer limit</span>
@@ -262,9 +302,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           </span>
                         </div>
                         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
-                          <span className="text-zinc-500">Estimated GPU max image</span>
+                          <span className="text-zinc-500">CPU fallback</span>
                           <span className="text-right text-zinc-200">
-                            {estimateMaxMegapixels(renderBackendDiagnostics.maxStorageBufferBindingSize)}
+                            {renderBackendDiagnostics.usedCpuFallback ? (renderBackendDiagnostics.fallbackReason ?? 'Yes') : 'No'}
                           </span>
                         </div>
                         <div className="flex items-center justify-between gap-3">

@@ -319,6 +319,18 @@ export function buildEmptyHistogram(): HistogramData {
   };
 }
 
+export function accumulateHistogram(
+  histogram: HistogramData,
+  data: Uint8ClampedArray,
+) {
+  for (let index = 0; index < data.length; index += 4) {
+    histogram.r[data[index]] += 1;
+    histogram.g[data[index + 1]] += 1;
+    histogram.b[data[index + 2]] += 1;
+    histogram.l[Math.round(0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2])] += 1;
+  }
+}
+
 function gaussianBlur1D(
   src: Uint8ClampedArray,
   dst: Float32Array,
@@ -514,13 +526,7 @@ export function processImageData(
     }
   }
 
-  // Build histogram from final pixel data
-  for (let index = 0; index < data.length; index += 4) {
-    histogram.r[data[index]] += 1;
-    histogram.g[data[index + 1]] += 1;
-    histogram.b[data[index + 2]] += 1;
-    histogram.l[Math.round(0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2])] += 1;
-  }
+  accumulateHistogram(histogram, data);
 
   return histogram;
 }

@@ -19,6 +19,7 @@ declare global {
   }
 
   interface GPUAdapterInfo {
+    vendor?: string;
     description?: string;
     device?: string;
     architecture?: string;
@@ -38,7 +39,9 @@ declare global {
       layout: 'auto' | GPUPipelineLayout;
       compute: { module: GPUShaderModule; entryPoint: string };
     }): GPUComputePipeline;
+    createRenderPipeline(descriptor: GPURenderPipelineDescriptor): GPURenderPipeline;
     createBuffer(descriptor: GPUBufferDescriptor): GPUBuffer;
+    createTexture(descriptor: GPUTextureDescriptor): GPUTexture;
     createBindGroup(descriptor: GPUCreateBindGroupDescriptor): GPUBindGroup;
     createCommandEncoder(): GPUCommandEncoder;
     destroy(): void;
@@ -46,6 +49,12 @@ declare global {
 
   interface GPUQueue {
     writeBuffer(buffer: GPUBuffer, bufferOffset: number, data: BufferSource, dataOffset?: number, size?: number): void;
+    writeTexture(
+      destination: GPUImageCopyTexture,
+      data: BufferSource,
+      dataLayout: GPUImageDataLayout,
+      size: GPUExtent3D,
+    ): void;
     submit(commandBuffers: GPUCommandBuffer[]): void;
   }
 
@@ -57,9 +66,39 @@ declare global {
     getBindGroupLayout(index: number): GPUBindGroupLayout;
   }
 
+  interface GPURenderPipeline {
+    getBindGroupLayout(index: number): GPUBindGroupLayout;
+  }
+
   interface GPUBindGroupLayout {}
 
   interface GPUBindGroup {}
+
+  interface GPURenderPipelineDescriptor {
+    layout: 'auto' | GPUPipelineLayout;
+    vertex: GPUVertexState;
+    fragment?: GPUFragmentState;
+    primitive?: GPUPrimitiveState;
+  }
+
+  interface GPUVertexState {
+    module: GPUShaderModule;
+    entryPoint: string;
+  }
+
+  interface GPUFragmentState {
+    module: GPUShaderModule;
+    entryPoint: string;
+    targets: GPUColorTargetState[];
+  }
+
+  interface GPUColorTargetState {
+    format: GPUTextureFormat;
+  }
+
+  interface GPUPrimitiveState {
+    topology?: 'triangle-list';
+  }
 
   interface GPUCreateBindGroupDescriptor {
     layout: GPUBindGroupLayout;
@@ -68,8 +107,10 @@ declare global {
 
   interface GPUBindGroupEntry {
     binding: number;
-    resource: GPUBufferBinding;
+    resource: GPUBindingResource;
   }
+
+  type GPUBindingResource = GPUBufferBinding | GPUTextureView;
 
   interface GPUBufferBinding {
     buffer: GPUBuffer;
@@ -88,10 +129,25 @@ declare global {
     unmap(): void;
   }
 
+  interface GPUTextureDescriptor {
+    size: GPUExtent3D;
+    format: GPUTextureFormat;
+    usage: number;
+  }
+
+  interface GPUTexture {
+    createView(): GPUTextureView;
+    destroy(): void;
+  }
+
+  interface GPUTextureView {}
+
   interface GPUCommandEncoder {
     beginComputePass(): GPUComputePassEncoder;
+    beginRenderPass(descriptor: GPURenderPassDescriptor): GPURenderPassEncoder;
     clearBuffer(buffer: GPUBuffer, offset?: number, size?: number): void;
     copyBufferToBuffer(source: GPUBuffer, sourceOffset: number, destination: GPUBuffer, destinationOffset: number, size: number): void;
+    copyTextureToBuffer(source: GPUImageCopyTexture, destination: GPUImageCopyBuffer, copySize: GPUExtent3D): void;
     finish(): GPUCommandBuffer;
   }
 
@@ -102,7 +158,58 @@ declare global {
     end(): void;
   }
 
+  interface GPURenderPassDescriptor {
+    colorAttachments: GPURenderPassColorAttachment[];
+  }
+
+  interface GPURenderPassColorAttachment {
+    view: GPUTextureView;
+    loadOp: 'clear' | 'load';
+    storeOp: 'store' | 'discard';
+    clearValue?: GPUColor;
+  }
+
+  interface GPURenderPassEncoder {
+    setPipeline(pipeline: GPURenderPipeline): void;
+    setBindGroup(index: number, bindGroup: GPUBindGroup): void;
+    draw(vertexCount: number, instanceCount?: number, firstVertex?: number, firstInstance?: number): void;
+    end(): void;
+  }
+
   interface GPUCommandBuffer {}
+
+  interface GPUImageCopyTexture {
+    texture: GPUTexture;
+  }
+
+  interface GPUImageCopyBuffer {
+    buffer: GPUBuffer;
+    offset: number;
+    bytesPerRow: number;
+    rowsPerImage: number;
+  }
+
+  interface GPUImageDataLayout {
+    offset?: number;
+    bytesPerRow?: number;
+    rowsPerImage?: number;
+  }
+
+  interface GPUExtent3DDict {
+    width: number;
+    height: number;
+    depthOrArrayLayers: number;
+  }
+
+  type GPUExtent3D = GPUExtent3DDict;
+  type GPUTextureFormat = 'rgba8unorm' | 'rgba16float';
+
+  interface GPUColor {
+    r: number;
+    g: number;
+    b: number;
+    a: number;
+  }
 
   const GPUBufferUsage: {
     MAP_READ: number;
@@ -110,6 +217,14 @@ declare global {
     COPY_DST: number;
     STORAGE: number;
     UNIFORM: number;
+  };
+
+  const GPUTextureUsage: {
+    COPY_SRC: number;
+    COPY_DST: number;
+    TEXTURE_BINDING: number;
+    STORAGE_BINDING: number;
+    RENDER_ATTACHMENT: number;
   };
 
   const GPUMapMode: {
