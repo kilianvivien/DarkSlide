@@ -22,7 +22,7 @@ import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
 import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from './constants';
-import { ColorMatrix, ConversionSettings, FilmProfile, MaskTuning, TonalCharacter, WorkspaceDocument } from './types';
+import { ColorMatrix, ConversionSettings, FilmProfile, MaskTuning, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useViewportZoom } from './hooks/useViewportZoom';
@@ -65,6 +65,7 @@ function getCanvas2dContext(canvas: HTMLCanvasElement) {
 }
 
 export default function App() {
+  const initialPreferences = useMemo(() => loadPreferences(), []);
   const usesNativeFileDialogs = isDesktopShell();
   const [documentState, setDocumentState] = useState<WorkspaceDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +86,17 @@ export default function App() {
   const [isPanDragging, setIsPanDragging] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'export'>('adjust');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
+  const [renderBackendDiagnostics, setRenderBackendDiagnostics] = useState<RenderBackendDiagnostics>({
+    gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
+    gpuEnabled: initialPreferences?.gpuRendering ?? true,
+    gpuActive: false,
+    gpuAdapterName: null,
+    maxStorageBufferBindingSize: null,
+    maxBufferSize: null,
+    gpuDisabledReason: (typeof navigator === 'undefined' || !('gpu' in navigator)) ? 'unsupported' : ((initialPreferences?.gpuRendering ?? true) ? null : 'user'),
+    lastError: null,
+  });
 
   const [displayScaleFactor, setDisplayScaleFactor] = useState(() => (
     typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
@@ -126,6 +138,7 @@ export default function App() {
     sidebarTab: 'adjust',
     isLeftPaneOpen: true,
     isRightPaneOpen: true,
+    gpuRendering: initialPreferences?.gpuRendering ?? true,
   });
   prefsSnapshotRef.current = {
     version: 1,
@@ -134,6 +147,7 @@ export default function App() {
     sidebarTab,
     isLeftPaneOpen,
     isRightPaneOpen,
+    gpuRendering: gpuRenderingEnabled,
   };
   const activeProfile = documentState
     ? allProfiles.find((profile) => profile.id === documentState.profileId) ?? fallbackProfile
@@ -245,7 +259,10 @@ export default function App() {
   }, [commitInteraction, documentState]);
 
   useEffect(() => {
-    workerClientRef.current = new ImageWorkerClient();
+    workerClientRef.current = new ImageWorkerClient({ gpuEnabled: initialPreferences?.gpuRendering ?? true });
+    void workerClientRef.current.getGPUDiagnostics().then(setRenderBackendDiagnostics).catch(() => {
+      // Ignore diagnostics refresh failures during startup.
+    });
     return () => {
       if (previewRetryFrameRef.current !== null) {
         window.cancelAnimationFrame(previewRetryFrameRef.current);
@@ -253,19 +270,32 @@ export default function App() {
       workerClientRef.current?.terminate();
       workerClientRef.current = null;
     };
-  }, []);
+  }, [initialPreferences]);
 
   // Restore UI layout from stored preferences on first mount
   useEffect(() => {
-    const prefs = loadPreferences();
+    const prefs = initialPreferences;
     if (!prefs) return;
     if (['adjust', 'curves', 'crop', 'export'].includes(prefs.sidebarTab)) {
       setSidebarTab(prefs.sidebarTab);
     }
     setIsLeftPaneOpen(prefs.isLeftPaneOpen);
     setIsRightPaneOpen(prefs.isRightPaneOpen);
+    setGPURenderingEnabled(prefs.gpuRendering);
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPreferences]);
+
+  const refreshRenderBackendDiagnostics = useCallback(async () => {
+    const worker = workerClientRef.current;
+    if (!worker) return;
+    const diagnostics = await worker.getGPUDiagnostics();
+    setRenderBackendDiagnostics(diagnostics);
   }, []);
+
+  useEffect(() => {
+    if (!showSettingsModal) return;
+    void refreshRenderBackendDiagnostics();
+  }, [refreshRenderBackendDiagnostics, showSettingsModal]);
 
   useEffect(() => {
     const syncBrowserScale = () => {
@@ -905,6 +935,13 @@ export default function App() {
     });
   }, []);
 
+  const handleGPURenderingChange = useCallback((enabled: boolean) => {
+    setGPURenderingEnabled(enabled);
+    workerClientRef.current?.setGPUEnabled(enabled);
+    savePreferences({ ...prefsSnapshotRef.current, gpuRendering: enabled });
+    void refreshRenderBackendDiagnostics();
+  }, [refreshRenderBackendDiagnostics]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
@@ -1199,6 +1236,7 @@ export default function App() {
         activeImportSession: importSessionRef.current,
         activeRenderRequest: activeRenderRequestRef.current,
         targetMaxDimension,
+        renderBackend: renderBackendDiagnostics,
       },
     };
 
@@ -1208,7 +1246,7 @@ export default function App() {
     } catch {
       setError('Could not copy debug info to the clipboard.');
     }
-  }, [canvasSize, documentState, hasVisiblePreview, targetMaxDimension]);
+  }, [canvasSize, documentState, hasVisiblePreview, renderBackendDiagnostics, targetMaxDimension]);
   handleCopyDebugInfoRef.current = handleCopyDebugInfo;
 
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
@@ -1609,6 +1647,9 @@ export default function App() {
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
         onCopyDebugInfo={handleCopyDebugInfo}
+        gpuRenderingEnabled={gpuRenderingEnabled}
+        renderBackendDiagnostics={renderBackendDiagnostics}
+        onToggleGPURendering={handleGPURenderingChange}
       />
     </div>
   );

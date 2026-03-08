@@ -9,6 +9,7 @@ export interface UserPreferences {
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'export';
   isLeftPaneOpen: boolean;
   isRightPaneOpen: boolean;
+  gpuRendering: boolean;
 }
 
 function isValidPreferences(value: unknown): value is UserPreferences {
@@ -20,7 +21,8 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     prefs.exportOptions !== undefined &&
     typeof prefs.sidebarTab === 'string' &&
     typeof prefs.isLeftPaneOpen === 'boolean' &&
-    typeof prefs.isRightPaneOpen === 'boolean'
+    typeof prefs.isRightPaneOpen === 'boolean' &&
+    (prefs.gpuRendering === undefined || typeof prefs.gpuRendering === 'boolean')
   );
 }
 
@@ -31,7 +33,10 @@ export function loadPreferences(): UserPreferences | null {
   try {
     const parsed = JSON.parse(raw);
     if (!isValidPreferences(parsed)) return null;
-    return parsed;
+    return {
+      ...parsed,
+      gpuRendering: parsed.gpuRendering ?? true,
+    };
   } catch {
     return null;
   }

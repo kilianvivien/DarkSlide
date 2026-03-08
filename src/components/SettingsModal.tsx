@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check } from 'lucide-react';
+import { RenderBackendDiagnostics } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCopyDebugInfo: () => Promise<void>;
+  gpuRenderingEnabled: boolean;
+  renderBackendDiagnostics: RenderBackendDiagnostics;
+  onToggleGPURendering: (enabled: boolean) => void;
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -25,7 +29,71 @@ const SHORTCUTS = [
   { action: 'Pan (hold)', key: 'Space' },
 ];
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onCopyDebugInfo }) => {
+function getRenderBackendLabel(diagnostics: RenderBackendDiagnostics) {
+  if (!diagnostics.gpuAvailable) {
+    return 'Unavailable — your browser does not support WebGPU';
+  }
+
+  if (diagnostics.gpuActive) {
+    return diagnostics.gpuAdapterName
+      ? `Active — GPU (WebGPU) on ${diagnostics.gpuAdapterName}`
+      : 'Active — GPU (WebGPU)';
+  }
+
+  if (!diagnostics.gpuEnabled) {
+    return 'Active — CPU (GPU disabled in settings)';
+  }
+
+  return 'Active — CPU';
+}
+
+function getRenderBackendDetail(diagnostics: RenderBackendDiagnostics) {
+  if (diagnostics.gpuDisabledReason === 'user') {
+    return 'GPU acceleration is disabled by preference.';
+  }
+  if (diagnostics.gpuDisabledReason === 'unsupported') {
+    return 'This browser or webview does not expose navigator.gpu.';
+  }
+  if (diagnostics.gpuDisabledReason === 'device-lost') {
+    return diagnostics.lastError ?? 'The GPU device was lost. DarkSlide will retry on the next render.';
+  }
+  if (diagnostics.gpuDisabledReason === 'initialization-failed') {
+    return diagnostics.lastError ?? 'WebGPU initialization failed, so rendering fell back to the CPU path.';
+  }
+  return diagnostics.gpuActive ? 'WebGPU is handling conversion, blur, and histogram work on the main thread.' : 'The CPU worker path is currently active.';
+}
+
+function formatBytes(value: number | null) {
+  if (value === null) {
+    return 'Unavailable';
+  }
+
+  const gib = value / (1024 ** 3);
+  if (gib >= 1) {
+    return `${gib.toFixed(2)} GiB`;
+  }
+
+  const mib = value / (1024 ** 2);
+  return `${mib.toFixed(0)} MiB`;
+}
+
+function estimateMaxMegapixels(storageLimit: number | null) {
+  if (storageLimit === null) {
+    return 'Unavailable';
+  }
+
+  const maxPixels = Math.floor(storageLimit / 16);
+  return `${(maxPixels / 1_000_000).toFixed(1)} MP`;
+}
+
+export const SettingsModal: React.FC<SettingsModalProps> = ({
+  isOpen,
+  onClose,
+  onCopyDebugInfo,
+  gpuRenderingEnabled,
+  renderBackendDiagnostics,
+  onToggleGPURendering,
+}) => {
   const [tab, setTab] = useState<'general' | 'shortcuts' | 'diagnostics'>('general');
   const [copied, setCopied] = useState(false);
 
@@ -104,8 +172,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 {tab === 'general' && (
                   <div className="space-y-6">
                     <div className="flex items-start gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
-                        <span className="text-[22px] font-bold text-zinc-100 leading-none tracking-tight">D</span>
+                      <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 overflow-hidden">
+                        <img src="/favicon.png" alt="DarkSlide" className="w-10 h-10 object-contain" />
                       </div>
                       <div>
                         <h3 className="text-sm font-semibold text-zinc-100">DarkSlide</h3>
@@ -113,6 +181,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                         <p className="text-[11px] text-zinc-600 mt-2 leading-relaxed max-w-xs">
                           Film negative converter. Import TIFF, JPEG, PNG, or WebP scans and convert them non-destructively.
                         </p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-zinc-100">Render Backend</h3>
+                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                            Disable GPU acceleration if you see rendering artifacts, instability, or device-loss errors.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={gpuRenderingEnabled}
+                          onClick={() => onToggleGPURendering(!gpuRenderingEnabled)}
+                          className={`relative shrink-0 overflow-hidden h-7 w-12 rounded-full border transition-all ${
+                            gpuRenderingEnabled
+                              ? 'border-emerald-400/70 bg-emerald-500/25'
+                              : 'border-zinc-700 bg-zinc-950'
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-0.5 h-[22px] w-[22px] rounded-full bg-zinc-100 transition-all ${
+                              gpuRenderingEnabled ? 'left-[22px]' : 'left-0.5'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5">
+                        <p className="text-[11px] font-medium text-zinc-200">{getRenderBackendLabel(renderBackendDiagnostics)}</p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{getRenderBackendDetail(renderBackendDiagnostics)}</p>
                       </div>
                     </div>
                   </div>
@@ -133,6 +234,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
                 {tab === 'diagnostics' && (
                   <div className="space-y-4">
+                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                      <h3 className="text-sm font-semibold text-zinc-100">Render Backend</h3>
+                      <div className="mt-4 space-y-2 text-[11px]">
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Path</span>
+                          <span className="text-zinc-200">{renderBackendDiagnostics.gpuActive ? 'GPU (WebGPU)' : 'CPU'}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Adapter</span>
+                          <span className="text-right text-zinc-200">{renderBackendDiagnostics.gpuAdapterName ?? 'Unavailable'}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">GPU toggle</span>
+                          <span className="text-zinc-200">{renderBackendDiagnostics.gpuEnabled ? 'Enabled' : 'Disabled'}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Storage buffer limit</span>
+                          <span className="text-right text-zinc-200">
+                            {formatBytes(renderBackendDiagnostics.maxStorageBufferBindingSize)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Max buffer size</span>
+                          <span className="text-right text-zinc-200">
+                            {formatBytes(renderBackendDiagnostics.maxBufferSize)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2">
+                          <span className="text-zinc-500">Estimated GPU max image</span>
+                          <span className="text-right text-zinc-200">
+                            {estimateMaxMegapixels(renderBackendDiagnostics.maxStorageBufferBindingSize)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-zinc-500">Reason</span>
+                          <span className="text-right text-zinc-200">{renderBackendDiagnostics.gpuDisabledReason ?? 'Active'}</span>
+                        </div>
+                      </div>
+                    </div>
+
                     <p className="text-[11px] text-zinc-500 leading-relaxed">
                       Copy a diagnostic report to your clipboard to share when reporting issues.
                     </p>

@@ -2,6 +2,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type WorkerMessage = { id: string; type: string; payload: unknown };
 
+const gpuState = vi.hoisted(() => ({
+  create: vi.fn(),
+  instance: {
+    adapterName: 'Mock GPU',
+    limits: {
+      maxStorageBufferBindingSize: 512 * 1024 * 1024,
+      maxBufferSize: 1024 * 1024 * 1024,
+    },
+    processImageData: vi.fn(),
+    destroy: vi.fn(),
+    isLost: vi.fn(() => false),
+  },
+}));
+
 class MockWorker {
   static instances: MockWorker[] = [];
 
@@ -24,16 +38,41 @@ class MockWorker {
   }
 }
 
+async function flushAsyncWork(iterations = 4) {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 Object.defineProperty(globalThis, 'Worker', {
   configurable: true,
   writable: true,
   value: MockWorker,
 });
 
+vi.mock('./gpu/WebGPUPipeline', () => ({
+  WebGPUPipeline: {
+    create: gpuState.create,
+  },
+}));
+
 describe('ImageWorkerClient', () => {
   beforeEach(() => {
     vi.resetModules();
     MockWorker.instances = [];
+    gpuState.create.mockReset();
+    gpuState.create.mockResolvedValue(null);
+    gpuState.instance.processImageData.mockReset();
+    gpuState.instance.processImageData.mockResolvedValue({
+      r: new Array(256).fill(0),
+      g: new Array(256).fill(0),
+      b: new Array(256).fill(0),
+      l: new Array(256).fill(0),
+    });
+    gpuState.instance.destroy.mockReset();
+    gpuState.instance.isLost.mockReset();
+    gpuState.instance.isLost.mockReturnValue(false);
+    Reflect.deleteProperty(navigator, 'gpu');
   });
 
   it('rejects pending requests on worker crash and recreates the worker', async () => {
@@ -142,5 +181,207 @@ describe('ImageWorkerClient', () => {
 
     await expect(pending).rejects.toBeInstanceOf(FatalImageWorkerError);
     expect(MockWorker.instances).toHaveLength(2);
+  });
+
+  it('routes render results through the GPU pipeline when available', async () => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const histogram = {
+      r: new Array(256).fill(1),
+      g: new Array(256).fill(2),
+      b: new Array(256).fill(3),
+      l: new Array(256).fill(4),
+    };
+    gpuState.instance.processImageData.mockResolvedValueOnce(histogram);
+
+    const pending = client.render({
+      documentId: 'doc-1',
+      settings: {
+        exposure: 0,
+        contrast: 0,
+        saturation: 100,
+        temperature: 0,
+        tint: 0,
+        redBalance: 1,
+        greenBalance: 1,
+        blueBalance: 1,
+        blackPoint: 0,
+        whitePoint: 255,
+        highlightProtection: 0,
+        curves: {
+          rgb: [],
+          red: [],
+          green: [],
+          blue: [],
+        },
+        rotation: 0,
+        levelAngle: 0,
+        crop: {
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          aspectRatio: null,
+        },
+        filmBaseSample: null,
+        sharpen: { enabled: false, radius: 1, amount: 0 },
+        noiseReduction: { enabled: false, luminanceStrength: 0 },
+      },
+      isColor: true,
+      revision: 3,
+      targetMaxDimension: 1024,
+      comparisonMode: 'processed',
+    });
+
+    await flushAsyncWork();
+
+    const request = worker.postedMessages[0];
+    expect(request?.type).toBe('render');
+    expect(request?.payload).toMatchObject({ skipProcessing: true });
+
+    worker.onmessage?.({
+      data: {
+        id: request?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 3,
+          width: 10,
+          height: 10,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray(400), 10, 10),
+          histogram: {
+            r: new Array(256).fill(0),
+            g: new Array(256).fill(0),
+            b: new Array(256).fill(0),
+            l: new Array(256).fill(0),
+          },
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toMatchObject({
+      documentId: 'doc-1',
+      revision: 3,
+      histogram,
+    });
+    expect(gpuState.instance.processImageData).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the CPU worker render when GPU processing fails', async () => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+    gpuState.instance.processImageData.mockRejectedValueOnce(new Error('gpu exploded'));
+
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const pending = client.render({
+      documentId: 'doc-1',
+      settings: {
+        exposure: 0,
+        contrast: 0,
+        saturation: 100,
+        temperature: 0,
+        tint: 0,
+        redBalance: 1,
+        greenBalance: 1,
+        blueBalance: 1,
+        blackPoint: 0,
+        whitePoint: 255,
+        highlightProtection: 0,
+        curves: {
+          rgb: [],
+          red: [],
+          green: [],
+          blue: [],
+        },
+        rotation: 0,
+        levelAngle: 0,
+        crop: {
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          aspectRatio: null,
+        },
+        filmBaseSample: null,
+        sharpen: { enabled: false, radius: 1, amount: 0 },
+        noiseReduction: { enabled: false, luminanceStrength: 0 },
+      },
+      isColor: true,
+      revision: 4,
+      targetMaxDimension: 1024,
+      comparisonMode: 'processed',
+    });
+
+    await flushAsyncWork();
+
+    const gpuRequest = worker.postedMessages[0];
+    worker.onmessage?.({
+      data: {
+        id: gpuRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 4,
+          width: 8,
+          height: 8,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray(256), 8, 8),
+          histogram: {
+            r: new Array(256).fill(0),
+            g: new Array(256).fill(0),
+            b: new Array(256).fill(0),
+            l: new Array(256).fill(0),
+          },
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const cpuRetryRequest = worker.postedMessages[1];
+    expect(cpuRetryRequest?.payload).not.toMatchObject({ skipProcessing: true });
+
+    worker.onmessage?.({
+      data: {
+        id: cpuRetryRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 4,
+          width: 8,
+          height: 8,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray(256), 8, 8),
+          histogram: {
+            r: new Array(256).fill(9),
+            g: new Array(256).fill(8),
+            b: new Array(256).fill(7),
+            l: new Array(256).fill(6),
+          },
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toMatchObject({
+      histogram: {
+        r: expect.arrayContaining([9]),
+        g: expect.arrayContaining([8]),
+      },
+    });
+    expect(gpuState.instance.destroy).toHaveBeenCalledTimes(1);
   });
 });

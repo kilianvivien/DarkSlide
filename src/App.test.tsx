@@ -14,6 +14,17 @@ const workerState = vi.hoisted(() => ({
   export: vi.fn(),
   sampleFilmBase: vi.fn(),
   disposeDocument: vi.fn(async () => ({ disposed: true })),
+  setGPUEnabled: vi.fn(),
+  getGPUDiagnostics: vi.fn(async () => ({
+    gpuAvailable: false,
+    gpuEnabled: true,
+    gpuActive: false,
+    gpuAdapterName: null,
+    maxStorageBufferBindingSize: null,
+    maxBufferSize: null,
+    gpuDisabledReason: 'unsupported',
+    lastError: null,
+  })),
 }));
 
 const fileBridgeState = vi.hoisted(() => ({
@@ -89,6 +100,10 @@ vi.mock('./utils/imageWorkerClient', () => ({
     sampleFilmBase = workerState.sampleFilmBase;
 
     disposeDocument = workerState.disposeDocument;
+
+    setGPUEnabled = workerState.setGPUEnabled;
+
+    getGPUDiagnostics = workerState.getGPUDiagnostics;
 
     terminate = vi.fn();
   },
@@ -184,6 +199,8 @@ describe('App import and preview pipeline', () => {
     workerState.export.mockReset();
     workerState.sampleFilmBase.mockReset();
     workerState.disposeDocument.mockClear();
+    workerState.setGPUEnabled.mockReset();
+    workerState.getGPUDiagnostics.mockClear();
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     fileBridgeState.openImageFile.mockReset();
     fileBridgeState.saveExportBlob.mockReset();

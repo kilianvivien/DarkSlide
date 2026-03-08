@@ -157,6 +157,7 @@ export interface RenderRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  skipProcessing?: boolean;
 }
 
 export interface RenderResult {
@@ -177,11 +178,32 @@ export interface ExportRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  skipProcessing?: boolean;
 }
 
 export interface ExportResult {
   blob: Blob;
   filename: string;
+}
+
+export interface RawExportResult {
+  imageData: ImageData;
+  width: number;
+  height: number;
+  filename: string;
+  format: ExportFormat;
+  quality: number;
+}
+
+export interface RenderBackendDiagnostics {
+  gpuAvailable: boolean;
+  gpuEnabled: boolean;
+  gpuActive: boolean;
+  gpuAdapterName: string | null;
+  maxStorageBufferBindingSize: number | null;
+  maxBufferSize: number | null;
+  gpuDisabledReason: 'user' | 'unsupported' | 'initialization-failed' | 'device-lost' | null;
+  lastError: string | null;
 }
 
 export interface SampleRequest {

@@ -218,6 +218,98 @@ function getFilmBaseBalance(sample: FilmBaseSample | null) {
   };
 }
 
+export function resolveEffectiveSettings(
+  settings: ConversionSettings,
+  maskTuning?: MaskTuning,
+) {
+  return maskTuning ? {
+    ...settings,
+    highlightProtection: clamp(settings.highlightProtection + maskTuning.highlightProtectionBias * 100, 0, 100),
+    blackPoint: clamp(settings.blackPoint + maskTuning.blackPointBias * 100, 0, 80),
+  } : settings;
+}
+
+export function buildProcessingUniforms(
+  settings: ConversionSettings,
+  isColor: boolean,
+  comparisonMode: 'processed' | 'original',
+  maskTuning?: MaskTuning,
+  colorMatrix?: ColorMatrix,
+  tonalCharacter?: TonalCharacter,
+) {
+  const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
+  const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
+
+  return new Float32Array([
+    comparisonMode === 'processed' ? 1 : 0,
+    isColor ? 1 : 0,
+    0,
+    0,
+
+    Math.pow(2, effectiveSettings.exposure / 50),
+    (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast)),
+    effectiveSettings.saturation / 100,
+    0,
+
+    filmBaseBalance.red,
+    filmBaseBalance.green,
+    filmBaseBalance.blue,
+    0,
+
+    effectiveSettings.redBalance,
+    effectiveSettings.greenBalance,
+    effectiveSettings.blueBalance,
+    0,
+
+    effectiveSettings.temperature / 255,
+    effectiveSettings.tint / 255,
+    effectiveSettings.blackPoint / 255,
+    effectiveSettings.whitePoint / 255,
+
+    effectiveSettings.highlightProtection,
+    tonalCharacter?.shadowLift ?? 0,
+    tonalCharacter?.midtoneAnchor ?? 0,
+    tonalCharacter?.highlightRolloff ?? 0.5,
+
+    colorMatrix?.[0] ?? 1,
+    colorMatrix?.[1] ?? 0,
+    colorMatrix?.[2] ?? 0,
+    0,
+
+    colorMatrix?.[3] ?? 0,
+    colorMatrix?.[4] ?? 1,
+    colorMatrix?.[5] ?? 0,
+    0,
+
+    colorMatrix?.[6] ?? 0,
+    colorMatrix?.[7] ?? 0,
+    colorMatrix?.[8] ?? 1,
+    0,
+
+    colorMatrix ? 1 : 0,
+    0,
+    0,
+    0,
+  ]);
+}
+
+export function buildCurveLutBuffer(settings: ConversionSettings) {
+  const lutRGB = createCurveLut(settings.curves.rgb);
+  const lutR = createCurveLut(settings.curves.red);
+  const lutG = createCurveLut(settings.curves.green);
+  const lutB = createCurveLut(settings.curves.blue);
+  const result = new Float32Array(1024);
+
+  for (let index = 0; index < 256; index += 1) {
+    result[index] = lutRGB[index] / 255;
+    result[256 + index] = lutR[index] / 255;
+    result[512 + index] = lutG[index] / 255;
+    result[768 + index] = lutB[index] / 255;
+  }
+
+  return result;
+}
+
 export function buildEmptyHistogram(): HistogramData {
   return {
     r: new Array(256).fill(0),
@@ -317,11 +409,7 @@ export function processImageData(
   colorMatrix?: ColorMatrix,
   tonalCharacter?: TonalCharacter,
 ): HistogramData {
-  const effectiveSettings = maskTuning ? {
-    ...settings,
-    highlightProtection: clamp(settings.highlightProtection + maskTuning.highlightProtectionBias * 100, 0, 100),
-    blackPoint: clamp(settings.blackPoint + maskTuning.blackPointBias * 100, 0, 80),
-  } : settings;
+  const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
 
   const data = imageData.data;
   const lutRGB = createCurveLut(effectiveSettings.curves.rgb);

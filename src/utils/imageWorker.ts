@@ -9,6 +9,7 @@ import {
   ExportResult,
   FilmBaseSample,
   PreviewLevel,
+  RawExportResult,
   RenderRequest,
   RenderResult,
   SampleRequest,
@@ -17,6 +18,7 @@ import {
 import {
   assertSupportedDimensions,
   clamp,
+  buildEmptyHistogram,
   getExtensionFromFormat,
   getFileExtension,
   getTransformedDimensions,
@@ -38,7 +40,7 @@ type WorkerRequest =
 type WorkerError = { code: string; message: string };
 
 type WorkerResponse =
-  | { id: string; ok: true; payload: DecodedImage | RenderResult | ExportResult | FilmBaseSample | { disposed: true } }
+  | { id: string; ok: true; payload: DecodedImage | RenderResult | ExportResult | RawExportResult | FilmBaseSample | { disposed: true } }
   | { id: string; ok: false; error: WorkerError };
 
 interface StoredPreview {
@@ -234,16 +236,21 @@ function handleRender(payload: RenderRequest) {
   if (!ctx) throw new Error('Could not read rendered preview.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  const histogram = processImageData(
-    imageData,
-    payload.settings,
-    payload.isColor,
-    payload.comparisonMode,
-    payload.maskTuning,
-    payload.colorMatrix,
-    payload.tonalCharacter,
-  );
-  ctx.putImageData(imageData, 0, 0);
+  const histogram = payload.skipProcessing
+    ? buildEmptyHistogram()
+    : processImageData(
+      imageData,
+      payload.settings,
+      payload.isColor,
+      payload.comparisonMode,
+      payload.maskTuning,
+      payload.colorMatrix,
+      payload.tonalCharacter,
+    );
+
+  if (!payload.skipProcessing) {
+    ctx.putImageData(imageData, 0, 0);
+  }
 
   return {
     documentId: payload.documentId,
@@ -282,6 +289,19 @@ async function handleExport(payload: ExportRequest) {
   if (!ctx) throw new Error('Could not create export canvas.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
+  const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
+
+  if (payload.skipProcessing) {
+    return {
+      imageData,
+      width: transformed.width,
+      height: transformed.height,
+      filename,
+      format: payload.options.format,
+      quality: payload.options.quality,
+    } satisfies RawExportResult;
+  }
+
   processImageData(
     imageData,
     payload.settings,
@@ -300,7 +320,7 @@ async function handleExport(payload: ExportRequest) {
 
   return {
     blob,
-    filename: `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`,
+    filename,
   } satisfies ExportResult;
 }
 
