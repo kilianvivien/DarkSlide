@@ -6,6 +6,9 @@ import {
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  HistogramData,
+  HistogramMode,
+  InteractionQuality,
   PrepareTileJobRequest,
   PreparedTileJobResult,
   PreviewMode,
@@ -100,11 +103,22 @@ function buildTileRects(width: number, height: number, tileSize: number) {
   return tiles;
 }
 
+function cloneHistogram(histogram: HistogramData): HistogramData {
+  return {
+    r: [...histogram.r],
+    g: [...histogram.g],
+    b: [...histogram.b],
+    l: [...histogram.l],
+  };
+}
+
 function createJobSnapshot(
   backendMode: RenderBackendMode,
   sourceKind: TileSourceKind,
   previewMode: PreviewMode | null,
   previewLevelId: string | null,
+  interactionQuality: InteractionQuality | null,
+  histogramMode: HistogramMode | null,
   tileSize: number | null,
   halo: number | null,
   tileCount: number | null,
@@ -119,6 +133,8 @@ function createJobSnapshot(
     sourceKind,
     previewMode,
     previewLevelId,
+    interactionQuality,
+    histogramMode,
     tileSize,
     halo,
     tileCount,
@@ -165,6 +181,10 @@ export class ImageWorkerClient {
 
   private previewLevelId: string | null = null;
 
+  private interactionQuality: InteractionQuality | null = null;
+
+  private histogramMode: HistogramMode | null = null;
+
   private tileSize: number | null = null;
 
   private halo: number | null = null;
@@ -192,6 +212,12 @@ export class ImageWorkerClient {
   private lastExportJob: RenderJobDiagnosticsSnapshot | null = null;
 
   private activePreviewJobId: string | null = null;
+
+  private lastDraftHistogram: HistogramData | null = null;
+
+  private lastDraftHistogramAt = 0;
+
+  private lastDraftHistogramDocumentId: string | null = null;
 
   constructor(options: { gpuEnabled?: boolean } = {}) {
     this.gpuEnabled = options.gpuEnabled ?? true;
@@ -272,6 +298,8 @@ export class ImageWorkerClient {
     | 'sourceKind'
     | 'previewMode'
     | 'previewLevelId'
+    | 'interactionQuality'
+    | 'histogramMode'
     | 'tileSize'
     | 'halo'
     | 'tileCount'
@@ -285,6 +313,8 @@ export class ImageWorkerClient {
     if (update.sourceKind !== undefined) this.sourceKind = update.sourceKind;
     if (update.previewMode !== undefined) this.previewMode = update.previewMode;
     if (update.previewLevelId !== undefined) this.previewLevelId = update.previewLevelId;
+    if (update.interactionQuality !== undefined) this.interactionQuality = update.interactionQuality;
+    if (update.histogramMode !== undefined) this.histogramMode = update.histogramMode;
     if (update.tileSize !== undefined) this.tileSize = update.tileSize;
     if (update.halo !== undefined) this.halo = update.halo;
     if (update.tileCount !== undefined) this.tileCount = update.tileCount;
@@ -431,6 +461,7 @@ export class ImageWorkerClient {
     settings: ConversionSettings,
     isColor: boolean,
     comparisonMode: 'processed' | 'original',
+    histogramMode: HistogramMode,
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
@@ -456,8 +487,23 @@ export class ImageWorkerClient {
       )
       : trimTileImageData(rawPreview);
 
-    const histogram = buildEmptyHistogram();
-    accumulateHistogram(histogram, imageData.data);
+    let histogram: HistogramData;
+    if (
+      histogramMode === 'throttled'
+      && this.lastDraftHistogram
+      && this.lastDraftHistogramDocumentId === prepared.documentId
+      && performance.now() - this.lastDraftHistogramAt < 150
+    ) {
+      histogram = cloneHistogram(this.lastDraftHistogram);
+    } else {
+      histogram = buildEmptyHistogram();
+      accumulateHistogram(histogram, imageData.data);
+      if (histogramMode === 'throttled') {
+        this.lastDraftHistogram = cloneHistogram(histogram);
+        this.lastDraftHistogramAt = performance.now();
+        this.lastDraftHistogramDocumentId = prepared.documentId;
+      }
+    }
 
     return {
       imageData,
@@ -514,6 +560,8 @@ export class ImageWorkerClient {
       sourceKind,
       previewMode: sourceKind === 'preview' ? this.previewMode : null,
       previewLevelId: null,
+      interactionQuality: sourceKind === 'preview' ? this.interactionQuality : null,
+      histogramMode: sourceKind === 'preview' ? this.histogramMode : null,
       tileSize: null,
       halo: null,
       tileCount: null,
@@ -552,6 +600,8 @@ export class ImageWorkerClient {
       sourceKind: this.sourceKind,
       previewMode: this.previewMode,
       previewLevelId: this.previewLevelId,
+      interactionQuality: this.interactionQuality,
+      histogramMode: this.histogramMode,
       tileSize: this.tileSize,
       halo: this.halo,
       tileCount: this.tileCount,
@@ -591,6 +641,8 @@ export class ImageWorkerClient {
           'preview',
           payload.previewMode ?? 'settled',
           null,
+          payload.interactionQuality ?? null,
+          payload.histogramMode ?? 'full',
           null,
           null,
           null,
@@ -615,6 +667,8 @@ export class ImageWorkerClient {
           'preview',
           payload.previewMode ?? 'settled',
           null,
+          payload.interactionQuality ?? null,
+          payload.histogramMode ?? 'full',
           null,
           null,
           null,
@@ -643,17 +697,20 @@ export class ImageWorkerClient {
     }
 
     const startedAt = performance.now();
-    appendDiagnostic({
-      level: 'info',
-      code: 'GPU_TILE_JOB_STARTED',
-      message: payload.documentId,
-      context: {
-        documentId: payload.documentId,
-        jobId,
-        previewMode: payload.previewMode ?? 'settled',
-        sourceKind: 'preview',
-      },
-    });
+    const shouldLogDraftFrameDiagnostics = !(payload.previewMode === 'draft' && payload.interactionQuality !== null);
+    if (shouldLogDraftFrameDiagnostics) {
+      appendDiagnostic({
+        level: 'info',
+        code: 'GPU_TILE_JOB_STARTED',
+        message: payload.documentId,
+        context: {
+          documentId: payload.documentId,
+          jobId,
+          previewMode: payload.previewMode ?? 'settled',
+          sourceKind: 'preview',
+        },
+      });
+    }
 
     try {
       const prepared = await this.prepareTileJob({
@@ -670,6 +727,7 @@ export class ImageWorkerClient {
         payload.settings,
         payload.isColor,
         payload.comparisonMode,
+        payload.histogramMode ?? 'full',
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
@@ -686,6 +744,8 @@ export class ImageWorkerClient {
         'preview',
         payload.previewMode ?? 'settled',
         prepared.previewLevelId,
+        payload.interactionQuality ?? null,
+        payload.histogramMode ?? 'full',
         prepared.tileSize,
         prepared.halo,
         assembled.tileCount,
@@ -700,6 +760,8 @@ export class ImageWorkerClient {
         sourceKind: 'preview',
         previewMode: payload.previewMode ?? 'settled',
         previewLevelId: prepared.previewLevelId,
+        interactionQuality: payload.interactionQuality ?? null,
+        histogramMode: payload.histogramMode ?? 'full',
         tileSize: prepared.tileSize,
         halo: prepared.halo,
         tileCount: assembled.tileCount,
@@ -712,22 +774,24 @@ export class ImageWorkerClient {
       this.previewBackend = backendMode;
       this.lastPreviewJob = snapshot;
 
-      appendDiagnostic({
-        level: 'info',
-        code: 'GPU_TILE_JOB_COMPLETED',
-        message: payload.documentId,
-        context: {
-          documentId: payload.documentId,
-          geometryCacheHit: prepared.geometryCacheHit,
-          halo: prepared.halo,
-          jobDurationMs,
-          jobId,
-          previewMode: payload.previewMode ?? 'settled',
-          sourceKind: 'preview',
-          tileCount: assembled.tileCount,
-          tileSize: prepared.tileSize,
-        },
-      });
+      if (shouldLogDraftFrameDiagnostics) {
+        appendDiagnostic({
+          level: 'info',
+          code: 'GPU_TILE_JOB_COMPLETED',
+          message: payload.documentId,
+          context: {
+            documentId: payload.documentId,
+            geometryCacheHit: prepared.geometryCacheHit,
+            halo: prepared.halo,
+            jobDurationMs,
+            jobId,
+            previewMode: payload.previewMode ?? 'settled',
+            sourceKind: 'preview',
+            tileCount: assembled.tileCount,
+            tileSize: prepared.tileSize,
+          },
+        });
+      }
 
       return {
         documentId: payload.documentId,
@@ -757,6 +821,8 @@ export class ImageWorkerClient {
         'preview',
         payload.previewMode ?? 'settled',
         null,
+        payload.interactionQuality ?? null,
+        payload.histogramMode ?? 'full',
         null,
         null,
         null,
@@ -854,6 +920,8 @@ export class ImageWorkerClient {
         'source',
         null,
         prepared.previewLevelId,
+        null,
+        null,
         prepared.tileSize,
         prepared.halo,
         assembled.tileCount,
@@ -868,6 +936,8 @@ export class ImageWorkerClient {
         sourceKind: 'source',
         previewMode: null,
         previewLevelId: prepared.previewLevelId,
+        interactionQuality: null,
+        histogramMode: null,
         tileSize: prepared.tileSize,
         halo: prepared.halo,
         tileCount: assembled.tileCount,
@@ -907,6 +977,8 @@ export class ImageWorkerClient {
       this.lastExportJob = createJobSnapshot(
         'cpu-worker',
         'source',
+        null,
+        null,
         null,
         null,
         null,

@@ -8,8 +8,10 @@ interface SettingsModalProps {
   onClose: () => void;
   onCopyDebugInfo: () => Promise<void>;
   gpuRenderingEnabled: boolean;
+  ultraSmoothDragEnabled: boolean;
   renderBackendDiagnostics: RenderBackendDiagnostics;
   onToggleGPURendering: (enabled: boolean) => void;
+  onToggleUltraSmoothDrag: (enabled: boolean) => void;
 }
 
 type DiagnosticCardItem = {
@@ -133,8 +135,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onCopyDebugInfo,
   gpuRenderingEnabled,
+  ultraSmoothDragEnabled,
   renderBackendDiagnostics,
   onToggleGPURendering,
+  onToggleUltraSmoothDrag,
 }) => {
   const [tab, setTab] = useState<'general' | 'shortcuts' | 'diagnostics'>('general');
   const [copied, setCopied] = useState(false);
@@ -237,6 +241,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <button
                           type="button"
                           role="switch"
+                          aria-label="GPU Rendering"
                           aria-checked={gpuRenderingEnabled}
                           onClick={() => onToggleGPURendering(!gpuRenderingEnabled)}
                           className={`relative shrink-0 overflow-hidden h-7 w-12 rounded-full border transition-all ${
@@ -256,6 +261,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2.5">
                         <p className="text-[11px] font-medium text-zinc-200">{getRenderBackendLabel(renderBackendDiagnostics)}</p>
                         <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{getRenderBackendDetail(renderBackendDiagnostics)}</p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-zinc-100">Interactive Preview</h3>
+                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                            Ultra Smooth Drag uses a lower preview level and less frequent histogram updates while dragging sliders and curves.
+                            It trades accuracy for snappiness.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-label="Ultra Smooth Drag"
+                          aria-checked={ultraSmoothDragEnabled}
+                          onClick={() => onToggleUltraSmoothDrag(!ultraSmoothDragEnabled)}
+                          className={`relative shrink-0 overflow-hidden h-7 w-12 rounded-full border transition-all ${
+                            ultraSmoothDragEnabled
+                              ? 'border-amber-400/70 bg-amber-500/20'
+                              : 'border-zinc-700 bg-zinc-950'
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-0.5 h-[22px] w-[22px] rounded-full bg-zinc-100 transition-all ${
+                              ultraSmoothDragEnabled ? 'left-[22px]' : 'left-0.5'
+                            }`}
+                          />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -292,6 +327,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   const previewItems: DiagnosticCardItem[] = [
                     { label: 'Backend', value: d.lastPreviewJob ? getBackendModeLabel(d.lastPreviewJob.backendMode) : '—', mono: false },
                     { label: 'Mode', value: d.lastPreviewJob?.previewMode ?? '—', mono: false },
+                    { label: 'Quality', value: d.lastPreviewJob?.interactionQuality ?? '—', mono: false },
+                    { label: 'Histogram', value: d.lastPreviewJob?.histogramMode ?? '—', mono: false },
                     { label: 'Preview level', value: d.lastPreviewJob?.previewLevelId ?? '—', mono: true },
                     { label: 'Duration', value: d.lastPreviewJob?.jobDurationMs !== null && d.lastPreviewJob ? `${d.lastPreviewJob.jobDurationMs} ms` : '—', mono: true, valueClass: getJobDurationColor(d.lastPreviewJob?.jobDurationMs ?? null) },
                     { label: 'Cache hit', value: d.lastPreviewJob?.geometryCacheHit === null || d.lastPreviewJob?.geometryCacheHit === undefined ? '—' : (d.lastPreviewJob.geometryCacheHit ? 'Yes' : 'No'), mono: false },

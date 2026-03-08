@@ -10,6 +10,7 @@ export interface UserPreferences {
   isLeftPaneOpen: boolean;
   isRightPaneOpen: boolean;
   gpuRendering: boolean;
+  ultraSmoothDrag: boolean;
 }
 
 function isValidPreferences(value: unknown): value is UserPreferences {
@@ -22,7 +23,8 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     typeof prefs.sidebarTab === 'string' &&
     typeof prefs.isLeftPaneOpen === 'boolean' &&
     typeof prefs.isRightPaneOpen === 'boolean' &&
-    (prefs.gpuRendering === undefined || typeof prefs.gpuRendering === 'boolean')
+    (prefs.gpuRendering === undefined || typeof prefs.gpuRendering === 'boolean') &&
+    (prefs.ultraSmoothDrag === undefined || typeof prefs.ultraSmoothDrag === 'boolean')
   );
 }
 
@@ -36,6 +38,7 @@ export function loadPreferences(): UserPreferences | null {
     return {
       ...parsed,
       gpuRendering: parsed.gpuRendering ?? true,
+      ultraSmoothDrag: parsed.ultraSmoothDrag ?? false,
     };
   } catch {
     return null;

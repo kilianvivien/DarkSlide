@@ -10,6 +10,7 @@ const VALID_PREFS: UserPreferences = {
   isLeftPaneOpen: false,
   isRightPaneOpen: true,
   gpuRendering: false,
+  ultraSmoothDrag: true,
 };
 
 beforeEach(() => {
@@ -66,6 +67,22 @@ describe('loadPreferences', () => {
       gpuRendering: true,
     });
   });
+
+  it('defaults ultraSmoothDrag to false for older stored preferences', () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      version: 1,
+      lastProfileId: 'x',
+      exportOptions: DEFAULT_EXPORT_OPTIONS,
+      sidebarTab: 'adjust',
+      isLeftPaneOpen: true,
+      isRightPaneOpen: false,
+      gpuRendering: true,
+    }));
+
+    expect(loadPreferences()).toMatchObject({
+      ultraSmoothDrag: false,
+    });
+  });
 });
 
 describe('savePreferences + loadPreferences round-trip', () => {
@@ -80,6 +97,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.isLeftPaneOpen).toBe(false);
     expect(loaded!.isRightPaneOpen).toBe(true);
     expect(loaded!.gpuRendering).toBe(false);
+    expect(loaded!.ultraSmoothDrag).toBe(true);
     expect(loaded!.exportOptions.format).toBe('image/png');
     expect(loaded!.exportOptions.quality).toBe(0.85);
   });

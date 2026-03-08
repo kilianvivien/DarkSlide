@@ -24,6 +24,8 @@ const workerState = vi.hoisted(() => ({
     sourceKind: null,
     previewMode: null,
     previewLevelId: null,
+    interactionQuality: null,
+    histogramMode: null,
     tileSize: null,
     halo: null,
     tileCount: null,
@@ -70,24 +72,57 @@ vi.mock('motion/react', async () => {
 vi.mock('./components/Sidebar', () => ({
   Sidebar: ({
     exportOptions,
+    onInteractionStart,
+    onInteractionEnd,
+    onOpenSettings,
+    onSettingsChange,
     onExportOptionsChange,
     onExport,
   }: {
     exportOptions: { filenameBase: string };
+    onInteractionStart?: () => void;
+    onInteractionEnd?: () => void;
+    onOpenSettings: () => void;
+    onSettingsChange: (settings: { exposure?: number }) => void;
     onExportOptionsChange: (options: { filenameBase?: string }) => void;
     onExport: () => void;
-  }) => (
-    <div data-testid="sidebar">
-      <input
-        aria-label="Filename"
-        value={exportOptions.filenameBase}
-        onChange={(event) => onExportOptionsChange({ filenameBase: event.target.value })}
-      />
-      <button type="button" onClick={onExport}>
-        Sidebar Export
-      </button>
-    </div>
-  ),
+  }) => {
+    const [exposure, setExposure] = React.useState(0);
+
+    return (
+      <div data-testid="sidebar">
+        <input
+          aria-label="Filename"
+          value={exportOptions.filenameBase}
+          onChange={(event) => onExportOptionsChange({ filenameBase: event.target.value })}
+        />
+        <button type="button" onClick={onExport}>
+          Sidebar Export
+        </button>
+        <button type="button" onClick={onOpenSettings}>
+          Open Settings
+        </button>
+        <button type="button" onClick={onInteractionStart}>
+          Start Drag
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setExposure((current) => {
+              const nextExposure = current + 1;
+              onSettingsChange({ exposure: nextExposure });
+              return nextExposure;
+            });
+          }}
+        >
+          Nudge Exposure
+        </button>
+        <button type="button" onClick={onInteractionEnd}>
+          End Drag
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock('./components/PresetsPane', () => ({
@@ -215,6 +250,7 @@ async function flushMicrotasks() {
 describe('App import and preview pipeline', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    localStorage.clear();
     workerState.decode.mockReset();
     workerState.render.mockReset();
     workerState.export.mockReset();
@@ -235,6 +271,7 @@ describe('App import and preview pipeline', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    localStorage.clear();
   });
 
   it('does not render while loading and only renders once after import settles', async () => {
@@ -354,6 +391,127 @@ describe('App import and preview pipeline', () => {
     expect(putImageData).toHaveBeenCalledTimes(2);
     expect((putImageData.mock.calls.at(-1)?.[0] as ImageData).width).toBe(77);
     expect(document.querySelector('[data-tip="Showing Original — click to return"]')).toBeTruthy();
+  });
+
+  it('schedules slider drag preview at most once per animation frame in balanced mode', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+      previewMode?: 'draft' | 'settled';
+      interactionQuality?: 'balanced' | 'ultra-smooth' | null;
+      histogramMode?: 'full' | 'throttled';
+      settings: { exposure: number };
+    }) => (
+      createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('drag-balanced.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Start Drag'));
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Nudge Exposure'));
+      fireEvent.click(screen.getByText('Nudge Exposure'));
+      fireEvent.click(screen.getByText('Nudge Exposure'));
+    });
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(16);
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(2);
+    expect(workerState.render.mock.calls[1]?.[0]).toMatchObject({
+      previewMode: 'draft',
+      interactionQuality: 'balanced',
+      histogramMode: 'full',
+      targetMaxDimension: 512,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('End Drag'));
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(3);
+    expect(workerState.render.mock.calls[2]?.[0]).toMatchObject({
+      previewMode: 'settled',
+      interactionQuality: null,
+      histogramMode: 'full',
+    });
+  });
+
+  it('persists ultra smooth drag and uses the 512px preview tier during drag', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+    }) => createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('switch', { name: 'Ultra Smooth Drag' }));
+    });
+
+    expect(JSON.parse(localStorage.getItem('darkslide_preferences_v1') ?? '{}')).toMatchObject({
+      ultraSmoothDrag: true,
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    await uploadFile(createFile('drag-ultra.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Start Drag'));
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Nudge Exposure'));
+      vi.advanceTimersByTime(16);
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(2);
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      previewMode: 'draft',
+      interactionQuality: 'ultra-smooth',
+      histogramMode: 'throttled',
+      targetMaxDimension: 512,
+    });
   });
 
   it('does not redraw a closed document when an in-flight render finishes late', async () => {

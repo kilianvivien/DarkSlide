@@ -17,6 +17,10 @@ const gpuState = vi.hoisted(() => ({
   },
 }));
 
+const diagnosticsState = vi.hoisted(() => ({
+  appendDiagnostic: vi.fn(),
+}));
+
 class MockWorker {
   static instances: MockWorker[] = [];
 
@@ -57,8 +61,13 @@ vi.mock('./gpu/WebGPUPipeline', () => ({
   },
 }));
 
+vi.mock('./diagnostics', () => ({
+  appendDiagnostic: diagnosticsState.appendDiagnostic,
+}));
+
 describe('ImageWorkerClient', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
     MockWorker.instances = [];
     gpuState.create.mockReset();
@@ -70,6 +79,7 @@ describe('ImageWorkerClient', () => {
     gpuState.instance.destroy.mockReset();
     gpuState.instance.isLost.mockReset();
     gpuState.instance.isLost.mockReturnValue(false);
+    diagnosticsState.appendDiagnostic.mockReset();
     Reflect.deleteProperty(navigator, 'gpu');
   });
 
@@ -309,6 +319,149 @@ describe('ImageWorkerClient', () => {
       imageData: expect.any(ImageData),
     });
     expect(gpuState.instance.processPreviewImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('throttles ultra smooth draft histograms and suppresses per-frame draft diagnostics', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+    gpuState.instance.processPreviewImage
+      .mockResolvedValueOnce(new ImageData(new Uint8ClampedArray([10, 10, 10, 255]), 1, 1))
+      .mockResolvedValueOnce(new ImageData(new Uint8ClampedArray([50, 50, 50, 255]), 1, 1))
+      .mockResolvedValueOnce(new ImageData(new Uint8ClampedArray([90, 90, 90, 255]), 1, 1));
+
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const settings = {
+      exposure: 0,
+      contrast: 0,
+      saturation: 100,
+      temperature: 0,
+      tint: 0,
+      redBalance: 1,
+      greenBalance: 1,
+      blueBalance: 1,
+      blackPoint: 0,
+      whitePoint: 255,
+      highlightProtection: 0,
+      curves: {
+        rgb: [],
+        red: [],
+        green: [],
+        blue: [],
+      },
+      rotation: 0,
+      levelAngle: 0,
+      crop: {
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        aspectRatio: null,
+      },
+      filmBaseSample: null,
+      sharpen: { enabled: false, radius: 1, amount: 0 },
+      noiseReduction: { enabled: false, luminanceStrength: 0 },
+    };
+
+    const resolveRender = async (revision: number) => {
+      const messageStart = worker.postedMessages.length;
+      const pending = client.render({
+        documentId: 'doc-1',
+        settings,
+        isColor: true,
+        revision,
+        targetMaxDimension: 512,
+        comparisonMode: 'processed',
+        previewMode: 'draft',
+        interactionQuality: 'ultra-smooth',
+        histogramMode: 'throttled',
+      });
+
+      await flushAsyncWork();
+
+      const prepareRequest = worker.postedMessages[messageStart];
+      worker.onmessage?.({
+        data: {
+          id: prepareRequest?.id,
+          ok: true,
+          payload: {
+            documentId: 'doc-1',
+            jobId: `doc-1:${revision}:preview`,
+            sourceKind: 'preview',
+            width: 1,
+            height: 1,
+            previewLevelId: 'preview-512',
+            tileSize: 1024,
+            halo: 0,
+            geometryCacheHit: true,
+          },
+        },
+      } as MessageEvent);
+
+      await flushAsyncWork();
+
+      const tileRequest = worker.postedMessages[messageStart + 1];
+      worker.onmessage?.({
+        data: {
+          id: tileRequest?.id,
+          ok: true,
+          payload: {
+            documentId: 'doc-1',
+            jobId: `doc-1:${revision}:preview`,
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            haloLeft: 0,
+            haloTop: 0,
+            haloRight: 0,
+            haloBottom: 0,
+            imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+          },
+        },
+      } as MessageEvent);
+
+      await flushAsyncWork();
+
+      const cancelRequest = worker.postedMessages[messageStart + 2];
+      worker.onmessage?.({
+        data: {
+          id: cancelRequest?.id,
+          ok: true,
+          payload: {
+            cancelled: true,
+          },
+        },
+      } as MessageEvent);
+
+      return pending;
+    };
+
+    const result1 = await resolveRender(1);
+    expect(result1.histogram.r[10]).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(100);
+    const result2 = await resolveRender(2);
+    expect(result2.histogram.r[10]).toBe(1);
+    expect(result2.histogram.r[50]).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(151);
+    const result3 = await resolveRender(3);
+    expect(result3.histogram.r[90]).toBe(1);
+
+    const diagnostics = await client.getGPUDiagnostics();
+    expect(diagnostics.lastPreviewJob).toMatchObject({
+      interactionQuality: 'ultra-smooth',
+      histogramMode: 'throttled',
+      previewLevelId: 'preview-512',
+    });
+    expect(diagnosticsState.appendDiagnostic).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'GPU_TILE_JOB_STARTED' }));
+    expect(diagnosticsState.appendDiagnostic).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'GPU_TILE_JOB_COMPLETED' }));
   });
 
   it('falls back to the CPU worker render when GPU processing fails', async () => {

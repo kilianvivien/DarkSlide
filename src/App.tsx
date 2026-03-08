@@ -22,7 +22,7 @@ import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
 import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from './constants';
-import { ColorMatrix, ConversionSettings, FilmProfile, MaskTuning, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
+import { ColorMatrix, ConversionSettings, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useViewportZoom } from './hooks/useViewportZoom';
@@ -40,6 +40,18 @@ function formatError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const readable = message.includes(': ') ? message.split(': ').slice(1).join(': ') : message;
   return readable || 'Unknown error.';
+}
+
+function isCancelledRenderError(error: unknown) {
+  if (error instanceof Error) {
+    return error.message.startsWith('JOB_CANCELLED') || error.message.includes('The tile job was cancelled.');
+  }
+
+  if (typeof error === 'string') {
+    return error.startsWith('JOB_CANCELLED') || error.includes('The tile job was cancelled.');
+  }
+
+  return false;
 }
 
 function isSupportedFile(file: File) {
@@ -71,6 +83,8 @@ type QueuedPreviewRender = {
   comparisonMode: 'processed' | 'original';
   targetMaxDimension: number;
   previewMode: 'draft' | 'settled';
+  interactionQuality: InteractionQuality | null;
+  histogramMode: HistogramMode;
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
@@ -100,6 +114,7 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'export'>('adjust');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
+  const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
   const [renderBackendDiagnostics, setRenderBackendDiagnostics] = useState<RenderBackendDiagnostics>({
     gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
     gpuEnabled: initialPreferences?.gpuRendering ?? true,
@@ -109,6 +124,8 @@ export default function App() {
     sourceKind: null,
     previewMode: null,
     previewLevelId: null,
+    interactionQuality: null,
+    histogramMode: null,
     tileSize: null,
     halo: null,
     tileCount: null,
@@ -143,8 +160,11 @@ export default function App() {
   const hasVisiblePreviewRef = useRef(false);
   const pendingPreviewRef = useRef<{ documentId: string; angle: number; imageData: ImageData } | null>(null);
   const previewRetryFrameRef = useRef<number | null>(null);
+  const interactivePreviewFrameRef = useRef<number | null>(null);
   const previewRenderInFlightRef = useRef(false);
   const queuedPreviewRenderRef = useRef<QueuedPreviewRender | null>(null);
+  const pendingInteractivePreviewRef = useRef<QueuedPreviewRender | null>(null);
+  const interactionJustEndedRef = useRef(false);
   const handleDownloadRef = useRef<(() => void) | null>(null);
   const handleResetRef = useRef<(() => void) | null>(null);
   const handleCopyDebugInfoRef = useRef<(() => Promise<void>) | null>(null);
@@ -171,6 +191,7 @@ export default function App() {
     isLeftPaneOpen: true,
     isRightPaneOpen: true,
     gpuRendering: initialPreferences?.gpuRendering ?? true,
+    ultraSmoothDrag: initialPreferences?.ultraSmoothDrag ?? false,
   });
   prefsSnapshotRef.current = {
     version: 1,
@@ -180,6 +201,7 @@ export default function App() {
     isLeftPaneOpen,
     isRightPaneOpen,
     gpuRendering: gpuRenderingEnabled,
+    ultraSmoothDrag: ultraSmoothDragEnabled,
   };
   const activeProfile = documentState
     ? allProfiles.find((profile) => profile.id === documentState.profileId) ?? fallbackProfile
@@ -276,10 +298,12 @@ export default function App() {
       return fullRenderTargetDimension;
     }
 
-    // During active adjustments, force the preview pyramid down to the 1024 level.
-    // Using logicalPreviewSize here overestimates demand back to source resolution.
+    if (isInteractingWithPreviewControls && comparisonMode === 'processed') {
+      return Math.min(fullRenderTargetDimension, ultraSmoothDragEnabled ? 512 : 1024);
+    }
+
     return Math.min(fullRenderTargetDimension, 1024);
-  }, [fullRenderTargetDimension, isDraftPreview]);
+  }, [comparisonMode, fullRenderTargetDimension, isDraftPreview, isInteractingWithPreviewControls, ultraSmoothDragEnabled]);
   const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
   const showMagnifier = Boolean((isPickingFilmBase || activePointPicker) && documentState?.status === 'ready');
 
@@ -287,19 +311,30 @@ export default function App() {
 
   const isInteractingRef = useRef(false);
 
+  const cancelScheduledInteractivePreview = useCallback(() => {
+    if (interactivePreviewFrameRef.current !== null) {
+      window.cancelAnimationFrame(interactivePreviewFrameRef.current);
+      interactivePreviewFrameRef.current = null;
+    }
+    pendingInteractivePreviewRef.current = null;
+  }, []);
+
   const handleInteractionStart = useCallback(() => {
     isInteractingRef.current = true;
+    interactionJustEndedRef.current = false;
     setIsInteractingWithPreviewControls(true);
     beginInteraction();
   }, [beginInteraction]);
 
   const handleInteractionEnd = useCallback(() => {
     isInteractingRef.current = false;
+    interactionJustEndedRef.current = true;
+    cancelScheduledInteractivePreview();
     setIsInteractingWithPreviewControls(false);
     if (documentState) {
       commitInteraction(documentState.settings);
     }
-  }, [commitInteraction, documentState]);
+  }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
 
   useEffect(() => {
     workerClientRef.current = new ImageWorkerClient({ gpuEnabled: initialPreferences?.gpuRendering ?? true });
@@ -309,6 +344,9 @@ export default function App() {
     return () => {
       if (previewRetryFrameRef.current !== null) {
         window.cancelAnimationFrame(previewRetryFrameRef.current);
+      }
+      if (interactivePreviewFrameRef.current !== null) {
+        window.cancelAnimationFrame(interactivePreviewFrameRef.current);
       }
       workerClientRef.current?.terminate();
       workerClientRef.current = null;
@@ -320,11 +358,12 @@ export default function App() {
     const prefs = initialPreferences;
     if (!prefs) return;
     if (['adjust', 'curves', 'crop', 'export'].includes(prefs.sidebarTab)) {
-      setSidebarTab(prefs.sidebarTab);
+    setSidebarTab(prefs.sidebarTab);
     }
     setIsLeftPaneOpen(prefs.isLeftPaneOpen);
     setIsRightPaneOpen(prefs.isRightPaneOpen);
     setGPURenderingEnabled(prefs.gpuRendering);
+    setUltraSmoothDragEnabled(prefs.ultraSmoothDrag);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPreferences]);
 
@@ -486,6 +525,8 @@ export default function App() {
     nextComparisonMode: 'processed' | 'original',
     nextTargetMaxDimension: number,
     previewMode: 'draft' | 'settled',
+    interactionQuality: InteractionQuality | null,
+    histogramMode: HistogramMode,
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
@@ -497,18 +538,21 @@ export default function App() {
     renderRevisionRef.current = revision;
     activeRenderRequestRef.current = { documentId, revision };
 
-    appendDiagnostic({
-      level: 'info',
-      code: 'RENDER_REQUESTED',
-      message: documentId,
-      context: {
-        comparisonMode: nextComparisonMode,
-        documentId,
-        previewMode,
-        revision,
-        targetMaxDimension: nextTargetMaxDimension,
-      },
-    });
+    const shouldLogInteractiveDraftDiagnostics = !(previewMode === 'draft' && interactionQuality !== null);
+    if (shouldLogInteractiveDraftDiagnostics) {
+      appendDiagnostic({
+        level: 'info',
+        code: 'RENDER_REQUESTED',
+        message: documentId,
+        context: {
+          comparisonMode: nextComparisonMode,
+          documentId,
+          previewMode,
+          revision,
+          targetMaxDimension: nextTargetMaxDimension,
+        },
+      });
+    }
 
     setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'processing', renderRevision: revision } : current);
 
@@ -521,6 +565,8 @@ export default function App() {
         targetMaxDimension: nextTargetMaxDimension,
         comparisonMode: nextComparisonMode,
         previewMode,
+        interactionQuality,
+        histogramMode,
         maskTuning,
         colorMatrix,
         tonalCharacter,
@@ -532,17 +578,19 @@ export default function App() {
         && result.revision === renderRevisionRef.current;
 
       if (!isLatestResult) {
-        appendDiagnostic({
-          level: 'info',
-          code: 'RENDER_STALE_IGNORED',
-          message: result.documentId,
-          context: {
-            documentId: result.documentId,
-            revision: result.revision,
-            activeDocumentId: activeDocumentIdRef.current,
-            activeRevision: activeRenderRequestRef.current?.revision ?? null,
-          },
-        });
+        if (shouldLogInteractiveDraftDiagnostics) {
+          appendDiagnostic({
+            level: 'info',
+            code: 'RENDER_STALE_IGNORED',
+            message: result.documentId,
+            context: {
+              documentId: result.documentId,
+              revision: result.revision,
+              activeDocumentId: activeDocumentIdRef.current,
+              activeRevision: activeRenderRequestRef.current?.revision ?? null,
+            },
+          });
+        }
         return;
       }
 
@@ -553,18 +601,20 @@ export default function App() {
       };
       cancelPendingPreviewRetry();
       flushPendingPreview();
-      appendDiagnostic({
-        level: 'info',
-        code: 'RENDER_COMPLETED',
-        message: result.documentId,
-        context: {
-          documentId: result.documentId,
-          height: result.height,
-          previewLevelId: result.previewLevelId,
-          revision: result.revision,
-          width: result.width,
-        },
-      });
+      if (shouldLogInteractiveDraftDiagnostics) {
+        appendDiagnostic({
+          level: 'info',
+          code: 'RENDER_COMPLETED',
+          message: result.documentId,
+          context: {
+            documentId: result.documentId,
+            height: result.height,
+            previewLevelId: result.previewLevelId,
+            revision: result.revision,
+            width: result.width,
+          },
+        });
+      }
       setDocumentState((current) => {
         if (!current || current.id !== documentId) return current;
         return {
@@ -574,17 +624,20 @@ export default function App() {
           status: 'ready',
         };
       });
-      void refreshRenderBackendDiagnostics();
+      if (shouldLogInteractiveDraftDiagnostics) {
+        void refreshRenderBackendDiagnostics();
+      }
     } catch (renderError) {
       const isLatestRequest = activeDocumentIdRef.current === documentId
         && activeRenderRequestRef.current?.documentId === documentId
         && activeRenderRequestRef.current?.revision === revision;
       if (!isLatestRequest) return;
 
-      const message = formatError(renderError);
-      if (message.includes('JOB_CANCELLED')) {
+      if (isCancelledRenderError(renderError)) {
         return;
       }
+
+      const message = formatError(renderError);
       appendDiagnostic({
         level: 'error',
         code: 'RENDER_FAILED',
@@ -599,7 +652,9 @@ export default function App() {
       });
       setError(`Processing failed. ${message}`);
       setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'error', errorCode: 'RENDER_FAILED' } : current);
-      void refreshRenderBackendDiagnostics();
+      if (shouldLogInteractiveDraftDiagnostics) {
+        void refreshRenderBackendDiagnostics();
+      }
     }
   }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, setPreviewVisibility]);
 
@@ -620,6 +675,8 @@ export default function App() {
           next.comparisonMode,
           next.targetMaxDimension,
           next.previewMode,
+          next.interactionQuality,
+          next.histogramMode,
           next.maskTuning,
           next.colorMatrix,
           next.tonalCharacter,
@@ -645,6 +702,26 @@ export default function App() {
     void drainPreviewRenderQueue();
   }, [drainPreviewRenderQueue]);
 
+  const scheduleInteractivePreviewRender = useCallback((next: QueuedPreviewRender) => {
+    if (pendingInteractivePreviewRef.current) {
+      workerClientRef.current?.noteCoalescedPreviewRequest();
+    }
+
+    pendingInteractivePreviewRef.current = next;
+    if (interactivePreviewFrameRef.current !== null) {
+      return;
+    }
+
+    interactivePreviewFrameRef.current = window.requestAnimationFrame(() => {
+      interactivePreviewFrameRef.current = null;
+      const queuedPreview = pendingInteractivePreviewRef.current;
+      pendingInteractivePreviewRef.current = null;
+      if (queuedPreview) {
+        schedulePreviewRender(queuedPreview);
+      }
+    });
+  }, [schedulePreviewRender]);
+
   useEffect(() => {
     if (!documentState || !displaySettings || documentState.previewLevels.length === 0) return;
 
@@ -655,19 +732,36 @@ export default function App() {
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
     const previewMode = isDraftPreview ? 'draft' : 'settled';
-    const debounceMs = isDraftPreview ? 40 : (hasVisiblePreviewRef.current ? 120 : 0);
+    const interactionQuality: InteractionQuality | null = isInteractingWithPreviewControls && comparisonMode === 'processed'
+      ? (ultraSmoothDragEnabled ? 'ultra-smooth' : 'balanced')
+      : null;
+    const histogramMode: HistogramMode = interactionQuality === 'ultra-smooth' && previewMode === 'draft'
+      ? 'throttled'
+      : 'full';
+    const queuedPreview = {
+      documentId,
+      settings,
+      isColor,
+      comparisonMode,
+      targetMaxDimension: renderTargetDimension,
+      previewMode,
+      interactionQuality,
+      histogramMode,
+      maskTuning: profileMaskTuning,
+      colorMatrix: profileColorMatrix,
+      tonalCharacter: profileTonalCharacter,
+    } satisfies QueuedPreviewRender;
+
+    if (isInteractingWithPreviewControls) {
+      scheduleInteractivePreviewRender(queuedPreview);
+      return;
+    }
+
+    cancelScheduledInteractivePreview();
+    const debounceMs = isDraftPreview ? 40 : (interactionJustEndedRef.current ? 0 : (hasVisiblePreviewRef.current ? 120 : 0));
+    interactionJustEndedRef.current = false;
     const timer = window.setTimeout(() => {
-      schedulePreviewRender({
-        documentId,
-        settings,
-        isColor,
-        comparisonMode,
-        targetMaxDimension: renderTargetDimension,
-        previewMode,
-        maskTuning: profileMaskTuning,
-        colorMatrix: profileColorMatrix,
-        tonalCharacter: profileTonalCharacter,
-      });
+      schedulePreviewRender(queuedPreview);
     }, debounceMs);
 
     return () => window.clearTimeout(timer);
@@ -676,13 +770,17 @@ export default function App() {
     activeProfile.maskTuning,
     activeProfile.tonalCharacter,
     activeProfile.type,
+    cancelScheduledInteractivePreview,
     comparisonMode,
     displaySettings,
     documentState?.id,
     documentState?.previewLevels.length,
     isDraftPreview,
+    isInteractingWithPreviewControls,
     renderTargetDimension,
+    scheduleInteractivePreviewRender,
     schedulePreviewRender,
+    ultraSmoothDragEnabled,
   ]);
 
   const updateDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
@@ -767,8 +865,11 @@ export default function App() {
     activeRenderRequestRef.current = null;
     pendingPreviewRef.current = null;
     queuedPreviewRenderRef.current = null;
+    pendingInteractivePreviewRef.current = null;
     previewRenderInFlightRef.current = false;
     cancelPendingPreviewRetry();
+    cancelScheduledInteractivePreview();
+    interactionJustEndedRef.current = false;
     renderRevisionRef.current = 0;
     setPreviewVisibility(false);
     setIsAdjustingLevel(false);
@@ -795,7 +896,7 @@ export default function App() {
     });
     resetHistory(fallbackProfile.defaultSettings);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [cancelPendingPreviewRetry, clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility, zoomToFit]);
+  }, [cancelPendingPreviewRetry, cancelScheduledInteractivePreview, clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility, zoomToFit]);
 
   const importFile = useCallback(async (file: File, nativePath?: string | null) => {
     const worker = workerClientRef.current;
@@ -825,8 +926,11 @@ export default function App() {
     activeRenderRequestRef.current = null;
     pendingPreviewRef.current = null;
     queuedPreviewRenderRef.current = null;
+    pendingInteractivePreviewRef.current = null;
     previewRenderInFlightRef.current = false;
     cancelPendingPreviewRetry();
+    cancelScheduledInteractivePreview();
+    interactionJustEndedRef.current = false;
 
     const importSession = importSessionRef.current + 1;
     importSessionRef.current = importSession;
@@ -978,7 +1082,7 @@ export default function App() {
       setPreviewVisibility(false);
       clearCanvas();
     }
-  }, [cancelPendingPreviewRetry, clearCanvas, disposeDocument, fallbackProfile, resetHistory, setPreviewVisibility]);
+  }, [cancelPendingPreviewRetry, cancelScheduledInteractivePreview, clearCanvas, disposeDocument, fallbackProfile, resetHistory, setPreviewVisibility]);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1049,6 +1153,11 @@ export default function App() {
     savePreferences({ ...prefsSnapshotRef.current, gpuRendering: enabled });
     void refreshRenderBackendDiagnostics();
   }, [refreshRenderBackendDiagnostics]);
+
+  const handleUltraSmoothDragChange = useCallback((enabled: boolean) => {
+    setUltraSmoothDragEnabled(enabled);
+    savePreferences({ ...prefsSnapshotRef.current, ultraSmoothDrag: enabled });
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1758,8 +1867,10 @@ export default function App() {
         onClose={() => setShowSettingsModal(false)}
         onCopyDebugInfo={handleCopyDebugInfo}
         gpuRenderingEnabled={gpuRenderingEnabled}
+        ultraSmoothDragEnabled={ultraSmoothDragEnabled}
         renderBackendDiagnostics={renderBackendDiagnostics}
         onToggleGPURendering={handleGPURenderingChange}
+        onToggleUltraSmoothDrag={handleUltraSmoothDragChange}
       />
     </div>
   );

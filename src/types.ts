@@ -24,6 +24,8 @@ export type ExportFormat = 'image/jpeg' | 'image/png' | 'image/webp';
 export type TileSourceKind = 'preview' | 'source';
 export type PreviewMode = 'draft' | 'settled';
 export type RenderBackendMode = 'gpu-preview' | 'gpu-tiled-render' | 'cpu-worker';
+export type InteractionQuality = 'balanced' | 'ultra-smooth';
+export type HistogramMode = 'full' | 'throttled';
 
 export interface FilmBaseSample {
   r: number;
@@ -158,6 +160,8 @@ export interface RenderRequest {
   targetMaxDimension: number;
   comparisonMode: 'processed' | 'original';
   previewMode?: PreviewMode;
+  interactionQuality?: InteractionQuality | null;
+  histogramMode?: HistogramMode;
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
@@ -253,6 +257,8 @@ export interface RenderJobDiagnosticsSnapshot {
   sourceKind: TileSourceKind;
   previewMode: PreviewMode | null;
   previewLevelId: string | null;
+  interactionQuality: InteractionQuality | null;
+  histogramMode: HistogramMode | null;
   tileSize: number | null;
   halo: number | null;
   tileCount: number | null;
@@ -272,6 +278,8 @@ export interface RenderBackendDiagnostics {
   sourceKind: TileSourceKind | null;
   previewMode: PreviewMode | null;
   previewLevelId: string | null;
+  interactionQuality: InteractionQuality | null;
+  histogramMode: HistogramMode | null;
   tileSize: number | null;
   halo: number | null;
   tileCount: number | null;
