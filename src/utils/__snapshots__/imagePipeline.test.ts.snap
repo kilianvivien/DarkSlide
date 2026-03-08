@@ -1,0 +1,253 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`profile round-trips > CineStill 800T — processImageData with default settings produces stable output 1`] = `
+[
+  39,
+  87,
+  128,
+  255,
+  171,
+  164,
+  197,
+  255,
+  228,
+  230,
+  225,
+  255,
+  58,
+  73,
+  97,
+  255,
+]
+`;
+
+exports[`profile round-trips > Fujifilm Pro 400H — processImageData with default settings produces stable output 1`] = `
+[
+  37,
+  91,
+  119,
+  255,
+  140,
+  173,
+  191,
+  255,
+  222,
+  241,
+  245,
+  255,
+  49,
+  78,
+  91,
+  255,
+]
+`;
+
+exports[`profile round-trips > Fujifilm Superia 400 — processImageData with default settings produces stable output 1`] = `
+[
+  25,
+  82,
+  92,
+  255,
+  141,
+  163,
+  149,
+  255,
+  230,
+  241,
+  225,
+  255,
+  42,
+  67,
+  64,
+  255,
+]
+`;
+
+exports[`profile round-trips > Generic B&W — processImageData with default settings produces stable output 1`] = `
+[
+  57,
+  57,
+  57,
+  255,
+  135,
+  135,
+  135,
+  255,
+  214,
+  214,
+  214,
+  255,
+  51,
+  51,
+  51,
+  255,
+]
+`;
+
+exports[`profile round-trips > Generic Color — processImageData with default settings produces stable output 1`] = `
+[
+  35,
+  65,
+  72,
+  255,
+  146,
+  138,
+  127,
+  255,
+  232,
+  215,
+  198,
+  255,
+  49,
+  53,
+  51,
+  255,
+]
+`;
+
+exports[`profile round-trips > Ilford Delta 3200 — processImageData with default settings produces stable output 1`] = `
+[
+  31,
+  31,
+  31,
+  255,
+  134,
+  134,
+  134,
+  255,
+  233,
+  233,
+  233,
+  255,
+  23,
+  23,
+  23,
+  255,
+]
+`;
+
+exports[`profile round-trips > Ilford HP5 Plus — processImageData with default settings produces stable output 1`] = `
+[
+  47,
+  47,
+  47,
+  255,
+  134,
+  134,
+  134,
+  255,
+  218,
+  218,
+  218,
+  255,
+  40,
+  40,
+  40,
+  255,
+]
+`;
+
+exports[`profile round-trips > Kodak Ektar 100 — processImageData with default settings produces stable output 1`] = `
+[
+  22,
+  65,
+  78,
+  255,
+  142,
+  138,
+  128,
+  255,
+  232,
+  218,
+  201,
+  255,
+  42,
+  51,
+  50,
+  255,
+]
+`;
+
+exports[`profile round-trips > Kodak Gold 200 — processImageData with default settings produces stable output 1`] = `
+[
+  47,
+  69,
+  63,
+  255,
+  185,
+  147,
+  112,
+  255,
+  255,
+  231,
+  187,
+  255,
+  68,
+  53,
+  35,
+  255,
+]
+`;
+
+exports[`profile round-trips > Kodak Portra 160 — processImageData with default settings produces stable output 1`] = `
+[
+  45,
+  72,
+  81,
+  255,
+  151,
+  142,
+  133,
+  255,
+  229,
+  215,
+  202,
+  255,
+  59,
+  61,
+  59,
+  255,
+]
+`;
+
+exports[`profile round-trips > Kodak Portra 400 — processImageData with default settings produces stable output 1`] = `
+[
+  48,
+  72,
+  75,
+  255,
+  166,
+  145,
+  126,
+  255,
+  233,
+  220,
+  196,
+  255,
+  64,
+  59,
+  52,
+  255,
+]
+`;
+
+exports[`profile round-trips > Kodak Tri-X 400 — processImageData with default settings produces stable output 1`] = `
+[
+  38,
+  38,
+  38,
+  255,
+  133,
+  133,
+  133,
+  255,
+  225,
+  225,
+  225,
+  255,
+  31,
+  31,
+  31,
+  255,
+]
+`;

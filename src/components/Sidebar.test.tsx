@@ -60,6 +60,15 @@ describe('Sidebar', () => {
         histogramData={null}
         isPickingFilmBase={false}
         onTogglePicker={vi.fn()}
+        onExport={vi.fn()}
+        isExporting={false}
+        activeTab="adjust"
+        onTabChange={vi.fn()}
+        onCropDone={vi.fn()}
+        onResetCrop={vi.fn()}
+        activePointPicker={null}
+        onSetPointPicker={vi.fn()}
+        onOpenSettings={vi.fn()}
       />,
     );
 

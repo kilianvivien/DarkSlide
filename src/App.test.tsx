@@ -203,7 +203,7 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('4032×6048')).toBeInTheDocument();
+    expect(screen.getByText(/4,?032 × 6,?048 px/)).toBeInTheDocument();
 
     await act(async () => {
       vi.advanceTimersByTime(1000);
@@ -235,7 +235,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(screen.getByText('20×20')).toBeInTheDocument();
+    expect(screen.getByText(/20 × 20 px/)).toBeInTheDocument();
 
     firstDecode.resolve(createDecodedImage(10, 10));
     await flushMicrotasks();
@@ -244,8 +244,8 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(screen.getByText('20×20')).toBeInTheDocument();
-    expect(screen.queryByText('10×10')).not.toBeInTheDocument();
+    expect(screen.getByText(/20 × 20 px/)).toBeInTheDocument();
+    expect(screen.queryByText(/10 × 10 px/)).not.toBeInTheDocument();
     expect(workerState.render).toHaveBeenCalledTimes(1);
   });
 
@@ -275,7 +275,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(screen.getByTitle('Toggle Before/After'));
+      fireEvent.click(document.querySelector('[data-tip="Toggle Before/After"]') as Element);
     });
     await act(async () => {
       vi.advanceTimersByTime(120);
@@ -293,7 +293,7 @@ describe('App import and preview pipeline', () => {
 
     expect(putImageData).toHaveBeenCalledTimes(1);
     expect((putImageData.mock.calls[0]?.[0] as ImageData).width).toBe(77);
-    expect(screen.getByText('Original')).toBeInTheDocument();
+    expect(document.querySelector('[data-tip="Showing Original — click to return"]')).toBeTruthy();
   });
 
   it('does not redraw a closed document when an in-flight render finishes late', async () => {
@@ -318,7 +318,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(screen.getByTitle('Close Image'));
+      fireEvent.click(document.querySelector('[data-tip="Close Image"]') as Element);
     });
 
     const [payload] = workerState.render.mock.calls[0];
@@ -448,7 +448,7 @@ describe('App import and preview pipeline', () => {
 
   it('opens files through the native dialog when running in the desktop shell', async () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
-    fileBridgeState.openImageFile.mockResolvedValue(createFile('desktop-open.tiff', 'image/tiff'));
+    fileBridgeState.openImageFile.mockResolvedValue({ file: createFile('desktop-open.tiff', 'image/tiff'), path: '/Users/tester/desktop-open.tiff' });
     workerState.decode.mockResolvedValue(createDecodedImage(640, 480));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
       createRenderResult(payload.documentId, payload.revision, 64, 48)
@@ -467,12 +467,12 @@ describe('App import and preview pipeline', () => {
 
     expect(fileBridgeState.openImageFile).toHaveBeenCalledTimes(1);
     expect(workerState.decode).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('640×480')).toBeInTheDocument();
+    expect(screen.getByText(/640 × 480 px/)).toBeInTheDocument();
   });
 
   it('returns to ready when a native export is cancelled', async () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
-    fileBridgeState.openImageFile.mockResolvedValue(createFile('export-cancel.tiff', 'image/tiff'));
+    fileBridgeState.openImageFile.mockResolvedValue({ file: createFile('export-cancel.tiff', 'image/tiff'), path: '/Users/tester/export-cancel.tiff' });
     fileBridgeState.saveExportBlob.mockResolvedValue('cancelled');
     workerState.decode.mockResolvedValue(createDecodedImage(512, 512));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (

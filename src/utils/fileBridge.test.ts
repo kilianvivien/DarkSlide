@@ -55,16 +55,17 @@ describe('fileBridge', () => {
     dialogState.open.mockResolvedValue('/Users/tester/Desktop/scan.tiff');
     fsState.readFile.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
 
-    const file = await openImageFile();
+    const result = await openImageFile();
 
     expect(dialogState.open).toHaveBeenCalledWith(expect.objectContaining({
       title: 'Open Scan',
       multiple: false,
     }));
     expect(fsState.readFile).toHaveBeenCalledWith('/Users/tester/Desktop/scan.tiff');
-    expect(file).toBeInstanceOf(File);
-    expect(file?.name).toBe('scan.tiff');
-    expect(file?.type).toBe('image/tiff');
+    expect(result?.file).toBeInstanceOf(File);
+    expect(result?.file.name).toBe('scan.tiff');
+    expect(result?.file.type).toBe('image/tiff');
+    expect(result?.path).toBe('/Users/tester/Desktop/scan.tiff');
   });
 
   it('downloads blobs in the browser build', async () => {

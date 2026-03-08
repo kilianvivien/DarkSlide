@@ -45,11 +45,10 @@ Ship a clean, hobbyist-friendly film negative converter as both a web app and a 
 - **Curves auto-balance**: Auto button (wand icon) in the Curves tab stretches levels to histogram data range and corrects per-channel color balance using 0.1% percentile clipping.
 - **Custom tooltips**: TooltipPortal component (React portal + event delegation on `[data-tip]`) replaces unreliable native `title` attributes throughout, fixing tooltip display in Tauri's WKWebView.
 
-## Phase 6: Beta Product Finish
-- Persistent user preferences (last-used profile, export settings, pane layout).
-- Recent files list for quick re-open.
-- Diagnostics panel: structured error reports users can copy for bug filing (move debug tools here).
-- Automated regression tests for import, render, export, and profile behavior.
+## Phase 6: Beta Product Finish [complete]
+- **Persistent user preferences**: last-used profile, export format/quality, sidebar tab, and pane open/closed state are saved to localStorage and restored on launch.
+- **Recent files list**: up to 10 previously imported files shown in the empty state; desktop builds re-open by path, browser builds open the file picker.
+- **Automated regression tests**: per-slider pipeline tests (exposure, contrast, black/white point, highlight protection, saturation, temperature/tint, curves), noise reduction and sharpen tests, golden-pixel profile round-trips for all 12 built-in profiles, and store utility tests (preferenceStore, recentFilesStore).
 
 ## Phase 7: Color Negative Science Refinement
 The current pipeline performs simple arithmetic inversion in 8-bit space with empirical film-base compensation. This is serviceable but leaves perceptible color casts, blocked shadows, and blown highlights on challenging color negatives — especially with dense orange-mask stocks like Portra, Ektar, and consumer films with high coupler dye saturation.
@@ -111,7 +110,7 @@ The current pipeline renders and exports in uncalibrated sRGB. On MacBook Pro an
 - **Print soft-proof (deferred within this phase)**: Fogra39/GRACoL soft-proofing is lower priority than display accuracy and can ship as a follow-on once the P3 pipeline is stable.
 
 ## Current Implementation Status
-- **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, zoom and pan controls, expanded built-in film profiles, custom preset persistence, sharpening and luminance noise reduction controls, Tauri desktop shell scaffold, native desktop file dialogs with browser fallback, settings modal, export tab button, undoable reset, histogram legend, crop UX improvements, custom presets tabs, curves auto-balance, and portal-based custom tooltips.
-- **Next up**: persistent preferences, recent files, and broader regression coverage.
+- **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, zoom and pan controls, expanded built-in film profiles, custom preset persistence, sharpening and luminance noise reduction controls, Tauri desktop shell scaffold, native desktop file dialogs with browser fallback, settings modal, export tab button, undoable reset, histogram legend, crop UX improvements, custom presets tabs, curves auto-balance, portal-based custom tooltips, persistent user preferences, recent files list, and automated regression test suite.
+- **Next up**: color negative science refinement (Phase 7) — float32 pipeline, log-space inversion, orange-mask matrices, tonal latitude, reference validation.
 - **Deferred**: multi-document tabs, batch processing, ICC profiles, session recovery.
 - **Planned (post-beta)**: color negative science refinement (Phase 7), WebGPU GPU rendering (Phase 8), RAW desktop pipeline (Phase 9).

@@ -1,10 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultSettings } from '../constants';
+import { createDefaultSettings, FILM_PROFILES } from '../constants';
 import { createCenteredAspectCrop, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
 }
+
+function createGrid(size: number, pixels: Array<[number, number, number]>) {
+  const data = new Uint8ClampedArray(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    const [r, g, b] = pixels[i % pixels.length];
+    data[i * 4] = r;
+    data[i * 4 + 1] = g;
+    data[i * 4 + 2] = b;
+    data[i * 4 + 3] = 255;
+  }
+  return new ImageData(data, size, size);
+}
+
+function luminance(imageData: ImageData, index = 0) {
+  const i = index * 4;
+  return 0.299 * imageData.data[i] + 0.587 * imageData.data[i + 1] + 0.114 * imageData.data[i + 2];
+}
+
+// Neutral settings that isolate a single parameter
+const neutralSettings = createDefaultSettings({
+  blackPoint: 0,
+  whitePoint: 255,
+  contrast: 0,
+  highlightProtection: 0,
+  saturation: 100,
+  temperature: 0,
+  tint: 0,
+  redBalance: 1,
+  greenBalance: 1,
+  blueBalance: 1,
+});
 
 describe('processImageData', () => {
   it('applies sampled film-base compensation before B&W conversion', () => {
@@ -37,6 +68,236 @@ describe('processImageData', () => {
     expect(sampledG).toBe(sampledB);
     expect(sampledR).not.toBe(plainR);
   });
+});
+
+describe('exposure slider', () => {
+  it('produces monotonically increasing luminance as exposure increases', () => {
+    // Input (200,200,200) → after inversion: (55,55,55) — dark pixel, easy to distinguish exposure levels
+    const low = createPixel(200, 200, 200);
+    const mid = createPixel(200, 200, 200);
+    const high = createPixel(200, 200, 200);
+
+    processImageData(low, { ...neutralSettings, exposure: -50 }, true, 'processed');
+    processImageData(mid, { ...neutralSettings, exposure: 0 }, true, 'processed');
+    processImageData(high, { ...neutralSettings, exposure: 50 }, true, 'processed');
+
+    expect(luminance(low)).toBeLessThan(luminance(mid));
+    expect(luminance(mid)).toBeLessThan(luminance(high));
+  });
+});
+
+describe('contrast slider', () => {
+  it('pushes dark values further below midpoint as contrast increases', () => {
+    // Input (200,200,200) → inverted (55,55,55), below midpoint 128. Higher contrast → pushed lower.
+    const none = createPixel(200, 200, 200);
+    const medium = createPixel(200, 200, 200);
+    const high = createPixel(200, 200, 200);
+
+    processImageData(none, { ...neutralSettings, contrast: 0 }, true, 'processed');
+    processImageData(medium, { ...neutralSettings, contrast: 40 }, true, 'processed');
+    processImageData(high, { ...neutralSettings, contrast: 80 }, true, 'processed');
+
+    // All below 128; higher contrast pushes further below midpoint
+    expect(luminance(high)).toBeLessThan(luminance(medium));
+    expect(luminance(medium)).toBeLessThan(luminance(none));
+  });
+
+  it('leaves midpoint pixel unchanged at contrast=0', () => {
+    // Input (127,127,127) → inverted (128,128,128) — pure midpoint
+    const pixel = createPixel(127, 127, 127);
+    processImageData(pixel, { ...neutralSettings, contrast: 0 }, true, 'processed');
+    // Mid-gray (128) at contrast=0 is contrastFactor=1, so (128-128)*1+128=128
+    expect(pixel.data[0]).toBeCloseTo(128, 0);
+  });
+});
+
+describe('blackPoint and whitePoint sliders', () => {
+  it('blackPoint=20 maps a dark pixel (~20) to near zero', () => {
+    // Input (235,235,235) → inverted (20,20,20). With blackPoint=20, output ≈ 0.
+    const pixel = createPixel(235, 235, 235);
+    processImageData(pixel, { ...neutralSettings, blackPoint: 20, whitePoint: 255 }, true, 'processed');
+    expect(luminance(pixel)).toBeLessThan(5);
+  });
+
+  it('blackPoint=0 leaves a dark pixel at its natural level', () => {
+    const pixel = createPixel(235, 235, 235);
+    processImageData(pixel, { ...neutralSettings, blackPoint: 0, whitePoint: 255 }, true, 'processed');
+    // (20 - 0) / 255 * 255 = 20
+    expect(luminance(pixel)).toBeCloseTo(20, 0);
+  });
+
+  it('whitePoint=200 clips a bright pixel to full', () => {
+    // Input (50,50,50) → inverted (205,205,205). With whitePoint=200 → clamped to 255.
+    const pixel = createPixel(50, 50, 50);
+    processImageData(pixel, { ...neutralSettings, blackPoint: 0, whitePoint: 200 }, true, 'processed');
+    expect(luminance(pixel)).toBe(255);
+  });
+});
+
+describe('highlightProtection slider', () => {
+  it('pulls bright values down when protection is applied', () => {
+    // Input (30,30,30) → inverted (225,225,225) — above threshold of 200
+    const unprotected = createPixel(30, 30, 30);
+    const protected_ = createPixel(30, 30, 30);
+
+    processImageData(unprotected, { ...neutralSettings, highlightProtection: 0 }, true, 'processed');
+    processImageData(protected_, { ...neutralSettings, highlightProtection: 80 }, true, 'processed');
+
+    expect(luminance(protected_)).toBeLessThan(luminance(unprotected));
+  });
+
+  it('leaves pixels below the threshold unchanged', () => {
+    // Input (150,150,150) → inverted (105,105,105) — well below the 200 threshold
+    const unprotected = createPixel(150, 150, 150);
+    const protected_ = createPixel(150, 150, 150);
+
+    processImageData(unprotected, { ...neutralSettings, highlightProtection: 0 }, true, 'processed');
+    processImageData(protected_, { ...neutralSettings, highlightProtection: 80 }, true, 'processed');
+
+    expect(luminance(protected_)).toBe(luminance(unprotected));
+  });
+});
+
+describe('saturation slider', () => {
+  it('saturation=0 produces a grayscale result', () => {
+    // Colored pixel (after inversion): red-shifted
+    const pixel = createPixel(50, 180, 180);
+    processImageData(pixel, { ...neutralSettings, saturation: 0 }, true, 'processed');
+    // After saturation=0: r, g, b should all equal the luminance of the pixel
+    expect(pixel.data[0]).toBe(pixel.data[1]);
+    expect(pixel.data[1]).toBe(pixel.data[2]);
+  });
+
+  it('saturation=200 produces more vivid result than saturation=100', () => {
+    // Input with color difference: (150, 50, 150) → inverted: (105, 205, 105) — green-dominant
+    const normal = createPixel(150, 50, 150);
+    const vivid = createPixel(150, 50, 150);
+
+    processImageData(normal, { ...neutralSettings, saturation: 100 }, true, 'processed');
+    processImageData(vivid, { ...neutralSettings, saturation: 200 }, true, 'processed');
+
+    // Green channel (index 1) should be further from gray at saturation=200
+    const grayNormal = luminance(normal);
+    const grayVivid = luminance(vivid);
+    const devNormal = Math.abs(normal.data[1] - grayNormal);
+    const devVivid = Math.abs(vivid.data[1] - grayVivid);
+    expect(devVivid).toBeGreaterThan(devNormal);
+  });
+});
+
+describe('temperature and tint sliders', () => {
+  it('positive temperature shifts red up and blue down (color mode)', () => {
+    // Neutral inverted input: (127,127,127) → (128,128,128)
+    const warm = createPixel(127, 127, 127);
+    const neutral = createPixel(127, 127, 127);
+
+    processImageData(neutral, { ...neutralSettings, temperature: 0 }, true, 'processed');
+    processImageData(warm, { ...neutralSettings, temperature: 15 }, true, 'processed');
+
+    expect(warm.data[0]).toBeGreaterThan(neutral.data[0]); // red up
+    expect(warm.data[2]).toBeLessThan(neutral.data[2]);    // blue down
+  });
+
+  it('positive tint shifts green up (color mode)', () => {
+    const tinted = createPixel(127, 127, 127);
+    const neutral = createPixel(127, 127, 127);
+
+    processImageData(neutral, { ...neutralSettings, tint: 0 }, true, 'processed');
+    processImageData(tinted, { ...neutralSettings, tint: 15 }, true, 'processed');
+
+    expect(tinted.data[1]).toBeGreaterThan(neutral.data[1]); // green up
+  });
+});
+
+describe('curves', () => {
+  it('a curve pulled down from identity produces a darker result', () => {
+    const identity = createPixel(127, 127, 127);
+    const darkened = createPixel(127, 127, 127);
+
+    const darkenedCurves = {
+      rgb: [{ x: 0, y: 0 }, { x: 128, y: 80 }, { x: 255, y: 255 }],
+      red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    };
+
+    processImageData(identity, neutralSettings, true, 'processed');
+    processImageData(darkened, { ...neutralSettings, curves: darkenedCurves }, true, 'processed');
+
+    expect(luminance(darkened)).toBeLessThan(luminance(identity));
+  });
+});
+
+describe('noise reduction', () => {
+  it('smooths a checkerboard pattern (lower neighbor variance after processing)', () => {
+    // 4×4 checkerboard: alternating (220,220,220) and (30,30,30)
+    // After inversion: alternating (35,35,35) and (225,225,225)
+    const imageData = createGrid(4, [[220, 220, 220], [30, 30, 30]]);
+
+    processImageData(imageData, {
+      ...neutralSettings,
+      noiseReduction: { enabled: true, luminanceStrength: 80 },
+    }, true, 'processed');
+
+    // Compute variance between adjacent pixels
+    let totalDiff = 0;
+    const { data, width } = imageData;
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 3; x++) {
+        const i = (y * width + x) * 4;
+        const j = (y * width + x + 1) * 4;
+        totalDiff += Math.abs(data[i] - data[j]);
+      }
+    }
+
+    // Without noise reduction, diff would be ~190 (35 vs 225). With NR it should be much smaller.
+    expect(totalDiff).toBeLessThan(700);
+  });
+});
+
+describe('sharpen', () => {
+  it('amplifies edge contrast on a checkerboard pattern', () => {
+    const withoutSharpen = createGrid(4, [[220, 220, 220], [30, 30, 30]]);
+    const withSharpen = createGrid(4, [[220, 220, 220], [30, 30, 30]]);
+
+    processImageData(withoutSharpen, {
+      ...neutralSettings,
+      sharpen: { enabled: false, radius: 1.0, amount: 0 },
+    }, true, 'processed');
+
+    processImageData(withSharpen, {
+      ...neutralSettings,
+      sharpen: { enabled: true, radius: 0.5, amount: 150 },
+    }, true, 'processed');
+
+    // With sharpen: bright pixels pushed brighter, dark pushed darker → higher total range
+    const maxWithout = Math.max(...Array.from(withoutSharpen.data).filter((_, i) => i % 4 !== 3));
+    const maxWith = Math.max(...Array.from(withSharpen.data).filter((_, i) => i % 4 !== 3));
+    const minWithout = Math.min(...Array.from(withoutSharpen.data).filter((_, i) => i % 4 !== 3));
+    const minWith = Math.min(...Array.from(withSharpen.data).filter((_, i) => i % 4 !== 3));
+
+    expect(maxWith - minWith).toBeGreaterThanOrEqual(maxWithout - minWithout);
+  });
+});
+
+describe('profile round-trips', () => {
+  // 2×2 test image with varied colors (before inversion)
+  const testImagePixels: Array<[number, number, number]> = [
+    [210, 180, 165],  // typical orange-masked highlight
+    [128, 120, 115],  // mid-tone
+    [60,  55,  50],   // shadow
+    [200, 190, 185],  // near-highlight
+  ];
+
+  for (const profile of FILM_PROFILES) {
+    it(`${profile.name} — processImageData with default settings produces stable output`, () => {
+      const imageData = createGrid(2, testImagePixels);
+      processImageData(imageData, profile.defaultSettings, profile.type === 'color', 'processed', profile.maskTuning);
+
+      // Snapshot the RGBA output so regressions are caught
+      expect(Array.from(imageData.data)).toMatchSnapshot();
+    });
+  }
 });
 
 describe('createCenteredAspectCrop', () => {

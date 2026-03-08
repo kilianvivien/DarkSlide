@@ -29,6 +29,9 @@ import { useViewportZoom } from './hooks/useViewportZoom';
 import { ZoomBar } from './components/ZoomBar';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
 import { isDesktopShell, openImageFile, saveExportBlob } from './utils/fileBridge';
+import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
+import { addRecentFile } from './utils/recentFilesStore';
+import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
 
@@ -109,6 +112,28 @@ export default function App() {
   const { customPresets, savePreset, deletePreset } = useCustomPresets();
   const allProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
+
+  // Always-current ref for allProfiles — avoids adding allProfiles to importFile's deps
+  const allProfilesRef = useRef(allProfiles);
+  allProfilesRef.current = allProfiles;
+
+  // Snapshot of the latest preference-relevant state, updated on every render so handlers can always read fresh values
+  const prefsSnapshotRef = useRef<UserPreferences>({
+    version: 1,
+    lastProfileId: fallbackProfile.id,
+    exportOptions: DEFAULT_EXPORT_OPTIONS,
+    sidebarTab: 'adjust',
+    isLeftPaneOpen: true,
+    isRightPaneOpen: true,
+  });
+  prefsSnapshotRef.current = {
+    version: 1,
+    lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
+    exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
+    sidebarTab,
+    isLeftPaneOpen,
+    isRightPaneOpen,
+  };
   const activeProfile = documentState
     ? allProfiles.find((profile) => profile.id === documentState.profileId) ?? fallbackProfile
     : fallbackProfile;
@@ -226,6 +251,18 @@ export default function App() {
       workerClientRef.current?.terminate();
       workerClientRef.current = null;
     };
+  }, []);
+
+  // Restore UI layout from stored preferences on first mount
+  useEffect(() => {
+    const prefs = loadPreferences();
+    if (!prefs) return;
+    if (['adjust', 'curves', 'crop', 'export'].includes(prefs.sidebarTab)) {
+      setSidebarTab(prefs.sidebarTab);
+    }
+    setIsLeftPaneOpen(prefs.isLeftPaneOpen);
+    setIsRightPaneOpen(prefs.isRightPaneOpen);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -513,6 +550,7 @@ export default function App() {
     if (tab === 'crop') {
       setIsCropOverlayVisible(true);
     }
+    savePreferences({ ...prefsSnapshotRef.current, sidebarTab: tab });
   }, []);
 
   const handleCropDone = useCallback(() => {
@@ -536,6 +574,16 @@ export default function App() {
       },
       dirty: true,
     }));
+    if (options.format !== undefined || options.quality !== undefined) {
+      savePreferences({
+        ...prefsSnapshotRef.current,
+        exportOptions: {
+          ...prefsSnapshotRef.current.exportOptions,
+          ...(options.format !== undefined ? { format: options.format } : {}),
+          ...(options.quality !== undefined ? { quality: options.quality } : {}),
+        },
+      });
+    }
   }, [updateDocument]);
 
   const disposeDocument = useCallback(async (documentId: string | null | undefined) => {
@@ -588,7 +636,7 @@ export default function App() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [cancelPendingPreviewRetry, clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility, zoomToFit]);
 
-  const importFile = useCallback(async (file: File) => {
+  const importFile = useCallback(async (file: File, nativePath?: string | null) => {
     const worker = workerClientRef.current;
     if (!worker) return;
 
@@ -622,7 +670,10 @@ export default function App() {
     await disposeDocument(previousDocumentId);
 
     const documentId = crypto.randomUUID();
-    const initialProfile = fallbackProfile;
+    const savedPrefs = loadPreferences();
+    const initialProfile = savedPrefs
+      ? (allProfilesRef.current.find((p) => p.id === savedPrefs.lastProfileId) ?? fallbackProfile)
+      : fallbackProfile;
     activeDocumentIdRef.current = documentId;
 
     appendDiagnostic({
@@ -708,6 +759,10 @@ export default function App() {
         profileId: initialProfile.id,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
+          ...(savedPrefs?.exportOptions ? {
+            format: savedPrefs.exportOptions.format,
+            quality: savedPrefs.exportOptions.quality,
+          } : {}),
           filenameBase: sanitizeFilenameBase(file.name),
         },
         histogram: null,
@@ -718,6 +773,11 @@ export default function App() {
 
       setDocumentState(nextDocument);
       resetHistory(nextDocument.settings);
+      addRecentFile({
+        name: file.name,
+        path: isDesktopShell() ? (nativePath ?? null) : null,
+        size: file.size,
+      });
       appendDiagnostic({
         level: 'info',
         code: 'FILE_IMPORTED',
@@ -767,12 +827,12 @@ export default function App() {
     }
 
     try {
-      const file = await openImageFile();
-      if (!file) {
+      const result = await openImageFile();
+      if (!result) {
         return;
       }
 
-      await importFile(file);
+      await importFile(result.file, result.path);
     } catch (openError) {
       const message = formatError(openError);
       appendDiagnostic({ level: 'error', code: 'OPEN_DIALOG_FAILED', message });
@@ -801,11 +861,19 @@ export default function App() {
   }, []);
 
   const handleToggleLeftPane = useCallback(() => {
-    setIsLeftPaneOpen((current) => !current);
+    setIsLeftPaneOpen((current) => {
+      const next = !current;
+      savePreferences({ ...prefsSnapshotRef.current, isLeftPaneOpen: next });
+      return next;
+    });
   }, []);
 
   const handleToggleRightPane = useCallback(() => {
-    setIsRightPaneOpen((current) => !current);
+    setIsRightPaneOpen((current) => {
+      const next = !current;
+      savePreferences({ ...prefsSnapshotRef.current, isRightPaneOpen: next });
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -931,6 +999,7 @@ export default function App() {
       dirty: true,
     }));
     resetHistory(profile.defaultSettings);
+    savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [resetHistory, updateDocument]);
 
   const handleSavePreset = useCallback((name: string) => {
@@ -1313,6 +1382,10 @@ export default function App() {
                 >
                   Select Files
                 </button>
+                <RecentFilesList
+                  onImport={(file, path) => void importFile(file, path)}
+                  onOpenPicker={() => void handleOpenImage()}
+                />
               </motion.div>
             ) : (
               <motion.div

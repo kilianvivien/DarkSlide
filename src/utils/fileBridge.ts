@@ -61,6 +61,14 @@ export async function openImageFile() {
 
   const fileName = getFileName(selected);
   const bytes = await readFile(selected);
+  return { file: new File([bytes], fileName, { type: getMimeTypeForFile(fileName) }), path: selected };
+}
+
+export async function openImageFileByPath(path: string): Promise<File | null> {
+  if (!isDesktopShell()) return null;
+  const { readFile } = await import('@tauri-apps/plugin-fs');
+  const fileName = getFileName(path);
+  const bytes = await readFile(path);
   return new File([bytes], fileName, { type: getMimeTypeForFile(fileName) });
 }
 
