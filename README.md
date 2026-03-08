@@ -75,6 +75,17 @@ DarkSlide is continuously evolving. Some of the major phases include:
 
 *See the `plan.md` file for full details on DarkSlide's roadmap and design specifics.*
 
-## 📜 License
+## � Acknowledgements
+
+DarkSlide is built on top of some amazing open-source projects:
+- [React](https://react.dev/) - The library for web and native user interfaces.
+- [Tauri](https://tauri.app/) - Build smaller, faster, and more secure desktop applications with a web frontend.
+- [Vite](https://vitejs.dev/) - Next Generation Frontend Tooling.
+- [Tailwind CSS](https://tailwindcss.com/) - A utility-first CSS framework for rapid UI development.
+- [Lucide](https://lucide.dev/) - Beautiful & consistent icon toolkit.
+- [Framer Motion](https://www.framer.com/motion/) - An open source motion library for React.
+- [UTIF.js](https://github.com/photopea/UTIF.js) - Fast and advanced TIFF decoder.
+
+## �📜 License
 
 This project is licensed under the MIT License - see the [`LICENSE`](./LICENSE) file for details.
