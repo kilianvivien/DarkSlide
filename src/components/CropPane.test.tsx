@@ -24,6 +24,7 @@ describe('CropPane', () => {
     expect(screen.getByRole('button', { name: /2:3/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /3:4/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /4:3/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /original/i })).toBeInTheDocument();
   });
 
   it('keeps custom ratio collapsed by default and expands on demand', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { createCenteredAspectCrop, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
+import { createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -385,6 +385,27 @@ describe('rotateCropClockwise', () => {
     expect(rotated.width).toBeCloseTo(0.5, 5);
     expect(rotated.height).toBeCloseTo(0.3, 5);
     expect(rotated.aspectRatio).toBeCloseTo(5 / 4, 5);
+  });
+});
+
+describe('getCropPixelBounds', () => {
+  it('rounds crop edges so the selected region matches the overlay more closely', () => {
+    const bounds = getCropPixelBounds(
+      {
+        x: 0.0833,
+        y: 0.0829,
+        width: 0.8334,
+        height: 0.8342,
+        aspectRatio: 4 / 5,
+      },
+      4032,
+      6048,
+    );
+
+    expect(bounds.x).toBe(336);
+    expect(bounds.y).toBe(501);
+    expect(bounds.width).toBe(3360);
+    expect(bounds.height).toBe(5046);
   });
 });
 

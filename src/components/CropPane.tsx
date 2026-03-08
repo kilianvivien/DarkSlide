@@ -27,6 +27,7 @@ export const CropPane: React.FC<CropPaneProps> = ({
   const [customWidth, setCustomWidth] = useState('2');
   const [customHeight, setCustomHeight] = useState('3');
   const [isCustomRatioOpen, setIsCustomRatioOpen] = useState(false);
+  const originalAspectRatio = imageWidth / Math.max(1, imageHeight);
 
   const handleRotate = () => {
     const nextRotation = (settings.rotation + 90) % 360;
@@ -125,6 +126,22 @@ export const CropPane: React.FC<CropPaneProps> = ({
         </h2>
         
         <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => handleAspectChange(originalAspectRatio)}
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all border ${
+              isAspectSelected(originalAspectRatio)
+                ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
+                : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
+            }`}
+          >
+            <span className="opacity-60"><ImageIcon size={14} /></span>
+            <div className="flex flex-col items-start leading-tight">
+              <span className="font-medium">Original</span>
+              <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${isAspectSelected(originalAspectRatio) ? 'text-zinc-900' : 'text-zinc-500'}`}>
+                Native
+              </span>
+            </div>
+          </button>
           {ASPECT_RATIOS.map((ratio) => (
             <button
               key={ratio.name}

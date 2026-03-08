@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CropSettings } from '../types';
 import { getNormalizedAspectRatio } from '../utils/imagePipeline';
 
@@ -7,6 +7,8 @@ interface CropOverlayProps {
   imageWidth: number;
   imageHeight: number;
   onChange: (crop: CropSettings) => void;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
 }
 
 type DragMode = 'move' | 'nw' | 'ne' | 'sw' | 'se' | null;
@@ -22,9 +24,45 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, imageWidth, imageHeight, onChange }) => {
+export const CropOverlay: React.FC<CropOverlayProps> = ({
+  crop,
+  imageWidth,
+  imageHeight,
+  onChange,
+  onInteractionStart,
+  onInteractionEnd,
+}) => {
   const frameRef = useRef<HTMLDivElement>(null);
+  const pendingCropRef = useRef<CropSettings | null>(null);
+  const frameRequestRef = useRef<number | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
+
+  const flushPendingCrop = useCallback(() => {
+    if (frameRequestRef.current !== null) {
+      window.cancelAnimationFrame(frameRequestRef.current);
+      frameRequestRef.current = null;
+    }
+
+    if (pendingCropRef.current) {
+      onChange(pendingCropRef.current);
+      pendingCropRef.current = null;
+    }
+  }, [onChange]);
+
+  const scheduleCropChange = useCallback((nextCrop: CropSettings) => {
+    pendingCropRef.current = nextCrop;
+    if (frameRequestRef.current !== null) {
+      return;
+    }
+
+    frameRequestRef.current = window.requestAnimationFrame(() => {
+      frameRequestRef.current = null;
+      if (pendingCropRef.current) {
+        onChange(pendingCropRef.current);
+        pendingCropRef.current = null;
+      }
+    });
+  }, [onChange]);
 
   useEffect(() => {
     if (!dragState) return;
@@ -99,11 +137,13 @@ export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, imageWidth, imag
         next.height = clamp(next.height, 0.05, 1 - next.y);
       }
 
-      onChange(next);
+      scheduleCropChange(next);
     };
 
     const handleUp = () => {
+      flushPendingCrop();
       setDragState(null);
+      onInteractionEnd?.();
     };
 
     window.addEventListener('mousemove', handleMove);
@@ -112,7 +152,11 @@ export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, imageWidth, imag
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
-  }, [dragState, imageHeight, imageWidth, onChange]);
+  }, [dragState, flushPendingCrop, imageHeight, imageWidth, onInteractionEnd, scheduleCropChange]);
+
+  useEffect(() => () => {
+    flushPendingCrop();
+  }, [flushPendingCrop]);
 
   const frameStyle = {
     left: `${crop.x * 100}%`,
@@ -123,6 +167,7 @@ export const CropOverlay: React.FC<CropOverlayProps> = ({ crop, imageWidth, imag
 
   const beginDrag = (mode: DragMode) => (event: React.MouseEvent) => {
     event.stopPropagation();
+    onInteractionStart?.();
     setDragState({
       mode,
       startX: event.clientX,

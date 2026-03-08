@@ -27,6 +27,7 @@ import {
   buildEmptyHistogram,
   getExtensionFromFormat,
   getFileExtension,
+  getCropPixelBounds,
   getTransformedDimensions,
   normalizeCrop,
   processImageData,
@@ -164,17 +165,13 @@ function buildPreviewLevels(sourceCanvas: OffscreenCanvas): StoredPreview[] {
 }
 
 function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
-  const crop = normalizeCrop(settings);
   const rotation = settings.rotation + settings.levelAngle;
   const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
     sourceCanvas.width,
     sourceCanvas.height,
     rotation,
   );
-  const cropX = Math.floor(crop.x * rotatedWidth);
-  const cropY = Math.floor(crop.y * rotatedHeight);
-  const cropWidth = Math.max(1, Math.floor(crop.width * rotatedWidth));
-  const cropHeight = Math.max(1, Math.floor(crop.height * rotatedHeight));
+  const cropBounds = getCropPixelBounds(normalizeCrop(settings), rotatedWidth, rotatedHeight);
 
   rotateCanvas = ensureCanvas(rotateCanvas, rotatedWidth, rotatedHeight);
   const rotateCtx = rotateCanvas.getContext('2d', { willReadFrequently: true });
@@ -187,31 +184,37 @@ function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
   rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
   rotateCtx.setTransform(1, 0, 0, 1, 0, 0);
 
-  outputCanvas = ensureCanvas(outputCanvas, cropWidth, cropHeight);
+  outputCanvas = ensureCanvas(outputCanvas, cropBounds.width, cropBounds.height);
   const outputCtx = outputCanvas.getContext('2d', { willReadFrequently: true });
   if (!outputCtx) throw new Error('Could not create output canvas.');
-  outputCtx.clearRect(0, 0, cropWidth, cropHeight);
-  outputCtx.drawImage(rotateCanvas, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  outputCtx.clearRect(0, 0, cropBounds.width, cropBounds.height);
+  outputCtx.drawImage(
+    rotateCanvas,
+    cropBounds.x,
+    cropBounds.y,
+    cropBounds.width,
+    cropBounds.height,
+    0,
+    0,
+    cropBounds.width,
+    cropBounds.height,
+  );
 
   return {
     canvas: outputCanvas,
-    width: cropWidth,
-    height: cropHeight,
+    width: cropBounds.width,
+    height: cropBounds.height,
   };
 }
 
 function renderTransformedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
-  const crop = normalizeCrop(settings);
   const rotation = settings.rotation + settings.levelAngle;
   const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
     sourceCanvas.width,
     sourceCanvas.height,
     rotation,
   );
-  const cropX = Math.floor(crop.x * rotatedWidth);
-  const cropY = Math.floor(crop.y * rotatedHeight);
-  const cropWidth = Math.max(1, Math.floor(crop.width * rotatedWidth));
-  const cropHeight = Math.max(1, Math.floor(crop.height * rotatedHeight));
+  const cropBounds = getCropPixelBounds(normalizeCrop(settings), rotatedWidth, rotatedHeight);
 
   const localRotateCanvas = new OffscreenCanvas(rotatedWidth, rotatedHeight);
   const rotateCtx = localRotateCanvas.getContext('2d', { willReadFrequently: true });
@@ -224,16 +227,26 @@ function renderTransformedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: 
   rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
   rotateCtx.setTransform(1, 0, 0, 1, 0, 0);
 
-  const localOutputCanvas = new OffscreenCanvas(cropWidth, cropHeight);
+  const localOutputCanvas = new OffscreenCanvas(cropBounds.width, cropBounds.height);
   const outputCtx = localOutputCanvas.getContext('2d', { willReadFrequently: true });
   if (!outputCtx) throw new Error('Could not create output canvas.');
-  outputCtx.clearRect(0, 0, cropWidth, cropHeight);
-  outputCtx.drawImage(localRotateCanvas, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  outputCtx.clearRect(0, 0, cropBounds.width, cropBounds.height);
+  outputCtx.drawImage(
+    localRotateCanvas,
+    cropBounds.x,
+    cropBounds.y,
+    cropBounds.width,
+    cropBounds.height,
+    0,
+    0,
+    cropBounds.width,
+    cropBounds.height,
+  );
 
   return {
     canvas: localOutputCanvas,
-    width: cropWidth,
-    height: cropHeight,
+    width: cropBounds.width,
+    height: cropBounds.height,
   };
 }
 

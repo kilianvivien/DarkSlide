@@ -94,6 +94,27 @@ export function normalizeCrop(settings: ConversionSettings) {
   };
 }
 
+export function getCropPixelBounds(crop: CropSettings, imageWidth: number, imageHeight: number) {
+  const width = clamp(crop.width, 0.01, 1);
+  const height = clamp(crop.height, 0.01, 1);
+  const x = clamp(crop.x, 0, 1 - width);
+  const y = clamp(crop.y, 0, 1 - height);
+  const safeWidth = Math.max(1, imageWidth);
+  const safeHeight = Math.max(1, imageHeight);
+
+  const left = clamp(Math.round(x * safeWidth), 0, safeWidth - 1);
+  const top = clamp(Math.round(y * safeHeight), 0, safeHeight - 1);
+  const right = clamp(Math.round((x + width) * safeWidth), left + 1, safeWidth);
+  const bottom = clamp(Math.round((y + height) * safeHeight), top + 1, safeHeight);
+
+  return {
+    x: left,
+    y: top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top),
+  };
+}
+
 export function normalizeAngle(angle: number) {
   const normalized = angle % 360;
   return normalized < 0 ? normalized + 360 : normalized;

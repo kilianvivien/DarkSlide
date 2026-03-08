@@ -42,13 +42,21 @@ function formatError(error: unknown) {
   return readable || 'Unknown error.';
 }
 
-function isCancelledRenderError(error: unknown) {
+function isIgnorableRenderError(error: unknown) {
   if (error instanceof Error) {
-    return error.message.startsWith('JOB_CANCELLED') || error.message.includes('The tile job was cancelled.');
+    return error.message.startsWith('JOB_CANCELLED')
+      || error.message.startsWith('JOB_MISSING')
+      || error.message.includes('The tile job was cancelled.')
+      || error.message.includes('The requested tile job is no longer available.')
+      || error.message.includes('The image document is no longer available.');
   }
 
   if (typeof error === 'string') {
-    return error.startsWith('JOB_CANCELLED') || error.includes('The tile job was cancelled.');
+    return error.startsWith('JOB_CANCELLED')
+      || error.startsWith('JOB_MISSING')
+      || error.includes('The tile job was cancelled.')
+      || error.includes('The requested tile job is no longer available.')
+      || error.includes('The image document is no longer available.');
   }
 
   return false;
@@ -115,6 +123,7 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
+  const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [renderBackendDiagnostics, setRenderBackendDiagnostics] = useState<RenderBackendDiagnostics>({
     gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
     gpuEnabled: initialPreferences?.gpuRendering ?? true,
@@ -292,10 +301,14 @@ export default function App() {
     const sourceMax = documentState ? Math.max(documentState.source.width, documentState.source.height) : targetMaxDimension;
     return Math.min(sourceMax, Math.ceil(targetMaxDimension * z));
   }, [targetMaxDimension, zoom, documentState]);
-  const isDraftPreview = comparisonMode === 'processed' && (isAdjustingLevel || isInteractingWithPreviewControls);
+  const isDraftPreview = comparisonMode === 'processed' && (isAdjustingLevel || isInteractingWithPreviewControls || isAdjustingCrop);
   const renderTargetDimension = useMemo(() => {
     if (!isDraftPreview) {
       return fullRenderTargetDimension;
+    }
+
+    if (isAdjustingCrop && comparisonMode === 'processed') {
+      return Math.min(fullRenderTargetDimension, 1024);
     }
 
     if (isInteractingWithPreviewControls && comparisonMode === 'processed') {
@@ -303,7 +316,7 @@ export default function App() {
     }
 
     return Math.min(fullRenderTargetDimension, 1024);
-  }, [comparisonMode, fullRenderTargetDimension, isDraftPreview, isInteractingWithPreviewControls, ultraSmoothDragEnabled]);
+  }, [comparisonMode, fullRenderTargetDimension, isAdjustingCrop, isDraftPreview, isInteractingWithPreviewControls, ultraSmoothDragEnabled]);
   const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
   const showMagnifier = Boolean((isPickingFilmBase || activePointPicker) && documentState?.status === 'ready');
 
@@ -331,6 +344,31 @@ export default function App() {
     interactionJustEndedRef.current = true;
     cancelScheduledInteractivePreview();
     setIsInteractingWithPreviewControls(false);
+    if (documentState) {
+      commitInteraction(documentState.settings);
+    }
+  }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
+
+  const handleCropInteractionStart = useCallback(() => {
+    if (isInteractingRef.current) {
+      return;
+    }
+
+    isInteractingRef.current = true;
+    interactionJustEndedRef.current = false;
+    setIsAdjustingCrop(true);
+    beginInteraction();
+  }, [beginInteraction]);
+
+  const handleCropInteractionEnd = useCallback(() => {
+    if (!isInteractingRef.current) {
+      return;
+    }
+
+    isInteractingRef.current = false;
+    interactionJustEndedRef.current = true;
+    cancelScheduledInteractivePreview();
+    setIsAdjustingCrop(false);
     if (documentState) {
       commitInteraction(documentState.settings);
     }
@@ -633,7 +671,7 @@ export default function App() {
         && activeRenderRequestRef.current?.revision === revision;
       if (!isLatestRequest) return;
 
-      if (isCancelledRenderError(renderError)) {
+      if (isIgnorableRenderError(renderError)) {
         return;
       }
 
@@ -732,8 +770,16 @@ export default function App() {
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
     const previewMode = isDraftPreview ? 'draft' : 'settled';
-    const interactionQuality: InteractionQuality | null = isInteractingWithPreviewControls && comparisonMode === 'processed'
-      ? (ultraSmoothDragEnabled ? 'ultra-smooth' : 'balanced')
+    const interactionQuality: InteractionQuality | null = comparisonMode === 'processed'
+      ? (
+        isAdjustingCrop
+          ? 'balanced'
+          : (
+            isInteractingWithPreviewControls
+              ? (ultraSmoothDragEnabled ? 'ultra-smooth' : 'balanced')
+              : null
+          )
+      )
       : null;
     const histogramMode: HistogramMode = interactionQuality === 'ultra-smooth' && previewMode === 'draft'
       ? 'throttled'
@@ -752,7 +798,7 @@ export default function App() {
       tonalCharacter: profileTonalCharacter,
     } satisfies QueuedPreviewRender;
 
-    if (isInteractingWithPreviewControls) {
+    if (isInteractingWithPreviewControls || isAdjustingCrop) {
       scheduleInteractivePreviewRender(queuedPreview);
       return;
     }
@@ -776,6 +822,7 @@ export default function App() {
     documentState?.id,
     documentState?.previewLevels.length,
     isDraftPreview,
+    isAdjustingCrop,
     isInteractingWithPreviewControls,
     renderTargetDimension,
     scheduleInteractivePreviewRender,
@@ -802,6 +849,9 @@ export default function App() {
     setSidebarTab(tab);
     if (tab === 'crop') {
       setIsCropOverlayVisible(true);
+    } else {
+      setIsCropOverlayVisible(false);
+      setIsAdjustingCrop(false);
     }
     savePreferences({ ...prefsSnapshotRef.current, sidebarTab: tab });
   }, []);
@@ -809,6 +859,7 @@ export default function App() {
   const handleCropDone = useCallback(() => {
     setSidebarTab('adjust');
     setIsCropOverlayVisible(false);
+    setIsAdjustingCrop(false);
   }, []);
 
   const handleResetCrop = useCallback(() => {
@@ -870,6 +921,7 @@ export default function App() {
     cancelPendingPreviewRetry();
     cancelScheduledInteractivePreview();
     interactionJustEndedRef.current = false;
+    setIsAdjustingCrop(false);
     renderRevisionRef.current = 0;
     setPreviewVisibility(false);
     setIsAdjustingLevel(false);
@@ -931,6 +983,7 @@ export default function App() {
     cancelPendingPreviewRetry();
     cancelScheduledInteractivePreview();
     interactionJustEndedRef.current = false;
+    setIsAdjustingCrop(false);
 
     const importSession = importSessionRef.current + 1;
     importSessionRef.current = importSession;
@@ -1775,6 +1828,8 @@ export default function App() {
                         crop={documentState.settings.crop}
                         imageWidth={cropImageSize.width}
                         imageHeight={cropImageSize.height}
+                        onInteractionStart={handleCropInteractionStart}
+                        onInteractionEnd={handleCropInteractionEnd}
                         onChange={(crop) => handleSettingsChange({ crop })}
                       />
                     )}
