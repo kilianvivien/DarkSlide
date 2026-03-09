@@ -11,6 +11,8 @@
     "core:window:allow-start-dragging",
     "dialog:default",
     "fs:default",
-    "fs:allow-write-file"
+    "fs:allow-read-text-file",
+    "fs:allow-write-file",
+    "fs:allow-write-text-file"
   ]
 }
