@@ -192,6 +192,297 @@ describe('ImageWorkerClient', () => {
     expect(MockWorker.instances).toHaveLength(2);
   });
 
+  it('re-decodes cached documents after a worker restart before rendering again', async () => {
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const firstWorker = MockWorker.instances[0];
+
+    const decodeBuffer = new ArrayBuffer(8);
+    const decoded = client.decode({
+      documentId: 'doc-1',
+      buffer: decodeBuffer,
+      fileName: 'scan.tiff',
+      mime: 'image/tiff',
+      size: 8,
+    });
+
+    const initialDecodeRequest = firstWorker.postedMessages[0];
+    firstWorker.onmessage?.({
+      data: {
+        id: initialDecodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'doc-1',
+            name: 'scan.tiff',
+            mime: 'image/tiff',
+            extension: '.tiff',
+            size: 8,
+            width: 10,
+            height: 10,
+          },
+          previewLevels: [],
+        },
+      },
+    } as MessageEvent);
+
+    await expect(decoded).resolves.toMatchObject({
+      metadata: {
+        id: 'doc-1',
+      },
+    });
+
+    firstWorker.onerror?.({
+      message: 'worker restarted',
+      preventDefault: vi.fn(),
+    } as unknown as ErrorEvent);
+
+    const secondWorker = MockWorker.instances[1];
+    const pending = client.render({
+      documentId: 'doc-1',
+      settings: {
+        exposure: 0,
+        contrast: 0,
+        saturation: 100,
+        temperature: 0,
+        tint: 0,
+        redBalance: 1,
+        greenBalance: 1,
+        blueBalance: 1,
+        blackPoint: 0,
+        whitePoint: 255,
+        highlightProtection: 0,
+        curves: {
+          rgb: [],
+          red: [],
+          green: [],
+          blue: [],
+        },
+        rotation: 0,
+        levelAngle: 0,
+        crop: {
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          aspectRatio: null,
+        },
+        filmBaseSample: null,
+        sharpen: { enabled: false, radius: 1, amount: 0 },
+        noiseReduction: { enabled: false, luminanceStrength: 0 },
+      },
+      isColor: true,
+      revision: 2,
+      targetMaxDimension: 1024,
+      comparisonMode: 'processed',
+    });
+
+    await flushAsyncWork(8);
+
+    const recoveredDecodeRequest = secondWorker.postedMessages[0];
+    expect(recoveredDecodeRequest?.type).toBe('decode');
+    expect(recoveredDecodeRequest?.payload).toMatchObject({
+      documentId: 'doc-1',
+      fileName: 'scan.tiff',
+      mime: 'image/tiff',
+      size: 8,
+    });
+
+    secondWorker.onmessage?.({
+      data: {
+        id: recoveredDecodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'doc-1',
+            name: 'scan.tiff',
+            mime: 'image/tiff',
+            extension: '.tiff',
+            size: 8,
+            width: 10,
+            height: 10,
+          },
+          previewLevels: [],
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork(8);
+
+    const renderRequest = secondWorker.postedMessages[1];
+    expect(renderRequest?.type).toBe('render');
+    secondWorker.onmessage?.({
+      data: {
+        id: renderRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 2,
+          width: 8,
+          height: 8,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray(256), 8, 8),
+          histogram: {
+            r: new Array(256).fill(1),
+            g: new Array(256).fill(2),
+            b: new Array(256).fill(3),
+            l: new Array(256).fill(4),
+          },
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toMatchObject({
+      documentId: 'doc-1',
+      revision: 2,
+      previewLevelId: 'preview-1024',
+    });
+  });
+
+  it('retries a render after re-decoding when the worker reports a missing document', async () => {
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const decoded = client.decode({
+      documentId: 'doc-1',
+      buffer: new ArrayBuffer(8),
+      fileName: 'scan.tiff',
+      mime: 'image/tiff',
+      size: 8,
+    });
+
+    const decodeRequest = worker.postedMessages[0];
+    worker.onmessage?.({
+      data: {
+        id: decodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'doc-1',
+            name: 'scan.tiff',
+            mime: 'image/tiff',
+            extension: '.tiff',
+            size: 8,
+            width: 10,
+            height: 10,
+          },
+          previewLevels: [],
+        },
+      },
+    } as MessageEvent);
+
+    await decoded;
+
+    const pending = client.render({
+      documentId: 'doc-1',
+      settings: {
+        exposure: 0,
+        contrast: 0,
+        saturation: 100,
+        temperature: 0,
+        tint: 0,
+        redBalance: 1,
+        greenBalance: 1,
+        blueBalance: 1,
+        blackPoint: 0,
+        whitePoint: 255,
+        highlightProtection: 0,
+        curves: {
+          rgb: [],
+          red: [],
+          green: [],
+          blue: [],
+        },
+        rotation: 0,
+        levelAngle: 0,
+        crop: {
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          aspectRatio: null,
+        },
+        filmBaseSample: null,
+        sharpen: { enabled: false, radius: 1, amount: 0 },
+        noiseReduction: { enabled: false, luminanceStrength: 0 },
+      },
+      isColor: true,
+      revision: 5,
+      targetMaxDimension: 1024,
+      comparisonMode: 'processed',
+    });
+
+    await flushAsyncWork(8);
+
+    const initialRenderRequest = worker.postedMessages[1];
+    expect(initialRenderRequest?.type).toBe('render');
+    worker.onmessage?.({
+      data: {
+        id: initialRenderRequest?.id,
+        ok: false,
+        error: {
+          code: 'RENDER_ERROR',
+          message: 'The image document is no longer available.',
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork(8);
+
+    const recoveredDecodeRequest = worker.postedMessages[2];
+    expect(recoveredDecodeRequest?.type).toBe('decode');
+    worker.onmessage?.({
+      data: {
+        id: recoveredDecodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'doc-1',
+            name: 'scan.tiff',
+            mime: 'image/tiff',
+            extension: '.tiff',
+            size: 8,
+            width: 10,
+            height: 10,
+          },
+          previewLevels: [],
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork(8);
+
+    const retriedRenderRequest = worker.postedMessages[3];
+    expect(retriedRenderRequest?.type).toBe('render');
+    worker.onmessage?.({
+      data: {
+        id: retriedRenderRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 5,
+          width: 8,
+          height: 8,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray(256), 8, 8),
+          histogram: {
+            r: new Array(256).fill(5),
+            g: new Array(256).fill(6),
+            b: new Array(256).fill(7),
+            l: new Array(256).fill(8),
+          },
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toMatchObject({
+      documentId: 'doc-1',
+      revision: 5,
+      previewLevelId: 'preview-1024',
+    });
+  });
+
   it('routes render results through the GPU pipeline when available', async () => {
     Object.defineProperty(navigator, 'gpu', {
       configurable: true,

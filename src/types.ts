@@ -1,4 +1,6 @@
 export type FilmType = 'color' | 'bw';
+export type CropTab = 'Film' | 'Print' | 'Social' | 'Digital';
+export type ScannerType = 'flatbed' | 'camera' | 'dedicated' | 'smartphone';
 
 export interface CurvePoint {
   x: number;
@@ -99,6 +101,14 @@ export interface FilmProfile {
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
   isCustom?: boolean;
+  tags?: string[];
+  filmStock?: string | null;
+  scannerType?: ScannerType | null;
+}
+
+export interface DarkslidePresetFile {
+  darkslideVersion: string;
+  profile: FilmProfile;
 }
 
 export interface HistogramData {

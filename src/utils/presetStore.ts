@@ -1,4 +1,4 @@
-import { VersionedPresetStore, FilmProfile } from '../types';
+import { DarkslidePresetFile, FilmProfile, VersionedPresetStore } from '../types';
 
 const STORAGE_KEY = 'darkslide_custom_presets_v1';
 
@@ -8,6 +8,40 @@ function isValidPresetStore(value: unknown): value is VersionedPresetStore {
   return store.version === 1 && Array.isArray(store.presets);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object';
+}
+
+function isValidScannerType(value: unknown) {
+  return value == null || value === 'flatbed' || value === 'camera' || value === 'dedicated' || value === 'smartphone';
+}
+
+function isValidProfile(value: unknown): value is FilmProfile {
+  if (!isRecord(value)) return false;
+  const defaultSettings = value.defaultSettings;
+  return (
+    typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && (value.type === 'color' || value.type === 'bw')
+    && isValidScannerType(value.scannerType)
+    && isRecord(defaultSettings)
+    && typeof defaultSettings.exposure === 'number'
+    && typeof defaultSettings.contrast === 'number'
+  );
+}
+
+export function validateDarkslideFile(raw: unknown): DarkslidePresetFile | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  if (typeof raw.darkslideVersion !== 'string' || !isValidProfile(raw.profile)) {
+    return null;
+  }
+
+  return raw as unknown as DarkslidePresetFile;
+}
+
 export function loadPresetStore(): FilmProfile[] {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return [];
@@ -15,7 +49,7 @@ export function loadPresetStore(): FilmProfile[] {
   try {
     const parsed = JSON.parse(raw);
     if (!isValidPresetStore(parsed)) return [];
-    return parsed.presets.filter((preset) => Boolean(preset?.id && preset?.name && preset?.defaultSettings));
+    return parsed.presets.filter(isValidProfile);
   } catch {
     return [];
   }

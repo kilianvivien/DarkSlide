@@ -20,6 +20,11 @@ const EXPORT_FILTERS: Record<ExportFormat, { name: string; extensions: string[] 
   'image/webp': { name: 'WebP Image', extensions: ['webp'] },
 };
 
+const PRESET_FILTER = {
+  name: 'DarkSlide Preset',
+  extensions: ['darkslide'],
+};
+
 function getMimeTypeForFile(fileName: string) {
   const extension = getFileExtension(fileName) as typeof SUPPORTED_EXTENSIONS[number];
   return MIME_BY_EXTENSION[extension] ?? 'application/octet-stream';
@@ -101,4 +106,77 @@ export async function saveExportBlob(blob: Blob, filename: string, format: Expor
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   return 'saved' as const;
+}
+
+export async function savePresetFile(json: string, filename: string): Promise<'saved' | 'cancelled'> {
+  if (isDesktopShell()) {
+    const [{ save }, { writeTextFile }] = await Promise.all([
+      import('@tauri-apps/plugin-dialog'),
+      import('@tauri-apps/plugin-fs'),
+    ]);
+
+    const selected = await save({
+      title: 'Export Preset',
+      defaultPath: filename,
+      filters: [PRESET_FILTER],
+    });
+
+    if (!selected) {
+      return 'cancelled';
+    }
+
+    await writeTextFile(selected, json);
+    return 'saved';
+  }
+
+  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = url;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return 'saved';
+}
+
+export async function openPresetFile(): Promise<{ content: string; fileName: string } | null> {
+  if (!isDesktopShell()) {
+    return null;
+  }
+
+  const [{ open }, { readTextFile }] = await Promise.all([
+    import('@tauri-apps/plugin-dialog'),
+    import('@tauri-apps/plugin-fs'),
+  ]);
+
+  const selected = await open({
+    title: 'Import Preset',
+    directory: false,
+    multiple: false,
+    filters: [PRESET_FILTER],
+  });
+
+  if (!selected || Array.isArray(selected)) {
+    return null;
+  }
+
+  return {
+    content: await readTextFile(selected),
+    fileName: getFileName(selected),
+  };
+}
+
+export async function confirmDeletePreset(name: string): Promise<boolean> {
+  const message = `Delete preset "${name}"?`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Delete Preset',
+      kind: 'warning',
+      okLabel: 'Delete',
+      cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
 }

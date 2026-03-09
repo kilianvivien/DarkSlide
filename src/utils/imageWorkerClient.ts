@@ -59,6 +59,13 @@ type PendingResolver = {
   reject: (reason?: unknown) => void;
 };
 
+type CachedDecodeRequest = {
+  payload: DecodeRequest;
+  workerEpoch: number;
+};
+
+const MISSING_DOCUMENT_MESSAGE = 'The image document is no longer available.';
+
 function trimTileImageData(tile: ReadTileResult) {
   const { imageData, haloLeft, haloTop, haloRight, haloBottom } = tile;
   const width = imageData.width - haloLeft - haloRight;
@@ -161,7 +168,13 @@ export class ImageWorkerClient {
 
   private pending = new Map<string, PendingResolver>();
 
+  private decodeCache = new Map<string, CachedDecodeRequest>();
+
+  private documentRecovery = new Map<string, Promise<void>>();
+
   private isTerminated = false;
+
+  private workerEpoch = 0;
 
   private gpuPipeline: WebGPUPipeline | null = null;
 
@@ -226,6 +239,7 @@ export class ImageWorkerClient {
   }
 
   private createWorker() {
+    this.workerEpoch += 1;
     const worker = new Worker(new URL('./imageWorker.ts', import.meta.url), { type: 'module' });
 
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
@@ -282,6 +296,71 @@ export class ImageWorkerClient {
       this.pending.set(id, { resolve, reject });
       this.worker?.postMessage({ id, type, payload } as WorkerRequest);
     });
+  }
+
+  private cloneDecodeRequest(payload: DecodeRequest): DecodeRequest {
+    return {
+      ...payload,
+      buffer: payload.buffer.slice(0),
+    };
+  }
+
+  private isMissingDocumentError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes(MISSING_DOCUMENT_MESSAGE);
+  }
+
+  private async recoverDocument(documentId: string) {
+    const cached = this.decodeCache.get(documentId);
+    if (!cached) {
+      throw new Error(MISSING_DOCUMENT_MESSAGE);
+    }
+
+    const existingRecovery = this.documentRecovery.get(documentId);
+    if (existingRecovery) {
+      await existingRecovery;
+      return;
+    }
+
+    const recovery = this.request<DecodedImage>('decode', this.cloneDecodeRequest(cached.payload))
+      .then(() => {
+        this.decodeCache.set(documentId, {
+          payload: cached.payload,
+          workerEpoch: this.workerEpoch,
+        });
+      })
+      .finally(() => {
+        this.documentRecovery.delete(documentId);
+      });
+
+    this.documentRecovery.set(documentId, recovery);
+    await recovery;
+  }
+
+  private async ensureDocumentLoaded(documentId: string) {
+    const cached = this.decodeCache.get(documentId);
+    if (!cached || cached.workerEpoch === this.workerEpoch) {
+      return;
+    }
+
+    await this.recoverDocument(documentId);
+  }
+
+  private async requestWithDocumentRecovery<T>(
+    documentId: string,
+    operation: () => Promise<T>,
+    allowRecovery: boolean,
+  ) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!allowRecovery || !this.isMissingDocumentError(error)) {
+        throw error;
+      }
+
+      await this.recoverDocument(documentId);
+      return operation();
+    }
   }
 
   private resetGPU(reason: RenderBackendDiagnostics['gpuDisabledReason'], error?: unknown, allowRetry = false) {
@@ -622,11 +701,21 @@ export class ImageWorkerClient {
     };
   }
 
-  decode(payload: DecodeRequest) {
-    return this.request<DecodedImage>('decode', payload);
+  async decode(payload: DecodeRequest) {
+    const decoded = await this.request<DecodedImage>('decode', payload);
+    this.decodeCache.set(payload.documentId, {
+      payload: this.cloneDecodeRequest(payload),
+      workerEpoch: this.workerEpoch,
+    });
+    return decoded;
   }
 
   async render(payload: RenderRequest) {
+    await this.ensureDocumentLoaded(payload.documentId);
+    return this.renderInternal(payload, true);
+  }
+
+  private async renderInternal(payload: RenderRequest, allowRecovery: boolean) {
     await this.cancelTileJob(payload.documentId, this.activePreviewJobId, true);
 
     const jobId = this.createJobId(payload.documentId, payload.revision, 'preview');
@@ -655,7 +744,11 @@ export class ImageWorkerClient {
         if (this.activePreviewJobId === jobId) {
           this.activePreviewJobId = null;
         }
-        return this.request<RenderResult>('render', payload);
+        return this.requestWithDocumentRecovery(
+          payload.documentId,
+          () => this.request<RenderResult>('render', payload),
+          allowRecovery,
+        );
       }
 
       const gpu = await this.ensureGPU();
@@ -692,7 +785,11 @@ export class ImageWorkerClient {
             sourceKind: 'preview',
           },
         });
-        return this.request<RenderResult>('render', payload);
+        return this.requestWithDocumentRecovery(
+          payload.documentId,
+          () => this.request<RenderResult>('render', payload),
+          allowRecovery,
+        );
       }
     }
 
@@ -813,6 +910,11 @@ export class ImageWorkerClient {
         throw error;
       }
 
+      if (allowRecovery && this.isMissingDocumentError(error)) {
+        await this.recoverDocument(payload.documentId);
+        return this.renderInternal(payload, false);
+      }
+
       this.handleGPUFailure(error);
       this.markCpuWorkerBackend('preview', message, true);
       this.previewBackend = 'cpu-worker';
@@ -847,18 +949,36 @@ export class ImageWorkerClient {
       if (this.activePreviewJobId === jobId) {
         this.activePreviewJobId = null;
       }
-      return this.request<RenderResult>('render', payload);
+      return this.requestWithDocumentRecovery(
+        payload.documentId,
+        () => this.request<RenderResult>('render', payload),
+        false,
+      );
     }
   }
 
-  sampleFilmBase(payload: SampleRequest) {
-    return this.request<FilmBaseSample>('sample-film-base', payload);
+  async sampleFilmBase(payload: SampleRequest) {
+    await this.ensureDocumentLoaded(payload.documentId);
+    return this.requestWithDocumentRecovery(
+      payload.documentId,
+      () => this.request<FilmBaseSample>('sample-film-base', payload),
+      true,
+    );
   }
 
   async export(payload: ExportRequest) {
+    await this.ensureDocumentLoaded(payload.documentId);
+    return this.exportInternal(payload, true);
+  }
+
+  private async exportInternal(payload: ExportRequest, allowRecovery: boolean) {
     if (!this.canAttemptGPU()) {
       this.markCpuWorkerBackend('source');
-      return this.request<ExportResult>('export', payload);
+      return this.requestWithDocumentRecovery(
+        payload.documentId,
+        () => this.request<ExportResult>('export', payload),
+        allowRecovery,
+      );
     }
 
     const gpu = await this.ensureGPU();
@@ -874,7 +994,11 @@ export class ImageWorkerClient {
           sourceKind: 'source',
         },
       });
-      return this.request<ExportResult>('export', payload);
+      return this.requestWithDocumentRecovery(
+        payload.documentId,
+        () => this.request<ExportResult>('export', payload),
+        allowRecovery,
+      );
     }
 
     const jobId = this.createJobId(payload.documentId, `export-${crypto.randomUUID()}`, 'source');
@@ -972,6 +1096,10 @@ export class ImageWorkerClient {
     } catch (error) {
       await this.cancelTileJob(payload.documentId, jobId);
       const message = error instanceof Error ? error.message : String(error);
+      if (allowRecovery && this.isMissingDocumentError(error)) {
+        await this.recoverDocument(payload.documentId);
+        return this.exportInternal(payload, false);
+      }
       this.handleGPUFailure(error);
       this.markCpuWorkerBackend('source', message, true);
       this.lastExportJob = createJobSnapshot(
@@ -1001,11 +1129,17 @@ export class ImageWorkerClient {
           sourceKind: 'source',
         },
       });
-      return this.request<ExportResult>('export', payload);
+      return this.requestWithDocumentRecovery(
+        payload.documentId,
+        () => this.request<ExportResult>('export', payload),
+        false,
+      );
     }
   }
 
   disposeDocument(documentId: string) {
+    this.decodeCache.delete(documentId);
+    this.documentRecovery.delete(documentId);
     return this.request<{ disposed: true }>('dispose', { documentId });
   }
 

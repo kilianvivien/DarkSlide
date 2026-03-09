@@ -1,4 +1,4 @@
-import { ExportOptions } from '../types';
+import { CropTab, ExportOptions } from '../types';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
 
@@ -7,6 +7,7 @@ export interface UserPreferences {
   lastProfileId: string;
   exportOptions: ExportOptions;
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'export';
+  cropTab?: CropTab;
   isLeftPaneOpen: boolean;
   isRightPaneOpen: boolean;
   gpuRendering: boolean;
@@ -21,6 +22,7 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     typeof prefs.lastProfileId === 'string' &&
     prefs.exportOptions !== undefined &&
     typeof prefs.sidebarTab === 'string' &&
+    (prefs.cropTab === undefined || ['Film', 'Print', 'Social', 'Digital'].includes(prefs.cropTab)) &&
     typeof prefs.isLeftPaneOpen === 'boolean' &&
     typeof prefs.isRightPaneOpen === 'boolean' &&
     (prefs.gpuRendering === undefined || typeof prefs.gpuRendering === 'boolean') &&
@@ -37,6 +39,7 @@ export function loadPreferences(): UserPreferences | null {
     if (!isValidPreferences(parsed)) return null;
     return {
       ...parsed,
+      cropTab: parsed.cropTab ?? 'Film',
       gpuRendering: parsed.gpuRendering ?? true,
       ultraSmoothDrag: parsed.ultraSmoothDrag ?? false,
     };

@@ -1,4 +1,4 @@
-import { ColorMatrix, ConversionSettings, CropSettings, Curves, ExportOptions, FilmProfile, TonalCharacter } from './types';
+import { ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, TonalCharacter } from './types';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -51,17 +51,37 @@ export const MAX_IMAGE_PIXELS = 120_000_000;
 export const MAX_IMAGE_DIMENSION = 18_000;
 export const PREVIEW_LEVELS = [512, 1024, 2048];
 export const DIAGNOSTICS_LIMIT = 100;
+export const DARKSLIDE_PRESET_FILE_VERSION = '1.0.0';
 
-export const ASPECT_RATIOS = [
+export interface AspectRatioEntry {
+  name: string;
+  value: number | null;
+  category?: CropTab;
+  format?: string;
+  gauge?: '35mm' | 'Medium Format';
+}
+
+export const ASPECT_RATIOS: AspectRatioEntry[] = [
   { name: 'Free', value: null },
-  { name: '1:1', value: 1, category: 'Social' },
-  { name: '4:5', value: 0.8, category: 'Social' },
-  { name: '9:16', value: 0.5625, category: 'Social' },
+  { name: '2:3', value: 2 / 3, category: 'Film', format: '35mm', gauge: '35mm' },
+  { name: '3:2', value: 3 / 2, category: 'Film', format: '35mm', gauge: '35mm' },
+  { name: '3:4', value: 3 / 4, category: 'Film', format: 'Half-frame', gauge: '35mm' },
+  { name: '4:3', value: 4 / 3, category: 'Film', format: 'Half-frame', gauge: '35mm' },
+  { name: '4:5', value: 4 / 5, category: 'Film', format: '6×4.5', gauge: 'Medium Format' },
+  { name: '5:4', value: 5 / 4, category: 'Film', format: '6×4.5', gauge: 'Medium Format' },
+  { name: '1:1', value: 1, category: 'Film', format: '6×6', gauge: 'Medium Format' },
+  { name: '6:7', value: 6 / 7, category: 'Film', format: '6×7', gauge: 'Medium Format' },
+  { name: '7:6', value: 7 / 6, category: 'Film', format: '6×7', gauge: 'Medium Format' },
+  { name: '2:3', value: 2 / 3, category: 'Film', format: '6×9', gauge: 'Medium Format' },
+  { name: '3:2', value: 3 / 2, category: 'Film', format: '6×9', gauge: 'Medium Format' },
   { name: '2:3', value: 2 / 3, category: 'Print' },
-  { name: '3:2', value: 1.5, category: 'Print' },
+  { name: '3:2', value: 3 / 2, category: 'Print' },
   { name: '3:4', value: 3 / 4, category: 'Print' },
   { name: '4:3', value: 4 / 3, category: 'Print' },
   { name: '5:7', value: 5 / 7, category: 'Print' },
+  { name: '1:1', value: 1, category: 'Social' },
+  { name: '4:5', value: 4 / 5, category: 'Social' },
+  { name: '9:16', value: 9 / 16, category: 'Social' },
   { name: '16:9', value: 16 / 9, category: 'Digital' },
 ];
 

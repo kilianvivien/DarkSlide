@@ -1,14 +1,82 @@
-import React, { useState } from 'react';
-import { RotateCw, Crop as CropIcon, Square, Smartphone, Image as ImageIcon, Monitor, ChevronDown } from 'lucide-react';
-import { ConversionSettings, CropSettings } from '../types';
-import { ASPECT_RATIOS } from '../constants';
+import React, { useMemo, useState } from 'react';
+import {
+  ChevronDown,
+  Crop as CropIcon,
+  Film,
+  Image as ImageIcon,
+  Monitor,
+  RectangleHorizontal,
+  RectangleVertical,
+  RotateCw,
+  Smartphone,
+  Square,
+} from 'lucide-react';
+import { ASPECT_RATIOS, AspectRatioEntry } from '../constants';
+import { ConversionSettings, CropSettings, CropTab } from '../types';
 import { createCenteredAspectCrop, rotateCropClockwise } from '../utils/imagePipeline';
 import { Slider } from './Slider';
+
+type Orientation = 'landscape' | 'portrait';
+
+type RatioGroup = {
+  key: string;
+  label: string;
+  category: CropTab;
+  gauge?: '35mm' | 'Medium Format';
+  iconEntry: AspectRatioEntry;
+  portrait: number;
+  landscape: number;
+  square: boolean;
+};
+
+const CROP_TABS: CropTab[] = ['Film', 'Print', 'Social', 'Digital'];
+const FILM_GAUGES: Array<'35mm' | 'Medium Format'> = ['35mm', 'Medium Format'];
+
+function buildRatioGroups() {
+  const groups: RatioGroup[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const ratio of ASPECT_RATIOS) {
+    if (ratio.value === null || !ratio.category) {
+      continue;
+    }
+
+    const key = ratio.category === 'Film'
+      ? `Film:${ratio.gauge}:${ratio.format}`
+      : `${ratio.category}:${Math.min(ratio.value, 1 / ratio.value).toFixed(5)}`;
+
+    if (seenKeys.has(key)) {
+      continue;
+    }
+
+    const square = Math.abs(ratio.value - 1) < 0.0001;
+    const landscape = square ? 1 : Math.max(ratio.value, 1 / ratio.value);
+    const portrait = square ? 1 : Math.min(ratio.value, 1 / ratio.value);
+
+    groups.push({
+      key,
+      label: ratio.format ?? ratio.name,
+      category: ratio.category,
+      gauge: ratio.gauge,
+      iconEntry: ratio,
+      portrait,
+      landscape,
+      square,
+    });
+    seenKeys.add(key);
+  }
+
+  return groups;
+}
+
+const RATIO_GROUPS = buildRatioGroups();
 
 interface CropPaneProps {
   settings: ConversionSettings;
   imageWidth: number;
   imageHeight: number;
+  cropTab: CropTab;
+  onCropTabChange: (tab: CropTab) => void;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
   onDone: () => void;
@@ -19,6 +87,8 @@ export const CropPane: React.FC<CropPaneProps> = ({
   settings,
   imageWidth,
   imageHeight,
+  cropTab,
+  onCropTabChange,
   onSettingsChange,
   onLevelInteractionChange,
   onDone,
@@ -27,7 +97,22 @@ export const CropPane: React.FC<CropPaneProps> = ({
   const [customWidth, setCustomWidth] = useState('2');
   const [customHeight, setCustomHeight] = useState('3');
   const [isCustomRatioOpen, setIsCustomRatioOpen] = useState(false);
-  const originalAspectRatio = imageWidth / Math.max(1, imageHeight);
+  const [orientationMap, setOrientationMap] = useState<Record<string, Orientation>>({});
+
+  const ratioGroupsByTab = useMemo(() => {
+    const grouped = {
+      Film: [] as RatioGroup[],
+      Print: [] as RatioGroup[],
+      Social: [] as RatioGroup[],
+      Digital: [] as RatioGroup[],
+    };
+
+    for (const ratioGroup of RATIO_GROUPS) {
+      grouped[ratioGroup.category].push(ratioGroup);
+    }
+
+    return grouped;
+  }, []);
 
   const handleRotate = () => {
     const nextRotation = (settings.rotation + 90) % 360;
@@ -48,19 +133,22 @@ export const CropPane: React.FC<CropPaneProps> = ({
       newCrop.width = 1;
       newCrop.height = 1;
     }
-    
+
     onSettingsChange({ crop: newCrop });
   };
 
-  const getIcon = (name: string) => {
-    switch (name) {
-      case '1:1': return <Square size={14} />;
-      case '2:3':
-      case '9:16': return <Smartphone size={14} />;
-      case '3:4':
-      case '4:5': return <ImageIcon size={14} />;
-      case '16:9': return <Monitor size={14} />;
-      default: return <ImageIcon size={14} />;
+  const getIcon = (entry: AspectRatioEntry) => {
+    if (entry.category === 'Film') return <Film size={14} />;
+
+    switch (entry.name) {
+      case '1:1':
+        return <Square size={14} />;
+      case '9:16':
+        return <Smartphone size={14} />;
+      case '16:9':
+        return <Monitor size={14} />;
+      default:
+        return <ImageIcon size={14} />;
     }
   };
 
@@ -69,6 +157,50 @@ export const CropPane: React.FC<CropPaneProps> = ({
     const currentAspect = settings.crop.aspectRatio;
     if (!currentAspect) return false;
     return Math.abs(currentAspect - preset) < 0.0001;
+  };
+
+  const isGroupSelected = (group: RatioGroup) => {
+    if (settings.crop.aspectRatio === null) {
+      return false;
+    }
+
+    return isAspectSelected(group.landscape) || isAspectSelected(group.portrait);
+  };
+
+  const getGroupOrientation = (group: RatioGroup) => {
+    if (orientationMap[group.key]) {
+      return orientationMap[group.key];
+    }
+
+    if (isAspectSelected(group.portrait)) {
+      return 'portrait';
+    }
+
+    return 'landscape';
+  };
+
+  const getGroupAspectValue = (group: RatioGroup) => (
+    getGroupOrientation(group) === 'portrait' ? group.portrait : group.landscape
+  );
+
+  const handleGroupSelect = (group: RatioGroup) => {
+    handleAspectChange(getGroupAspectValue(group));
+  };
+
+  const handleToggleOrientation = (group: RatioGroup) => {
+    if (group.square) {
+      return;
+    }
+
+    const nextOrientation = getGroupOrientation(group) === 'landscape' ? 'portrait' : 'landscape';
+    setOrientationMap((current) => ({
+      ...current,
+      [group.key]: nextOrientation,
+    }));
+
+    if (isGroupSelected(group)) {
+      handleAspectChange(nextOrientation === 'portrait' ? group.portrait : group.landscape);
+    }
   };
 
   const handleCustomAspectApply = () => {
@@ -81,10 +213,53 @@ export const CropPane: React.FC<CropPaneProps> = ({
     handleAspectChange(width / height);
   };
 
+  const renderRatioButton = (group: RatioGroup) => {
+    const selected = isGroupSelected(group);
+    const orientation = getGroupOrientation(group);
+    const sharedClassName = selected
+      ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
+      : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200';
+
+    return (
+      <div
+        key={group.key}
+        className={`flex overflow-hidden rounded-lg border transition-all ${sharedClassName}`}
+      >
+        <button
+          type="button"
+          onClick={() => handleGroupSelect(group)}
+          className="flex flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm"
+        >
+          <span className="opacity-60">{getIcon(group.iconEntry)}</span>
+          <div className="flex flex-col items-start leading-tight">
+            <span className="font-medium">{group.label}</span>
+            <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${selected ? 'text-zinc-700' : 'text-zinc-500'}`}>
+              {orientation}
+            </span>
+          </div>
+        </button>
+        {!group.square && (
+          <button
+            type="button"
+            aria-label={`${group.label} ${orientation === 'landscape' ? 'switch to portrait' : 'switch to landscape'}`}
+            onClick={() => handleToggleOrientation(group)}
+            className={`flex items-center justify-center border-l px-3 transition-colors ${
+              selected
+                ? 'border-zinc-300/70 hover:bg-zinc-200'
+                : 'border-zinc-800 hover:bg-zinc-700/60'
+            }`}
+          >
+            {orientation === 'landscape' ? <RectangleHorizontal size={14} /> : <RectangleVertical size={14} />}
+          </button>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-8">
       <section>
-        <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+        <h2 className="mb-6 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
           <RotateCw size={12} /> Orientation
         </h2>
         <button
@@ -121,48 +296,58 @@ export const CropPane: React.FC<CropPaneProps> = ({
       </section>
 
       <section>
-        <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+        <h2 className="mb-6 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
           <CropIcon size={12} /> Aspect Ratio Presets
         </h2>
-        
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => handleAspectChange(originalAspectRatio)}
-            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all border ${
-              isAspectSelected(originalAspectRatio)
-                ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
-                : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
-            }`}
-          >
-            <span className="opacity-60"><ImageIcon size={14} /></span>
-            <div className="flex flex-col items-start leading-tight">
-              <span className="font-medium">Original</span>
-              <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${isAspectSelected(originalAspectRatio) ? 'text-zinc-900' : 'text-zinc-500'}`}>
-                Native
-              </span>
-            </div>
-          </button>
-          {ASPECT_RATIOS.map((ratio) => (
+
+        <button
+          type="button"
+          onClick={() => handleAspectChange(null)}
+          className={`mb-4 flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-all ${
+            isAspectSelected(null)
+              ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
+              : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
+          }`}
+        >
+          <span className="opacity-60"><CropIcon size={14} /></span>
+          <div className="flex flex-col items-start leading-tight">
+            <span className="font-medium">Free</span>
+            <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${isAspectSelected(null) ? 'text-zinc-700' : 'text-zinc-500'}`}>
+              Unlocked
+            </span>
+          </div>
+        </button>
+
+        <div className="flex border-b border-zinc-700/50">
+          {CROP_TABS.map((tab) => (
             <button
-              key={ratio.name}
-              onClick={() => handleAspectChange(ratio.value)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all border ${
-                isAspectSelected(ratio.value)
-                  ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
-                  : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
+              key={tab}
+              type="button"
+              onClick={() => onCropTabChange(tab)}
+              className={`pb-2 pr-4 text-[11px] font-semibold uppercase tracking-widest border-b-2 transition-all ${
+                cropTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
               }`}
             >
-              <span className="opacity-60">{getIcon(ratio.name)}</span>
-              <div className="flex flex-col items-start leading-tight">
-                <span className="font-medium">{ratio.name}</span>
-                {ratio.category && (
-                  <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${isAspectSelected(ratio.value) ? 'text-zinc-900' : 'text-zinc-500'}`}>
-                    {ratio.category}
-                  </span>
-                )}
-              </div>
+              {tab}
             </button>
           ))}
+        </div>
+
+        <div className="mt-4 space-y-4">
+          {cropTab === 'Film' ? (
+            FILM_GAUGES.map((gauge) => (
+              <div key={gauge} className="space-y-2">
+                <h3 className="text-[10px] uppercase tracking-wider text-zinc-500">{gauge}</h3>
+                <div className="space-y-2">
+                  {ratioGroupsByTab.Film.filter((group) => group.gauge === gauge).map(renderRatioButton)}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="space-y-2">
+              {ratioGroupsByTab[cropTab].map(renderRatioButton)}
+            </div>
+          )}
         </div>
 
         <div className="mt-4 rounded-xl border border-zinc-800/70 bg-zinc-900/30">

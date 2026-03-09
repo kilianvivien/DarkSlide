@@ -7,6 +7,7 @@ const VALID_PREFS: UserPreferences = {
   lastProfileId: 'portra-400',
   exportOptions: { format: 'image/png', quality: 0.85, filenameBase: 'test' },
   sidebarTab: 'export',
+  cropTab: 'Social',
   isLeftPaneOpen: false,
   isRightPaneOpen: true,
   gpuRendering: false,
@@ -64,6 +65,7 @@ describe('loadPreferences', () => {
     }));
 
     expect(loadPreferences()).toMatchObject({
+      cropTab: 'Film',
       gpuRendering: true,
     });
   });
@@ -80,6 +82,7 @@ describe('loadPreferences', () => {
     }));
 
     expect(loadPreferences()).toMatchObject({
+      cropTab: 'Film',
       ultraSmoothDrag: false,
     });
   });
@@ -94,6 +97,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.version).toBe(1);
     expect(loaded!.lastProfileId).toBe('portra-400');
     expect(loaded!.sidebarTab).toBe('export');
+    expect(loaded!.cropTab).toBe('Social');
     expect(loaded!.isLeftPaneOpen).toBe(false);
     expect(loaded!.isRightPaneOpen).toBe(true);
     expect(loaded!.gpuRendering).toBe(false);

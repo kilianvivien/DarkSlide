@@ -13,7 +13,7 @@ import {
   Settings,
   Wand2,
 } from 'lucide-react';
-import { ConversionSettings, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData } from '../types';
+import { ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData } from '../types';
 
 function histPercentile(bins: number[], p: number): number {
   const total = bins.reduce((a, b) => a + b, 0);
@@ -73,6 +73,8 @@ interface SidebarProps {
   isExporting: boolean;
   activeTab: 'adjust' | 'curves' | 'crop' | 'export';
   onTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'export') => void;
+  cropTab: CropTab;
+  onCropTabChange: (tab: CropTab) => void;
   onCropDone: () => void;
   onResetCrop: () => void;
   activePointPicker: 'black' | 'white' | 'grey' | null;
@@ -98,6 +100,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isExporting,
   activeTab,
   onTabChange,
+  cropTab,
+  onCropTabChange,
   onCropDone,
   onResetCrop,
   activePointPicker,
@@ -309,6 +313,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   settings={settings}
                   imageWidth={cropImageWidth}
                   imageHeight={cropImageHeight}
+                  cropTab={cropTab}
+                  onCropTabChange={onCropTabChange}
                   onLevelInteractionChange={onLevelInteractionChange}
                   onSettingsChange={onSettingsChange}
                   onDone={onCropDone}

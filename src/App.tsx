@@ -22,7 +22,7 @@ import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
 import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from './constants';
-import { ColorMatrix, ConversionSettings, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
+import { ColorMatrix, ConversionSettings, CropTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, TonalCharacter, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useViewportZoom } from './hooks/useViewportZoom';
@@ -120,6 +120,7 @@ export default function App() {
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanDragging, setIsPanDragging] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'export'>('adjust');
+  const [cropTab, setCropTab] = useState<CropTab>(() => initialPreferences?.cropTab ?? 'Film');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
@@ -183,7 +184,7 @@ export default function App() {
     onScaleChanged: (handler: ({ payload }: { payload: { scaleFactor: number } }) => void) => Promise<() => void>;
   } | null>(null);
 
-  const { customPresets, savePreset, deletePreset } = useCustomPresets();
+  const { customPresets, savePreset, importPreset, deletePreset } = useCustomPresets();
   const allProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
 
@@ -197,6 +198,7 @@ export default function App() {
     lastProfileId: fallbackProfile.id,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     sidebarTab: 'adjust',
+    cropTab: initialPreferences?.cropTab ?? 'Film',
     isLeftPaneOpen: true,
     isRightPaneOpen: true,
     gpuRendering: initialPreferences?.gpuRendering ?? true,
@@ -207,6 +209,7 @@ export default function App() {
     lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
     exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
     sidebarTab,
+    cropTab,
     isLeftPaneOpen,
     isRightPaneOpen,
     gpuRendering: gpuRenderingEnabled,
@@ -396,8 +399,9 @@ export default function App() {
     const prefs = initialPreferences;
     if (!prefs) return;
     if (['adjust', 'curves', 'crop', 'export'].includes(prefs.sidebarTab)) {
-    setSidebarTab(prefs.sidebarTab);
+      setSidebarTab(prefs.sidebarTab);
     }
+    setCropTab(prefs.cropTab ?? 'Film');
     setIsLeftPaneOpen(prefs.isLeftPaneOpen);
     setIsRightPaneOpen(prefs.isRightPaneOpen);
     setGPURenderingEnabled(prefs.gpuRendering);
@@ -847,9 +851,7 @@ export default function App() {
 
   const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'export') => {
     setSidebarTab(tab);
-    if (tab === 'crop') {
-      setIsCropOverlayVisible(true);
-    } else {
+    if (tab !== 'crop') {
       setIsCropOverlayVisible(false);
       setIsAdjustingCrop(false);
     }
@@ -860,6 +862,11 @@ export default function App() {
     setSidebarTab('adjust');
     setIsCropOverlayVisible(false);
     setIsAdjustingCrop(false);
+  }, []);
+
+  const handleCropTabChange = useCallback((tab: CropTab) => {
+    setCropTab(tab);
+    savePreferences({ ...prefsSnapshotRef.current, cropTab: tab });
   }, []);
 
   const handleResetCrop = useCallback(() => {
@@ -1338,15 +1345,45 @@ export default function App() {
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [resetHistory, updateDocument]);
 
-  const handleSavePreset = useCallback((name: string) => {
+  const handleSavePreset = useCallback((
+    name: string,
+    metadata?: { filmStock?: string; scannerType?: ScannerType | null },
+  ) => {
     if (!documentState) return;
-    const newPreset = savePreset(name, activeProfile.type, documentState.settings);
+    const newPreset = savePreset({
+      id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `custom-${crypto.randomUUID()}`
+        : `custom-${Date.now()}`,
+      version: 1,
+      name,
+      type: activeProfile.type,
+      description: 'Custom DarkSlide preset',
+      defaultSettings: structuredClone(documentState.settings),
+      isCustom: true,
+      tags: [activeProfile.type],
+      filmStock: metadata?.filmStock?.trim() ? metadata.filmStock.trim() : null,
+      scannerType: metadata?.scannerType ?? null,
+    });
     updateDocument((current) => ({
       ...current,
       profileId: newPreset.id,
       dirty: false,
     }));
   }, [activeProfile.type, documentState, savePreset, updateDocument]);
+
+  const handleImportPreset = useCallback((
+    profile: FilmProfile,
+    options?: { overwriteId?: string; renameTo?: string },
+  ) => {
+    importPreset({
+      ...profile,
+      version: profile.version ?? 1,
+      description: profile.description || 'Imported DarkSlide preset',
+      tags: profile.tags?.length ? profile.tags : [profile.type],
+      filmStock: profile.filmStock ?? null,
+      scannerType: profile.scannerType ?? null,
+    }, options);
+  }, [importPreset]);
 
   const handleDeletePreset = useCallback((id: string) => {
     deletePreset(id);
@@ -1582,6 +1619,8 @@ export default function App() {
                 isExporting={isExporting}
                 activeTab={sidebarTab}
                 onTabChange={handleSidebarTabChange}
+                cropTab={cropTab}
+                onCropTabChange={handleCropTabChange}
                 onCropDone={handleCropDone}
                 onResetCrop={handleResetCrop}
                 activePointPicker={activePointPicker}
@@ -1900,8 +1939,11 @@ export default function App() {
                 activeStockId={documentState?.profileId ?? fallbackProfile.id}
                 onStockChange={handleProfileChange}
                 customPresets={customPresets}
+                canSavePreset={Boolean(documentState)}
                 onSavePreset={handleSavePreset}
+                onImportPreset={handleImportPreset}
                 onDeletePreset={handleDeletePreset}
+                onError={setError}
               />
               </motion.div>
             )}

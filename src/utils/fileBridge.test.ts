@@ -7,11 +7,14 @@ const coreState = vi.hoisted(() => ({
 const dialogState = vi.hoisted(() => ({
   open: vi.fn(),
   save: vi.fn(),
+  ask: vi.fn(),
 }));
 
 const fsState = vi.hoisted(() => ({
   readFile: vi.fn(),
   writeFile: vi.fn(),
+  readTextFile: vi.fn(),
+  writeTextFile: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -21,22 +24,28 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: dialogState.open,
   save: dialogState.save,
+  ask: dialogState.ask,
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   readFile: fsState.readFile,
   writeFile: fsState.writeFile,
+  readTextFile: fsState.readTextFile,
+  writeTextFile: fsState.writeTextFile,
 }));
 
-import { isDesktopShell, openImageFile, saveExportBlob } from './fileBridge';
+import { confirmDeletePreset, isDesktopShell, openImageFile, openPresetFile, saveExportBlob, savePresetFile } from './fileBridge';
 
 describe('fileBridge', () => {
   beforeEach(() => {
     coreState.isTauri.mockReturnValue(false);
     dialogState.open.mockReset();
     dialogState.save.mockReset();
+    dialogState.ask.mockReset();
     fsState.readFile.mockReset();
     fsState.writeFile.mockReset();
+    fsState.readTextFile.mockReset();
+    fsState.writeTextFile.mockReset();
   });
 
   afterEach(() => {
@@ -104,5 +113,73 @@ describe('fileBridge', () => {
     );
     expect(second).toBe('cancelled');
     expect(fsState.writeFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens preset files through the desktop dialog', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.open.mockResolvedValue('/Users/tester/Desktop/preset.darkslide');
+    fsState.readTextFile.mockResolvedValue('{"darkslideVersion":"1.0.0"}');
+
+    const result = await openPresetFile();
+
+    expect(fsState.readTextFile).toHaveBeenCalledWith('/Users/tester/Desktop/preset.darkslide');
+    expect(result).toEqual({
+      content: '{"darkslideVersion":"1.0.0"}',
+      fileName: 'preset.darkslide',
+    });
+  });
+
+  it('downloads preset files in the browser build', async () => {
+    const createObjectURL = vi.fn(() => 'blob:preset');
+    const revokeObjectURL = vi.fn();
+    const click = vi.fn();
+    const anchor = { click } as unknown as HTMLAnchorElement;
+
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL,
+    });
+    vi.spyOn(document, 'createElement').mockReturnValue(anchor);
+
+    const result = await savePresetFile('{"darkslideVersion":"1.0.0"}', 'preset.darkslide');
+
+    expect(result).toBe('saved');
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes preset files through the desktop save dialog', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.save.mockResolvedValue('/Users/tester/Desktop/preset.darkslide');
+
+    const result = await savePresetFile('{"darkslideVersion":"1.0.0"}', 'preset.darkslide');
+
+    expect(result).toBe('saved');
+    expect(fsState.writeTextFile).toHaveBeenCalledWith(
+      '/Users/tester/Desktop/preset.darkslide',
+      '{"darkslideVersion":"1.0.0"}',
+    );
+  });
+
+  it('uses browser confirm when not in the desktop shell', async () => {
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirm);
+
+    await expect(confirmDeletePreset('Portra 400 Push')).resolves.toBe(true);
+    expect(confirm).toHaveBeenCalledWith('Delete preset "Portra 400 Push"?');
+  });
+
+  it('uses the native desktop confirmation dialog when in Tauri', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.ask.mockResolvedValue(false);
+
+    await expect(confirmDeletePreset('Portra 400 Push')).resolves.toBe(false);
+    expect(dialogState.ask).toHaveBeenCalledWith('Delete preset "Portra 400 Push"?', expect.objectContaining({
+      title: 'Delete Preset',
+      kind: 'warning',
+      okLabel: 'Delete',
+      cancelLabel: 'Cancel',
+    }));
   });
 });

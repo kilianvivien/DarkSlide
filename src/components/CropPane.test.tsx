@@ -9,22 +9,83 @@ vi.mock('./Slider', () => ({
 }));
 
 describe('CropPane', () => {
-  it('renders portrait print presets', () => {
+  it('renders the film tab by default with grouped format buttons', () => {
     render(
       <CropPane
         settings={createDefaultSettings()}
         imageWidth={4032}
         imageHeight={6048}
+        cropTab="Film"
+        onCropTabChange={vi.fn()}
         onSettingsChange={vi.fn()}
         onDone={vi.fn()}
         onResetCrop={vi.fn()}
       />,
     );
 
-    expect(screen.getByRole('button', { name: /2:3/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /3:4/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /4:3/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /original/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /free/i })).toBeInTheDocument();
+    expect(screen.getAllByText('35mm')).toHaveLength(2);
+    expect(screen.getByText('Medium Format')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^35mm/i })[0]).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^6×7/i })[0]).toBeInTheDocument();
+  });
+
+  it('switches print ratios through the tab callback and applies the current landscape orientation', () => {
+    const onSettingsChange = vi.fn();
+
+    render(
+      <CropPane
+        settings={createDefaultSettings()}
+        imageWidth={4032}
+        imageHeight={6048}
+        cropTab="Print"
+        onCropTabChange={vi.fn()}
+        onSettingsChange={onSettingsChange}
+        onDone={vi.fn()}
+        onResetCrop={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^2:3/i })[0]);
+
+    expect(onSettingsChange).toHaveBeenCalledWith(expect.objectContaining({
+      crop: expect.objectContaining({
+        aspectRatio: 3 / 2,
+      }),
+    }));
+  });
+
+  it('toggles a selected ratio between landscape and portrait', () => {
+    const onSettingsChange = vi.fn();
+
+    render(
+      <CropPane
+        settings={createDefaultSettings({
+          crop: {
+            x: 0.1,
+            y: 0.1,
+            width: 0.8,
+            height: 0.8,
+            aspectRatio: 3 / 2,
+          },
+        })}
+        imageWidth={4032}
+        imageHeight={6048}
+        cropTab="Print"
+        onCropTabChange={vi.fn()}
+        onSettingsChange={onSettingsChange}
+        onDone={vi.fn()}
+        onResetCrop={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /2:3 switch to portrait/i }));
+
+    expect(onSettingsChange).toHaveBeenCalledWith(expect.objectContaining({
+      crop: expect.objectContaining({
+        aspectRatio: 2 / 3,
+      }),
+    }));
   });
 
   it('keeps custom ratio collapsed by default and expands on demand', () => {
@@ -33,6 +94,8 @@ describe('CropPane', () => {
         settings={createDefaultSettings()}
         imageWidth={4032}
         imageHeight={6048}
+        cropTab="Film"
+        onCropTabChange={vi.fn()}
         onSettingsChange={vi.fn()}
         onDone={vi.fn()}
         onResetCrop={vi.fn()}
@@ -54,6 +117,8 @@ describe('CropPane', () => {
         settings={createDefaultSettings()}
         imageWidth={4032}
         imageHeight={6048}
+        cropTab="Film"
+        onCropTabChange={vi.fn()}
         onSettingsChange={onSettingsChange}
         onDone={vi.fn()}
         onResetCrop={vi.fn()}
