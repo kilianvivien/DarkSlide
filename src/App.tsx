@@ -1678,7 +1678,7 @@ export default function App() {
                 <button
                   onClick={handleReset}
                   className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg transition-all"
-                  data-tip="Reset Adjustments (undoable)"
+                  data-tip="Reset Adjustments to Current Preset"
                 >
                   <RotateCcw size={18} />
                 </button>
