@@ -70,7 +70,7 @@ The entire render pipeline runs on the CPU inside a Web Worker. For large scans 
 - **Export path**: GPU renders to an `OffscreenCanvas` via `canvas.getContext('webgpu')`; `convertToBlob()` on that canvas preserves the existing export interface. No changes to the file-bridge or download logic.
 - **Architecture note**: add a `WebGPUPipeline` class alongside `imagePipeline.ts`. `imageWorker.ts` instantiates it on first use, holds a `GPUDevice` reference for the worker's lifetime, and tears it down on the `terminate` message. The worker message protocol (`RenderRequest` / `RenderResult`) is unchanged.
 
-## Phase 9: Editing Workflow Enhancements
+## Phase 9: Editing Workflow Enhancements [partially implemented]
 This phase ships three independent feature sets that improve the single-document editing experience before the larger Pro Workflow expansion. RAW import is Tauri-only; preset and crop work runs on both platforms.
 
 ### RAW import pipeline (Tauri desktop only)
@@ -185,6 +185,7 @@ The current pipeline renders and exports in uncalibrated sRGB. On MacBook Pro an
 
 ## Current Implementation Status
 - **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, zoom and pan controls, expanded built-in film profiles, custom preset persistence, sharpening and luminance noise reduction controls, Tauri desktop shell scaffold, native desktop file dialogs with browser fallback, settings modal, export tab button, undoable reset, histogram legend, crop UX improvements, custom presets tabs, curves auto-balance, portal-based custom tooltips, persistent user preferences, recent files list, automated regression test suite, float-space pipeline processing, per-stock color matrices, tonal-character metadata, synthetic ΔE validation, picker loupe, advanced crop ratio controls, WebGPU compute pipeline (GPU blur, main conversion loop, histogram reduction, export path, CPU fallback, Diagnostics panel reporting).
-- **Next up**: Editing workflow enhancements (Phase 9 — RAW import, film crop ratios, preset export/import), with a smaller follow-up to revisit calibrated density/log inversion using real scanner references.
+- **Partially implemented**: Phase 9 editing workflow enhancements. Feature A (film-format crop ratios) and Feature B (preset export/import) are done; Feature C (RAW import pipeline) remains to be implemented.
+- **Next up**: finish Phase 9 with the remaining RAW import pipeline work, then revisit calibrated density/log inversion using real scanner references.
 - **Deferred**: multi-document tabs, batch processing, ICC profiles, session recovery, contact sheet export.
 - **Planned (post-beta)**: render performance (Phase 10), GPU & memory hardening (Phase 11), pro workflow — multi-document / batch / ICC / contact sheet (Phase 12), and a calibrated real-reference revisit of the deferred log-inversion experiment.

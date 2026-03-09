@@ -233,7 +233,7 @@ export const CropPane: React.FC<CropPaneProps> = ({
           <span className="opacity-60">{getIcon(group.iconEntry)}</span>
           <div className="flex flex-col items-start leading-tight">
             <span className="font-medium">{group.label}</span>
-            <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${selected ? 'text-zinc-700' : 'text-zinc-500'}`}>
+            <span className={`text-[9px] uppercase tracking-wider opacity-50 ${selected ? 'text-zinc-700' : 'text-zinc-500'}`}>
               {orientation}
             </span>
           </div>
@@ -312,19 +312,19 @@ export const CropPane: React.FC<CropPaneProps> = ({
           <span className="opacity-60"><CropIcon size={14} /></span>
           <div className="flex flex-col items-start leading-tight">
             <span className="font-medium">Free</span>
-            <span className={`text-[9px] uppercase tracking-tighter opacity-50 ${isAspectSelected(null) ? 'text-zinc-700' : 'text-zinc-500'}`}>
+            <span className={`text-[9px] uppercase tracking-wider opacity-50 ${isAspectSelected(null) ? 'text-zinc-700' : 'text-zinc-500'}`}>
               Unlocked
             </span>
           </div>
         </button>
 
-        <div className="flex border-b border-zinc-700/50">
+        <div className="flex gap-4 border-b border-zinc-800">
           {CROP_TABS.map((tab) => (
             <button
               key={tab}
               type="button"
               onClick={() => onCropTabChange(tab)}
-              className={`pb-2 pr-4 text-[11px] font-semibold uppercase tracking-widest border-b-2 transition-all ${
+              className={`pb-2 text-[11px] font-semibold uppercase tracking-widest border-b-2 transition-all ${
                 cropTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
               }`}
             >

@@ -247,7 +247,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
             }}
             aria-label="Save current preset"
             disabled={!canSavePreset}
-            className="p-1.5 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-all disabled:cursor-default disabled:text-zinc-700 disabled:hover:bg-transparent"
+            className="p-1.5 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-lg transition-all disabled:cursor-default disabled:text-zinc-700 disabled:hover:bg-transparent"
             data-tip="Save Current Settings as Preset"
           >
             <Plus size={14} />
@@ -306,23 +306,18 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                     { label: 'Dedicated', value: 'dedicated' as const },
                     { label: 'Smartphone', value: 'smartphone' as const },
                   ]).map((option) => (
-                    <label
+                    <button
                       key={option.label}
-                      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all ${
+                      type="button"
+                      onClick={() => setSaveScannerType(saveScannerType === option.value ? null : option.value)}
+                      className={`rounded-lg border px-3 py-2 text-xs transition-all ${
                         saveScannerType === option.value
-                          ? 'border-zinc-300 bg-zinc-100 text-zinc-950'
+                          ? 'border-white bg-zinc-100 text-zinc-950 shadow-lg'
                           : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
                       }`}
                     >
-                      <input
-                        type="radio"
-                        name="preset-scanner-type"
-                        checked={saveScannerType === option.value}
-                        onChange={() => setSaveScannerType(option.value)}
-                        className="sr-only"
-                      />
-                      <span>{option.label}</span>
-                    </label>
+                      {option.label}
+                    </button>
                   ))}
                 </div>
               </div>
@@ -336,10 +331,10 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
             </div>
 
             <div className="mt-4 flex justify-end gap-2">
-              <button aria-label="Save preset" onClick={handleSave} className="p-2 text-emerald-500 hover:bg-emerald-500/20 rounded">
+              <button aria-label="Save preset" onClick={handleSave} className="p-2 text-emerald-500 hover:bg-emerald-500/20 rounded-lg transition-colors">
                 <Check size={14} />
               </button>
-              <button aria-label="Cancel preset save" onClick={resetSaveForm} className="p-2 text-red-500 hover:bg-red-500/20 rounded">
+              <button aria-label="Cancel preset save" onClick={resetSaveForm} className="p-2 text-red-500 hover:bg-red-500/20 rounded-lg transition-colors">
                 <X size={14} />
               </button>
             </div>

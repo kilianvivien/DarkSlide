@@ -1,5 +1,11 @@
 # Phase 9: Editing Workflow Enhancements — Implementation Plan
 
+## Status
+
+- Feature A is implemented.
+- Feature B is implemented.
+- Feature C remains to be done.
+
 Three independent feature sets, ordered by dependency depth. Film-format crop ratios and preset export/import are platform-agnostic and can be built in parallel. RAW import is Tauri-only and touches the deepest layer (Rust → worker → App).
 
 ---
