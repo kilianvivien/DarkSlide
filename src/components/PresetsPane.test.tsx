@@ -18,6 +18,27 @@ vi.mock('../utils/fileBridge', () => ({
 import { PresetsPane } from './PresetsPane';
 
 describe('PresetsPane', () => {
+  it('switches to the custom tab when opening the save preset form', () => {
+    render(
+      <PresetsPane
+        activeStockId="generic-color"
+        onStockChange={vi.fn()}
+        customPresets={[]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Generic')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /save current preset/i }));
+
+    expect(screen.getByPlaceholderText('Preset Name...')).toBeInTheDocument();
+    expect(screen.queryByText('Generic')).not.toBeInTheDocument();
+  });
+
   it('confirms before deleting a custom preset', async () => {
     const onDeletePreset = vi.fn();
     fileBridgeState.confirmDeletePreset.mockResolvedValue(true);

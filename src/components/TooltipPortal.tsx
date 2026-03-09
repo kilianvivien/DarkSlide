@@ -1,11 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 interface TooltipState {
   content: string;
-  x: number;
-  y: number;
+  rect: DOMRect;
+}
+
+interface TooltipPosition {
+  left: number;
+  top: number;
   below: boolean;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 /**
@@ -14,6 +22,37 @@ interface TooltipState {
  */
 export const TooltipPortal: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [position, setPosition] = useState<TooltipPosition | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!tooltip || !tooltipRef.current) {
+      setPosition(null);
+      return;
+    }
+
+    const padding = 12;
+    const gap = 8;
+    const tooltipWidth = tooltipRef.current.offsetWidth;
+    const tooltipHeight = tooltipRef.current.offsetHeight;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const centeredLeft = tooltip.rect.left + (tooltip.rect.width / 2) - (tooltipWidth / 2);
+    const left = clamp(centeredLeft, padding, Math.max(padding, viewportWidth - tooltipWidth - padding));
+    const topAbove = tooltip.rect.top - gap - tooltipHeight;
+    const topBelow = tooltip.rect.bottom + gap;
+    const fitsAbove = topAbove >= padding;
+    const fitsBelow = topBelow + tooltipHeight <= viewportHeight - padding;
+    const below = !fitsAbove && fitsBelow;
+    const preferredTop = below ? topBelow : topAbove;
+    const top = clamp(preferredTop, padding, Math.max(padding, viewportHeight - tooltipHeight - padding));
+
+    setPosition({
+      left,
+      top,
+      below,
+    });
+  }, [tooltip]);
 
   useEffect(() => {
     let current: HTMLElement | null = null;
@@ -25,11 +64,7 @@ export const TooltipPortal: React.FC<{ children: React.ReactNode }> = ({ childre
       if (!target) { setTooltip(null); return; }
       const content = target.getAttribute('data-tip');
       if (!content) return;
-      const rect = target.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const above = rect.top - 8;
-      const below = rect.bottom + 8;
-      setTooltip({ content, x: cx, y: above < 28 ? below : above, below: above < 28 });
+      setTooltip({ content, rect: target.getBoundingClientRect() });
     };
 
     const hide = (e: MouseEvent) => {
@@ -37,6 +72,7 @@ export const TooltipPortal: React.FC<{ children: React.ReactNode }> = ({ childre
       if (leaving && !leaving.contains(e.relatedTarget as Node | null)) {
         current = null;
         setTooltip(null);
+        setPosition(null);
       }
     };
 
@@ -53,11 +89,13 @@ export const TooltipPortal: React.FC<{ children: React.ReactNode }> = ({ childre
       {children}
       {tooltip && createPortal(
         <div
+          ref={tooltipRef}
           className="fixed z-[9999] pointer-events-none px-2 py-1 bg-zinc-800 border border-zinc-700 rounded-md text-[10px] font-mono text-zinc-300 shadow-xl max-w-[220px] leading-relaxed"
           style={{
-            left: tooltip.x,
-            top: tooltip.y,
-            transform: tooltip.below ? 'translateX(-50%)' : 'translate(-50%, -100%)',
+            left: position?.left ?? 0,
+            top: position?.top ?? 0,
+            visibility: position ? 'visible' : 'hidden',
+            maxWidth: 'min(220px, calc(100vw - 24px))',
           }}
         >
           {tooltip.content}

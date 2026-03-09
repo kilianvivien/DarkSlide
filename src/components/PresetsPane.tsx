@@ -242,6 +242,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
           <button
             onClick={() => {
               setImportConflict(null);
+              setPresetTab('custom');
               setIsSaving(true);
             }}
             aria-label="Save current preset"

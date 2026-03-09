@@ -142,11 +142,11 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
         })}
       </div>
 
-      <div className="relative w-full aspect-square bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden group">
+      <div className="relative w-full aspect-square bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden group select-none">
         <svg
           ref={svgRef}
           viewBox={`0 0 ${size} ${size}`}
-          className="w-full h-full cursor-crosshair"
+          className="w-full h-full cursor-crosshair select-none"
           onDoubleClick={handleDoubleClick}
         >
           {/* Grid */}
@@ -226,8 +226,8 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
           )}
         </svg>
         
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-          <span className="text-[9px] text-zinc-600 bg-zinc-950/80 px-1.5 py-0.5 rounded border border-zinc-800">
+        <div className="pointer-events-none absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100 select-none">
+          <span className="select-none text-[9px] text-zinc-600 bg-zinc-950/80 px-1.5 py-0.5 rounded border border-zinc-800">
             Double-click to add point • Right-click to remove
           </span>
         </div>
