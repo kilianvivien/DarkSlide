@@ -151,7 +151,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                     <Pipette size={12} /> Film Base
                     <button
-                      data-tip="Sample an unexposed area of the negative to set the film base color used during inversion."
+                      data-tip="Sample an unexposed area of the negative to neutralize the film base using color balance."
                       className="ml-1 text-zinc-700 hover:text-zinc-500 transition-colors"
                       tabIndex={-1}
                     >

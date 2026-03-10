@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
-import { buildRawInitialSettings, estimateFilmBaseSample, getFilmBaseChannelBalance, getFilmBaseExposure, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, estimateFilmBaseSample, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, RAW_IMPORT_PROFILE_ID, rotationFromExifOrientation } from './rawImport';
 
 function createRawRgb(width: number, height: number, border: [number, number, number], center: [number, number, number]) {
   const data = new Uint8Array(width * height * 3);
@@ -53,8 +53,37 @@ describe('rawImport', () => {
     });
   });
 
+  it('builds a transient profile for the import-time RAW result', () => {
+    const settings = createDefaultSettings({ rotation: 90, filmBaseSample: { r: 160, g: 150, b: 140 } });
+
+    expect(createRawImportProfile({
+      id: 'generic-color',
+      version: 1,
+      name: 'Generic Color',
+      type: 'color',
+      description: 'Balanced color-negative starting point for most consumer scans.',
+      defaultSettings: createDefaultSettings(),
+    }, settings)).toMatchObject({
+      id: RAW_IMPORT_PROFILE_ID,
+      name: 'Raw Import Result',
+      type: 'color',
+      defaultSettings: settings,
+    });
+  });
+
   it('derives channel balances from the sampled film base', () => {
     expect(getFilmBaseChannelBalance({ r: 168, g: 151, b: 134 })).toEqual({
+      redBalance: (255 - 151) / (255 - 168),
+      greenBalance: 1,
+      blueBalance: (255 - 151) / (255 - 134),
+    });
+  });
+
+  it('builds manual film-base correction settings without lifting exposure', () => {
+    expect(getFilmBaseCorrectionSettings({ r: 168, g: 151, b: 134 })).toEqual({
+      filmBaseSample: null,
+      temperature: 0,
+      tint: 0,
       redBalance: (255 - 151) / (255 - 168),
       greenBalance: 1,
       blueBalance: (255 - 151) / (255 - 134),

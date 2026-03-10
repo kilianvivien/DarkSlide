@@ -1,5 +1,7 @@
 import { RAW_EXTENSIONS } from '../constants';
-import { ConversionSettings, FilmBaseSample } from '../types';
+import { ConversionSettings, FilmBaseSample, FilmProfile } from '../types';
+
+export const RAW_IMPORT_PROFILE_ID = 'raw-import-result';
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -118,6 +120,15 @@ export function getFilmBaseChannelBalance(sample: FilmBaseSample | null) {
   };
 }
 
+export function getFilmBaseCorrectionSettings(sample: FilmBaseSample | null) {
+  return {
+    filmBaseSample: null,
+    temperature: 0,
+    tint: 0,
+    ...getFilmBaseChannelBalance(sample),
+  } satisfies Pick<ConversionSettings, 'filmBaseSample' | 'temperature' | 'tint' | 'redBalance' | 'greenBalance' | 'blueBalance'>;
+}
+
 export function getFilmBaseExposure(sample: FilmBaseSample | null, targetWhitePoint = 245 / 255) {
   if (!sample) {
     return 0;
@@ -142,4 +153,14 @@ export function buildRawInitialSettings(
     filmBaseSample: estimatedFilmBase,
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
+}
+
+export function createRawImportProfile(baseProfile: FilmProfile, settings: ConversionSettings): FilmProfile {
+  return {
+    ...baseProfile,
+    id: RAW_IMPORT_PROFILE_ID,
+    name: 'Raw Import Result',
+    description: 'Exact starting point produced during RAW import.',
+    defaultSettings: structuredClone(settings),
+  } satisfies FilmProfile;
 }

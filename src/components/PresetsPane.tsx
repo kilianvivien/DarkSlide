@@ -3,11 +3,14 @@ import { Check, Download, Film, Layers, Plus, SlidersHorizontal, Trash2, Upload,
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES } from '../constants';
 import { confirmDeletePreset, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { validateDarkslideFile } from '../utils/presetStore';
+import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
 import { DarkslidePresetFile, FilmProfile, ScannerType } from '../types';
 
 const GENERIC_IDS = new Set(['generic-bw', 'generic-color']);
-const GENERIC_PROFILES = FILM_PROFILES.filter((p) => GENERIC_IDS.has(p.id));
-const STOCK_PROFILES = FILM_PROFILES.filter((p) => !GENERIC_IDS.has(p.id));
+
+function isGenericProfile(profile: FilmProfile) {
+  return GENERIC_IDS.has(profile.id) || profile.id === RAW_IMPORT_PROFILE_ID;
+}
 
 type ImportConflictState = {
   existingId: string;
@@ -53,6 +56,7 @@ function formatTag(tag: string | undefined) {
 interface PresetsPaneProps {
   activeStockId: string;
   onStockChange: (stock: FilmProfile) => void;
+  builtinProfiles?: FilmProfile[];
   customPresets: FilmProfile[];
   canSavePreset: boolean;
   onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => void;
@@ -64,6 +68,7 @@ interface PresetsPaneProps {
 export const PresetsPane: React.FC<PresetsPaneProps> = ({
   activeStockId,
   onStockChange,
+  builtinProfiles = FILM_PROFILES,
   customPresets,
   canSavePreset,
   onSavePreset,
@@ -79,10 +84,18 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [importConflict, setImportConflict] = useState<ImportConflictState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const genericProfiles = useMemo(
+    () => builtinProfiles.filter(isGenericProfile),
+    [builtinProfiles],
+  );
+  const stockProfiles = useMemo(
+    () => builtinProfiles.filter((profile) => !isGenericProfile(profile)),
+    [builtinProfiles],
+  );
 
   const activeProfile = useMemo(
-    () => [...FILM_PROFILES, ...customPresets].find((profile) => profile.id === activeStockId) ?? null,
-    [activeStockId, customPresets],
+    () => [...builtinProfiles, ...customPresets].find((profile) => profile.id === activeStockId) ?? null,
+    [activeStockId, builtinProfiles, customPresets],
   );
   const activeTag = activeProfile?.type === 'bw' ? 'B&W' : 'Color';
 
@@ -487,7 +500,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                 <SlidersHorizontal size={10} /> Generic
               </h3>
               <div className="space-y-2">
-                {GENERIC_PROFILES.map((stock) => (
+                {genericProfiles.map((stock) => (
                   <button
                     key={stock.id}
                     onClick={() => onStockChange(stock)}
@@ -514,7 +527,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                 <Film size={10} /> Film Stocks
               </h3>
               <div className="space-y-2">
-                {STOCK_PROFILES.map((stock) => (
+                {stockProfiles.map((stock) => (
                   <button
                     key={stock.id}
                     onClick={() => onStockChange(stock)}

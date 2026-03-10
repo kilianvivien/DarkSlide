@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Deferred<T> = {
@@ -83,6 +83,7 @@ vi.mock('./components/Sidebar', () => ({
     onSettingsChange,
     onExportOptionsChange,
     onExport,
+    onTogglePicker,
   }: {
     exportOptions: { filenameBase: string };
     onInteractionStart?: () => void;
@@ -91,6 +92,7 @@ vi.mock('./components/Sidebar', () => ({
     onSettingsChange: (settings: { exposure?: number }) => void;
     onExportOptionsChange: (options: { filenameBase?: string }) => void;
     onExport: () => void;
+    onTogglePicker: () => void;
   }) => {
     const [exposure, setExposure] = React.useState(0);
 
@@ -106,6 +108,9 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={onOpenSettings}>
           Open Settings
+        </button>
+        <button type="button" onClick={onTogglePicker}>
+          Toggle Film Base Picker
         </button>
         <button type="button" onClick={onInteractionStart}>
           Start Drag
@@ -131,7 +136,27 @@ vi.mock('./components/Sidebar', () => ({
 }));
 
 vi.mock('./components/PresetsPane', () => ({
-  PresetsPane: () => <div data-testid="presets" />,
+  PresetsPane: ({
+    builtinProfiles = [],
+    customPresets = [],
+    onStockChange,
+  }: {
+    builtinProfiles?: Array<{ id: string; name: string }>;
+    customPresets?: Array<{ id: string; name: string }>;
+    onStockChange: (profile: { id: string; name: string }) => void;
+  }) => (
+    <div data-testid="presets">
+      {[...builtinProfiles, ...customPresets].map((profile) => (
+        <button
+          key={profile.id}
+          type="button"
+          onClick={() => onStockChange(profile)}
+        >
+          {profile.name}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock('./components/CropOverlay', () => ({
@@ -280,6 +305,17 @@ describe('App import and preview pipeline', () => {
       clearRect: vi.fn(),
       putImageData: vi.fn(),
     }) as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 200,
+      bottom: 100,
+      width: 200,
+      height: 100,
+      toJSON: () => ({}),
+    } as DOMRect);
   });
 
   afterEach(() => {
@@ -378,6 +414,75 @@ describe('App import and preview pipeline', () => {
 
     const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;
     expect(diagnostics.some((entry) => entry.code === 'RAW_DECODED' && entry.message.includes('scan.dng'))).toBe(true);
+  });
+
+  it('keeps the RAW import result available as a profile after switching away', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('scan.dng', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/scan.dng',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [200, 180, 150][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue(createDecodedImage(8, 8));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
+
+    const renderCallsAfterImport = workerState.render.mock.calls.length;
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic Color' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+    expect(workerState.render.mock.calls.length).toBeGreaterThan(renderCallsAfterImport);
+
+    let latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        filmBaseSample: { r: number; g: number; b: number } | null;
+        rotation: number;
+      };
+    };
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
+    expect(latestRenderCall.settings.rotation).toBe(0);
+
+    const renderCallsAfterGeneric = workerState.render.mock.calls.length;
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+    expect(workerState.render.mock.calls.length).toBeGreaterThan(renderCallsAfterGeneric);
+
+    latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        filmBaseSample: { r: number; g: number; b: number } | null;
+        rotation: number;
+      };
+    };
+    expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 200, g: 180, b: 150 });
+    expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
   it('shows the RAW decoding overlay while the native decode is still running', async () => {
@@ -492,6 +597,61 @@ describe('App import and preview pipeline', () => {
     expect(putImageData).toHaveBeenCalledTimes(2);
     expect((putImageData.mock.calls.at(-1)?.[0] as ImageData).width).toBe(77);
     expect(document.querySelector('[data-tip="Showing Original — click to return"]')).toBeTruthy();
+  });
+
+  it('applies film-base sampling as a color-balance correction without changing exposure', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; settings: { exposure: number } }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.sampleFilmBase.mockResolvedValue({ r: 168, g: 151, b: 134 });
+
+    render(<App />);
+    await uploadFile(createFile('film-base-sample.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByText('Toggle Film Base Picker'));
+
+    const canvas = document.querySelector('canvas');
+    expect(canvas).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(canvas as HTMLCanvasElement, { clientX: 100, clientY: 50 });
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.sampleFilmBase).toHaveBeenCalledWith(expect.objectContaining({
+      x: 0.5,
+      y: 0.5,
+    }));
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        temperature: number;
+        tint: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        filmBaseSample: null;
+      };
+    };
+
+    expect(latestRenderCall.settings.exposure).toBe(0);
+    expect(latestRenderCall.settings.temperature).toBe(0);
+    expect(latestRenderCall.settings.tint).toBe(0);
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo((255 - 151) / (255 - 168));
+    expect(latestRenderCall.settings.greenBalance).toBe(1);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo((255 - 151) / (255 - 134));
   });
 
   it('schedules slider drag preview at most once per animation frame in balanced mode', async () => {

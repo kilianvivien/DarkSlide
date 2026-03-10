@@ -36,7 +36,7 @@ import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
-import { buildRawInitialSettings, estimateFilmBaseSample, getFilmBaseChannelBalance, getFilmBaseExposure, isRawExtension } from './utils/rawImport';
+import { buildRawInitialSettings, createRawImportProfile, estimateFilmBaseSample, getFilmBaseCorrectionSettings, isRawExtension } from './utils/rawImport';
 
 interface RawDecodeResult {
   width: number;
@@ -241,12 +241,18 @@ export default function App() {
   } | null>(null);
 
   const { customPresets, savePreset, importPreset, deletePreset } = useCustomPresets();
-  const allProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
+  const persistedProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
+  const builtinProfiles = useMemo(() => (
+    documentState?.rawImportProfile
+      ? [documentState.rawImportProfile, ...FILM_PROFILES]
+      : FILM_PROFILES
+  ), [documentState?.rawImportProfile]);
+  const allProfiles = useMemo(() => [...builtinProfiles, ...customPresets], [builtinProfiles, customPresets]);
 
-  // Always-current ref for allProfiles — avoids adding allProfiles to importFile's deps
-  const allProfilesRef = useRef(allProfiles);
-  allProfilesRef.current = allProfiles;
+  // Always-current ref for non-transient profiles — avoids adding them to importFile's deps
+  const persistedProfilesRef = useRef(persistedProfiles);
+  persistedProfilesRef.current = persistedProfiles;
 
   // Snapshot of the latest preference-relevant state, updated on every render so handlers can always read fresh values
   const prefsSnapshotRef = useRef<UserPreferences>({
@@ -1095,7 +1101,7 @@ export default function App() {
       ? rawDefaultProfile
       : (
         savedPrefs
-          ? (allProfilesRef.current.find((p) => p.id === savedPrefs.lastProfileId) ?? fallbackProfile)
+          ? (persistedProfilesRef.current.find((p) => p.id === savedPrefs.lastProfileId) ?? fallbackProfile)
           : fallbackProfile
       );
     activeDocumentIdRef.current = documentId;
@@ -1152,6 +1158,7 @@ export default function App() {
     try {
       let decoded: DecodedImage;
       let initialSettings = structuredClone(initialProfile.defaultSettings);
+      let rawImportProfile: FilmProfile | null = null;
 
       if (rawImport) {
         try {
@@ -1165,6 +1172,7 @@ export default function App() {
             rawResult.height,
             rawResult.orientation,
           );
+          rawImportProfile = createRawImportProfile(initialProfile, initialSettings);
           const rgba = rgbToRgba(rawResult.data, rawResult.width, rawResult.height);
 
           if (estimatedFilmBase) {
@@ -1266,7 +1274,8 @@ export default function App() {
         },
         previewLevels: decoded.previewLevels,
         settings: initialSettings,
-        profileId: initialProfile.id,
+        rawImportProfile,
+        profileId: rawImportProfile?.id ?? initialProfile.id,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
           ...(savedPrefs?.exportOptions ? {
@@ -1650,11 +1659,7 @@ export default function App() {
           y,
         });
 
-        handleSettingsChange({
-          filmBaseSample: null,
-          exposure: getFilmBaseExposure(sample, documentState.settings.whitePoint / 255),
-          ...getFilmBaseChannelBalance(sample),
-        });
+        handleSettingsChange(getFilmBaseCorrectionSettings(sample));
 
         setIsPickingFilmBase(false);
         appendDiagnostic({
@@ -2132,6 +2137,7 @@ export default function App() {
               <PresetsPane
                 activeStockId={documentState?.profileId ?? fallbackProfile.id}
                 onStockChange={handleProfileChange}
+                builtinProfiles={builtinProfiles}
                 customPresets={customPresets}
                 canSavePreset={Boolean(documentState)}
                 onSavePreset={handleSavePreset}

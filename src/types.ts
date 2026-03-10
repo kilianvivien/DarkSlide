@@ -145,6 +145,7 @@ export interface WorkspaceDocument {
   source: SourceMetadata;
   previewLevels: PreviewLevel[];
   settings: ConversionSettings;
+  rawImportProfile?: FilmProfile | null;
   profileId: string;
   exportOptions: ExportOptions;
   histogram: HistogramData | null;
