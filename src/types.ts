@@ -63,6 +63,14 @@ export interface NoiseReductionSettings {
   luminanceStrength: number; // 0 - 100
 }
 
+export interface BlackAndWhiteSettings {
+  enabled: boolean;
+  redMix: number; // -100 - 100
+  greenMix: number; // -100 - 100
+  blueMix: number; // -100 - 100
+  tone: number; // -100 - 100
+}
+
 export interface ConversionSettings {
   exposure: number;
   contrast: number;
@@ -80,6 +88,7 @@ export interface ConversionSettings {
   levelAngle: number;
   crop: CropSettings;
   filmBaseSample: FilmBaseSample | null;
+  blackAndWhite: BlackAndWhiteSettings;
   sharpen: SharpenSettings;
   noiseReduction: NoiseReductionSettings;
 }

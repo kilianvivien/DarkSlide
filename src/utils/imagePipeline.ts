@@ -241,6 +241,37 @@ function applyFilmBaseCompensation(value: number, sampleValue: number) {
   return clamp((value - invertedFilmBase) / Math.max(1 / 255, 1 - invertedFilmBase), 0, 1);
 }
 
+function mixBlackAndWhiteChannels(r: number, g: number, b: number, redMix: number, greenMix: number, blueMix: number) {
+  const baseGray = 0.299 * r + 0.587 * g + 0.114 * b;
+  return clamp(
+    baseGray
+      + (r - baseGray) * (redMix / 100)
+      + (g - baseGray) * (greenMix / 100)
+      + (b - baseGray) * (blueMix / 100),
+    0,
+    1,
+  );
+}
+
+function applyBlackAndWhiteTone(gray: number, tone: number): [number, number, number] {
+  const toneStrength = clamp(Math.abs(tone) / 100, 0, 1);
+
+  if (toneStrength <= 0) {
+    return [gray, gray, gray];
+  }
+
+  const toneColor = tone >= 0
+    ? [1.08, 0.96, 0.82]
+    : [0.84, 0.93, 1.08];
+  const mixFactor = toneStrength;
+
+  return [
+    gray + (gray * toneColor[0] - gray) * mixFactor,
+    gray + (gray * toneColor[1] - gray) * mixFactor,
+    gray + (gray * toneColor[2] - gray) * mixFactor,
+  ];
+}
+
 export function resolveEffectiveSettings(
   settings: ConversionSettings,
   maskTuning?: MaskTuning,
@@ -266,7 +297,7 @@ export function buildProcessingUniforms(
   return new Float32Array([
     comparisonMode === 'processed' ? 1 : 0,
     isColor ? 1 : 0,
-    0,
+    effectiveSettings.blackAndWhite.enabled ? 1 : 0,
     0,
 
     Math.pow(2, effectiveSettings.exposure / 50),
@@ -293,6 +324,15 @@ export function buildProcessingUniforms(
     tonalCharacter?.shadowLift ?? 0,
     tonalCharacter?.midtoneAnchor ?? 0,
     tonalCharacter?.highlightRolloff ?? 0.5,
+
+    effectiveSettings.blackAndWhite.redMix / 100,
+    effectiveSettings.blackAndWhite.greenMix / 100,
+    effectiveSettings.blackAndWhite.blueMix / 100,
+    effectiveSettings.blackAndWhite.tone / 100,
+    0,
+    0,
+    0,
+    0,
 
     colorMatrix?.[0] ?? 1,
     colorMatrix?.[1] ?? 0,
@@ -460,6 +500,7 @@ export function processImageData(
   const whitePoint = effectiveSettings.whitePoint / 255;
   const temperatureShift = effectiveSettings.temperature / 255;
   const tintShift = effectiveSettings.tint / 255;
+  const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -483,11 +524,24 @@ export function processImageData(
         r *= effectiveSettings.redBalance;
         g *= effectiveSettings.greenBalance;
         b *= effectiveSettings.blueBalance;
-        r += temperatureShift;
-        b -= temperatureShift;
-        g += tintShift;
-      } else {
-        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (!effectiveSettings.blackAndWhite.enabled) {
+          r += temperatureShift;
+          b -= temperatureShift;
+          g += tintShift;
+        }
+      }
+
+      if (shouldUseBlackAndWhite) {
+        const gray = isColor
+          ? mixBlackAndWhiteChannels(
+            r,
+            g,
+            b,
+            effectiveSettings.blackAndWhite.redMix,
+            effectiveSettings.blackAndWhite.greenMix,
+            effectiveSettings.blackAndWhite.blueMix,
+          )
+          : 0.299 * r + 0.587 * g + 0.114 * b;
         r = gray;
         g = gray;
         b = gray;
@@ -509,16 +563,16 @@ export function processImageData(
       g = applyTonalCharacter(g, effectiveSettings.highlightProtection, tonalCharacter);
       b = applyTonalCharacter(b, effectiveSettings.highlightProtection, tonalCharacter);
 
-      if (isColor) {
+      if (isColor && !effectiveSettings.blackAndWhite.enabled) {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
         r = gray + (r - gray) * saturationFactor;
         g = gray + (g - gray) * saturationFactor;
         b = gray + (b - gray) * saturationFactor;
       } else {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-        r = gray;
-        g = gray;
-        b = gray;
+        [r, g, b] = shouldUseBlackAndWhite
+          ? applyBlackAndWhiteTone(gray, effectiveSettings.blackAndWhite.tone)
+          : [gray, gray, gray];
       }
 
       const mappedR = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);

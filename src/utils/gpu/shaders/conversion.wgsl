@@ -1,7 +1,7 @@
 struct Uniforms {
   processMode: f32,
   isColor: f32,
-  _pad0: f32,
+  bwEnabled: f32,
   _pad1: f32,
 
   exposureFactor: f32,
@@ -29,25 +29,35 @@ struct Uniforms {
   midtoneAnchor: f32,
   highlightRolloff: f32,
 
+  bwRedMix: f32,
+  bwGreenMix: f32,
+  bwBlueMix: f32,
+  bwTone: f32,
+
+  _pad5: f32,
+  _pad6: f32,
+  _pad7: f32,
+  _pad8: f32,
+
   cm0: f32,
   cm1: f32,
   cm2: f32,
-  _pad5: f32,
+  _pad9: f32,
 
   cm3: f32,
   cm4: f32,
   cm5: f32,
-  _pad6: f32,
+  _pad10: f32,
 
   cm6: f32,
   cm7: f32,
   cm8: f32,
-  _pad7: f32,
+  _pad11: f32,
 
   hasColorMatrix: f32,
-  _pad8: f32,
-  _pad9: f32,
-  _pad10: f32,
+  _pad12: f32,
+  _pad13: f32,
+  _pad14: f32,
 };
 
 struct DispatchParams {
@@ -99,6 +109,35 @@ fn applyTonalCharacter(value: f32) -> f32 {
   return clampF(v, 0.0, 1.0);
 }
 
+fn mixBlackAndWhiteChannels(r: f32, g: f32, b: f32) -> f32 {
+  let baseGray = 0.299 * r + 0.587 * g + 0.114 * b;
+  return clampF(
+    baseGray
+      + (r - baseGray) * u.bwRedMix
+      + (g - baseGray) * u.bwGreenMix
+      + (b - baseGray) * u.bwBlueMix,
+    0.0,
+    1.0,
+  );
+}
+
+fn applyBlackAndWhiteTone(gray: f32) -> vec3<f32> {
+  let toneStrength = clampF(abs(u.bwTone), 0.0, 1.0);
+  if (toneStrength <= 0.0) {
+    return vec3<f32>(gray, gray, gray);
+  }
+
+  let toneColor = select(
+    vec3<f32>(0.84, 0.93, 1.08),
+    vec3<f32>(1.08, 0.96, 0.82),
+    u.bwTone >= 0.0,
+  );
+  let mixFactor = toneStrength;
+  let neutral = vec3<f32>(gray, gray, gray);
+  let toned = gray * toneColor;
+  return neutral + (toned - neutral) * mixFactor;
+}
+
 fn lookupCurve(channel: u32, value: f32) -> f32 {
   let idx = clamp(u32(round(clampF(value, 0.0, 1.0) * 255.0)), 0u, 255u);
   return curveLuts[channel * 256u + idx];
@@ -138,11 +177,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       r *= u.chanBalR;
       g *= u.chanBalG;
       b *= u.chanBalB;
-      r += u.tempShift;
-      b -= u.tempShift;
-      g += u.tintShift;
-    } else {
-      let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (u.bwEnabled <= 0.5) {
+        r += u.tempShift;
+        b -= u.tempShift;
+        g += u.tintShift;
+      }
+    }
+
+    if (u.isColor <= 0.5 || u.bwEnabled > 0.5) {
+      let gray = select(
+        0.299 * r + 0.587 * g + 0.114 * b,
+        mixBlackAndWhiteChannels(r, g, b),
+        u.isColor > 0.5,
+      );
       r = gray;
       g = gray;
       b = gray;
@@ -164,16 +211,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     g = applyTonalCharacter(g);
     b = applyTonalCharacter(b);
 
-    if (u.isColor > 0.5) {
+    if (u.isColor > 0.5 && u.bwEnabled <= 0.5) {
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;
       r = gray + (r - gray) * u.saturationFactor;
       g = gray + (g - gray) * u.saturationFactor;
       b = gray + (b - gray) * u.saturationFactor;
     } else {
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-      r = gray;
-      g = gray;
-      b = gray;
+      let toned = select(
+        vec3<f32>(gray, gray, gray),
+        applyBlackAndWhiteTone(gray),
+        u.isColor <= 0.5 || u.bwEnabled > 0.5,
+      );
+      r = toned.x;
+      g = toned.y;
+      b = toned.z;
     }
 
     r = lookupCurve(1u, lookupCurve(0u, r));

@@ -5,7 +5,7 @@ struct VertexOutput {
 struct Uniforms {
   processMode: f32,
   isColor: f32,
-  _pad0: f32,
+  bwEnabled: f32,
   _pad1: f32,
 
   exposureFactor: f32,
@@ -33,25 +33,35 @@ struct Uniforms {
   midtoneAnchor: f32,
   highlightRolloff: f32,
 
+  bwRedMix: f32,
+  bwGreenMix: f32,
+  bwBlueMix: f32,
+  bwTone: f32,
+
+  _pad5: f32,
+  _pad6: f32,
+  _pad7: f32,
+  _pad8: f32,
+
   cm0: f32,
   cm1: f32,
   cm2: f32,
-  _pad5: f32,
+  _pad9: f32,
 
   cm3: f32,
   cm4: f32,
   cm5: f32,
-  _pad6: f32,
+  _pad10: f32,
 
   cm6: f32,
   cm7: f32,
   cm8: f32,
-  _pad7: f32,
+  _pad11: f32,
 
   hasColorMatrix: f32,
-  _pad8: f32,
-  _pad9: f32,
-  _pad10: f32,
+  _pad12: f32,
+  _pad13: f32,
+  _pad14: f32,
 };
 
 struct BlurParams {
@@ -121,6 +131,35 @@ fn applyTonalCharacter(value: f32, uniforms: Uniforms) -> f32 {
   return clampF(next, 0.0, 1.0);
 }
 
+fn mixBlackAndWhiteChannels(r: f32, g: f32, b: f32, uniforms: Uniforms) -> f32 {
+  let baseGray = 0.299 * r + 0.587 * g + 0.114 * b;
+  return clampF(
+    baseGray
+      + (r - baseGray) * uniforms.bwRedMix
+      + (g - baseGray) * uniforms.bwGreenMix
+      + (b - baseGray) * uniforms.bwBlueMix,
+    0.0,
+    1.0,
+  );
+}
+
+fn applyBlackAndWhiteTone(gray: f32, uniforms: Uniforms) -> vec3<f32> {
+  let toneStrength = clampF(abs(uniforms.bwTone), 0.0, 1.0);
+  if (toneStrength <= 0.0) {
+    return vec3<f32>(gray, gray, gray);
+  }
+
+  let toneColor = select(
+    vec3<f32>(0.84, 0.93, 1.08),
+    vec3<f32>(1.08, 0.96, 0.82),
+    uniforms.bwTone >= 0.0,
+  );
+  let mixFactor = toneStrength;
+  let neutral = vec3<f32>(gray, gray, gray);
+  let toned = gray * toneColor;
+  return neutral + (toned - neutral) * mixFactor;
+}
+
 fn textureCoord(position: vec4<f32>) -> vec2<i32> {
   return vec2<i32>(i32(position.x), i32(position.y));
 }
@@ -164,11 +203,19 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       r *= uniforms.chanBalR;
       g *= uniforms.chanBalG;
       b *= uniforms.chanBalB;
-      r += uniforms.tempShift;
-      b -= uniforms.tempShift;
-      g += uniforms.tintShift;
-    } else {
-      let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (uniforms.bwEnabled <= 0.5) {
+        r += uniforms.tempShift;
+        b -= uniforms.tempShift;
+        g += uniforms.tintShift;
+      }
+    }
+
+    if (uniforms.isColor <= 0.5 || uniforms.bwEnabled > 0.5) {
+      let gray = select(
+        0.299 * r + 0.587 * g + 0.114 * b,
+        mixBlackAndWhiteChannels(r, g, b, uniforms),
+        uniforms.isColor > 0.5,
+      );
       r = gray;
       g = gray;
       b = gray;
@@ -190,16 +237,21 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
     g = applyTonalCharacter(g, uniforms);
     b = applyTonalCharacter(b, uniforms);
 
-    if (uniforms.isColor > 0.5) {
+    if (uniforms.isColor > 0.5 && uniforms.bwEnabled <= 0.5) {
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;
       r = gray + (r - gray) * uniforms.saturationFactor;
       g = gray + (g - gray) * uniforms.saturationFactor;
       b = gray + (b - gray) * uniforms.saturationFactor;
     } else {
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-      r = gray;
-      g = gray;
-      b = gray;
+      let toned = select(
+        vec3<f32>(gray, gray, gray),
+        applyBlackAndWhiteTone(gray, uniforms),
+        uniforms.isColor <= 0.5 || uniforms.bwEnabled > 0.5,
+      );
+      r = toned.x;
+      g = toned.y;
+      b = toned.z;
     }
 
     r = lookupCurve(1u, lookupCurve(0u, r));

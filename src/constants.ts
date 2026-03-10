@@ -39,6 +39,13 @@ export function createDefaultSettings(overrides: Partial<ConversionSettings> = {
     levelAngle: 0,
     crop: structuredClone(DEFAULT_CROP),
     filmBaseSample: null,
+    blackAndWhite: {
+      enabled: false,
+      redMix: 0,
+      greenMix: 0,
+      blueMix: 0,
+      tone: 0,
+    },
     sharpen: { enabled: false, radius: 1.0, amount: 50 },
     noiseReduction: { enabled: false, luminanceStrength: 0 },
     ...overrides,

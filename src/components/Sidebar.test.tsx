@@ -25,7 +25,7 @@ vi.mock('./Histogram', () => ({
 }));
 
 vi.mock('./Slider', () => ({
-  Slider: () => <div data-testid="slider" />,
+  Slider: ({ label }: { label: string }) => <div data-testid="slider">{label}</div>,
 }));
 
 vi.mock('./CurvesControl', () => ({
@@ -75,5 +75,55 @@ describe('Sidebar', () => {
     );
 
     expect(screen.getByText('Sample Film Base')).toBeInTheDocument();
+  });
+
+  it('shows black-and-white conversion sliders for color profiles when enabled', () => {
+    const colorProfile = FILM_PROFILES.find((profile) => profile.type === 'color');
+    expect(colorProfile).toBeTruthy();
+
+    render(
+      <Sidebar
+        settings={createDefaultSettings({
+          blackAndWhite: {
+            enabled: true,
+            redMix: 0,
+            greenMix: 0,
+            blueMix: 0,
+            tone: 0,
+          },
+        })}
+        exportOptions={{
+          format: 'image/jpeg',
+          quality: 0.92,
+          filenameBase: 'test',
+        }}
+        cropImageWidth={4032}
+        cropImageHeight={6048}
+        onLevelInteractionChange={vi.fn()}
+        onSettingsChange={vi.fn()}
+        onExportOptionsChange={vi.fn()}
+        activeProfile={colorProfile ?? null}
+        histogramData={null}
+        isPickingFilmBase={false}
+        onTogglePicker={vi.fn()}
+        onExport={vi.fn()}
+        isExporting={false}
+        activeTab="adjust"
+        onTabChange={vi.fn()}
+        cropTab="Film"
+        onCropTabChange={vi.fn()}
+        onCropDone={vi.fn()}
+        onResetCrop={vi.fn()}
+        activePointPicker={null}
+        onSetPointPicker={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Convert to Black and White')).toBeInTheDocument();
+    expect(screen.getByText('Red')).toBeInTheDocument();
+    expect(screen.getByText('Green')).toBeInTheDocument();
+    expect(screen.getByText('Blue')).toBeInTheDocument();
+    expect(screen.getByText('Tone')).toBeInTheDocument();
   });
 });

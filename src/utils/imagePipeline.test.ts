@@ -106,6 +106,45 @@ describe('processImageData', () => {
   });
 });
 
+describe('black and white conversion', () => {
+  it('lets the red mix brighten red-heavy areas', () => {
+    const neutral = createPixel(30, 190, 220);
+    const redBoosted = createPixel(30, 190, 220);
+
+    processImageData(neutral, neutralSettings, true, 'processed');
+    processImageData(redBoosted, {
+      ...neutralSettings,
+      blackAndWhite: {
+        enabled: true,
+        redMix: 100,
+        greenMix: 0,
+        blueMix: 0,
+        tone: 0,
+      },
+    }, true, 'processed');
+
+    expect(luminance(redBoosted)).toBeGreaterThan(luminance(neutral));
+  });
+
+  it('applies warm toning after monochrome conversion', () => {
+    const toned = createPixel(120, 120, 120);
+
+    processImageData(toned, {
+      ...neutralSettings,
+      blackAndWhite: {
+        enabled: true,
+        redMix: 0,
+        greenMix: 0,
+        blueMix: 0,
+        tone: 100,
+      },
+    }, true, 'processed');
+
+    expect(toned.data[0]).toBeGreaterThan(toned.data[1]);
+    expect(toned.data[1]).toBeGreaterThan(toned.data[2]);
+  });
+});
+
 describe('exposure slider', () => {
   it('produces monotonically increasing luminance as exposure increases', () => {
     // Input (200,200,200) → after inversion: (55,55,55) — dark pixel, easy to distinguish exposure levels

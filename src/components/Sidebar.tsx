@@ -10,6 +10,7 @@ import {
   Focus,
   Eraser,
   Info,
+  Circle,
   Settings,
   Wand2,
 } from 'lucide-react';
@@ -191,7 +192,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onInteractionEnd={onInteractionEnd}
                   />
 
-                  {isColor && (
+                  {isColor && !settings.blackAndWhite.enabled && (
                     <>
                       <Slider label="Saturation" value={settings.saturation} min={0} max={200} onChange={(value) => onSettingsChange({ saturation: value })} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                       <Slider label="Temperature" value={settings.temperature} min={-100} max={100} onChange={(value) => onSettingsChange({ temperature: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
@@ -208,6 +209,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <Slider label="Red Balance" value={settings.redBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ redBalance: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                     <Slider label="Green Balance" value={settings.greenBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ greenBalance: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                     <Slider label="Blue Balance" value={settings.blueBalance} min={0.5} max={1.5} step={0.01} onChange={(value) => onSettingsChange({ blueBalance: value })} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  </section>
+                )}
+
+                {isColor && (
+                  <section>
+                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                      <Circle size={12} /> Convert to Black and White
+                    </h2>
+                    <label className="flex items-center gap-2 mb-4 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.blackAndWhite.enabled}
+                        onChange={(e) => onSettingsChange({ blackAndWhite: { ...settings.blackAndWhite, enabled: e.target.checked } })}
+                        className="accent-zinc-200"
+                      />
+                      <span className="text-[11px] text-zinc-400">Enable</span>
+                    </label>
+                    {settings.blackAndWhite.enabled && (
+                      <>
+                        <Slider label="Red" value={settings.blackAndWhite.redMix} min={-100} max={100} onChange={(value) => onSettingsChange({ blackAndWhite: { ...settings.blackAndWhite, redMix: value } })} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                        <Slider label="Green" value={settings.blackAndWhite.greenMix} min={-100} max={100} onChange={(value) => onSettingsChange({ blackAndWhite: { ...settings.blackAndWhite, greenMix: value } })} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                        <Slider label="Blue" value={settings.blackAndWhite.blueMix} min={-100} max={100} onChange={(value) => onSettingsChange({ blackAndWhite: { ...settings.blackAndWhite, blueMix: value } })} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                        <Slider label="Tone" value={settings.blackAndWhite.tone} min={-100} max={100} onChange={(value) => onSettingsChange({ blackAndWhite: { ...settings.blackAndWhite, tone: value } })} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                      </>
+                    )}
                   </section>
                 )}
 
