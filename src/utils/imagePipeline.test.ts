@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
+import { buildProcessingUniforms, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -103,6 +103,12 @@ describe('processImageData', () => {
     }, true, 'processed');
 
     expect(Array.from(balanced.data)).not.toEqual(Array.from(unbalanced.data));
+  });
+});
+
+describe('buildProcessingUniforms', () => {
+  it('keeps the GPU uniform payload at 48 floats', () => {
+    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(48);
   });
 });
 

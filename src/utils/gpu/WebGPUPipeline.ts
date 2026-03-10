@@ -12,7 +12,7 @@ import {
 } from '../imagePipeline';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
-const PROCESSING_UNIFORM_BYTES = 44 * 4;
+const PROCESSING_UNIFORM_BYTES = 48 * 4;
 const CURVE_LUT_BYTES = 1024 * 4;
 const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
