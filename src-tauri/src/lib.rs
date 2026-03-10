@@ -1,12 +1,55 @@
+use rawler::analyze::raw_to_srgb;
+use rawler::decoders::RawDecodeParams;
+use serde::Serialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
 use tauri::Manager;
+
+#[derive(Serialize)]
+struct RawDecodeResult {
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+    color_space: String,
+    white_balance: Option<[f64; 3]>,
+}
+
+#[tauri::command]
+fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
+    let decode_params = RawDecodeParams::default();
+    let raw_image = rawler::decode_file(&path).map_err(|error| error.to_string())?;
+    let developed = raw_to_srgb(&path, &decode_params).map_err(|error| error.to_string())?;
+    let rgb = developed.to_rgb8();
+
+    let white_balance = match raw_image.wb_coeffs {
+        [r, g, b, _]
+            if r.is_finite()
+                && g.is_finite()
+                && b.is_finite()
+                && r > 0.0
+                && g > 0.0
+                && b > 0.0 =>
+        {
+            Some([r as f64, g as f64, b as f64])
+        }
+        _ => None,
+    };
+
+    Ok(RawDecodeResult {
+        width: rgb.width(),
+        height: rgb.height(),
+        data: rgb.into_raw(),
+        color_space: "sRGB".to_string(),
+        white_balance,
+    })
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .invoke_handler(tauri::generate_handler![decode_raw])
         .setup(|app| {
             let import_item = MenuItemBuilder::with_id("open", "Import...")
                 .accelerator("CmdOrCtrl+O")

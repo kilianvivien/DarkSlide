@@ -309,6 +309,8 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                     <button
                       key={option.label}
                       type="button"
+                      aria-label={option.label}
+                      aria-pressed={saveScannerType === option.value}
                       onClick={() => setSaveScannerType(saveScannerType === option.value ? null : option.value)}
                       className={`rounded-lg border px-3 py-2 text-xs transition-all ${
                         saveScannerType === option.value

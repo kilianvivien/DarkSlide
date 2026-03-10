@@ -46,9 +46,14 @@ const workerState = vi.hoisted(() => ({
   })),
 }));
 
+const coreState = vi.hoisted(() => ({
+  invoke: vi.fn(),
+}));
+
 const fileBridgeState = vi.hoisted(() => ({
   isDesktopShell: vi.fn(() => false),
   openImageFile: vi.fn(),
+  openImageFileByPath: vi.fn(),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
 }));
 
@@ -133,10 +138,15 @@ vi.mock('./components/CropOverlay', () => ({
   CropOverlay: () => <div data-testid="crop-overlay" />,
 }));
 
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: coreState.invoke,
+}));
+
 vi.mock('./hooks/useCustomPresets', () => ({
   useCustomPresets: () => ({
     customPresets: [],
     savePreset: vi.fn(),
+    importPreset: vi.fn(),
     deletePreset: vi.fn(),
   }),
 }));
@@ -168,6 +178,7 @@ vi.mock('./utils/imageWorkerClient', () => ({
 vi.mock('./utils/fileBridge', () => ({
   isDesktopShell: fileBridgeState.isDesktopShell,
   openImageFile: fileBridgeState.openImageFile,
+  openImageFileByPath: fileBridgeState.openImageFileByPath,
   saveExportBlob: fileBridgeState.saveExportBlob,
 }));
 
@@ -251,6 +262,7 @@ describe('App import and preview pipeline', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     localStorage.clear();
+    coreState.invoke.mockReset();
     workerState.decode.mockReset();
     workerState.render.mockReset();
     workerState.export.mockReset();
@@ -260,6 +272,7 @@ describe('App import and preview pipeline', () => {
     workerState.getGPUDiagnostics.mockClear();
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     fileBridgeState.openImageFile.mockReset();
+    fileBridgeState.openImageFileByPath.mockReset();
     fileBridgeState.saveExportBlob.mockReset();
     fileBridgeState.saveExportBlob.mockResolvedValue('saved');
 
@@ -305,6 +318,61 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the desktop-only RAW error in the browser build', async () => {
+    render(<App />);
+
+    await uploadFile(createFile('scan.dng', 'application/octet-stream'));
+
+    expect(workerState.decode).not.toHaveBeenCalled();
+    expect(screen.getByText(/RAW files \(.dng, .cr3, .nef, .arw, .raf, .rw2\) require the DarkSlide desktop app\./)).toBeInTheDocument();
+  });
+
+  it('routes desktop RAW imports through the Tauri decode command before handing RGBA to the worker', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    const rawFile = createFile('scan.dng', 'application/octet-stream');
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: rawFile,
+      path: '/Users/tester/Desktop/scan.dng',
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 2,
+      height: 1,
+      data: [10, 20, 30, 40, 50, 60],
+      color_space: 'sRGB',
+      white_balance: [2, 1, 1.5],
+    });
+    workerState.decode.mockResolvedValue(createDecodedImage(2, 1));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 2, 1)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(coreState.invoke).toHaveBeenCalledWith('decode_raw', { path: '/Users/tester/Desktop/scan.dng' });
+    expect(workerState.decode).toHaveBeenCalledWith(expect.objectContaining({
+      fileName: 'scan.dng',
+      mime: 'image/x-raw-rgba',
+      rawDimensions: { width: 2, height: 1 },
+      size: 8,
+    }));
+
+    const rawDecodeRequest = workerState.decode.mock.calls[0]?.[0] as { buffer: ArrayBuffer };
+    expect(Array.from(new Uint8Array(rawDecodeRequest.buffer))).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
+    expect(screen.getByText(/2 × 1 px/)).toBeInTheDocument();
+
+    const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;
+    expect(diagnostics.some((entry) => entry.code === 'RAW_DECODED' && entry.message.includes('scan.dng'))).toBe(true);
   });
 
   it('ignores stale imports that resolve after a newer file wins', async () => {

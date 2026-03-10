@@ -1,9 +1,10 @@
 import { isTauri } from '@tauri-apps/api/core';
-import { SUPPORTED_EXTENSIONS } from '../constants';
+import { RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from '../constants';
 import type { ExportFormat } from '../types';
 import { getFileExtension } from './imagePipeline';
 
 const SUPPORTED_DIALOG_EXTENSIONS = SUPPORTED_EXTENSIONS.map((extension) => extension.slice(1));
+const ALL_DIALOG_EXTENSIONS = [...SUPPORTED_DIALOG_EXTENSIONS, ...RAW_EXTENSIONS.map((extension) => extension.slice(1))];
 
 const MIME_BY_EXTENSION: Record<typeof SUPPORTED_EXTENSIONS[number], string> = {
   '.tif': 'image/tiff',
@@ -54,8 +55,8 @@ export async function openImageFile() {
     multiple: false,
     filters: [
       {
-        name: 'Supported scans',
-        extensions: SUPPORTED_DIALOG_EXTENSIONS,
+        name: 'All Supported Images',
+        extensions: isDesktopShell() ? ALL_DIALOG_EXTENSIONS : SUPPORTED_DIALOG_EXTENSIONS,
       },
     ],
   });

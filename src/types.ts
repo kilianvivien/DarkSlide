@@ -160,6 +160,7 @@ export interface DecodeRequest {
   fileName: string;
   mime: string;
   size: number;
+  rawDimensions?: { width: number; height: number };
 }
 
 export interface RenderRequest {

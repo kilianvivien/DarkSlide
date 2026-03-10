@@ -22,7 +22,7 @@ import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
 import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from './constants';
-import { ColorMatrix, ConversionSettings, CropTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, TonalCharacter, WorkspaceDocument } from './types';
+import { ColorMatrix, ConversionSettings, CropTab, DecodedImage, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, TonalCharacter, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useViewportZoom } from './hooks/useViewportZoom';
@@ -35,6 +35,14 @@ import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
+
+interface RawDecodeResult {
+  width: number;
+  height: number;
+  data: ArrayLike<number>;
+  color_space: string;
+  white_balance?: [number, number, number] | null;
+}
 
 function formatError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -82,6 +90,22 @@ function normalizePreviewImageData(imageData: ImageData, width: number, height: 
 
 function getCanvas2dContext(canvas: HTMLCanvasElement) {
   return canvas.getContext('2d', { willReadFrequently: true }) ?? canvas.getContext('2d');
+}
+
+function rgbToRgba(rgb: ArrayLike<number>, width: number, height: number) {
+  const expectedLength = width * height * 3;
+  if (rgb.length !== expectedLength) {
+    throw new Error(`RAW decode returned ${rgb.length} RGB bytes for a ${width}x${height} image.`);
+  }
+
+  const rgba = new Uint8Array(width * height * 4);
+  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < rgb.length; sourceIndex += 3, targetIndex += 4) {
+    rgba[targetIndex] = rgb[sourceIndex] ?? 0;
+    rgba[targetIndex + 1] = rgb[sourceIndex + 1] ?? 0;
+    rgba[targetIndex + 2] = rgb[sourceIndex + 2] ?? 0;
+    rgba[targetIndex + 3] = 255;
+  }
+  return rgba;
 }
 
 type QueuedPreviewRender = {
@@ -962,12 +986,20 @@ export default function App() {
     if (!worker) return;
 
     if (isRawFile(file)) {
-      setError('RAW import is reserved for the future desktop path. Use TIFF, JPEG, PNG, or WebP in the browser build.');
-      appendDiagnostic({ level: 'error', code: 'RAW_UNSUPPORTED', message: file.name, context: { extension: getFileExtension(file.name) } });
-      return;
+      if (!isDesktopShell()) {
+        setError('RAW files (.dng, .cr3, .nef, .arw, .raf, .rw2) require the DarkSlide desktop app. Convert to TIFF for browser use, or download DarkSlide for desktop.');
+        appendDiagnostic({ level: 'error', code: 'RAW_UNSUPPORTED', message: file.name, context: { extension: getFileExtension(file.name) } });
+        return;
+      }
+
+      if (!nativePath) {
+        setError('RAW import requires a file path. Please use File > Open.');
+        appendDiagnostic({ level: 'error', code: 'RAW_PATH_REQUIRED', message: file.name, context: { extension: getFileExtension(file.name) } });
+        return;
+      }
     }
 
-    if (!isSupportedFile(file)) {
+    if (!isSupportedFile(file) && !isRawFile(file)) {
       setError('Unsupported file type. Import TIFF, JPEG, PNG, or WebP for now.');
       appendDiagnostic({ level: 'error', code: 'UNSUPPORTED_FILE', message: file.name });
       return;
@@ -1044,28 +1076,76 @@ export default function App() {
     });
 
     try {
-      const buffer = await file.arrayBuffer();
-      if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
-        appendDiagnostic({
-          level: 'info',
-          code: 'IMPORT_STALE_IGNORED',
-          message: file.name,
-          context: {
-            documentId,
-            importSession,
-            stage: 'array-buffer',
-          },
-        });
-        return;
-      }
+      let decoded: DecodedImage;
 
-      const decoded = await worker.decode({
-        documentId,
-        buffer,
-        fileName: file.name,
-        mime: file.type || 'application/octet-stream',
-        size: file.size,
-      });
+      if (isRawFile(file)) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const rawResult = await invoke<RawDecodeResult>('decode_raw', { path: nativePath });
+          const rgba = rgbToRgba(rawResult.data, rawResult.width, rawResult.height);
+
+          appendDiagnostic({
+            level: 'info',
+            code: 'RAW_DECODED',
+            message: `RAW decoded via Tauri: ${file.name} (${rawResult.width}×${rawResult.height}, ${rawResult.color_space})`,
+            context: {
+              colorSpace: rawResult.color_space,
+              documentId,
+              fileName: file.name,
+              height: rawResult.height,
+              width: rawResult.width,
+            },
+          });
+
+          decoded = await worker.decode({
+            documentId,
+            buffer: rgba.buffer,
+            fileName: file.name,
+            mime: 'image/x-raw-rgba',
+            size: rgba.byteLength,
+            rawDimensions: {
+              width: rawResult.width,
+              height: rawResult.height,
+            },
+          });
+        } catch (rawError) {
+          const message = formatError(rawError);
+          appendDiagnostic({
+            level: 'error',
+            code: 'RAW_DECODE_FAILED',
+            message,
+            context: {
+              documentId,
+              fileName: file.name,
+              nativePath: nativePath ?? null,
+            },
+          });
+          throw rawError;
+        }
+      } else {
+        const buffer = await file.arrayBuffer();
+        if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
+          appendDiagnostic({
+            level: 'info',
+            code: 'IMPORT_STALE_IGNORED',
+            message: file.name,
+            context: {
+              documentId,
+              importSession,
+              stage: 'array-buffer',
+            },
+          });
+          return;
+        }
+
+        decoded = await worker.decode({
+          documentId,
+          buffer,
+          fileName: file.name,
+          mime: file.type || 'application/octet-stream',
+          size: file.size,
+        });
+      }
 
       if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
         await disposeDocument(documentId);

@@ -69,6 +69,10 @@ describe('fileBridge', () => {
     expect(dialogState.open).toHaveBeenCalledWith(expect.objectContaining({
       title: 'Open Scan',
       multiple: false,
+      filters: [expect.objectContaining({
+        name: 'All Supported Images',
+        extensions: expect.arrayContaining(['tif', 'tiff', 'png', 'jpg', 'jpeg', 'webp', 'dng', 'cr3', 'nef', 'arw', 'raf', 'rw2']),
+      })],
     }));
     expect(fsState.readFile).toHaveBeenCalledWith('/Users/tester/Desktop/scan.tiff');
     expect(result?.file).toBeInstanceOf(File);

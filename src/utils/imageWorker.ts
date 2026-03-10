@@ -317,6 +317,48 @@ function clearTileJob(jobId: string) {
 }
 
 async function handleDecode(payload: DecodeRequest) {
+  if (payload.mime === 'image/x-raw-rgba') {
+    if (!payload.rawDimensions) {
+      throw createError('RAW_INVALID', 'RAW decode payload is missing dimensions.');
+    }
+
+    const { width, height } = payload.rawDimensions;
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      throw new Error('Could not create RAW decode canvas.');
+    }
+
+    const imageData = new ImageData(new Uint8ClampedArray(payload.buffer), width, height);
+    ctx.putImageData(imageData, 0, 0);
+
+    assertSupportedDimensions(canvas.width, canvas.height);
+
+    const previewStore = buildPreviewLevels(canvas);
+    const metadata: SourceMetadata = {
+      id: payload.documentId,
+      name: payload.fileName,
+      mime: payload.mime,
+      extension: getFileExtension(payload.fileName),
+      size: payload.size,
+      width: canvas.width,
+      height: canvas.height,
+    };
+
+    documents.set(payload.documentId, {
+      metadata,
+      sourceCanvas: canvas,
+      previews: previewStore,
+      previewGeometryCache: new Map(),
+      sourceGeometryCache: new Map(),
+    });
+
+    return {
+      metadata,
+      previewLevels: previewStore.map((preview) => preview.level),
+    } satisfies DecodedImage;
+  }
+
   const extension = getFileExtension(payload.fileName);
   if (RAW_EXTENSIONS.includes(extension as typeof RAW_EXTENSIONS[number])) {
     throw createError('RAW_UNSUPPORTED', 'RAW import is reserved for the future desktop decode path. Use TIFF, JPEG, PNG, or WebP in the browser build.');

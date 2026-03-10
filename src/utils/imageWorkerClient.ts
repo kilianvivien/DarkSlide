@@ -302,6 +302,7 @@ export class ImageWorkerClient {
     return {
       ...payload,
       buffer: payload.buffer.slice(0),
+      rawDimensions: payload.rawDimensions ? { ...payload.rawDimensions } : undefined,
     };
   }
 
