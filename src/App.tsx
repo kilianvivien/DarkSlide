@@ -82,6 +82,17 @@ function isRawFile(file: File) {
   return isRawExtension(getFileExtension(file.name));
 }
 
+function getPresetTags(
+  settings: ConversionSettings,
+  profileType: FilmProfile['type'],
+  extension: string,
+) {
+  return [
+    settings.blackAndWhite.enabled || profileType === 'bw' ? 'bw' : 'color',
+    isRawExtension(extension) ? 'raw' : 'non-raw',
+  ];
+}
+
 function normalizePreviewImageData(imageData: ImageData, width: number, height: number) {
   if (imageData.width === width && imageData.height === height) {
     return imageData;
@@ -280,6 +291,11 @@ export default function App() {
   const activeProfile = documentState
     ? allProfiles.find((profile) => profile.id === documentState.profileId) ?? fallbackProfile
     : fallbackProfile;
+  const savePresetTags = useMemo(() => (
+    documentState
+      ? getPresetTags(documentState.settings, activeProfile.type, documentState.source.extension)
+      : [activeProfile.type]
+  ), [activeProfile.type, documentState]);
   const cropImageSize = useMemo(() => {
     if (!documentState) {
       return { width: 1, height: 1 };
@@ -1559,7 +1575,7 @@ export default function App() {
       description: 'Custom DarkSlide preset',
       defaultSettings: structuredClone(documentState.settings),
       isCustom: true,
-      tags: [activeProfile.type],
+      tags: savePresetTags,
       filmStock: metadata?.filmStock?.trim() ? metadata.filmStock.trim() : null,
       scannerType: metadata?.scannerType ?? null,
     });
@@ -1568,7 +1584,7 @@ export default function App() {
       profileId: newPreset.id,
       dirty: false,
     }));
-  }, [activeProfile.type, documentState, savePreset, updateDocument]);
+  }, [activeProfile.type, documentState, savePreset, savePresetTags, updateDocument]);
 
   const handleImportPreset = useCallback((
     profile: FilmProfile,
@@ -2140,6 +2156,7 @@ export default function App() {
                 builtinProfiles={builtinProfiles}
                 customPresets={customPresets}
                 canSavePreset={Boolean(documentState)}
+                saveTags={savePresetTags}
                 onSavePreset={handleSavePreset}
                 onImportPreset={handleImportPreset}
                 onDeletePreset={handleDeletePreset}

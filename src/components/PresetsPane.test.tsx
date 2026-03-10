@@ -80,6 +80,7 @@ describe('PresetsPane', () => {
         onStockChange={vi.fn()}
         customPresets={[]}
         canSavePreset
+        saveTags={['bw', 'raw']}
         onSavePreset={onSavePreset}
         onImportPreset={vi.fn()}
         onDeletePreset={vi.fn()}
@@ -96,6 +97,26 @@ describe('PresetsPane', () => {
       filmStock: 'Kodak Gold 200',
       scannerType: 'smartphone',
     });
+  });
+
+  it('shows save-form tags for B&W RAW presets', () => {
+    render(
+      <PresetsPane
+        activeStockId="generic-color"
+        onStockChange={vi.fn()}
+        customPresets={[]}
+        canSavePreset
+        saveTags={['bw', 'raw']}
+        onSavePreset={vi.fn()}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /save current preset/i }));
+
+    expect(screen.getByText('B&W')).toBeInTheDocument();
+    expect(screen.getByText('RAW')).toBeInTheDocument();
   });
 
   it('imports a valid .darkslide file through the browser fallback input', async () => {
@@ -170,7 +191,7 @@ describe('PresetsPane', () => {
           defaultSettings: createDefaultSettings(),
           filmStock: 'Kodak Portra 400',
           scannerType: 'flatbed',
-          tags: ['color'],
+          tags: ['bw', 'raw'],
         }]}
         canSavePreset
         onSavePreset={vi.fn()}
@@ -181,7 +202,7 @@ describe('PresetsPane', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /custom/i }));
 
-    expect(screen.getByText('Kodak Portra 400 · Flatbed · Color')).toBeInTheDocument();
+    expect(screen.getByText('Kodak Portra 400 · Flatbed · B&W · RAW')).toBeInTheDocument();
   });
 
   it('renders smartphone metadata labels for custom presets', () => {
@@ -198,7 +219,7 @@ describe('PresetsPane', () => {
           defaultSettings: createDefaultSettings(),
           filmStock: 'Kodak Gold 200',
           scannerType: 'smartphone',
-          tags: ['color'],
+          tags: ['color', 'non-raw'],
         }]}
         canSavePreset
         onSavePreset={vi.fn()}
@@ -209,6 +230,6 @@ describe('PresetsPane', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /custom/i }));
 
-    expect(screen.getByText('Kodak Gold 200 · Smartphone · Color')).toBeInTheDocument();
+    expect(screen.getByText('Kodak Gold 200 · Smartphone · Color · Non-RAW')).toBeInTheDocument();
   });
 });

@@ -50,7 +50,18 @@ function formatScannerType(scannerType: ScannerType | null | undefined) {
 
 function formatTag(tag: string | undefined) {
   if (!tag) return null;
-  return tag === 'bw' ? 'B&W' : tag === 'color' ? 'Color' : tag;
+  switch (tag) {
+    case 'bw':
+      return 'B&W';
+    case 'color':
+      return 'Color';
+    case 'raw':
+      return 'RAW';
+    case 'non-raw':
+      return 'Non-RAW';
+    default:
+      return tag;
+  }
 }
 
 interface PresetsPaneProps {
@@ -59,6 +70,7 @@ interface PresetsPaneProps {
   builtinProfiles?: FilmProfile[];
   customPresets: FilmProfile[];
   canSavePreset: boolean;
+  saveTags?: string[];
   onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => void;
   onImportPreset: (profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => void;
   onDeletePreset: (id: string) => void;
@@ -71,6 +83,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   builtinProfiles = FILM_PROFILES,
   customPresets,
   canSavePreset,
+  saveTags,
   onSavePreset,
   onImportPreset,
   onDeletePreset,
@@ -97,7 +110,9 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     () => [...builtinProfiles, ...customPresets].find((profile) => profile.id === activeStockId) ?? null,
     [activeStockId, builtinProfiles, customPresets],
   );
-  const activeTag = activeProfile?.type === 'bw' ? 'B&W' : 'Color';
+  const activeTags = (saveTags?.length ? saveTags : [activeProfile?.type ?? 'color'])
+    .map(formatTag)
+    .filter((value): value is string => Boolean(value));
 
   const resetSaveForm = () => {
     setNewPresetName('');
@@ -339,9 +354,13 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
 
               <div className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Tags</span>
-                <span className="rounded-full border border-zinc-700 px-2 py-0.5 text-[10px] uppercase tracking-widest text-zinc-300">
-                  {activeTag}
-                </span>
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  {activeTags.map((tag) => (
+                    <span key={tag} className="rounded-full border border-zinc-700 px-2 py-0.5 text-[10px] uppercase tracking-widest text-zinc-300">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -440,10 +459,13 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
             ) : (
               <div className="space-y-2">
                 {customPresets.map((stock) => {
+                  const tagLabels = (stock.tags?.length ? stock.tags : [stock.type])
+                    .map(formatTag)
+                    .filter((value): value is string => Boolean(value));
                   const metadata = [
                     stock.filmStock,
                     formatScannerType(stock.scannerType),
-                    formatTag(stock.tags?.[0]),
+                    ...tagLabels,
                   ].filter(Boolean);
 
                   return (
