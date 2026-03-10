@@ -542,12 +542,29 @@ function handleSampleFilmBase(payload: SampleRequest) {
 
   const sampleX = clamp(Math.round(payload.x * (transformed.width - 1)), 0, Math.max(transformed.width - 1, 0));
   const sampleY = clamp(Math.round(payload.y * (transformed.height - 1)), 0, Math.max(transformed.height - 1, 0));
-  const pixel = ctx.getImageData(sampleX, sampleY, 1, 1).data;
+  const radius = clamp(Math.round(Math.min(transformed.width, transformed.height) / 512), 1, 4);
+  const left = clamp(sampleX - radius, 0, Math.max(transformed.width - 1, 0));
+  const top = clamp(sampleY - radius, 0, Math.max(transformed.height - 1, 0));
+  const right = clamp(sampleX + radius, 0, Math.max(transformed.width - 1, 0));
+  const bottom = clamp(sampleY + radius, 0, Math.max(transformed.height - 1, 0));
+  const area = ctx.getImageData(left, top, right - left + 1, bottom - top + 1).data;
+
+  let totalR = 0;
+  let totalG = 0;
+  let totalB = 0;
+  let count = 0;
+
+  for (let index = 0; index < area.length; index += 4) {
+    totalR += area[index];
+    totalG += area[index + 1];
+    totalB += area[index + 2];
+    count += 1;
+  }
 
   return {
-    r: pixel[0],
-    g: pixel[1],
-    b: pixel[2],
+    r: count > 0 ? Math.round(totalR / count) : 0,
+    g: count > 0 ? Math.round(totalG / count) : 0,
+    b: count > 0 ? Math.round(totalB / count) : 0,
   } satisfies FilmBaseSample;
 }
 

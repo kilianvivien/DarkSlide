@@ -36,7 +36,7 @@ import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
-import { buildRawInitialSettings, estimateFilmBaseSample, getFilmBaseChannelBalance, isRawExtension } from './utils/rawImport';
+import { buildRawInitialSettings, estimateFilmBaseSample, isRawExtension } from './utils/rawImport';
 
 interface RawDecodeResult {
   width: number;
@@ -532,6 +532,14 @@ export default function App() {
     hasVisiblePreviewRef.current = next;
     setHasVisiblePreview(next);
   }, []);
+
+  useEffect(() => {
+    if (!hasVisiblePreview) {
+      return;
+    }
+
+    setBlockingOverlay((current) => (current ? null : current));
+  }, [hasVisiblePreview]);
 
   const drawPreview = useCallback((imageData: ImageData) => {
     const canvas = displayCanvasRef.current;
@@ -1293,7 +1301,6 @@ export default function App() {
           width: decoded.metadata.width,
         },
       });
-      setBlockingOverlay(null);
     } catch (importError) {
       if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) return;
 
@@ -1331,13 +1338,23 @@ export default function App() {
     }
 
     try {
+      flushSync(() => {
+        setBlockingOverlay({
+          title: 'Preparing import',
+          detail: 'Waiting for the selected file to open.',
+        });
+      });
+      await waitForNextPaint();
+
       const result = await openImageFile();
       if (!result) {
+        setBlockingOverlay(null);
         return;
       }
 
       await importFile(result.file, result.path, result.size);
     } catch (openError) {
+      setBlockingOverlay(null);
       const message = formatError(openError);
       appendDiagnostic({ level: 'error', code: 'OPEN_DIALOG_FAILED', message });
       setError(`Could not open file. ${message}`);
@@ -1635,7 +1652,6 @@ export default function App() {
 
         handleSettingsChange({
           filmBaseSample: sample,
-          ...getFilmBaseChannelBalance(sample),
         });
 
         setIsPickingFilmBase(false);
@@ -1745,38 +1761,8 @@ export default function App() {
     });
   }, [usesNativeFileDialogs]);
 
-  const showBlockingOverlay = Boolean(
-    documentState
-    && documentState.status !== 'error'
-    && documentState.status !== 'exporting'
-    && (
-      documentState.status === 'loading'
-      || documentState.status === 'processing'
-      || !hasVisiblePreview
-    ),
-  );
-  const overlayContent = blockingOverlay ?? (
-    showBlockingOverlay && documentState
-      ? {
-        title: documentState.status === 'loading' && isRawExtension(documentState.source.extension)
-          ? 'RAW import underway'
-          : (
-            documentState.status === 'loading'
-              ? 'Import underway'
-              : (!hasVisiblePreview ? 'Preparing initial preview' : 'Rendering preview')
-          ),
-        detail: documentState.status === 'loading' && isRawExtension(documentState.source.extension)
-          ? 'Decoding the RAW file and preparing the first preview.'
-          : (
-            documentState.status === 'loading'
-              ? 'Building preview levels for the imported image.'
-              : (!hasVisiblePreview
-                ? 'Waiting for the first processed frame to draw to the canvas.'
-                : 'Applying the current conversion settings.')
-          ),
-      }
-      : null
-  );
+  const showBlockingOverlay = Boolean(blockingOverlay);
+  const overlayContent = blockingOverlay;
   const isExporting = documentState?.status === 'exporting';
 
   return (

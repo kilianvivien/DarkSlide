@@ -120,13 +120,16 @@ export function getFilmBaseChannelBalance(sample: FilmBaseSample | null) {
 
 export function buildRawInitialSettings(
   baseSettings: ConversionSettings,
-  _rgb: ArrayLike<number>,
-  _width: number,
-  _height: number,
+  rgb: ArrayLike<number>,
+  width: number,
+  height: number,
   orientation: number | null | undefined,
 ) {
+  const estimatedFilmBase = estimateFilmBaseSample(rgb, width, height);
+
   return {
     ...structuredClone(baseSettings),
+    filmBaseSample: estimatedFilmBase,
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
 }

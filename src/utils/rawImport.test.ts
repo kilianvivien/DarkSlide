@@ -42,7 +42,11 @@ describe('rawImport', () => {
 
     expect(buildRawInitialSettings(base, rgb, 64, 48, 6)).toMatchObject({
       rotation: 90,
-      filmBaseSample: null,
+      filmBaseSample: {
+        r: 160,
+        g: 150,
+        b: 140,
+      },
       redBalance: 1,
       greenBalance: 1,
       blueBalance: 1,

@@ -155,12 +155,12 @@ export function MagnifierLoupe({ sourceCanvas, containerRef, magnification, size
       setState((current) => (current.visible ? { ...current, visible: false } : current));
     };
 
-    container.addEventListener('pointermove', queueDraw);
-    container.addEventListener('pointerleave', hideLoupe);
+    window.addEventListener('pointermove', queueDraw, { passive: true });
+    window.addEventListener('blur', hideLoupe);
 
     return () => {
-      container.removeEventListener('pointermove', queueDraw);
-      container.removeEventListener('pointerleave', hideLoupe);
+      window.removeEventListener('pointermove', queueDraw);
+      window.removeEventListener('blur', hideLoupe);
       if (frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
