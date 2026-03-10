@@ -42,7 +42,7 @@ const neutralSettings = createDefaultSettings({
 });
 
 describe('processImageData', () => {
-  it('applies sampled film-base compensation before B&W conversion', () => {
+  it('maps the sampled film base to black before B&W conversion', () => {
     const baseSettings = createDefaultSettings({
       blackPoint: 0,
       whitePoint: 255,
@@ -51,7 +51,7 @@ describe('processImageData', () => {
     });
 
     const withoutSample = createPixel(30, 80, 130);
-    const withSample = createPixel(30, 80, 130);
+    const withSample = createPixel(220, 110, 55);
 
     processImageData(withoutSample, baseSettings, false, 'processed');
     processImageData(withSample, {
@@ -70,7 +70,39 @@ describe('processImageData', () => {
     expect(plainG).toBe(plainB);
     expect(sampledR).toBe(sampledG);
     expect(sampledG).toBe(sampledB);
-    expect(sampledR).not.toBe(plainR);
+    expect(sampledR).toBe(0);
+    expect(sampledR).toBeLessThan(plainR);
+  });
+
+  it('still applies channel balances after mapping the film base to black', () => {
+    const balanced = createPixel(30, 80, 130);
+    const unbalanced = createPixel(30, 80, 130);
+
+    processImageData(balanced, {
+      ...neutralSettings,
+      filmBaseSample: {
+        r: 220,
+        g: 110,
+        b: 55,
+      },
+      redBalance: 0.5,
+      greenBalance: 1,
+      blueBalance: 2,
+    }, true, 'processed');
+
+    processImageData(unbalanced, {
+      ...neutralSettings,
+      filmBaseSample: {
+        r: 220,
+        g: 110,
+        b: 55,
+      },
+      redBalance: 1,
+      greenBalance: 1,
+      blueBalance: 1,
+    }, true, 'processed');
+
+    expect(Array.from(balanced.data)).not.toEqual(Array.from(unbalanced.data));
   });
 });
 

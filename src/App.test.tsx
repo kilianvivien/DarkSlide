@@ -335,6 +335,7 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.openImageFile.mockResolvedValue({
       file: rawFile,
       path: '/Users/tester/Desktop/scan.dng',
+      size: 12_345_678,
     });
     coreState.invoke.mockResolvedValue({
       width: 2,
@@ -355,7 +356,11 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
     await act(async () => {
-      vi.runOnlyPendingTimers();
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
     });
     await flushMicrotasks();
 
@@ -364,7 +369,7 @@ describe('App import and preview pipeline', () => {
       fileName: 'scan.dng',
       mime: 'image/x-raw-rgba',
       rawDimensions: { width: 2, height: 1 },
-      size: 8,
+      size: 12_345_678,
     }));
 
     const rawDecodeRequest = workerState.decode.mock.calls[0]?.[0] as { buffer: ArrayBuffer };
@@ -373,6 +378,34 @@ describe('App import and preview pipeline', () => {
 
     const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;
     expect(diagnostics.some((entry) => entry.code === 'RAW_DECODED' && entry.message.includes('scan.dng'))).toBe(true);
+  });
+
+  it('shows the RAW decoding overlay while the native decode is still running', async () => {
+    const rawDecode = deferred<{
+      width: number;
+      height: number;
+      data: number[];
+      color_space: string;
+      orientation?: number;
+    }>();
+
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('scan.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/scan.nef',
+      size: 30_955_119,
+    });
+    coreState.invoke.mockReturnValue(rawDecode.promise);
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+
+    expect(screen.getByText('RAW import underway')).toBeInTheDocument();
+    expect(screen.getByText(/Decoding the RAW file and preparing the first preview\./)).toBeInTheDocument();
   });
 
   it('ignores stale imports that resolve after a newer file wins', async () => {

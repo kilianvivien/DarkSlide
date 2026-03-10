@@ -229,14 +229,16 @@ function getFilmBaseBalance(sample: FilmBaseSample | null) {
     return { red: 1, green: 1, blue: 1 };
   }
 
-  const safeR = Math.max(sample.r, 1);
-  const safeG = Math.max(sample.g, 1);
-  const safeB = Math.max(sample.b, 1);
   return {
-    red: safeG / safeR,
-    green: 1,
-    blue: safeG / safeB,
+    red: clamp(sample.r / 255, 1 / 255, 1),
+    green: clamp(sample.g / 255, 1 / 255, 1),
+    blue: clamp(sample.b / 255, 1 / 255, 1),
   };
+}
+
+function applyFilmBaseCompensation(value: number, sampleValue: number) {
+  const invertedFilmBase = 1 - clamp(sampleValue, 1 / 255, 1);
+  return clamp((value - invertedFilmBase) / Math.max(1 / 255, 1 - invertedFilmBase), 0, 1);
 }
 
 export function resolveEffectiveSettings(
@@ -469,13 +471,13 @@ export function processImageData(
       g = 1 - g;
       b = 1 - b;
 
+      r = applyFilmBaseCompensation(r, filmBaseBalance.red);
+      g = applyFilmBaseCompensation(g, filmBaseBalance.green);
+      b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
+
       if (colorMatrix) {
         [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);
       }
-
-      r *= filmBaseBalance.red;
-      g *= filmBaseBalance.green;
-      b *= filmBaseBalance.blue;
 
       if (isColor) {
         r *= effectiveSettings.redBalance;

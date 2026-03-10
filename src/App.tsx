@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload,
@@ -21,7 +22,7 @@ import { Sidebar } from './components/Sidebar';
 import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
-import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from './constants';
+import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, SUPPORTED_EXTENSIONS } from './constants';
 import { ColorMatrix, ConversionSettings, CropTab, DecodedImage, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, TonalCharacter, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
@@ -35,6 +36,7 @@ import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
+import { buildRawInitialSettings, estimateFilmBaseSample, getFilmBaseChannelBalance, isRawExtension } from './utils/rawImport';
 
 interface RawDecodeResult {
   width: number;
@@ -42,6 +44,7 @@ interface RawDecodeResult {
   data: ArrayLike<number>;
   color_space: string;
   white_balance?: [number, number, number] | null;
+  orientation?: number | null;
 }
 
 function formatError(error: unknown) {
@@ -76,8 +79,7 @@ function isSupportedFile(file: File) {
 }
 
 function isRawFile(file: File) {
-  const extension = getFileExtension(file.name);
-  return RAW_EXTENSIONS.includes(extension as typeof RAW_EXTENSIONS[number]);
+  return isRawExtension(getFileExtension(file.name));
 }
 
 function normalizePreviewImageData(imageData: ImageData, width: number, height: number) {
@@ -90,6 +92,30 @@ function normalizePreviewImageData(imageData: ImageData, width: number, height: 
 
 function getCanvas2dContext(canvas: HTMLCanvasElement) {
   return canvas.getContext('2d', { willReadFrequently: true }) ?? canvas.getContext('2d');
+}
+
+function getNativePathFromFile(file: File): string | null {
+  const candidate = (file as File & { path?: string }).path;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+}
+
+function waitForNextPaint() {
+  if (typeof window === 'undefined' || (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent))) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    if (typeof window.requestAnimationFrame !== 'function') {
+      window.setTimeout(resolve, 0);
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        resolve();
+      });
+    });
+  });
 }
 
 function rgbToRgba(rgb: ArrayLike<number>, width: number, height: number) {
@@ -122,6 +148,11 @@ type QueuedPreviewRender = {
   tonalCharacter?: TonalCharacter;
 };
 
+type BlockingOverlayState = {
+  title: string;
+  detail: string;
+};
+
 export default function App() {
   const initialPreferences = useMemo(() => loadPreferences(), []);
   const usesNativeFileDialogs = isDesktopShell();
@@ -149,6 +180,7 @@ export default function App() {
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
+  const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
   const [renderBackendDiagnostics, setRenderBackendDiagnostics] = useState<RenderBackendDiagnostics>({
     gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
     gpuEnabled: initialPreferences?.gpuRendering ?? true,
@@ -529,13 +561,14 @@ export default function App() {
     }
 
     if (drawPreview(pendingPreview.imageData)) {
+      pendingPreviewRef.current = null;
       setRenderedPreviewAngle(pendingPreview.angle);
       setPreviewVisibility(true);
       previewRetryFrameRef.current = null;
       return;
     }
 
-    if (attempt >= 10) {
+    if (attempt >= 30) {
       previewRetryFrameRef.current = null;
       setPreviewVisibility(false);
       appendDiagnostic({
@@ -554,6 +587,18 @@ export default function App() {
       attemptPreviewDraw(attempt + 1);
     });
   }, [drawPreview, setPreviewVisibility]);
+
+  useEffect(() => {
+    if (!displayCanvasRef.current) {
+      return;
+    }
+
+    if (pendingPreviewRef.current?.documentId !== activeDocumentIdRef.current) {
+      return;
+    }
+
+    flushPendingPreview();
+  }, [documentState?.id, documentState?.status, flushPendingPreview]);
 
   const calculateTargetMaxDimension = useCallback(() => {
     const viewport = viewportRef.current;
@@ -964,6 +1009,7 @@ export default function App() {
     await disposeDocument(documentId);
     setDocumentState(null);
     setError(null);
+    setBlockingOverlay(null);
     setComparisonMode('processed');
     setIsPickingFilmBase(false);
     setIsCropOverlayVisible(false);
@@ -981,11 +1027,13 @@ export default function App() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [cancelPendingPreviewRetry, cancelScheduledInteractivePreview, clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility, zoomToFit]);
 
-  const importFile = useCallback(async (file: File, nativePath?: string | null) => {
+  const importFile = useCallback(async (file: File, nativePath?: string | null, nativeFileSize?: number) => {
     const worker = workerClientRef.current;
     if (!worker) return;
+    const sourceFileSize = nativeFileSize ?? file.size;
+    const rawImport = isRawFile(file);
 
-    if (isRawFile(file)) {
+    if (rawImport) {
       if (!isDesktopShell()) {
         setError('RAW files (.dng, .cr3, .nef, .arw, .raf, .rw2) require the DarkSlide desktop app. Convert to TIFF for browser use, or download DarkSlide for desktop.');
         appendDiagnostic({ level: 'error', code: 'RAW_UNSUPPORTED', message: file.name, context: { extension: getFileExtension(file.name) } });
@@ -999,7 +1047,7 @@ export default function App() {
       }
     }
 
-    if (!isSupportedFile(file) && !isRawFile(file)) {
+    if (!isSupportedFile(file) && !rawImport) {
       setError('Unsupported file type. Import TIFF, JPEG, PNG, or WebP for now.');
       appendDiagnostic({ level: 'error', code: 'UNSUPPORTED_FILE', message: file.name });
       return;
@@ -1034,9 +1082,14 @@ export default function App() {
 
     const documentId = crypto.randomUUID();
     const savedPrefs = loadPreferences();
-    const initialProfile = savedPrefs
-      ? (allProfilesRef.current.find((p) => p.id === savedPrefs.lastProfileId) ?? fallbackProfile)
-      : fallbackProfile;
+    const rawDefaultProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? fallbackProfile;
+    const initialProfile = rawImport
+      ? rawDefaultProfile
+      : (
+        savedPrefs
+          ? (allProfilesRef.current.find((p) => p.id === savedPrefs.lastProfileId) ?? fallbackProfile)
+          : fallbackProfile
+      );
     activeDocumentIdRef.current = documentId;
 
     appendDiagnostic({
@@ -1047,18 +1100,18 @@ export default function App() {
         documentId,
         extension: getFileExtension(file.name),
         importSession,
-        size: file.size,
+        size: sourceFileSize,
       },
     });
 
-    setDocumentState({
+    const loadingDocument: WorkspaceDocument = {
       id: documentId,
       source: {
         id: documentId,
         name: file.name,
         mime: file.type || 'application/octet-stream',
         extension: getFileExtension(file.name),
-        size: file.size,
+        size: sourceFileSize,
         width: 0,
         height: 0,
       },
@@ -1073,16 +1126,50 @@ export default function App() {
       renderRevision: 0,
       status: 'loading',
       dirty: false,
+    };
+    flushSync(() => {
+      setBlockingOverlay(rawImport ? {
+        title: 'RAW import underway',
+        detail: 'Decoding the RAW file and preparing the first preview.',
+      } : {
+        title: 'Import underway',
+        detail: 'Loading the image and preparing preview levels.',
+      });
+      setDocumentState(loadingDocument);
     });
+    if (rawImport) {
+      await waitForNextPaint();
+    }
 
     try {
       let decoded: DecodedImage;
+      let initialSettings = structuredClone(initialProfile.defaultSettings);
 
-      if (isRawFile(file)) {
+      if (rawImport) {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
           const rawResult = await invoke<RawDecodeResult>('decode_raw', { path: nativePath });
+          const estimatedFilmBase = estimateFilmBaseSample(rawResult.data, rawResult.width, rawResult.height);
+          initialSettings = buildRawInitialSettings(
+            initialProfile.defaultSettings,
+            rawResult.data,
+            rawResult.width,
+            rawResult.height,
+            rawResult.orientation,
+          );
           const rgba = rgbToRgba(rawResult.data, rawResult.width, rawResult.height);
+
+          if (estimatedFilmBase) {
+            appendDiagnostic({
+              level: 'info',
+              code: 'RAW_FILM_BASE_ESTIMATED',
+              message: `${estimatedFilmBase.r}/${estimatedFilmBase.g}/${estimatedFilmBase.b}`,
+              context: {
+                documentId,
+                fileName: file.name,
+              },
+            });
+          }
 
           appendDiagnostic({
             level: 'info',
@@ -1093,6 +1180,7 @@ export default function App() {
               documentId,
               fileName: file.name,
               height: rawResult.height,
+              orientation: rawResult.orientation ?? null,
               width: rawResult.width,
             },
           });
@@ -1102,7 +1190,7 @@ export default function App() {
             buffer: rgba.buffer,
             fileName: file.name,
             mime: 'image/x-raw-rgba',
-            size: rgba.byteLength,
+            size: sourceFileSize,
             rawDimensions: {
               width: rawResult.width,
               height: rawResult.height,
@@ -1143,7 +1231,7 @@ export default function App() {
           buffer,
           fileName: file.name,
           mime: file.type || 'application/octet-stream',
-          size: file.size,
+          size: sourceFileSize,
         });
       }
 
@@ -1164,9 +1252,12 @@ export default function App() {
 
       const nextDocument: WorkspaceDocument = {
         id: documentId,
-        source: decoded.metadata,
+        source: {
+          ...decoded.metadata,
+          size: sourceFileSize,
+        },
         previewLevels: decoded.previewLevels,
-        settings: structuredClone(initialProfile.defaultSettings),
+        settings: initialSettings,
         profileId: initialProfile.id,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
@@ -1187,7 +1278,7 @@ export default function App() {
       addRecentFile({
         name: file.name,
         path: isDesktopShell() ? (nativePath ?? null) : null,
-        size: file.size,
+        size: sourceFileSize,
       });
       appendDiagnostic({
         level: 'info',
@@ -1202,6 +1293,7 @@ export default function App() {
           width: decoded.metadata.width,
         },
       });
+      setBlockingOverlay(null);
     } catch (importError) {
       if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) return;
 
@@ -1221,6 +1313,7 @@ export default function App() {
       setDocumentState(null);
       setPreviewVisibility(false);
       clearCanvas();
+      setBlockingOverlay(null);
     }
   }, [cancelPendingPreviewRetry, cancelScheduledInteractivePreview, clearCanvas, disposeDocument, fallbackProfile, resetHistory, setPreviewVisibility]);
 
@@ -1228,7 +1321,7 @@ export default function App() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    await importFile(file);
+    await importFile(file, getNativePathFromFile(file));
   };
 
   const handleOpenImage = useCallback(async () => {
@@ -1243,7 +1336,7 @@ export default function App() {
         return;
       }
 
-      await importFile(result.file, result.path);
+      await importFile(result.file, result.path, result.size);
     } catch (openError) {
       const message = formatError(openError);
       appendDiagnostic({ level: 'error', code: 'OPEN_DIALOG_FAILED', message });
@@ -1540,15 +1633,9 @@ export default function App() {
           y,
         });
 
-        const safeRed = Math.max(sample.r, 1);
-        const safeBlue = Math.max(sample.b, 1);
-        const safeGreen = Math.max(sample.g, 1);
-
         handleSettingsChange({
           filmBaseSample: sample,
-          redBalance: clamp(safeGreen / safeRed, 0.5, 1.5),
-          greenBalance: 1,
-          blueBalance: clamp(safeGreen / safeBlue, 0.5, 1.5),
+          ...getFilmBaseChannelBalance(sample),
         });
 
         setIsPickingFilmBase(false);
@@ -1643,7 +1730,7 @@ export default function App() {
     setIsDragActive(false);
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
-    await importFile(file);
+    await importFile(file, getNativePathFromFile(file));
   }, [importFile]);
 
   const handleTitleBarMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -1658,7 +1745,38 @@ export default function App() {
     });
   }, [usesNativeFileDialogs]);
 
-  const showBlockingOverlay = documentState?.status === 'loading' || (documentState?.status === 'processing' && !hasVisiblePreview);
+  const showBlockingOverlay = Boolean(
+    documentState
+    && documentState.status !== 'error'
+    && documentState.status !== 'exporting'
+    && (
+      documentState.status === 'loading'
+      || documentState.status === 'processing'
+      || !hasVisiblePreview
+    ),
+  );
+  const overlayContent = blockingOverlay ?? (
+    showBlockingOverlay && documentState
+      ? {
+        title: documentState.status === 'loading' && isRawExtension(documentState.source.extension)
+          ? 'RAW import underway'
+          : (
+            documentState.status === 'loading'
+              ? 'Import underway'
+              : (!hasVisiblePreview ? 'Preparing initial preview' : 'Rendering preview')
+          ),
+        detail: documentState.status === 'loading' && isRawExtension(documentState.source.extension)
+          ? 'Decoding the RAW file and preparing the first preview.'
+          : (
+            documentState.status === 'loading'
+              ? 'Building preview levels for the imported image.'
+              : (!hasVisiblePreview
+                ? 'Waiting for the first processed frame to draw to the canvas.'
+                : 'Applying the current conversion settings.')
+          ),
+      }
+      : null
+  );
   const isExporting = documentState?.status === 'exporting';
 
   return (
@@ -1844,7 +1962,7 @@ export default function App() {
                   Select Files
                 </button>
                 <RecentFilesList
-                  onImport={(file, path) => void importFile(file, path)}
+                  onImport={(file, path, size) => void importFile(file, path, size)}
                   onOpenPicker={() => void handleOpenImage()}
                 />
               </motion.div>
@@ -1955,15 +2073,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {showBlockingOverlay && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-zinc-950/50 backdrop-blur-sm z-10">
-                      <Loader2 className="animate-spin text-zinc-400" size={48} />
-                      <p className="text-zinc-400 text-sm font-medium animate-pulse">
-                        {documentState.status === 'loading' ? 'Decoding high-resolution file…' : 'Rendering preview…'}
-                      </p>
-                    </div>
-                  )}
-
                 </div>
 
                 <div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-3">
@@ -1989,8 +2098,25 @@ export default function App() {
                   </div>
                 </div>
               </motion.div>
-            )}
+          )}
           </AnimatePresence>
+
+          {overlayContent && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-zinc-950/55 backdrop-blur-sm">
+              <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-950/95 px-6 py-5 shadow-2xl shadow-black/60">
+                <div className="flex items-center gap-4">
+                  <Loader2 className="shrink-0 animate-spin text-zinc-200" size={30} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-zinc-100">{overlayContent.title}</p>
+                    <p className="mt-1 text-xs text-zinc-400">{overlayContent.detail}</p>
+                  </div>
+                </div>
+                <div className="mt-4 h-2 overflow-hidden rounded-full bg-zinc-800">
+                  <div className="h-full w-1/2 animate-pulse rounded-full bg-zinc-200" />
+                </div>
+              </div>
+            </div>
+          )}
 
           {error && (
             <motion.div

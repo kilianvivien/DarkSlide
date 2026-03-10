@@ -71,6 +71,11 @@ fn applyWhiteBlackPoint(value: f32, bp: f32, wp: f32) -> f32 {
   return (value - bp) / range;
 }
 
+fn applyFilmBaseCompensation(value: f32, sampleValue: f32) -> f32 {
+  let invertedFilmBase = 1.0 - clampF(sampleValue, 1.0 / 255.0, 1.0);
+  return clampF((value - invertedFilmBase) / max(1.0 / 255.0, 1.0 - invertedFilmBase), 0.0, 1.0);
+}
+
 fn applyTonalCharacter(value: f32) -> f32 {
   var v = value;
 
@@ -116,6 +121,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     g = 1.0 - g;
     b = 1.0 - b;
 
+    r = applyFilmBaseCompensation(r, u.filmBaseR);
+    g = applyFilmBaseCompensation(g, u.filmBaseG);
+    b = applyFilmBaseCompensation(b, u.filmBaseB);
+
     if (u.hasColorMatrix > 0.5) {
       let nr = u.cm0 * r + u.cm1 * g + u.cm2 * b;
       let ng = u.cm3 * r + u.cm4 * g + u.cm5 * b;
@@ -124,10 +133,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       g = ng;
       b = nb;
     }
-
-    r *= u.filmBaseR;
-    g *= u.filmBaseG;
-    b *= u.filmBaseB;
 
     if (u.isColor > 0.5) {
       r *= u.chanBalR;

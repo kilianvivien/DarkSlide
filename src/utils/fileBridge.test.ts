@@ -12,6 +12,7 @@ const dialogState = vi.hoisted(() => ({
 
 const fsState = vi.hoisted(() => ({
   readFile: vi.fn(),
+  stat: vi.fn(),
   writeFile: vi.fn(),
   readTextFile: vi.fn(),
   writeTextFile: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   readFile: fsState.readFile,
+  stat: fsState.stat,
   writeFile: fsState.writeFile,
   readTextFile: fsState.readTextFile,
   writeTextFile: fsState.writeTextFile,
@@ -43,6 +45,7 @@ describe('fileBridge', () => {
     dialogState.save.mockReset();
     dialogState.ask.mockReset();
     fsState.readFile.mockReset();
+    fsState.stat.mockReset();
     fsState.writeFile.mockReset();
     fsState.readTextFile.mockReset();
     fsState.writeTextFile.mockReset();
@@ -79,6 +82,21 @@ describe('fileBridge', () => {
     expect(result?.file.name).toBe('scan.tiff');
     expect(result?.file.type).toBe('image/tiff');
     expect(result?.path).toBe('/Users/tester/Desktop/scan.tiff');
+    expect(result?.size).toBe(4);
+  });
+
+  it('opens RAW files through the desktop dialog without reading them into JS first', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.open.mockResolvedValue('/Users/tester/Desktop/scan.nef');
+    fsState.stat.mockResolvedValue({ size: 30_955_119 });
+
+    const result = await openImageFile();
+
+    expect(fsState.readFile).not.toHaveBeenCalled();
+    expect(fsState.stat).toHaveBeenCalledWith('/Users/tester/Desktop/scan.nef');
+    expect(result?.file.name).toBe('scan.nef');
+    expect(result?.file.size).toBe(0);
+    expect(result?.size).toBe(30_955_119);
   });
 
   it('downloads blobs in the browser build', async () => {

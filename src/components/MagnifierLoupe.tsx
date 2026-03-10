@@ -119,19 +119,22 @@ export function MagnifierLoupe({ sourceCanvas, containerRef, magnification, size
       const loupeCtx = loupeCanvas.getContext('2d', { willReadFrequently: true });
       const centerPixel = loupeCtx?.getImageData(center, center, 1, 1).data;
       const containerRect = container.getBoundingClientRect();
-      const defaultLeft = pointer.x - containerRect.left + 20;
-      const defaultTop = pointer.y - containerRect.top - size - 20;
-      const left = defaultLeft + size > containerRect.width
-        ? pointer.x - containerRect.left - size - 20
-        : defaultLeft;
-      const top = defaultTop < 0
-        ? pointer.y - containerRect.top + 20
-        : defaultTop;
+      const pointerLeft = pointer.x - containerRect.left;
+      const pointerTop = pointer.y - containerRect.top;
+      const horizontalOffset = 28;
+      const verticalOffset = 28;
+      const labelAllowance = 36;
+      const preferredLeft = pointerLeft + horizontalOffset;
+      const fallbackLeft = pointerLeft - size - horizontalOffset;
+      const preferredTop = pointerTop + verticalOffset;
+      const fallbackTop = pointerTop - size - labelAllowance - verticalOffset;
+      const left = preferredLeft + size <= containerRect.width - 16 ? preferredLeft : fallbackLeft;
+      const top = preferredTop + size + labelAllowance <= containerRect.height - 16 ? preferredTop : fallbackTop;
 
       setState({
         visible: true,
         left: clamp(left, 0, Math.max(0, containerRect.width - size)),
-        top: clamp(top, 0, Math.max(0, containerRect.height - size - 28)),
+        top: clamp(top, 0, Math.max(0, containerRect.height - size - labelAllowance)),
         rgb: centerPixel ? [centerPixel[0], centerPixel[1], centerPixel[2]] : [0, 0, 0],
       });
     };

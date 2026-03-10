@@ -2,6 +2,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from '../constants';
 import type { ExportFormat } from '../types';
 import { getFileExtension } from './imagePipeline';
+import { isRawExtension } from './rawImport';
 
 const SUPPORTED_DIALOG_EXTENSIONS = SUPPORTED_EXTENSIONS.map((extension) => extension.slice(1));
 const ALL_DIALOG_EXTENSIONS = [...SUPPORTED_DIALOG_EXTENSIONS, ...RAW_EXTENSIONS.map((extension) => extension.slice(1))];
@@ -39,14 +40,41 @@ export function isDesktopShell() {
   return isTauri();
 }
 
-export async function openImageFile() {
+export interface NativeOpenFileResult {
+  file: File;
+  path: string;
+  size: number;
+}
+
+async function openDesktopFile(path: string): Promise<NativeOpenFileResult> {
+  const { readFile, stat } = await import('@tauri-apps/plugin-fs');
+  const fileName = getFileName(path);
+  const extension = getFileExtension(fileName);
+
+  if (isRawExtension(extension)) {
+    const metadata = await stat(path);
+    return {
+      file: new File([], fileName, { type: 'application/octet-stream' }),
+      path,
+      size: typeof metadata.size === 'number' ? metadata.size : 0,
+    };
+  }
+
+  const bytes = await readFile(path);
+  return {
+    file: new File([bytes], fileName, { type: getMimeTypeForFile(fileName) }),
+    path,
+    size: bytes.byteLength,
+  };
+}
+
+export async function openImageFile(): Promise<NativeOpenFileResult | null> {
   if (!isDesktopShell()) {
     return null;
   }
 
-  const [{ open }, { readFile }] = await Promise.all([
+  const [{ open }] = await Promise.all([
     import('@tauri-apps/plugin-dialog'),
-    import('@tauri-apps/plugin-fs'),
   ]);
 
   const selected = await open({
@@ -65,17 +93,12 @@ export async function openImageFile() {
     return null;
   }
 
-  const fileName = getFileName(selected);
-  const bytes = await readFile(selected);
-  return { file: new File([bytes], fileName, { type: getMimeTypeForFile(fileName) }), path: selected };
+  return openDesktopFile(selected);
 }
 
-export async function openImageFileByPath(path: string): Promise<File | null> {
+export async function openImageFileByPath(path: string): Promise<NativeOpenFileResult | null> {
   if (!isDesktopShell()) return null;
-  const { readFile } = await import('@tauri-apps/plugin-fs');
-  const fileName = getFileName(path);
-  const bytes = await readFile(path);
-  return new File([bytes], fileName, { type: getMimeTypeForFile(fileName) });
+  return openDesktopFile(path);
 }
 
 export async function saveExportBlob(blob: Blob, filename: string, format: ExportFormat) {

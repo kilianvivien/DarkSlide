@@ -1,5 +1,5 @@
-use rawler::analyze::raw_to_srgb;
-use rawler::decoders::RawDecodeParams;
+use rawler::analyze::{analyze_metadata, AnalyzerData};
+use rawler::imgop::develop::{ProcessingStep, RawDevelop};
 use serde::Serialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
@@ -12,13 +12,32 @@ struct RawDecodeResult {
     data: Vec<u8>,
     color_space: String,
     white_balance: Option<[f64; 3]>,
+    orientation: Option<u16>,
 }
 
 #[tauri::command]
 fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
-    let decode_params = RawDecodeParams::default();
     let raw_image = rawler::decode_file(&path).map_err(|error| error.to_string())?;
-    let developed = raw_to_srgb(&path, &decode_params).map_err(|error| error.to_string())?;
+    let developed = RawDevelop {
+        // Camera white balance is tuned for the photographed scene, not for an
+        // orange film negative. Applying it here makes DarkSlide's own negative
+        // conversion start from an already-skewed source.
+        steps: vec![
+            ProcessingStep::Rescale,
+            ProcessingStep::Demosaic,
+            ProcessingStep::CropActiveArea,
+            ProcessingStep::Calibrate,
+            ProcessingStep::CropDefault,
+            ProcessingStep::SRgb,
+        ],
+    }
+        .develop_intermediate(&raw_image)
+        .and_then(|intermediate| {
+            intermediate
+                .to_dynamic_image()
+                .ok_or_else(|| rawler::RawlerError::DecoderFailed("Failed to convert developed RAW image to a dynamic image".to_string()))
+        })
+        .map_err(|error| error.to_string())?;
     let rgb = developed.to_rgb8();
 
     let white_balance = match raw_image.wb_coeffs {
@@ -35,12 +54,20 @@ fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
         _ => None,
     };
 
+    let orientation = analyze_metadata(&path)
+        .ok()
+        .and_then(|analysis| match analysis.data {
+            Some(AnalyzerData::Metadata(metadata)) => metadata.raw_metadata.exif.orientation,
+            _ => None,
+        });
+
     Ok(RawDecodeResult {
         width: rgb.width(),
         height: rgb.height(),
         data: rgb.into_raw(),
         color_space: "sRGB".to_string(),
         white_balance,
+        orientation,
     })
 }
 

@@ -94,6 +94,11 @@ fn applyWhiteBlackPoint(value: f32, blackPoint: f32, whitePoint: f32) -> f32 {
   return (value - blackPoint) / range;
 }
 
+fn applyFilmBaseCompensation(value: f32, sampleValue: f32) -> f32 {
+  let invertedFilmBase = 1.0 - clampF(sampleValue, 1.0 / 255.0, 1.0);
+  return clampF((value - invertedFilmBase) / max(1.0 / 255.0, 1.0 - invertedFilmBase), 0.0, 1.0);
+}
+
 fn applyTonalCharacter(value: f32, uniforms: Uniforms) -> f32 {
   var next = value;
 
@@ -142,6 +147,10 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
     g = 1.0 - g;
     b = 1.0 - b;
 
+    r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
+    g = applyFilmBaseCompensation(g, uniforms.filmBaseG);
+    b = applyFilmBaseCompensation(b, uniforms.filmBaseB);
+
     if (uniforms.hasColorMatrix > 0.5) {
       let nr = uniforms.cm0 * r + uniforms.cm1 * g + uniforms.cm2 * b;
       let ng = uniforms.cm3 * r + uniforms.cm4 * g + uniforms.cm5 * b;
@@ -150,10 +159,6 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       g = ng;
       b = nb;
     }
-
-    r *= uniforms.filmBaseR;
-    g *= uniforms.filmBaseG;
-    b *= uniforms.filmBaseB;
 
     if (uniforms.isColor > 0.5) {
       r *= uniforms.chanBalR;

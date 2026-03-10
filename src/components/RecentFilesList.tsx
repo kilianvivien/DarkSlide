@@ -20,7 +20,7 @@ function formatSize(bytes: number): string {
 }
 
 interface RecentFilesListProps {
-  onImport: (file: File, path: string | null) => void;
+  onImport: (file: File, path: string | null, size?: number) => void;
   onOpenPicker: () => void;
 }
 
@@ -39,9 +39,9 @@ export function RecentFilesList({ onImport, onOpenPicker }: RecentFilesListProps
       return;
     }
     try {
-      const file = await openImageFileByPath(entry.path);
-      if (file) {
-        onImport(file, entry.path);
+      const result = await openImageFileByPath(entry.path);
+      if (result) {
+        onImport(result.file, entry.path, result.size);
       }
     } catch {
       onOpenPicker();
