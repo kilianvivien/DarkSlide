@@ -225,7 +225,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <h3 className="text-sm font-semibold text-zinc-100">DarkSlide</h3>
                         <p className="text-[11px] text-zinc-500 mt-0.5">Version 0.1.0 beta</p>
                         <p className="text-[11px] text-zinc-600 mt-2 leading-relaxed max-w-xs">
-                          Film negative converter. Import TIFF, JPEG, PNG, or WebP scans and convert them non-destructively.
+                          Film negative converter. Import TIFF, JPEG, or PNG scans, plus RAW files in the desktop app, and convert them non-destructively.
                         </p>
                       </div>
                     </div>

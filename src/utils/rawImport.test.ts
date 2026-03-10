@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
-import { buildRawInitialSettings, estimateFilmBaseSample, getFilmBaseChannelBalance, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, estimateFilmBaseSample, getFilmBaseChannelBalance, getFilmBaseExposure, rotationFromExifOrientation } from './rawImport';
 
 function createRawRgb(width: number, height: number, border: [number, number, number], center: [number, number, number]) {
   const data = new Uint8Array(width * height * 3);
@@ -55,9 +55,15 @@ describe('rawImport', () => {
 
   it('derives channel balances from the sampled film base', () => {
     expect(getFilmBaseChannelBalance({ r: 168, g: 151, b: 134 })).toEqual({
-      redBalance: 151 / 168,
+      redBalance: (255 - 151) / (255 - 168),
       greenBalance: 1,
-      blueBalance: 151 / 134,
+      blueBalance: (255 - 151) / (255 - 134),
     });
+  });
+
+  it('derives a white-reference exposure from the sampled film base', () => {
+    expect(getFilmBaseExposure({ r: 168, g: 151, b: 134 })).toBe(
+      Math.round(50 * Math.log2((245 / 255) / ((255 - 151) / 255))),
+    );
   });
 });

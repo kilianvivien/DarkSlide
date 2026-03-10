@@ -107,15 +107,25 @@ export function getFilmBaseChannelBalance(sample: FilmBaseSample | null) {
     };
   }
 
-  const safeR = Math.max(sample.r, 1);
-  const safeG = Math.max(sample.g, 1);
-  const safeB = Math.max(sample.b, 1);
+  const safeR = Math.max(255 - sample.r, 1);
+  const safeG = Math.max(255 - sample.g, 1);
+  const safeB = Math.max(255 - sample.b, 1);
 
   return {
     redBalance: safeG / safeR,
     greenBalance: 1,
     blueBalance: safeG / safeB,
   };
+}
+
+export function getFilmBaseExposure(sample: FilmBaseSample | null, targetWhitePoint = 245 / 255) {
+  if (!sample) {
+    return 0;
+  }
+
+  const positiveGreen = clamp((255 - sample.g) / 255, 1 / 255, 1);
+  const target = clamp(targetWhitePoint, 1 / 255, 1);
+  return clamp(Math.round(50 * Math.log2(target / positiveGreen)), -100, 100);
 }
 
 export function buildRawInitialSettings(

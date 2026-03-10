@@ -36,7 +36,7 @@ import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
-import { buildRawInitialSettings, estimateFilmBaseSample, isRawExtension } from './utils/rawImport';
+import { buildRawInitialSettings, estimateFilmBaseSample, getFilmBaseChannelBalance, getFilmBaseExposure, isRawExtension } from './utils/rawImport';
 
 interface RawDecodeResult {
   width: number;
@@ -1651,7 +1651,9 @@ export default function App() {
         });
 
         handleSettingsChange({
-          filmBaseSample: sample,
+          filmBaseSample: null,
+          exposure: getFilmBaseExposure(sample, documentState.settings.whitePoint / 255),
+          ...getFilmBaseChannelBalance(sample),
         });
 
         setIsPickingFilmBase(false);
@@ -1940,7 +1942,7 @@ export default function App() {
                   <ImageIcon size={32} className="text-zinc-600" />
                 </div>
                 <h2 className="text-2xl font-semibold text-zinc-200 mb-3 tracking-tight">Drop your negatives here</h2>
-                <p className="text-zinc-500 text-sm leading-relaxed mb-8">Import TIFF, JPEG, PNG, or WebP scans.</p>
+                <p className="text-zinc-500 text-sm leading-relaxed mb-8">Import TIFF, JPEG, or PNG scans, plus RAW files in the desktop app.</p>
                 <button
                   onClick={() => void handleOpenImage()}
                   className="px-8 py-3 bg-zinc-100 text-zinc-950 rounded-2xl font-semibold hover:bg-white transition-all shadow-xl shadow-black/40"
