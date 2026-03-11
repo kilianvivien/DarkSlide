@@ -80,14 +80,17 @@ DarkSlide is continuously evolving. Some of the major phases include:
 ## 🙏 Acknowledgements
 
 DarkSlide is built on top of some amazing open-source projects:
-- [React](https://react.dev/) - The library for web and native user interfaces.
-- [Tauri](https://tauri.app/) - Build smaller, faster, and more secure desktop applications with a web frontend.
-- [Vite](https://vitejs.dev/) - Next Generation Frontend Tooling.
-- [Tailwind CSS](https://tailwindcss.com/) - A utility-first CSS framework for rapid UI development.
-- [Lucide](https://lucide.dev/) - Beautiful & consistent icon toolkit.
-- [Framer Motion](https://www.framer.com/motion/) - An open source motion library for React.
-- [UTIF.js](https://github.com/photopea/UTIF.js) - Fast and advanced TIFF decoder.
-- [rawler](https://github.com/dnglab/dnglab) - Pure-Rust RAW image decoder supporting DNG, CR3, NEF, ARW, RAF, and RW2.
+
+| Library | License | Description |
+|---|---|---|
+| [React](https://react.dev/) | MIT | UI library |
+| [Tauri](https://tauri.app/) | MIT / Apache-2.0 | Desktop application framework |
+| [Vite](https://vitejs.dev/) | MIT | Frontend build tooling |
+| [Tailwind CSS](https://tailwindcss.com/) | MIT | Utility-first CSS framework |
+| [Lucide](https://lucide.dev/) | ISC | Icon toolkit |
+| [Framer Motion](https://www.framer.com/motion/) | MIT | Animation library for React |
+| [UTIF.js](https://github.com/photopea/UTIF.js) | MIT | Fast TIFF decoder |
+| [rawler](https://github.com/dnglab/dnglab) | MIT | Pure-Rust RAW image decoder |
 
 ## 📜 License
 
