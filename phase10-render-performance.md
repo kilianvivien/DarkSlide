@@ -8,7 +8,7 @@ Phase 10 ships three independent workstreams that improve interactive editing re
 |---|---|---|---|
 | A. React rendering efficiency | 6 files | Low | Fewer unnecessary re-renders during slider drags |
 | B. CPU pipeline optimisations | 2 files | Low | 5–15% faster per-frame CPU render time |
-| C. EXIF metadata preservation | 7 files, 1 new dep | Low–Medium | Exported images carry orientation, date, software tag |
+| C. EXIF metadata preservation | 8 files, 1 new dep | Medium | Exported images carry orientation, date, software tag |
 
 ---
 
@@ -31,7 +31,7 @@ Wrap the following components with `React.memo()`:
 
 | Component | File | Why it helps |
 |---|---|---|
-| `Sidebar` | `src/components/Sidebar.tsx` | Guards the entire sidebar tree from re-rendering on histogram-only or crop-only updates |
+| `Sidebar` | `src/components/Sidebar.tsx` | Helps on tab-only or parent-layout updates, but the bigger win comes from memoized children and narrower props |
 | `Histogram` | `src/components/Histogram.tsx` | Only needs to re-render when `data` changes, not on every settings update |
 | `CurvesControl` | `src/components/CurvesControl.tsx` | Only depends on `curves` sub-object and its callbacks |
 | `CropOverlay` | `src/components/CropOverlay.tsx` | Only depends on `crop`, image dimensions, and callbacks |
@@ -53,47 +53,55 @@ For `Slider`, since it receives an `onChange` callback, memoization only helps i
 
 ### A2. Stabilize callbacks passed to memoized children
 
-**In `Sidebar.tsx`** — the 27 inline `onChange` closures on Sliders:
+**In `Sidebar.tsx`** — stabilize the callbacks that feed memoized leaves:
 
-Currently each slider gets `onChange={(value) => onSettingsChange({ exposure: value })}`, which creates a new function reference every render.
+Currently each slider gets a fresh inline callback such as `onChange={(value) => onSettingsChange({ exposure: value })}`, which defeats `React.memo` on `Slider`.
 
-Create stable, memoized callbacks for each slider group using `useCallback`:
+Do not model this as one generic `keyof ConversionSettings` handler map. The current sidebar has three distinct update shapes:
+
+1. **Scalar settings** — `exposure`, `contrast`, `blackPoint`, `whitePoint`, `highlightProtection`, `saturation`, `temperature`, `tint`, `redBalance`, `greenBalance`, `blueBalance`
+2. **Nested settings** — `blackAndWhite`, `sharpen`, `noiseReduction`
+3. **Export options** — `quality` uses `onExportOptionsChange`, not `onSettingsChange`
+
+Recommended pattern:
 
 ```tsx
 const handleExposureChange = useCallback(
   (value: number) => onSettingsChange({ exposure: value }),
   [onSettingsChange],
 );
+
+const handleBlackAndWhiteEnabledChange = useCallback(
+  (enabled: boolean) => onSettingsChange({
+    blackAndWhite: { ...settings.blackAndWhite, enabled },
+  }),
+  [onSettingsChange, settings.blackAndWhite],
+);
+
+const handleExportQualityChange = useCallback(
+  (value: number) => onExportOptionsChange({ quality: value / 100 }),
+  [onExportOptionsChange],
+);
 ```
 
-Since there are 27 sliders, group them by pane to keep it manageable:
-
-1. **Basic adjustments** (4 sliders): exposure, contrast, blackPoint, whitePoint
-2. **Highlight protection** (1 slider): highlightProtection
-3. **Color sliders** (3 sliders): saturation, temperature, tint
-4. **Color balance** (3 sliders): redBalance, greenBalance, blueBalance
-5. **B&W mix** (4 sliders): redMix, greenMix, blueMix, yellowMix
-6. **Sharpen** (2 sliders): amount, radius
-7. **Noise reduction** (1 slider): luminance
-8. **Export quality** (1 slider): quality
-
-Use a factory helper to avoid 27 individual `useCallback` calls:
+For the scalar settings, a factory helper is fine:
 
 ```tsx
-const sliderHandler = useCallback(
+const createScalarSliderHandler = useCallback(
   (key: keyof ConversionSettings) => (value: number) => {
     onSettingsChange({ [key]: value } as Partial<ConversionSettings>);
   },
   [onSettingsChange],
 );
-// Then: memoize each key's handler with useMemo over a map
 ```
 
-Or, since the slider keys are static, create a memoized handler map:
+But restrict it to the scalar numeric keys only. Do not use it for nested settings or export options.
+
+Since the slider keys are static, a memoized handler map is still reasonable:
 
 ```tsx
 const handlers = useMemo(() => {
-  const keys = ['exposure', 'contrast', 'blackPoint', 'whitePoint', ...] as const;
+  const keys = ['exposure', 'contrast', 'blackPoint', 'whitePoint', 'highlightProtection', 'saturation', 'temperature', 'tint', 'redBalance', 'greenBalance', 'blueBalance'] as const;
   const map: Record<string, (v: number) => void> = {};
   for (const key of keys) {
     map[key] = (value: number) => onSettingsChange({ [key]: value } as Partial<ConversionSettings>);
@@ -344,6 +352,8 @@ This means during a crop drag (the most common geometry interaction), the rotati
 
 **Cache eviction policy:** Keep at most 2 entries per cache level (current + previous) to bound memory. Since preview and source use separate caches, total entries are capped at 4 per document.
 
+Be explicit that this optimization only affects the worker tile path (`prepare-tile-job` / `read-tile`). It does not change the simpler preview `render` path used during CPU fallback.
+
 **Also:** Replace `JSON.stringify` for the cache key with a cheaper string concatenation:
 
 ```typescript
@@ -363,7 +373,12 @@ function rotationCacheKey(sourceKind: string, levelId: string | null, rotation: 
 
 - Run `npm run test` — the existing `imagePipeline.test.ts` golden-pixel tests will catch any regression in output values.
 - Verify that fused LUTs produce identical output by running the existing per-slider pipeline tests.
-- The geometry cache split is transparent to the client — `imageWorkerClient.ts` message protocol is unchanged.
+- Add worker/client tests for geometry cache behavior:
+  - crop-only change reuses the rotation cache
+  - rotation change invalidates rotation cache
+  - cache eviction keeps current + previous only
+  - cancelled tile jobs still clean up correctly
+- The geometry cache split is transparent to the client message protocol — `imageWorkerClient.ts` request shapes stay unchanged.
 - Manual test: open a 40 MP scan, drag the crop handles rapidly, confirm the preview updates without visible lag increase.
 
 ---
@@ -372,7 +387,12 @@ function rotationCacheKey(sourceKind: string, levelId: string | null, rotation: 
 
 ### Current Problem
 
-Exported images carry zero metadata. The original scan's EXIF data (orientation, color profile, date, camera/scanner info) is silently dropped during the canvas round-trip. `createImageBitmap()` discards EXIF on decode; `OffscreenCanvas.convertToBlob()` produces a bare pixel blob.
+Exported images carry zero metadata. The original scan's EXIF data (orientation, date, camera/scanner info) is silently dropped during the canvas round-trip, and the current export flow has two backend branches:
+
+- CPU fallback exports entirely inside `imageWorker.ts`
+- GPU tiled export assembles pixels and creates the blob in `imageWorkerClient.ts`
+
+Also, the current raster decode path uses `createImageBitmap(blob)` in the worker. Browsers may already honor EXIF orientation during decode, so orientation handling must be made explicit to avoid double-rotation.
 
 ### C1. Choose an EXIF library
 
@@ -467,7 +487,15 @@ function extractExif(buffer: ArrayBuffer): ExifMetadata | undefined {
 }
 ```
 
-Call `extractExif(buffer)` in the JPEG decode path and include the result in the `DecodedImage` response sent back to the main thread. This means extending the `DecodedImage` type:
+Call `extractExif(buffer)` in the JPEG decode path and include the result in the `DecodedImage` response sent back to the main thread. To avoid applying orientation twice, make the decode policy explicit:
+
+```typescript
+const bitmap = await createImageBitmap(blob, { imageOrientation: 'none' });
+```
+
+That keeps the decoded pixels in source-file orientation so DarkSlide can apply `rotationFromExifOrientation()` exactly once during document setup.
+
+This means extending the `DecodedImage` type:
 
 ```typescript
 export interface DecodedImage {
@@ -476,27 +504,37 @@ export interface DecodedImage {
 }
 ```
 
-**For TIFF files:** UTIF already parses IFD tags internally. We can read orientation from the first IFD:
+**For TIFF files:** avoid a second full parse of the same large buffer. `decodeTiffRaster()` already calls `UTIF.decode(buffer)` internally, so extend it to surface first-frame metadata alongside pixel data:
 
 ```typescript
-const ifds = UTIF.decode(buffer);
-const orientation = ifds[0]?.t274?.[0];  // Tag 274 = Orientation
+export interface DecodedTiffRaster {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+  frameIndex: number;
+  frameCount: number;
+  orientation?: number;
+}
 ```
 
 **For PNG/WebP:** These formats rarely carry useful EXIF. Skip extraction — return `undefined`.
 
-**For RAW (desktop):** The Tauri `decode_raw` command already reads orientation via `analyze_metadata()`. Extend the `RawDecodeResult` to also return `dateTimeOriginal`, `make`, `model` from rawler metadata, and store in `ExifMetadata`.
+**For RAW (desktop):** The Tauri `decode_raw` command already reads orientation via `analyze_metadata()`. Extend the `RawDecodeResult` to also return `dateTimeOriginal`, `make`, `model` from rawler metadata, and store in `ExifMetadata`. If phase 10 is meant to stay browser-focused, this can be a follow-up rather than part of the initial implementation.
 
 ### C4. Orientation auto-apply
 
 **Where:** `src/utils/imageWorkerClient.ts` and `src/App.tsx`
 
-When `exif.orientation` is present (values 1–8), apply the corresponding rotation automatically during the initial document setup — the same way `rawImport.ts` already does for RAW files:
+When `exif.orientation` is present (values 1–8), apply the corresponding rotation automatically during the initial document setup — the same way `rawImport.ts` already does for RAW files.
 
-```typescript
+This depends on C3's explicit decode policy (`imageOrientation: 'none'`). If raster decode is left as browser-default orientation handling, this auto-rotation step must not run for JPEG imports.
+
+```tsx
 // Reuse the existing helper
 import { rotationFromExifOrientation } from './rawImport';
+```
 
+```typescript
 // In the decode result handler (App.tsx or wherever WorkspaceDocument is created):
 const rotation = rotationFromExifOrientation(decoded.exif?.orientation);
 if (rotation !== 0) {
@@ -510,7 +548,36 @@ Store the parsed `ExifMetadata` in `SourceMetadata` so it's available at export 
 
 ### C5. EXIF write on export
 
-**Where:** `src/utils/imageWorkerClient.ts` — after blob creation, before download
+**Where:** centralize in a backend-agnostic export finalization step, not only in `src/utils/imageWorkerClient.ts`
+
+Today export can finish in either place:
+
+- CPU worker path returns a finished blob from `imageWorker.ts`
+- GPU tiled path creates the blob in `imageWorkerClient.ts`
+
+The metadata injection step should therefore run after either branch yields `{ blob, filename }`. Recommended shape:
+
+```typescript
+async function finalizeExportBlob(
+  result: ExportResult,
+  format: ExportFormat,
+  embedMetadata: boolean,
+  sourceExif: ExifMetadata | undefined,
+): Promise<ExportResult> {
+  if (!embedMetadata) {
+    return result;
+  }
+
+  let blob = result.blob;
+  if (format === 'image/jpeg') {
+    blob = await injectExifIntoJpeg(blob, sourceExif);
+  } else if (format === 'image/png') {
+    blob = await injectPngTextChunk(blob, 'Software', 'DarkSlide');
+  }
+
+  return { ...result, blob };
+}
+```
 
 **For JPEG exports:**
 
@@ -563,19 +630,19 @@ function injectPngTextChunk(blob: Blob, key: string, value: string): Promise<Blo
 
 **Integration point:**
 
-In `imageWorkerClient.ts`, after `createBlobFromImageData()` returns the blob and before `saveExportBlob()`:
+In `imageWorkerClient.ts`, finalize the export result after either the CPU or GPU branch returns:
 
 ```typescript
-if (exportOptions.embedMetadata && sourceMetadata?.exif) {
-  if (format === 'image/jpeg') {
-    blob = await injectExifIntoJpeg(blob, sourceMetadata.exif);
-  } else if (format === 'image/png') {
-    blob = await injectPngTextChunk(blob, 'Software', 'DarkSlide');
-  }
-}
+const rawResult = await this.exportInternal(payload, true);
+return finalizeExportBlob(
+  rawResult,
+  payload.options.format,
+  payload.options.embedMetadata,
+  payload.sourceExif,
+);
 ```
 
-The `sourceMetadata` must be passed through the export flow. Currently `exportInternal()` receives an `ExportRequest` that doesn't include source metadata. Extend it:
+The source EXIF must be passed through the export flow. Currently `ExportRequest` doesn't include source metadata. Extend it:
 
 ```typescript
 export interface ExportRequest {
@@ -612,12 +679,13 @@ Add a tooltip: "Include camera info, date, and software tag in exported file. Di
 | `package.json` | Add `piexifjs` dependency |
 | `src/types.ts` | Add `ExifMetadata` interface, extend `SourceMetadata`, `ExportOptions`, `ExportRequest`, `DecodedImage` |
 | `src/constants.ts` | Update `DEFAULT_EXPORT_OPTIONS` with `embedMetadata: true` |
-| `src/utils/imageWorker.ts` | EXIF extraction in decode path (JPEG via piexifjs, TIFF via UTIF IFD tag) |
-| `src/utils/imageWorkerClient.ts` | EXIF injection in export path, pass `sourceExif` through export flow |
-| `src/App.tsx` | Store `exif` in `SourceMetadata` on decode, auto-apply orientation, pass metadata to export |
+| `src/utils/imageWorker.ts` | EXIF extraction in decode path, explicit raster decode orientation policy |
+| `src/utils/imageWorkerClient.ts` | Backend-agnostic export finalization, pass `sourceExif` through export flow |
+| `src/utils/tiff.ts` | Surface TIFF orientation from the existing decode pass instead of re-parsing |
+| `src/App.tsx` | Store `exif` in `SourceMetadata` on decode, auto-apply orientation exactly once, pass metadata to export |
 | `src/components/Sidebar.tsx` | "Embed metadata" checkbox in Export tab |
 | `src/utils/rawImport.ts` | Extend `rotationFromExifOrientation` for mirrored orientations (optional) |
-| `src-tauri/src/lib.rs` | Extend `RawDecodeResult` to return additional EXIF fields (date, make, model) |
+| `src-tauri/src/lib.rs` | Extend `RawDecodeResult` to return additional EXIF fields (optional desktop follow-up) |
 
 ### C — Testing
 
@@ -636,7 +704,7 @@ The three workstreams are independent and can be developed in parallel. Within e
 ### Phase A (React rendering): ~1–2 sessions
 1. Wrap all 6 components with `React.memo`
 2. Hoist all inline objects to module-level constants
-3. Memoize Sidebar slider callbacks (handler map pattern)
+3. Memoize Sidebar callbacks by update shape (scalar settings, nested settings, export options)
 4. Replace App.tsx inline arrow props with `useCallback`
 5. Narrow CropPane props (pass `settings.crop` instead of full `settings`)
 6. Run tests, verify no regressions
@@ -646,15 +714,16 @@ The three workstreams are independent and can be developed in parallel. Within e
 2. Build fused curve LUTs, replace per-pixel chained lookup
 3. Split geometry cache in `imageWorker.ts` (rotation + crop stages)
 4. Run `imagePipeline.test.ts` golden-pixel tests, verify exact output match
+5. Add worker/client cache-behavior tests for crop-only reuse and eviction
 
 ### Phase C (EXIF preservation): ~2 sessions
 1. Install `piexifjs`, add types (`ExifMetadata`, extended `SourceMetadata`, `ExportOptions`)
-2. Implement EXIF extraction in worker decode path
+2. Implement EXIF extraction in worker decode path and set explicit raster orientation decode policy
 3. Wire orientation auto-apply in App.tsx
-4. Implement EXIF injection in export path (JPEG + PNG software tag)
+4. Implement backend-agnostic export finalization (JPEG EXIF + PNG software tag)
 5. Add "Embed metadata" checkbox in Sidebar export tab
 6. Write round-trip tests
-7. Extend Tauri `decode_raw` to return additional metadata fields
+7. Optionally extend Tauri `decode_raw` to return additional metadata fields
 
 ---
 
@@ -664,4 +733,5 @@ The three workstreams are independent and can be developed in parallel. Within e
 - **WebP EXIF injection**: deferred — requires RIFF container manipulation.
 - **ICC profile preservation**: belongs to Phase 12 (ICC color management).
 - **EXIF for mirrored orientations** (2, 4, 5, 7): rare in scanner output; can be added later.
+- **RAW metadata expansion**: optional desktop follow-up unless this phase explicitly includes Tauri-side work.
 - **GPU pipeline optimizations**: belong to Phase 11 (GPU & Memory Hardening).

@@ -6,16 +6,16 @@ Phase 11 hardens the GPU pipeline and worker memory management for stability und
 
 | Workstream | Scope | Risk | Expected Impact |
 |---|---|---|---|
-| A. GPU buffer caching | `WebGPUPipeline.ts`, `imageWorkerClient.ts`, `types.ts` | Low | Eliminates redundant GPU uploads during rapid slider drags |
+| A. GPU uniform upload elision | `WebGPUPipeline.ts` | Low | Eliminates redundant uniform/LUT uploads during rapid slider drags |
 | B. Memory hardening | `imageWorker.ts`, `imageWorkerClient.ts`, `App.tsx`, `imagePipeline.ts`, `fileBridge.ts`, `constants.ts`, `types.ts`, `SettingsModal.tsx` | Medium | Prevents OOM on large files, plugs blob/canvas leaks, adds graceful error messaging |
 
 ---
 
-## Workstream A: GPU Buffer Caching
+## Workstream A: GPU Uniform Upload Elision
 
 ### Current Problem
 
-The `WebGPUPipeline` in `src/utils/gpu/WebGPUPipeline.ts` rewrites all uniform buffers and curve LUTs on every render dispatch, even when the `ConversionSettings` have not changed between frames. During rapid slider drags this means redundant GPU uploads every interaction frame. Additionally, `ensureTextures()` destroys and recreates all five work textures when any dimension changes, even if only one dimension changed.
+The `WebGPUPipeline` in `src/utils/gpu/WebGPUPipeline.ts` rewrites all uniform buffers and curve LUTs on every render dispatch, even when the effective processing state has not changed between frames. During rapid slider drags this means redundant GPU uploads every interaction frame.
 
 **Current per-render GPU write cost:**
 - `processingUniformBuffer`: 192 bytes (`48 * 4`) via `writeBuffer` — line 474
@@ -26,17 +26,17 @@ The `WebGPUPipeline` in `src/utils/gpu/WebGPUPipeline.ts` rewrites all uniform b
 
 None of these are guarded by a dirty check.
 
-### A1. Settings revision tracking
+### A1. Hash-based uniform upload elision
 
-Add a `settingsRevision` counter to skip redundant uniform buffer uploads when settings have not changed between consecutive renders.
+Do not thread a new `settingsRevision` token through the app and worker for Phase 11. The lowest-risk change is local to `WebGPUPipeline`: hash the generated uniform payloads and skip `writeBuffer` when the byte content is unchanged.
 
 **Changes to `WebGPUPipeline.ts`:**
 
 Add private fields to track the last-uploaded state:
 
 ```ts
-private lastProcessingUniformsHash: string | null = null;
-private lastCurveLutHash: string | null = null;
+private lastProcessingUniformsHash: number | null = null;
+private lastCurveLutHash: number | null = null;
 ```
 
 Before each `writeBuffer` call in `processImageData()`, compute a lightweight hash of the uniform data and compare against the cached value. Skip the write if unchanged:
@@ -59,7 +59,7 @@ if (curveHash !== this.lastCurveLutHash) {
 }
 ```
 
-**Hash function** — use a fast FNV-1a over the Float32Array's backing ArrayBuffer. This is cheaper than the writeBuffer call it guards:
+**Hash function** — use a fast FNV-1a over the Float32Array's backing `ArrayBuffer`:
 
 ```ts
 private static hashFloat32Array(data: Float32Array): number {
@@ -73,9 +73,9 @@ private static hashFloat32Array(data: Float32Array): number {
 }
 ```
 
-Use a `number` hash instead of a string to avoid allocation. Store as `lastProcessingUniformsHash: number | null` and `lastCurveLutHash: number | null`.
+Use a `number` hash instead of a string to avoid allocation. Reset both hashes on `destroy()` and on device loss to ensure stale state is never reused.
 
-**Reset hashes on `destroy()`** and on device loss to ensure stale state is never reused.
+This is upload elision, not true revision tracking: `buildProcessingUniforms()` / `buildCurveLutBuffer()` still run every render. That is acceptable for Phase 11 because it keeps the change local to the GPU pipeline. If profiling later shows hash cost is material, a follow-up can propagate a caller-owned revision token and skip both buffer construction and upload.
 
 ### A2. Curve LUT diff
 
@@ -85,57 +85,13 @@ This is already handled by A1's `curveHash` check — the hash over the 1024-ele
 
 No additional work needed beyond A1.
 
-### A3. Texture reuse on partial resize
+### A3. Texture reuse on resize
 
 **Current behavior** (`ensureTextures()`, lines 256–309): if either width or height changes, all five textures (source, workA, workB, workC, output) are destroyed and recreated.
 
-**Problem**: a crop-height change also forces reallocation of textures whose width hasn't changed. Since all five textures share the same dimensions, this is unavoidable at the GPU level — textures cannot be partially resized. However, the readback buffer can be reused more aggressively.
+**Conclusion**: no Phase 11 change is required here. All five textures share the same dimensions, so partial texture reuse is not possible at the GPU level. The current `ensureTextures()` exact-dimension reuse and `ensureReadbackBuffer()` size-capacity reuse are already the correct baseline.
 
-**Change to `ensureReadbackBuffer()`** (lines 311–325): the current check `this.currentReadbackSize >= size` already handles the case where the buffer is large enough. No change needed — this is already correct.
-
-**Change to `ensureTextures()`**: add a tolerance check to avoid thrashing on sub-pixel dimension changes from crop drag rounding. If the new dimensions are within 1px of the current dimensions and the current textures exist, skip reallocation:
-
-```ts
-private ensureTextures(width: number, height: number) {
-  if (
-    this.sourceTexture
-    && this.currentTextureWidth === width
-    && this.currentTextureHeight === height
-  ) {
-    return;
-  }
-
-  // Existing destroy + recreate logic unchanged
-  ...
-}
-```
-
-The existing check is already dimension-exact. No change needed here — the texture reuse is already optimal. The only real win is in A4 below.
-
-### A4. Readback overlap
-
-**Current behavior** (line 577): after `device.queue.submit()`, the code immediately calls `await this.readbackBuffer.mapAsync(GPUMapMode.READ)`, which blocks the worker until the GPU finishes the entire pipeline.
-
-**Change**: split the readback into a non-blocking submit + deferred await pattern. Between `submit()` and the `mapAsync` await, perform any CPU-side bookkeeping:
-
-```ts
-// Current (blocking):
-this.device.queue.submit([encoder.finish()]);
-await this.readbackBuffer.mapAsync(GPUMapMode.READ);
-const pixels = this.extractPixels(expandedWidth, expandedHeight);
-return copyWholeImage(pixels, expandedWidth, expandedHeight);
-
-// Proposed (overlapped):
-this.device.queue.submit([encoder.finish()]);
-const mapPromise = this.readbackBuffer.mapAsync(GPUMapMode.READ);
-// No CPU-side work to overlap with currently — but the promise-based
-// pattern ensures future CPU work (e.g. histogram prep) can slot in here.
-await mapPromise;
-const pixels = this.extractPixels(expandedWidth, expandedHeight);
-return copyWholeImage(pixels, expandedWidth, expandedHeight);
-```
-
-This is a structural change that enables future overlap. The immediate benefit is small (just separating submit from await), but it unblocks future histogram-prep-during-readback optimizations without changing the return type or API.
+Do not add a 1px tolerance check here: it would silently reuse textures of the wrong size and produce incorrect output. Any real readback/submit overlap would require a larger redesign such as double-buffered readback or pipelining the next tile while the previous readback maps. That work is deferred out of Phase 11.
 
 ---
 
@@ -176,19 +132,21 @@ if (payload.buffer.byteLength > MAX_FILE_SIZE_BYTES) {
 
 Import `MAX_FILE_SIZE_BYTES` from `constants.ts` in the worker.
 
-**Also add a pre-check on the main thread** in `App.tsx` before sending the file to the worker. This avoids the cost of transferring a huge `ArrayBuffer` to the worker just to have it rejected:
+**Add the main-thread pre-check at the actual allocation boundary** in `App.tsx`: reject the file before `file.arrayBuffer()` is called. This avoids allocating the large browser-side `ArrayBuffer` at all for oversized imports.
 
 ```ts
-// In the importFile handler, before calling workerClient.decode():
-if (file.size > MAX_FILE_SIZE_BYTES) {
-  setError(`File is too large (${Math.round(file.size / 1024 / 1024)} MB). Maximum supported size is ${Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB.`);
+// In importFile(), before file.arrayBuffer():
+if (!rawImport && sourceFileSize > MAX_FILE_SIZE_BYTES) {
+  setError(`File is too large (${Math.round(sourceFileSize / 1024 / 1024)} MB). Maximum supported size is ${Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB.`);
   return;
 }
 ```
 
+Keep the worker-side `payload.buffer.byteLength` guard as defense in depth for any future entry point that bypasses the UI pre-check.
+
 ### B2. GPU device-lost recovery
 
-**Files**: `WebGPUPipeline.ts`, `imageWorkerClient.ts`, `types.ts`, `SettingsModal.tsx`
+**Files**: `WebGPUPipeline.ts`, `imageWorkerClient.ts`, `App.tsx`, `SettingsModal.tsx`
 
 **Step 1 — Robust `device.lost` handler in `WebGPUPipeline`:**
 
@@ -226,7 +184,7 @@ getLostInfo(): { reason: string; message: string } | null {
 
 **Step 2 — Worker client device-loss handling in `imageWorkerClient.ts`:**
 
-In `handleGPUFailure()` (line 445), add diagnostics logging when device-lost is detected:
+In `handleGPUFailure()` (line 445), add diagnostics logging when device-lost is detected and keep the current retry-on-next-render policy:
 
 ```ts
 private handleGPUFailure(error: unknown) {
@@ -237,7 +195,7 @@ private handleGPUFailure(error: unknown) {
   appendDiagnostic({
     level: 'error',
     code: 'GPU_DEVICE_LOST',
-    message: 'GPU device was lost. Falling back to CPU rendering for the remainder of this session.',
+    message: 'GPU device was lost. Falling back to CPU rendering until the next render retry.',
     context: {
       reason,
       originalError: message,
@@ -245,11 +203,11 @@ private handleGPUFailure(error: unknown) {
     },
   });
 
-  this.resetGPU(reason, message, false); // allowRetry=false for device-lost
+  this.resetGPU(reason, message, true); // retry on next render
 }
 ```
 
-Change the `allowRetry` parameter: when the reason is `'device-lost'`, set `allowRetry = false` to prevent re-initialization attempts that will likely fail again. Currently `handleGPUFailure` always passes `true` (line 448) — change this:
+Do **not** permanently disable GPU for the rest of the session after device loss. Phase 11 keeps the current behavior: mark the GPU unavailable, surface the event in diagnostics/UI, and allow re-initialization on the next render attempt. Update the implementation text accordingly:
 
 ```ts
 private handleGPUFailure(error: unknown) {
@@ -269,49 +227,57 @@ private handleGPUFailure(error: unknown) {
     },
   });
 
-  // Don't retry after device loss — the GPU is gone for this session.
-  // Do allow retry after transient init failures.
-  this.resetGPU(reason, message, !isDeviceLost);
+  // Retry on the next render after device loss; some losses are transient.
+  this.resetGPU(reason, message, true);
 }
 ```
 
-**Step 3 — Surface a non-blocking toast in the UI:**
+**Step 3 — Add an explicit notification path to the UI:**
 
-Add a `gpuLostNotified` field to `RenderBackendDiagnostics`:
+Do not add a passive `gpuLostNotified` field and hope the app notices it later. The current app only refreshes diagnostics on startup and when the settings modal opens, so a device-loss event needs an explicit push path.
 
 ```ts
-// types.ts — add to RenderBackendDiagnostics:
-gpuLostNotified: boolean;
+// imageWorkerClient.ts
+type ImageWorkerClientOptions = {
+  gpuEnabled?: boolean;
+  onBackendDiagnosticsChange?: (diagnostics: RenderBackendDiagnostics) => void;
+  onGPUDeviceLost?: (message: string) => void;
+};
 ```
 
-In `imageWorkerClient.ts`, track whether the loss has been reported:
+Add a synchronous `getCachedGPUDiagnostics()` helper that snapshots current client state without calling `ensureGPU()`. Call `onBackendDiagnosticsChange?.(getCachedGPUDiagnostics())` whenever `resetGPU()` or `updateBackendState()` changes the backend state.
 
 ```ts
-private gpuLostNotified = false;
+private getCachedGPUDiagnostics(): RenderBackendDiagnostics {
+  return {
+    gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
+    gpuEnabled: this.gpuEnabled,
+    gpuActive: this.gpuPipeline !== null,
+    gpuAdapterName: this.gpuPipeline?.adapterName ?? null,
+    ...
+  };
+}
 ```
 
-Set it to `true` when device-lost is detected in `handleGPUFailure()`. Expose it in `getBackendDiagnostics()`.
+When `handleGPUFailure()` detects `'device-lost'`, invoke `onGPUDeviceLost?.(message)` once per transition into the lost state. Clear that one-shot guard after a successful GPU re-initialization so a later loss can notify again.
 
-In `App.tsx`, when `backendDiagnostics.gpuLostNotified` transitions from `false` to `true`, show a toast notification (use the existing status/error display mechanism):
+In `App.tsx`, pass both callbacks into the `ImageWorkerClient` constructor. On backend diagnostics change, immediately call `setRenderBackendDiagnostics(...)`. On GPU device loss, surface a non-blocking transient notice.
 
 ```ts
-// In the render effect or a useEffect watching diagnostics:
-useEffect(() => {
-  const diagnostics = workerClientRef.current?.getBackendDiagnostics();
-  if (diagnostics?.gpuDisabledReason === 'device-lost' && !gpuLostToastShown) {
-    setGpuLostToastShown(true);
-    // Show a non-blocking toast (can reuse existing error toast pattern)
-    setStatusMessage('GPU unavailable — using CPU rendering');
-  }
-}, [backendDiagnostics]);
+workerClientRef.current = new ImageWorkerClient({
+  gpuEnabled: initialPreferences?.gpuRendering ?? true,
+  onBackendDiagnosticsChange: setRenderBackendDiagnostics,
+  onGPUDeviceLost: (message) => {
+    // Reuse an existing non-blocking transient notice surface if one exists.
+    // If none exists yet, add a small local toast/banner rather than using setError().
+    showTransientNotice(message || 'GPU unavailable — retrying on the next render');
+  },
+});
 ```
 
 **Step 4 — Diagnostics panel reporting:**
 
-In `SettingsModal.tsx`, add a "GPU Status" row in the Diagnostics tab that shows:
-- "Active (GPU)" in green when GPU is working
-- "CPU fallback (device lost)" in yellow when `gpuDisabledReason === 'device-lost'`
-- "CPU fallback (unsupported)" in grey when `gpuDisabledReason === 'unsupported'`
+Do not add a separate `gpuLostNotified` row. The existing diagnostics/status UI already has a backend label, detail copy, and a status badge. Update that copy so `gpuDisabledReason === 'device-lost'` reads as "GPU device was lost. DarkSlide will retry on the next render." and ensure the client callback above refreshes diagnostics immediately when loss happens.
 
 ### B3. Blob URL audit
 
@@ -319,22 +285,18 @@ In `SettingsModal.tsx`, add a "GPU Status" row in the Diagnostics tab that shows
 
 The current blob URL handling in `fileBridge.ts` is actually correct — both `downloadBlob()` (line 126–131) and `downloadPresetFile()` (line 156–161) create a blob URL, trigger the download, and revoke after 1 second via `setTimeout`. No other files in the codebase create blob URLs outside of test mocks.
 
-**Add a debug-mode leak detector** — a lightweight wrapper around `URL.createObjectURL` / `URL.revokeObjectURL` that tracks outstanding blob URLs and warns if the count exceeds a threshold:
+**Add a debug-mode lifecycle audit** — but do not warn solely on active-count threshold, because the current code intentionally keeps each blob URL alive for 1 second after download and burst exports can legitimately create many concurrent URLs.
 
 ```ts
 // src/utils/blobUrlTracker.ts (new file, ~30 lines)
 
-const activeBlobUrls = new Set<string>();
-const WARN_THRESHOLD = 20;
+const activeBlobUrls = new Map<string, number>();
+const WARN_AFTER_MS = 10_000;
 
 export function trackCreateObjectURL(blob: Blob | MediaSource): string {
   const url = URL.createObjectURL(blob);
-  activeBlobUrls.add(url);
-  if (activeBlobUrls.size > WARN_THRESHOLD) {
-    console.warn(
-      `[DarkSlide] ${activeBlobUrls.size} unreleased blob URLs detected (threshold: ${WARN_THRESHOLD}). Possible leak.`,
-    );
-  }
+  activeBlobUrls.set(url, performance.now());
+  warnForStaleBlobUrls();
   return url;
 }
 
@@ -345,6 +307,27 @@ export function trackRevokeObjectURL(url: string): void {
 
 export function getActiveBlobUrlCount(): number {
   return activeBlobUrls.size;
+}
+
+export function getOldestActiveBlobUrlAgeMs(): number | null {
+  const now = performance.now();
+  let oldest = -1;
+  for (const createdAt of activeBlobUrls.values()) {
+    oldest = Math.max(oldest, now - createdAt);
+  }
+  return oldest >= 0 ? oldest : null;
+}
+
+function warnForStaleBlobUrls() {
+  const now = performance.now();
+  for (const [url, createdAt] of activeBlobUrls.entries()) {
+    if (now - createdAt > WARN_AFTER_MS) {
+      console.warn('[DarkSlide] Blob URL remained active far longer than expected.', {
+        url,
+        ageMs: Math.round(now - createdAt),
+      });
+    }
+  }
 }
 ```
 
@@ -358,52 +341,30 @@ import { trackCreateObjectURL, trackRevokeObjectURL } from './blobUrlTracker';
 // Replace URL.revokeObjectURL(url) → trackRevokeObjectURL(url)
 ```
 
-Expose `getActiveBlobUrlCount()` in the Diagnostics tab of `SettingsModal.tsx` as a "Blob URLs" row.
+Expose `getActiveBlobUrlCount()` and optionally the oldest active age in the Diagnostics tab of `SettingsModal.tsx` as debug-only rows.
 
 ### B4. Worker memory cleanup on document close
 
 **File**: `src/utils/imageWorker.ts`
 
-The `handleDispose()` path (line 617–623) deletes the document from the `documents` map and clears related tile jobs, but does not explicitly release OffscreenCanvas resources. While the garbage collector will eventually reclaim them, in long sessions with many open/close cycles, deferred GC can cause memory pressure.
+The `handleDispose()` path (line 617–623) deletes the document from the `documents` map and clears related tile jobs, but does not explicitly release `OffscreenCanvas` resources. While the garbage collector will eventually reclaim them, in long sessions with many open/close cycles, deferred GC can cause memory pressure.
 
-**Add explicit canvas cleanup:**
+Disposal is not the only leak point. The current worker also drops transformed canvases on geometry-cache replacement and job cancellation without explicit cleanup. Phase 11 should harden all three paths: cache eviction, tile-job cleanup, and document disposal.
+
+**Add reference-safe canvas cleanup helpers:**
+
+Geometry caches own transformed canvases; `tileJobs` borrow them. Do not blindly `releaseCanvas()` from `clearTileJob()`, because the same `transformedCanvas` may still be referenced by the active geometry cache. Instead, add a helper that releases a canvas only when no cache entry and no tile job still reference it.
 
 ```ts
-// In the dispose handler (line 617-623):
-if (request.type === 'dispose') {
-  const doc = documents.get(request.payload.documentId);
-  if (doc) {
-    // Explicitly release canvas memory
-    releaseCanvas(doc.sourceCanvas);
-    doc.previews.forEach((preview) => {
-      // Don't release if preview.canvas === doc.sourceCanvas (shared reference)
-      if (preview.canvas !== doc.sourceCanvas) {
-        releaseCanvas(preview.canvas);
-      }
-    });
-    // Clear geometry caches (each holds a StoredTileJob with a transformedCanvas)
-    doc.previewGeometryCache.forEach((job) => releaseCanvas(job.transformedCanvas));
-    doc.previewGeometryCache.clear();
-    doc.sourceGeometryCache.forEach((job) => releaseCanvas(job.transformedCanvas));
-    doc.sourceGeometryCache.clear();
+function releaseCanvasIfUnreferenced(canvas: OffscreenCanvas) {
+  const stillReferencedByCache = Array.from(documents.values()).some((doc) =>
+    Array.from(doc.previewGeometryCache.values()).some((job) => job.transformedCanvas === canvas)
+    || Array.from(doc.sourceGeometryCache.values()).some((job) => job.transformedCanvas === canvas)
+  );
+  const stillReferencedByTileJob = Array.from(tileJobs.values()).some((job) => job.transformedCanvas === canvas);
+  if (!stillReferencedByCache && !stillReferencedByTileJob) {
+    releaseCanvas(canvas);
   }
-
-  documents.delete(request.payload.documentId);
-
-  // Clean up tile jobs for this document
-  Array.from(tileJobs.entries())
-    .filter(([, job]) => job.documentId === request.payload.documentId)
-    .forEach(([jobId, job]) => {
-      releaseCanvas(job.transformedCanvas);
-      clearTileJob(jobId);
-    });
-
-  // Clean up cancelled job IDs for this document
-  // (cancelledJobs is a Set<string> of job IDs, not document-scoped,
-  // but any cancelled jobs for this document's tile jobs are now irrelevant)
-
-  reply({ id: request.id, ok: true, payload: { disposed: true } });
-  return;
 }
 ```
 
@@ -422,6 +383,14 @@ function releaseCanvas(canvas: OffscreenCanvas) {
   }
 }
 ```
+
+Use `releaseCanvasIfUnreferenced()` in these places:
+
+- when replacing a geometry-cache entry (`cache.clear()` / new `cache.set(...)` path)
+- when deleting a cache entry during document disposal
+- when cancelling or clearing tile jobs after the job entry is removed
+
+In the cache-replacement path, capture the old cached job before `cache.clear()` and call `releaseCanvasIfUnreferenced(oldJob.transformedCanvas)` after the cache mutation, so long editing sessions do not retain abandoned transformed canvases.
 
 **Also release the static `rotateCanvas` and `outputCanvas`** after dispose if no documents remain:
 
@@ -488,7 +457,7 @@ This is an estimate (actual browser allocations may differ) but gives the diagno
 
 ### B5. Graceful OOM messaging
 
-**Files**: `src/utils/imageWorker.ts`, `src/utils/imageWorkerClient.ts`
+**Files**: `src/utils/imageWorker.ts`, `src/App.tsx`
 
 The worker's top-level `try/catch` (line 659–668) catches all errors generically. Add a specific check for `RangeError`, which is the standard error thrown when a typed-array allocation fails:
 
@@ -514,34 +483,7 @@ The worker's top-level `try/catch` (line 659–668) catches all errors generical
 }
 ```
 
-On the client side (`imageWorkerClient.ts`), the `isMissingDocumentError()` check should NOT trigger recovery for OOM errors. Add a guard:
-
-```ts
-private isOOMError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes('OUT_OF_MEMORY') || message.includes('Image too large');
-}
-```
-
-In `requestWithDocumentRecovery()`, skip recovery on OOM:
-
-```ts
-private async requestWithDocumentRecovery<T>(
-  documentId: string,
-  operation: () => Promise<T>,
-  allowRecovery: boolean,
-) {
-  try {
-    return await operation();
-  } catch (error) {
-    if (!allowRecovery || !this.isMissingDocumentError(error) || this.isOOMError(error)) {
-      throw error;
-    }
-    await this.recoverDocument(documentId);
-    return operation();
-  }
-}
-```
+No `imageWorkerClient.ts` recovery change is needed here. The current recovery path already only retries missing-document failures, so OOM errors will naturally propagate without a special guard.
 
 In `App.tsx`, when the error code is `OUT_OF_MEMORY`, display a specific error message to the user instead of the generic import failure text.
 
@@ -552,25 +494,21 @@ In `App.tsx`, when the error code is `OUT_OF_MEMORY`, display a specific error m
 ### Phase 1: Memory safety (B1, B5) — lowest risk, highest immediate value
 
 1. **B1** — Add `MAX_FILE_SIZE_BYTES` constant and pre-check in both the worker and `App.tsx`.
-2. **B5** — Add `RangeError` / OOM detection in the worker catch block and client-side guard.
+2. **B5** — Add `RangeError` / OOM detection in the worker catch block and specific OOM messaging in `App.tsx`.
 
 These two changes are completely self-contained and can ship independently.
 
 ### Phase 2: GPU resilience (A1, B2) — moderate risk, significant value
 
-3. **A1** — Add FNV-1a hash to `WebGPUPipeline` and skip redundant `writeBuffer` calls.
-4. **B2** — Improve `device.lost` handler, disable retry on device-lost, add diagnostics logging, surface toast in UI.
+3. **A1** — Add FNV-1a hashing to `WebGPUPipeline` and skip redundant uniform/LUT `writeBuffer` calls.
+4. **B2** — Improve `device.lost` handling, keep retry-on-next-render behavior, add diagnostics logging, and push backend state changes to the UI via explicit callbacks.
 
 A1 requires testing with all pipeline paths (preview, tiled, export) to ensure hash collisions don't cause stale renders. B2 requires testing on a system where device loss can be simulated (e.g. by disabling the GPU mid-session via browser flags).
 
 ### Phase 3: Leak prevention (B3, B4) — low risk, long-session value
 
 5. **B3** — Add `blobUrlTracker.ts`, wire into `fileBridge.ts`, expose count in diagnostics.
-6. **B4** — Add `releaseCanvas()` helper, expand dispose handler, add memory estimation, expose in diagnostics.
-
-### Phase 4: Performance (A4) — low risk, marginal immediate value
-
-7. **A4** — Restructure readback to promise-based pattern. Minimal immediate benefit but sets up future histogram-during-readback optimization.
+6. **B4** — Add reference-safe canvas cleanup helpers for cache eviction/job cleanup/dispose, add memory estimation, expose in diagnostics.
 
 ---
 
@@ -579,20 +517,20 @@ A1 requires testing with all pipeline paths (preview, tiled, export) to ensure h
 | File | Workstream | Changes |
 |---|---|---|
 | `src/constants.ts` | B1 | Add `MAX_FILE_SIZE_BYTES` |
-| `src/types.ts` | B2, B4 | Add `gpuLostNotified` to `RenderBackendDiagnostics`; add `WorkerMemoryDiagnostics` interface |
-| `src/utils/gpu/WebGPUPipeline.ts` | A1, A4, B2 | Hash-based buffer skip, readback overlap, device-lost info getters |
+| `src/types.ts` | B4 | Add `WorkerMemoryDiagnostics` interface |
+| `src/utils/gpu/WebGPUPipeline.ts` | A1, B2 | Hash-based buffer skip, device-lost info getters |
 | `src/utils/imageWorker.ts` | B1, B4, B5 | File size check, canvas release on dispose, OOM detection |
-| `src/utils/imageWorkerClient.ts` | B2, B5 | Device-lost diagnostics + no-retry, OOM guard in recovery |
+| `src/utils/imageWorkerClient.ts` | B2 | Device-lost diagnostics, retry-on-next-render, backend diagnostics change callbacks |
 | `src/utils/fileBridge.ts` | B3 | Use tracked blob URL functions |
-| `src/utils/blobUrlTracker.ts` | B3 | **New file** — blob URL lifecycle tracker |
-| `src/App.tsx` | B1, B2 | Pre-import size check, GPU-lost toast |
-| `src/components/SettingsModal.tsx` | B2, B3, B4 | GPU status row, blob URL count, worker memory estimate |
+| `src/utils/blobUrlTracker.ts` | B3 | **New file** — blob URL lifecycle audit with stale-age warnings |
+| `src/App.tsx` | B1, B2, B5 | Pre-import size check, GPU-loss notice hookup, specific OOM messaging |
+| `src/components/SettingsModal.tsx` | B2, B3, B4 | Updated GPU-loss detail copy, blob URL debug rows, worker memory estimate |
 
 ## New Files
 
 | File | Purpose | Size |
 |---|---|---|
-| `src/utils/blobUrlTracker.ts` | Track `createObjectURL` / `revokeObjectURL` calls, warn on leak threshold | ~30 lines |
+| `src/utils/blobUrlTracker.ts` | Track `createObjectURL` / `revokeObjectURL` calls and warn on stale unreleased URLs | ~40 lines |
 
 ## Testing Plan
 
@@ -601,19 +539,21 @@ A1 requires testing with all pipeline paths (preview, tiled, export) to ensure h
 | Test | File | Validates |
 |---|---|---|
 | File size rejection | `imageWorker.test.ts` | Worker throws `FILE_TOO_LARGE` for buffers > `MAX_FILE_SIZE_BYTES` |
+| Main-thread size rejection | `App.test.tsx` | Oversized browser import is rejected before `file.arrayBuffer()` |
 | OOM error code | `imageWorker.test.ts` | `RangeError` in decode/render maps to `OUT_OF_MEMORY` code |
-| OOM skips recovery | `imageWorkerClient.test.ts` | `requestWithDocumentRecovery` does not retry on OOM |
-| Blob URL tracker | `blobUrlTracker.test.ts` | `trackCreateObjectURL` increments count, `trackRevokeObjectURL` decrements, warn fires at threshold |
-| Hash stability | `WebGPUPipeline.test.ts` | Same settings produce same hash; different settings produce different hash |
+| Blob URL tracker | `blobUrlTracker.test.ts` | `trackCreateObjectURL` increments count, `trackRevokeObjectURL` decrements, stale-age warning fires only for long-lived URLs |
+| Hash stability | `WebGPUPipeline.test.ts` | Same uniform payload produces same hash; different payload produces different hash |
+| Geometry cleanup on cache replacement | `imageWorker.test.ts` | Replaced transformed canvases are eventually released when no longer referenced |
+| GPU diagnostics callback | `imageWorkerClient.test.ts` | Device loss pushes updated diagnostics and emits a one-shot user notification |
 
 ### Manual tests
 
 | Scenario | Steps | Expected |
 |---|---|---|
 | Large file rejection | Import a 600 MB TIFF | Error message: "File is too large (600 MB)" before any decode attempt |
-| GPU device loss | Open Chrome DevTools → `chrome://gpu` → kill GPU process | Toast: "GPU unavailable — using CPU rendering"; Diagnostics shows "device-lost" |
+| GPU device loss | Open Chrome DevTools → `chrome://gpu` → kill GPU process | Non-blocking notice appears; Diagnostics updates immediately to "device-lost"; the next render attempts GPU re-init |
 | Long editing session | Import 10 images sequentially, editing each for 2 minutes | Worker memory estimate in diagnostics stays bounded; no browser tab crash |
-| Blob URL leak detection | Export 25 images rapidly | Console warning if blob URLs exceed 20 (debug build only) |
+| Blob URL leak detection | Export 25 images rapidly | No warning from normal 1-second revoke delay; warning only if a blob URL remains unreleased well beyond the expected window |
 | OOM on huge image | Construct a 120 MP × 16-bit TIFF and import | Error: "Image too large for available memory" instead of generic crash |
 
 ---
@@ -624,6 +564,7 @@ These are explicitly out of scope for Phase 11:
 
 - **Decode cache eviction** (`imageWorkerClient.ts` `decodeCache`): the current single-document model means the cache holds at most one entry. This becomes relevant in Phase 12 (multi-document tabs) and will be addressed there.
 - **Geometry cache bounding**: the current `cache.clear()` on each new geometry key (line 426) means each cache holds at most one entry. This is correct for the single-document model.
+- **True GPU/CPU overlap or double-buffered readback**: Phase 11 does not redesign the readback flow. A real overlap implementation would need separate readback buffers and/or pipelining across tiles/jobs.
 - **GPU texture format changes**: no changes to `INTERMEDIATE_FORMAT` or texture pipeline topology.
 - **CPU pipeline optimisations**: covered in Phase 10.
 - **Worker thread pooling**: beyond current scope; single-worker model remains.
