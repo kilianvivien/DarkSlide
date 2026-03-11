@@ -29,7 +29,7 @@ export interface DocumentTab {
   historyIndex: number;                  // pointer into historyStack
   zoom: ZoomLevel;
   pan: { x: number; y: number };
-  scrolledSidebarTab: string | null;     // restore sidebar position on switch
+  sidebarScrollTop: number;              // restore sidebar scroll position on switch
 }
 ```
 
@@ -59,6 +59,12 @@ function updateActiveDocument(updater: (doc: WorkspaceDocument) => WorkspaceDocu
 }
 ```
 
+Keep these render/session refs explicit during the refactor:
+- `activeDocumentIdRef` remains global and always points at the visible tab.
+- `renderRevisionRef` becomes per-tab (`DocumentTab.document.renderRevision` stays authoritative). Do not use a single cross-tab revision counter.
+- Queued preview refs (`activeRenderRequestRef`, `pendingPreviewRef`, `queuedPreviewRenderRef`, `pendingInteractivePreviewRef`) remain global because only one tab is visible at a time, but they must be cleared on tab switch.
+- Import-session invalidation remains global for file-open races, but import must no longer dispose the previously active document as part of normal success flow.
+
 ### Tab lifecycle
 
 #### Open (import)
@@ -82,6 +88,12 @@ function updateActiveDocument(updater: (doc: WorkspaceDocument) => WorkspaceDocu
 4. Update `activeDocumentIdRef.current`.
 5. Cancel any in-flight preview render for the old tab.
 6. The render effect (keyed on `documentState?.id`) fires automatically for the new tab.
+
+#### Dirty state
+- `document.dirty` remains per-document.
+- Mark dirty when conversion settings, crop, profile selection, or export options change.
+- Do **not** mark dirty for viewport-only state (`zoom`, `pan`, sidebar scroll position), tab order, batch modal choices, or contact-sheet options.
+- Exporting a file does not clear `dirty`; it is still a "changes since import/reset" flag, not a save-state tracker.
 
 ### Tab bar component (`src/components/TabBar.tsx`)
 
@@ -149,7 +161,7 @@ Apply a shared `ConversionSettings` + `FilmProfile` to a set of files and export
 
 ### Entry point
 
-- "Batch Export..." button in the Export tab of the Sidebar (always visible, does not require multi-tab).
+- "Batch Export..." button at the bottom left corner of the sidebar, left of the settings wheel (always visible, does not require multi-tab).
 - Keyboard shortcut: `Cmd+Shift+E`.
 - Tauri menu item: File > Batch Export...
 
@@ -159,18 +171,21 @@ A full-screen modal overlay with:
 
 1. **File list panel**
    - "Add Files" button opens a multi-select file picker via `fileBridge.openMultipleImageFiles()`.
-   - Each row: thumbnail (generated at decode time), filename, file size, status badge (`pending` | `processing` | `done` | `error`).
+   - Each row: filename, file size, status badge (`pending` | `processing` | `done` | `error`).
+   - Optional enhancement: desktop-only thumbnail preview via object URL or lazy visible-row decode. Do **not** eagerly decode every queued file just to populate thumbnails.
    - Remove button per row.
    - Drag-and-drop onto the modal to add files.
 
 2. **Settings source** (radio group)
-   - "Use current document settings" — copies active tab's `ConversionSettings` + `profileId`.
+   - "Use current document settings" — copies the active tab's `ConversionSettings` and resolved active `FilmProfile`.
    - "Use built-in profile" — dropdown to select any `FilmProfile`.
+   - "Use custom profile" — dropdown to select any custom profile.
    - (Film base sampling is not available in batch mode — each file uses the shared settings as-is.)
 
 3. **Export options**
    - Format (JPEG / PNG / WebP) and quality slider — reuses existing `ExportOptions` UI components.
    - **Output naming**: text input with template tokens: `{original}`, `{n}` (sequence number). Default: `{original}_darkslide`.
+   - Filename collisions in the target folder auto-suffix with `-2`, `-3`, etc. Existing files are never overwritten silently.
 
 4. **Output folder** (desktop only)
    - "Choose Folder" button calls `fileBridge.openDirectory()`.
@@ -201,8 +216,8 @@ A pure async function that accepts the worker client and yields progress:
 export async function* runBatch(
   workerClient: ImageWorkerClient,
   entries: BatchJobEntry[],
-  settings: ConversionSettings,
-  profile: FilmProfile,
+  sharedSettings: ConversionSettings,
+  sharedProfile: FilmProfile,
   exportOptions: ExportOptions,
   outputPath: string | null,           // null for web
   cancelToken: { cancelled: boolean },
@@ -216,26 +231,28 @@ export async function* runBatch(
       const buffer = await entry.file.arrayBuffer();
 
       // 2. Decode
-      const decodeResult = await workerClient.decode({
+      await workerClient.decode({
         documentId: entry.id,
         buffer,
-        filename: entry.filename,
-        mimeType: entry.file.type,
+        fileName: entry.filename,
+        mime: entry.file.type || 'application/octet-stream',
+        size: entry.file.size,
       });
 
       // 3. Export at full resolution
-      const blob = await workerClient.export({
+      const result = await workerClient.export({
         documentId: entry.id,
-        settings,
-        profile,
-        exportOptions,
-        sourceWidth: decodeResult.width,
-        sourceHeight: decodeResult.height,
+        settings: sharedSettings,
+        isColor: sharedProfile.type !== 'bw' && !sharedSettings.blackAndWhite.enabled,
+        options: exportOptions,
+        maskTuning: sharedProfile.maskTuning,
+        colorMatrix: sharedProfile.colorMatrix,
+        tonalCharacter: sharedProfile.tonalCharacter,
       });
 
       // 4. Save
-      const outputFilename = applyNamingTemplate(entry.filename, exportOptions);
-      await saveExportBlob(blob, outputFilename, exportOptions.format, outputPath);
+      const outputFilename = applyNamingTemplate(entry.filename, exportOptions.filenameBase);
+      await saveBatchExport(result.blob, outputFilename, exportOptions.format, outputPath);
 
       // 5. Dispose worker memory for this file
       await workerClient.disposeDocument(entry.id);
@@ -255,6 +272,7 @@ Key design decisions:
 - **Sequential, not parallel** — one file at a time avoids GPU/CPU contention and memory spikes.
 - **Dispose after each file** — keeps worker memory bounded regardless of batch size.
 - **Error resilience** — a failed file does not abort the batch; it is logged and skipped.
+- `runBatch(...)` should be specified against the current `DecodeRequest` / `ExportRequest` types in `src/types.ts`. If those request types change as part of Phase 12, update the shared type definitions first and then update this plan to match.
 
 ### File bridge additions (`src/utils/fileBridge.ts`)
 
@@ -265,6 +283,8 @@ export async function saveToDirectory(blob: Blob, filename: string, dirPath: str
 ```
 
 Web fallback for `saveToDirectory`: use `showDirectoryPicker()` (File System Access API) if available, otherwise fall back to sequential `<a download>` clicks.
+
+`saveBatchExport(...)` should wrap the existing `saveExportBlob(...)` path for single-file downloads and use `saveToDirectory(...)` only when the user has selected an output folder.
 
 ### Files touched
 
@@ -293,6 +313,7 @@ Multi-document tabs (Feature 1) must be implemented — the contact sheet reads 
 
 - "Contact Sheet..." button in the Export tab, enabled when 2+ tabs are open.
 - Disabled state tooltip: "Open multiple images to create a contact sheet".
+- Clicking "Generate" snapshots the selected tab IDs, labels, settings, and resolved profiles at that moment. Closing or editing tabs after generation starts does not affect the in-flight sheet.
 
 ### Contact sheet modal (`src/components/ContactSheetModal.tsx`)
 
@@ -312,7 +333,7 @@ New message type in `imageWorker.ts`:
 
 ```
 → { id, type: 'contact-sheet', payload: ContactSheetRequest }
-← { id, type: 'contact-sheet-result', payload: ContactSheetResult }
+← existing worker envelope: { id, ok, payload: ContactSheetResult }
 ```
 
 Types added to `src/types.ts`:
@@ -403,7 +424,7 @@ Embed a color profile (ICC) into exported JPEG/PNG files so that color-managed a
 
 ### Scope
 
-Phase 12 delivers **profile embedding** only — no color space conversion. The pipeline stays sRGB; the exported file gets tagged with the correct ICC profile. Full gamut mapping (sRGB ↔ Display P3 ↔ AdobeRGB) is deferred to a future phase.
+Phase 12 delivers **sRGB profile embedding** only — no color space conversion. The pipeline stays sRGB, and exports may be tagged as sRGB or left untagged. Full gamut mapping (sRGB ↔ Display P3 ↔ AdobeRGB) and arbitrary custom ICC selection are deferred to a future phase because tagging sRGB pixel data as some other color space would be incorrect.
 
 ### sRGB profile constant (`src/utils/srgbIccProfile.ts`)
 
@@ -451,11 +472,8 @@ Dispatcher that calls `embedIccInJpeg` or `embedIccInPng` based on format. WebP 
 In `imageWorkerClient.ts`, after the export blob is produced (both GPU and CPU paths), add:
 
 ```typescript
-if (exportOptions.iccEmbedMode !== 'none') {
-  const profile = exportOptions.iccEmbedMode === 'custom' && exportOptions.customIccProfile
-    ? exportOptions.customIccProfile
-    : SRGB_ICC_PROFILE;
-  blob = await embedIccInBlob(blob, profile, exportOptions.format);
+if (exportOptions.iccEmbedMode === 'srgb') {
+  blob = await embedIccInBlob(blob, SRGB_ICC_PROFILE, exportOptions.format);
 }
 ```
 
@@ -469,12 +487,9 @@ export interface ExportOptions {
   format: ExportFormat;
   quality: number;
   filenameBase: string;
-  iccEmbedMode: 'srgb' | 'custom' | 'none';   // default: 'srgb'
-  customIccProfile?: Uint8Array | null;          // populated when iccEmbedMode === 'custom'
+  iccEmbedMode: 'srgb' | 'none';   // default: 'srgb'
 }
 ```
-
-Note: `customIccProfile` is a `Uint8Array` and cannot be serialized to `localStorage`. The preference store must exclude it — only persist `iccEmbedMode`.
 
 ### UI changes (Export tab in `src/components/Sidebar.tsx`)
 
@@ -483,21 +498,16 @@ Add a "Color Profile" section below the existing format/quality controls:
 ```
 Color Profile
   ○ sRGB (default)
-  ○ Custom...        [Choose ICC File]
   ○ None
 ```
 
-"Custom..." shows a file picker (Tauri: `open({ filters: [{ name: 'ICC', extensions: ['icc', 'icm'] }] })`; web: `<input type="file" accept=".icc,.icm">`). The selected file's bytes are read and stored in `exportOptions.customIccProfile`.
-
-### File bridge addition
-
-```typescript
-export async function openIccProfileFile(): Promise<{ name: string; data: Uint8Array } | null>;
-```
+Do not expose custom ICC file selection in Phase 12. That UI belongs in the later phase that also performs real color-space conversion.
 
 ### Preference persistence
 
-In `src/utils/preferenceStore.ts`, persist `iccEmbedMode` as part of `UserPreferences`. Do **not** persist `customIccProfile` (it's session-only). On load, default `customIccProfile` to `null`.
+In `src/utils/preferenceStore.ts`, persist `iccEmbedMode` as part of `UserPreferences.exportOptions`.
+
+Compatibility note: keep `UserPreferences.version = 1` and treat missing `iccEmbedMode` as `'srgb'` on load so existing installations migrate without a storage reset.
 
 ### Files touched
 
@@ -505,10 +515,9 @@ In `src/utils/preferenceStore.ts`, persist `iccEmbedMode` as part of `UserPrefer
 |------|--------|
 | `src/utils/iccEmbed.ts` | **New** — `embedIccInJpeg`, `embedIccInPng`, `embedIccInBlob` |
 | `src/utils/srgbIccProfile.ts` | **New** — Base64 sRGB ICC profile constant |
-| `src/types.ts` | Add `iccEmbedMode`, `customIccProfile` to `ExportOptions` |
+| `src/types.ts` | Add `iccEmbedMode` to `ExportOptions` |
 | `src/utils/imageWorkerClient.ts` | Post-process export blob with `embedIccInBlob` |
 | `src/components/Sidebar.tsx` | Add ICC profile selector in Export tab |
-| `src/utils/fileBridge.ts` | Add `openIccProfileFile()` |
 | `src/utils/preferenceStore.ts` | Persist `iccEmbedMode` |
 | `src/constants.ts` | Update `DEFAULT_EXPORT_OPTIONS` with `iccEmbedMode: 'srgb'` |
 
@@ -543,7 +552,7 @@ Step 4: ICC Color Management
   ├── 4b. iccEmbed.ts (JPEG + PNG byte-level injection)
   ├── 4c. ExportOptions type extension + default update
   ├── 4d. Export pipeline post-processing in imageWorkerClient
-  ├── 4e. ICC profile selector UI in Sidebar export tab
+  ├── 4e. sRGB / None selector UI in Sidebar export tab
   └── 4f. Preference persistence for iccEmbedMode
 ```
 
@@ -568,13 +577,14 @@ Step 4: ICC Color Management
 - Generate a 2×2 sheet from 4 open images: verify grid layout, captions, and background color.
 - Odd number of images (e.g., 5 with 3 columns): verify the last row is correctly laid out with empty cells.
 - Large cell size (1024px) with 12 images: verify output dimensions are correct.
+- Start generation, then close or edit one of the source tabs: verify the sheet uses the captured snapshot rather than partially updated state.
 
 ### ICC embedding
 - Export a JPEG with sRGB embedding: open in Photoshop/Preview, verify the profile is detected as sRGB.
 - Export a PNG with sRGB embedding: verify the `iCCP` chunk is present (use `pngcheck` or similar).
 - Export with "None": verify no ICC data is present.
 - Export WebP: verify no crash (ICC embedding silently skipped for WebP).
-- Custom ICC file: load a Display P3 `.icc` file, export, verify the profile is embedded (note: colors may not be correct since no conversion happens — this is expected for Phase 12).
+- Load preferences from a pre-Phase-12 install: verify missing `iccEmbedMode` defaults cleanly to `'srgb'`.
 
 ---
 
@@ -588,7 +598,7 @@ Step 4: ICC Color Management
 | JPEG ICC injection breaks file structure | Corrupt output files | Test with JFIF, EXIF, and progressive JPEG variants; validate with `exiftool` |
 | Batch export memory leak | Worker memory grows unbounded | Dispose each document immediately after export completes |
 | Contact sheet text rendering in worker | `fillText` unavailable or garbled in `OffscreenCanvas` | Use `monospace` fallback font; test in Chromium and Safari/WKWebView |
-| `customIccProfile` accidentally serialized | localStorage write fails (binary data) | Explicitly exclude from preference serialization; document the constraint |
+| Batch filename collision overwrites an existing file | Silent data loss in output folder | Auto-suffix output names; never overwrite silently |
 
 ---
 
@@ -597,5 +607,6 @@ Step 4: ICC Color Management
 - The worker is already multi-document capable (`documents: Map<string, StoredDocument>`). The only change is removing the `disposeDocument` call in `importFile`.
 - The GPU pipeline (`WebGPUPipeline`) is stateless per-document — a single `GPUDevice` instance serves all tabs. No changes needed.
 - The `decodeCache` in `ImageWorkerClient` is already keyed by `documentId` — it naturally supports multiple documents for crash recovery.
-- `renderRevision` can remain a single global counter. Each render result carries its `documentId`; the staleness check compares revision numbers within the context of the active document.
+- `renderRevision` should be treated as per-document state. Global visibility refs can stay singular because only one tab is shown at a time, but revision numbering must not let a render in tab B invalidate a newer render in tab A.
 - Batch processing deliberately does **not** use the GPU path for simplicity — it decodes and exports via the existing worker `handleExport` flow, which selects GPU or CPU automatically based on capability detection.
+- Contact sheet generation should use a frozen request payload built on the main thread from the active tab snapshot, not a live read of mutable React state during worker execution.
