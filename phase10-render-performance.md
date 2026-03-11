@@ -2,13 +2,14 @@
 
 ## Overview
 
-Phase 10 ships three independent workstreams that improve interactive editing responsiveness and export quality. All changes are low-risk refactors with measurable impact, particularly on large scans (24–120 MP).
+Phase 10 ships four independent workstreams that improve interactive editing responsiveness and export quality. All changes are low-risk refactors with measurable impact, particularly on large scans (24–120 MP).
 
 | Workstream | Scope | Risk | Expected Impact |
 |---|---|---|---|
 | A. React rendering efficiency | 6 files | Low | Fewer unnecessary re-renders during slider drags |
-| B. CPU pipeline optimisations | 2 files | Low | 5–15% faster per-frame CPU render time |
+| B. CPU pipeline optimisations | 1 file | Low | 5–15% faster per-frame CPU render time |
 | C. EXIF metadata preservation | 8 files, 1 new dep | Medium | Exported images carry orientation, date, software tag |
+| D. GPU uniform upload elision | 1 file | Low | Eliminates redundant uniform/LUT uploads during rapid slider drags |
 
 ---
 
@@ -308,78 +309,16 @@ Benefits:
 
 Use `Float32Array` for the fused LUTs since the rest of the pipeline operates in float space.
 
-### B3. Geometry cache granularity
-
-**Current state** (`imageWorker.ts`):
-
-The geometry cache key includes `crop`, `rotation`, and `levelAngle` together. When any geometry parameter changes, `cache.clear()` wipes all entries — even if only crop changed and the rotation result could be reused.
-
-```typescript
-// Current: single cache key containing all geometry
-function createGeometryCacheKey(...) {
-  return JSON.stringify({
-    sourceKind, previewLevelId,
-    crop, rotation, levelAngle,
-  });
-}
-
-// On miss: clear entire cache
-cache.clear();
-cache.set(geometryCacheKey, storedJob);
-```
-
-**Fix:** Split geometry processing into two stages with independent caches:
-
-```typescript
-interface StoredDocument {
-  // ... existing fields
-  rotationCache: Map<string, OffscreenCanvas>;  // rotation+level result
-  cropCache: Map<string, StoredTileJob>;         // crop of rotated canvas
-}
-```
-
-**Stage 1 — Rotation cache:**
-- Key: `JSON.stringify({ sourceKind, previewLevelId, rotation, levelAngle })`
-- Value: rotated `OffscreenCanvas` (no crop applied)
-- Invalidation: only when `rotation` or `levelAngle` changes
-
-**Stage 2 — Crop cache:**
-- Key: `JSON.stringify({ sourceKind, previewLevelId, rotation, levelAngle, crop })`
-- Value: final `StoredTileJob` (crop applied to the rotated canvas)
-- Invalidation: when any geometry parameter changes (but rotation cache survives)
-
-This means during a crop drag (the most common geometry interaction), the rotation cache is preserved. The crop stage reads from the cached rotated canvas instead of re-rotating the source.
-
-**Cache eviction policy:** Keep at most 2 entries per cache level (current + previous) to bound memory. Since preview and source use separate caches, total entries are capped at 4 per document.
-
-Be explicit that this optimization only affects the worker tile path (`prepare-tile-job` / `read-tile`). It does not change the simpler preview `render` path used during CPU fallback.
-
-**Also:** Replace `JSON.stringify` for the cache key with a cheaper string concatenation:
-
-```typescript
-function rotationCacheKey(sourceKind: string, levelId: string | null, rotation: number, levelAngle: number) {
-  return `${sourceKind}|${levelId ?? ''}|${rotation}|${levelAngle}`;
-}
-```
-
 ### B — Files Changed
 
 | File | Changes |
 |---|---|
 | `src/utils/imagePipeline.ts` | Hoist gray computation, add luma constants, fuse curve LUTs |
-| `src/utils/imageWorker.ts` | Split geometry cache into rotation + crop stages, cheaper keys |
 
 ### B — Testing
 
 - Run `npm run test` — the existing `imagePipeline.test.ts` golden-pixel tests will catch any regression in output values.
 - Verify that fused LUTs produce identical output by running the existing per-slider pipeline tests.
-- Add worker/client tests for geometry cache behavior:
-  - crop-only change reuses the rotation cache
-  - rotation change invalidates rotation cache
-  - cache eviction keeps current + previous only
-  - cancelled tile jobs still clean up correctly
-- The geometry cache split is transparent to the client message protocol — `imageWorkerClient.ts` request shapes stay unchanged.
-- Manual test: open a 40 MP scan, drag the crop handles rapidly, confirm the preview updates without visible lag increase.
 
 ---
 
@@ -452,6 +391,8 @@ export interface ExportOptions {
 ```
 
 Update `DEFAULT_EXPORT_OPTIONS` in `constants.ts` to include `embedMetadata: true`.
+
+**Note:** Phase 12 Feature 4 (ICC Color Management) will further extend `ExportOptions` with `iccEmbedMode: 'srgb' | 'none'`. Keep the type extensible — both fields are independent post-processing toggles applied after the worker returns the raw export blob.
 
 ### C3. EXIF read at import time
 
@@ -564,16 +505,19 @@ async function finalizeExportBlob(
   embedMetadata: boolean,
   sourceExif: ExifMetadata | undefined,
 ): Promise<ExportResult> {
-  if (!embedMetadata) {
-    return result;
+  let blob = result.blob;
+
+  // Step 1: EXIF injection (Phase 10 C)
+  if (embedMetadata) {
+    if (format === 'image/jpeg') {
+      blob = await injectExifIntoJpeg(blob, sourceExif);
+    } else if (format === 'image/png') {
+      blob = await injectPngTextChunk(blob, 'Software', 'DarkSlide');
+    }
   }
 
-  let blob = result.blob;
-  if (format === 'image/jpeg') {
-    blob = await injectExifIntoJpeg(blob, sourceExif);
-  } else if (format === 'image/png') {
-    blob = await injectPngTextChunk(blob, 'Software', 'DarkSlide');
-  }
+  // Step 2: ICC profile embedding will be added here by Phase 12 Feature 4.
+  // ICC must run after EXIF to avoid segment layout conflicts in JPEG.
 
   return { ...result, blob };
 }
@@ -697,9 +641,105 @@ Add a tooltip: "Include camera info, date, and software tag in exported file. Di
 
 ---
 
+## Workstream D: GPU Uniform Upload Elision
+
+### Current Problem
+
+The `WebGPUPipeline` in `src/utils/gpu/WebGPUPipeline.ts` rewrites all uniform buffers and curve LUTs on every render dispatch, even when the effective processing state has not changed between frames. During rapid slider drags this means redundant GPU uploads every interaction frame.
+
+**Current per-render GPU write cost:**
+- `processingUniformBuffer`: 192 bytes (`48 * 4`) via `writeBuffer` — line 474
+- `curveLutBuffer`: 4,096 bytes (`1024 * 4`) via `writeBuffer` — line 479
+- `blurUniformBuffer`: 32 bytes, written 0–4 times per render — lines 383–392
+- `effectUniformBuffer`: 16 bytes, written 0–2 times per render — lines 396–400
+- `sourceTexture` via `writeTexture`: full image data (e.g. 37.7 MB for 4K) — line 459
+
+None of these are guarded by a dirty check.
+
+### D1. Hash-based uniform upload elision
+
+The lowest-risk change is local to `WebGPUPipeline`: hash the generated uniform payloads and skip `writeBuffer` when the byte content is unchanged.
+
+**Changes to `WebGPUPipeline.ts`:**
+
+Add private fields to track the last-uploaded state:
+
+```ts
+private lastProcessingUniformsHash: number | null = null;
+private lastCurveLutHash: number | null = null;
+```
+
+Before each `writeBuffer` call in `processImageData()`, compute a lightweight hash of the uniform data and compare against the cached value. Skip the write if unchanged:
+
+```ts
+// In processImageData(), replace the unconditional writeBuffer calls:
+
+const processingUniforms = buildProcessingUniforms(settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter);
+const processingHash = hashFloat32Array(processingUniforms);
+if (processingHash !== this.lastProcessingUniformsHash) {
+  this.device.queue.writeBuffer(this.processingUniformBuffer, 0, processingUniforms);
+  this.lastProcessingUniformsHash = processingHash;
+}
+
+const curveLut = buildCurveLutBuffer(settings);
+const curveHash = hashFloat32Array(curveLut);
+if (curveHash !== this.lastCurveLutHash) {
+  this.device.queue.writeBuffer(this.curveLutBuffer, 0, curveLut);
+  this.lastCurveLutHash = curveHash;
+}
+```
+
+**Hash function** — use a fast FNV-1a over the Float32Array's backing `ArrayBuffer`:
+
+```ts
+private static hashFloat32Array(data: Float32Array): number {
+  const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  let hash = 2166136261;
+  for (let i = 0; i < bytes.length; i++) {
+    hash ^= bytes[i];
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash;
+}
+```
+
+Use a `number` hash instead of a string to avoid allocation. Reset both hashes on `destroy()` and on device loss to ensure stale state is never reused.
+
+This is upload elision, not true revision tracking: `buildProcessingUniforms()` / `buildCurveLutBuffer()` still run every render. That is acceptable because it keeps the change local to the GPU pipeline. If profiling later shows hash cost is material, a follow-up can propagate a caller-owned revision token and skip both buffer construction and upload.
+
+### D2. Curve LUT diff
+
+The curve LUT buffer (4 × 256 entries = 4,096 bytes) is the most expensive per-render upload outside of the source texture. During non-curve edits (exposure, contrast, saturation, etc.) the curves do not change.
+
+This is already handled by D1's `curveHash` check — the hash over the 1024-element `Float32Array` will match on non-curve edits, skipping the `writeBuffer`.
+
+No additional work needed beyond D1.
+
+### D3. Texture reuse on resize
+
+**Current behavior** (`ensureTextures()`, lines 256–309): if either width or height changes, all five textures (source, workA, workB, workC, output) are destroyed and recreated.
+
+**Conclusion**: no change is required here. All five textures share the same dimensions, so partial texture reuse is not possible at the GPU level. The current `ensureTextures()` exact-dimension reuse and `ensureReadbackBuffer()` size-capacity reuse are already the correct baseline.
+
+Do not add a 1px tolerance check here: it would silently reuse textures of the wrong size and produce incorrect output. Any real readback/submit overlap would require a larger redesign such as double-buffered readback or pipelining the next tile while the previous readback maps.
+
+### D — Files Changed
+
+| File | Changes |
+|---|---|
+| `src/utils/gpu/WebGPUPipeline.ts` | Hash-based buffer skip, FNV-1a hash function |
+
+### D — Testing
+
+- Requires testing with all pipeline paths (preview, tiled, export) to ensure hash collisions don't cause stale renders.
+- Unit test: same uniform payload produces same hash; different payload produces different hash.
+- Manual test: open a large scan, drag exposure slider rapidly, confirm preview is correct and GPU upload count is reduced (observable via WebGPU profiling tools).
+
+---
+
 ## Implementation Order
 
-The three workstreams are independent and can be developed in parallel. Within each:
+The four workstreams are independent and can be developed in parallel. Within each:
 
 ### Phase A (React rendering): ~1–2 sessions
 1. Wrap all 6 components with `React.memo`
@@ -712,9 +752,7 @@ The three workstreams are independent and can be developed in parallel. Within e
 ### Phase B (CPU pipeline): ~1 session
 1. Add luma constants, hoist gray computation in `processImageData`
 2. Build fused curve LUTs, replace per-pixel chained lookup
-3. Split geometry cache in `imageWorker.ts` (rotation + crop stages)
-4. Run `imagePipeline.test.ts` golden-pixel tests, verify exact output match
-5. Add worker/client cache-behavior tests for crop-only reuse and eviction
+3. Run `imagePipeline.test.ts` golden-pixel tests, verify exact output match
 
 ### Phase C (EXIF preservation): ~2 sessions
 1. Install `piexifjs`, add types (`ExifMetadata`, extended `SourceMetadata`, `ExportOptions`)
@@ -725,13 +763,20 @@ The three workstreams are independent and can be developed in parallel. Within e
 6. Write round-trip tests
 7. Optionally extend Tauri `decode_raw` to return additional metadata fields
 
+### Phase D (GPU uniform elision): ~1 session
+1. Add FNV-1a hash function to `WebGPUPipeline`
+2. Guard `writeBuffer` calls with hash comparison
+3. Test with preview, tiled, and export paths
+4. Verify no stale renders from hash collisions
+
 ---
 
 ## Out of Scope
 
 - **Settings segmentation** (splitting `ConversionSettings` type): deferred as the memo boundaries achieve the same render-skip benefit at far lower risk.
 - **WebP EXIF injection**: deferred — requires RIFF container manipulation.
-- **ICC profile preservation**: belongs to Phase 12 (ICC color management).
+- **ICC profile embedding**: belongs to Phase 12 Feature 4 (ICC color management). Phase 12 extends `finalizeExportBlob()` with an ICC injection step after EXIF.
 - **EXIF for mirrored orientations** (2, 4, 5, 7): rare in scanner output; can be added later.
 - **RAW metadata expansion**: optional desktop follow-up unless this phase explicitly includes Tauri-side work.
-- **GPU pipeline optimizations**: belong to Phase 11 (GPU & Memory Hardening).
+- **Geometry cache restructuring**: moved to Phase 11, where it ships alongside the cache cleanup hardening (B4) that operates on the same data structures.
+- **GPU device-lost recovery**: belongs to Phase 11 (Memory Hardening).

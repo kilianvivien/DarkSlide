@@ -11,6 +11,17 @@ Phase 12 lifts the single-document constraint and adds the plumbing needed for p
 
 Each feature builds on the previous one but can be developed and tested incrementally.
 
+### Prerequisites from Earlier Phases
+
+Phase 12 assumes Phase 10 and Phase 11 are complete:
+
+- **Phase 10 C (EXIF preservation)**: `ExportOptions` includes `embedMetadata`, and `finalizeExportBlob()` handles EXIF injection. Phase 12 Feature 4 extends this pipeline with ICC embedding.
+- **Phase 10 D (GPU uniform elision)**: Hash-based `writeBuffer` skip in `WebGPUPipeline` — no multi-doc interaction, works unchanged.
+- **Phase 11 A (geometry cache split)**: The worker's geometry cache is split into `rotationCache` + `cropCache` per document. Phase 12 multi-doc inherits this structure — each `StoredDocument` carries its own cache pair.
+- **Phase 11 B1 (file size pre-check)**: `MAX_FILE_SIZE_BYTES` applies per-file in both single-import and batch import.
+- **Phase 11 B4 (canvas cleanup)**: `releaseCanvasIfUnreferenced()` and `releaseCanvas()` helpers exist in the worker. Phase 12 tab-close must call `workerClient.disposeDocument(tab.id)` to trigger this cleanup.
+- **Phase 11 B5 (OOM detection)**: Batch processing benefits from per-file OOM errors being caught gracefully.
+
 ---
 
 ## Feature 1: Multi-Document Tabs
@@ -240,7 +251,7 @@ export async function* runBatch(
       });
 
       // 3. Export at full resolution
-      const result = await workerClient.export({
+      const rawResult = await workerClient.export({
         documentId: entry.id,
         settings: sharedSettings,
         isColor: sharedProfile.type !== 'bw' && !sharedSettings.blackAndWhite.enabled,
@@ -250,7 +261,11 @@ export async function* runBatch(
         tonalCharacter: sharedProfile.tonalCharacter,
       });
 
-      // 4. Save
+      // 4. Post-process: EXIF metadata (Phase 10 C) + ICC profile (Phase 12 F4)
+      //    Reuses the same finalizeExportBlob() pipeline as single-file export.
+      const result = await finalizeExportBlob(rawResult, exportOptions);
+
+      // 5. Save
       const outputFilename = applyNamingTemplate(entry.filename, exportOptions.filenameBase);
       await saveBatchExport(result.blob, outputFilename, exportOptions.format, outputPath);
 
@@ -270,8 +285,10 @@ export async function* runBatch(
 
 Key design decisions:
 - **Sequential, not parallel** — one file at a time avoids GPU/CPU contention and memory spikes.
-- **Dispose after each file** — keeps worker memory bounded regardless of batch size.
-- **Error resilience** — a failed file does not abort the batch; it is logged and skipped.
+- **Dispose after each file** — keeps worker memory bounded regardless of batch size (Phase 11 B4 canvas cleanup triggers on dispose).
+- **Error resilience** — a failed file does not abort the batch; it is logged and skipped. Phase 11 B5 OOM detection ensures large-file failures produce actionable messages.
+- **Full export finalization** — each file's export blob passes through `finalizeExportBlob()` (Phase 10 C5) for EXIF metadata injection and ICC profile embedding, same as single-file export.
+- **File size pre-check** — Phase 11 B1's `MAX_FILE_SIZE_BYTES` applies per-file. Oversized files in the batch are rejected at decode time with a clear error, without aborting the rest.
 - `runBatch(...)` should be specified against the current `DecodeRequest` / `ExportRequest` types in `src/types.ts`. If those request types change as part of Phase 12, update the shared type definitions first and then update this plan to match.
 
 ### File bridge additions (`src/utils/fileBridge.ts`)
@@ -469,25 +486,27 @@ Dispatcher that calls `embedIccInJpeg` or `embedIccInPng` based on format. WebP 
 
 ### Export pipeline integration
 
-In `imageWorkerClient.ts`, after the export blob is produced (both GPU and CPU paths), add:
+In `imageWorkerClient.ts`, integrate ICC embedding into the existing `finalizeExportBlob()` pipeline established by Phase 10 C5. The finalization order is: **EXIF injection first, then ICC embedding** — because ICC embeds raw bytes at the container level and must not conflict with the EXIF APP1/APP2 segment layout.
 
 ```typescript
+// In finalizeExportBlob() (added by Phase 10 C5), after the EXIF injection step:
 if (exportOptions.iccEmbedMode === 'srgb') {
   blob = await embedIccInBlob(blob, SRGB_ICC_PROFILE, exportOptions.format);
 }
 ```
 
-This runs on the main thread (fast — just byte splicing) after the worker returns the raw blob.
+This runs on the main thread (fast — just byte splicing) after the worker returns the raw blob. Both EXIF and ICC post-processing share the same `finalizeExportBlob()` function, keeping the pipeline unified for single-file export, batch export, and contact sheet export.
 
 ### Type changes (`src/types.ts`)
 
-Extend `ExportOptions`:
+Extend `ExportOptions` (which already includes `embedMetadata: boolean` from Phase 10 C):
 ```typescript
 export interface ExportOptions {
   format: ExportFormat;
   quality: number;
   filenameBase: string;
-  iccEmbedMode: 'srgb' | 'none';   // default: 'srgb'
+  embedMetadata: boolean;            // Phase 10 C — EXIF preservation
+  iccEmbedMode: 'srgb' | 'none';   // Phase 12 — default: 'srgb'
 }
 ```
 
@@ -608,5 +627,6 @@ Step 4: ICC Color Management
 - The GPU pipeline (`WebGPUPipeline`) is stateless per-document — a single `GPUDevice` instance serves all tabs. No changes needed.
 - The `decodeCache` in `ImageWorkerClient` is already keyed by `documentId` — it naturally supports multiple documents for crash recovery.
 - `renderRevision` should be treated as per-document state. Global visibility refs can stay singular because only one tab is shown at a time, but revision numbering must not let a render in tab B invalidate a newer render in tab A.
+- Each `StoredDocument` carries its own `rotationCache` and `cropCache` (Phase 11 A). Phase 11 B4's `releaseCanvasIfUnreferenced()` already scans all documents, so multi-doc cleanup works without changes.
 - Batch processing deliberately does **not** use the GPU path for simplicity — it decodes and exports via the existing worker `handleExport` flow, which selects GPU or CPU automatically based on capability detection.
 - Contact sheet generation should use a frozen request payload built on the main thread from the active tab snapshot, not a live read of mutable React state during worker execution.

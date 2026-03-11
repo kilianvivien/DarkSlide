@@ -1,97 +1,89 @@
-# Phase 11: GPU & Memory Hardening — Implementation Plan
+# Phase 11: Worker & Memory Hardening — Implementation Plan
 
 ## Overview
 
-Phase 11 hardens the GPU pipeline and worker memory management for stability under heavy workloads — large scans (24–120 MP), long editing sessions, and GPU edge cases. All changes are defensive in nature: no new features, no UI additions beyond diagnostics reporting.
+Phase 11 hardens the worker memory management and cache architecture for stability under heavy workloads — large scans (24–120 MP), long editing sessions, and GPU edge cases. All changes are defensive in nature: no new features, no UI additions beyond diagnostics reporting.
 
 | Workstream | Scope | Risk | Expected Impact |
 |---|---|---|---|
-| A. GPU uniform upload elision | `WebGPUPipeline.ts` | Low | Eliminates redundant uniform/LUT uploads during rapid slider drags |
-| B. Memory hardening | `imageWorker.ts`, `imageWorkerClient.ts`, `App.tsx`, `imagePipeline.ts`, `fileBridge.ts`, `constants.ts`, `types.ts`, `SettingsModal.tsx` | Medium | Prevents OOM on large files, plugs blob/canvas leaks, adds graceful error messaging |
+| A. Geometry cache restructuring | `imageWorker.ts` | Low–Medium | Preserves rotation cache during crop drags, enables coherent cleanup in B4 |
+| B. Memory hardening | `imageWorker.ts`, `imageWorkerClient.ts`, `App.tsx`, `fileBridge.ts`, `constants.ts`, `types.ts`, `WebGPUPipeline.ts`, `SettingsModal.tsx` | Medium | Prevents OOM on large files, plugs blob/canvas leaks, adds graceful error messaging |
 
 ---
 
-## Workstream A: GPU Uniform Upload Elision
+## Workstream A: Geometry Cache Restructuring
 
 ### Current Problem
 
-The `WebGPUPipeline` in `src/utils/gpu/WebGPUPipeline.ts` rewrites all uniform buffers and curve LUTs on every render dispatch, even when the effective processing state has not changed between frames. During rapid slider drags this means redundant GPU uploads every interaction frame.
+The geometry cache key includes `crop`, `rotation`, and `levelAngle` together. When any geometry parameter changes, `cache.clear()` wipes all entries — even if only crop changed and the rotation result could be reused.
 
-**Current per-render GPU write cost:**
-- `processingUniformBuffer`: 192 bytes (`48 * 4`) via `writeBuffer` — line 474
-- `curveLutBuffer`: 4,096 bytes (`1024 * 4`) via `writeBuffer` — line 479
-- `blurUniformBuffer`: 32 bytes, written 0–4 times per render — lines 383–392
-- `effectUniformBuffer`: 16 bytes, written 0–2 times per render — lines 396–400
-- `sourceTexture` via `writeTexture`: full image data (e.g. 37.7 MB for 4K) — line 459
-
-None of these are guarded by a dirty check.
-
-### A1. Hash-based uniform upload elision
-
-Do not thread a new `settingsRevision` token through the app and worker for Phase 11. The lowest-risk change is local to `WebGPUPipeline`: hash the generated uniform payloads and skip `writeBuffer` when the byte content is unchanged.
-
-**Changes to `WebGPUPipeline.ts`:**
-
-Add private fields to track the last-uploaded state:
-
-```ts
-private lastProcessingUniformsHash: number | null = null;
-private lastCurveLutHash: number | null = null;
-```
-
-Before each `writeBuffer` call in `processImageData()`, compute a lightweight hash of the uniform data and compare against the cached value. Skip the write if unchanged:
-
-```ts
-// In processImageData(), replace the unconditional writeBuffer calls:
-
-const processingUniforms = buildProcessingUniforms(settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter);
-const processingHash = hashFloat32Array(processingUniforms);
-if (processingHash !== this.lastProcessingUniformsHash) {
-  this.device.queue.writeBuffer(this.processingUniformBuffer, 0, processingUniforms);
-  this.lastProcessingUniformsHash = processingHash;
+```typescript
+// Current: single cache key containing all geometry
+function createGeometryCacheKey(...) {
+  return JSON.stringify({
+    sourceKind, previewLevelId,
+    crop, rotation, levelAngle,
+  });
 }
 
-const curveLut = buildCurveLutBuffer(settings);
-const curveHash = hashFloat32Array(curveLut);
-if (curveHash !== this.lastCurveLutHash) {
-  this.device.queue.writeBuffer(this.curveLutBuffer, 0, curveLut);
-  this.lastCurveLutHash = curveHash;
+// On miss: clear entire cache
+cache.clear();
+cache.set(geometryCacheKey, storedJob);
+```
+
+### A1. Split geometry cache into rotation + crop stages
+
+**Fix:** Split geometry processing into two stages with independent caches:
+
+```typescript
+interface StoredDocument {
+  // ... existing fields
+  rotationCache: Map<string, OffscreenCanvas>;  // rotation+level result
+  cropCache: Map<string, StoredTileJob>;         // crop of rotated canvas
 }
 ```
 
-**Hash function** — use a fast FNV-1a over the Float32Array's backing `ArrayBuffer`:
+**Stage 1 — Rotation cache:**
+- Key: `JSON.stringify({ sourceKind, previewLevelId, rotation, levelAngle })`
+- Value: rotated `OffscreenCanvas` (no crop applied)
+- Invalidation: only when `rotation` or `levelAngle` changes
 
-```ts
-private static hashFloat32Array(data: Float32Array): number {
-  const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  let hash = 2166136261;
-  for (let i = 0; i < bytes.length; i++) {
-    hash ^= bytes[i];
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash;
+**Stage 2 — Crop cache:**
+- Key: `JSON.stringify({ sourceKind, previewLevelId, rotation, levelAngle, crop })`
+- Value: final `StoredTileJob` (crop applied to the rotated canvas)
+- Invalidation: when any geometry parameter changes (but rotation cache survives)
+
+This means during a crop drag (the most common geometry interaction), the rotation cache is preserved. The crop stage reads from the cached rotated canvas instead of re-rotating the source.
+
+**Cache eviction policy:** Keep at most 2 entries per cache level (current + previous) to bound memory. Since preview and source use separate caches, total entries are capped at 4 per document.
+
+This optimization only affects the worker tile path (`prepare-tile-job` / `read-tile`). It does not change the simpler preview `render` path used during CPU fallback.
+
+**Also:** Replace `JSON.stringify` for the cache key with a cheaper string concatenation:
+
+```typescript
+function rotationCacheKey(sourceKind: string, levelId: string | null, rotation: number, levelAngle: number) {
+  return `${sourceKind}|${levelId ?? ''}|${rotation}|${levelAngle}`;
 }
 ```
 
-Use a `number` hash instead of a string to avoid allocation. Reset both hashes on `destroy()` and on device loss to ensure stale state is never reused.
+### A — Files Changed
 
-This is upload elision, not true revision tracking: `buildProcessingUniforms()` / `buildCurveLutBuffer()` still run every render. That is acceptable for Phase 11 because it keeps the change local to the GPU pipeline. If profiling later shows hash cost is material, a follow-up can propagate a caller-owned revision token and skip both buffer construction and upload.
+| File | Changes |
+|---|---|
+| `src/utils/imageWorker.ts` | Split geometry cache into rotation + crop stages, cheaper keys |
 
-### A2. Curve LUT diff
+### A — Testing
 
-The curve LUT buffer (4 × 256 entries = 4,096 bytes) is the most expensive per-render upload outside of the source texture. During non-curve edits (exposure, contrast, saturation, etc.) the curves do not change.
+- Add worker/client tests for geometry cache behavior:
+  - crop-only change reuses the rotation cache
+  - rotation change invalidates rotation cache
+  - cache eviction keeps current + previous only
+  - cancelled tile jobs still clean up correctly
+- The geometry cache split is transparent to the client message protocol — `imageWorkerClient.ts` request shapes stay unchanged.
+- Manual test: open a 40 MP scan, drag the crop handles rapidly, confirm the preview updates without visible lag increase.
 
-This is already handled by A1's `curveHash` check — the hash over the 1024-element `Float32Array` will match on non-curve edits, skipping the `writeBuffer`.
-
-No additional work needed beyond A1.
-
-### A3. Texture reuse on resize
-
-**Current behavior** (`ensureTextures()`, lines 256–309): if either width or height changes, all five textures (source, workA, workB, workC, output) are destroyed and recreated.
-
-**Conclusion**: no Phase 11 change is required here. All five textures share the same dimensions, so partial texture reuse is not possible at the GPU level. The current `ensureTextures()` exact-dimension reuse and `ensureReadbackBuffer()` size-capacity reuse are already the correct baseline.
-
-Do not add a 1px tolerance check here: it would silently reuse textures of the wrong size and produce incorrect output. Any real readback/submit overlap would require a larger redesign such as double-buffered readback or pipelining the next tile while the previous readback maps. That work is deferred out of Phase 11.
+**Note:** Workstream B4 (canvas cleanup) builds directly on this cache structure, adding `releaseCanvasIfUnreferenced()` to scan both `rotationCache` and `cropCache`. Implement A1 first, then B4.
 
 ---
 
@@ -355,11 +347,13 @@ Disposal is not the only leak point. The current worker also drops transformed c
 
 Geometry caches own transformed canvases; `tileJobs` borrow them. Do not blindly `releaseCanvas()` from `clearTileJob()`, because the same `transformedCanvas` may still be referenced by the active geometry cache. Instead, add a helper that releases a canvas only when no cache entry and no tile job still reference it.
 
+The cleanup helper scans both cache levels per document (as restructured by Workstream A above):
+
 ```ts
 function releaseCanvasIfUnreferenced(canvas: OffscreenCanvas) {
   const stillReferencedByCache = Array.from(documents.values()).some((doc) =>
-    Array.from(doc.previewGeometryCache.values()).some((job) => job.transformedCanvas === canvas)
-    || Array.from(doc.sourceGeometryCache.values()).some((job) => job.transformedCanvas === canvas)
+    Array.from(doc.rotationCache.values()).some((entry) => entry === canvas)
+    || Array.from(doc.cropCache.values()).some((job) => job.transformedCanvas === canvas)
   );
   const stillReferencedByTileJob = Array.from(tileJobs.values()).some((job) => job.transformedCanvas === canvas);
   if (!stillReferencedByCache && !stillReferencedByTileJob) {
@@ -434,11 +428,11 @@ function estimateMemoryBytes(): number {
         total += preview.canvas.width * preview.canvas.height * 4;
       }
     }
-    // Geometry caches
-    for (const [, job] of doc.previewGeometryCache) {
-      total += job.width * job.height * 4;
+    // Geometry caches (Workstream A: rotationCache + cropCache)
+    for (const [, canvas] of doc.rotationCache) {
+      total += canvas.width * canvas.height * 4;
     }
-    for (const [, job] of doc.sourceGeometryCache) {
+    for (const [, job] of doc.cropCache) {
       total += job.width * job.height * 4;
     }
   }
@@ -491,24 +485,27 @@ In `App.tsx`, when the error code is `OUT_OF_MEMORY`, display a specific error m
 
 ## Implementation Order
 
-### Phase 1: Memory safety (B1, B5) — lowest risk, highest immediate value
+### Step 1: Geometry cache restructure (A1) — foundation for B4
 
-1. **B1** — Add `MAX_FILE_SIZE_BYTES` constant and pre-check in both the worker and `App.tsx`.
-2. **B5** — Add `RangeError` / OOM detection in the worker catch block and specific OOM messaging in `App.tsx`.
+1. **A1** — Split geometry cache into `rotationCache` + `cropCache` in the worker. This must land before B4, which adds cleanup helpers for these caches.
+
+### Step 2: Memory safety (B1, B5) — lowest risk, highest immediate value
+
+2. **B1** — Add `MAX_FILE_SIZE_BYTES` constant and pre-check in both the worker and `App.tsx`.
+3. **B5** — Add `RangeError` / OOM detection in the worker catch block and specific OOM messaging in `App.tsx`.
 
 These two changes are completely self-contained and can ship independently.
 
-### Phase 2: GPU resilience (A1, B2) — moderate risk, significant value
+### Step 3: GPU resilience (B2) — moderate risk, significant value
 
-3. **A1** — Add FNV-1a hashing to `WebGPUPipeline` and skip redundant uniform/LUT `writeBuffer` calls.
 4. **B2** — Improve `device.lost` handling, keep retry-on-next-render behavior, add diagnostics logging, and push backend state changes to the UI via explicit callbacks.
 
-A1 requires testing with all pipeline paths (preview, tiled, export) to ensure hash collisions don't cause stale renders. B2 requires testing on a system where device loss can be simulated (e.g. by disabling the GPU mid-session via browser flags).
+B2 requires testing on a system where device loss can be simulated (e.g. by disabling the GPU mid-session via browser flags).
 
-### Phase 3: Leak prevention (B3, B4) — low risk, long-session value
+### Step 4: Leak prevention (B3, B4) — low risk, long-session value
 
 5. **B3** — Add `blobUrlTracker.ts`, wire into `fileBridge.ts`, expose count in diagnostics.
-6. **B4** — Add reference-safe canvas cleanup helpers for cache eviction/job cleanup/dispose, add memory estimation, expose in diagnostics.
+6. **B4** — Add reference-safe canvas cleanup helpers for cache eviction/job cleanup/dispose (operating on the A1 cache structure), add memory estimation, expose in diagnostics.
 
 ---
 
@@ -518,8 +515,8 @@ A1 requires testing with all pipeline paths (preview, tiled, export) to ensure h
 |---|---|---|
 | `src/constants.ts` | B1 | Add `MAX_FILE_SIZE_BYTES` |
 | `src/types.ts` | B4 | Add `WorkerMemoryDiagnostics` interface |
-| `src/utils/gpu/WebGPUPipeline.ts` | A1, B2 | Hash-based buffer skip, device-lost info getters |
-| `src/utils/imageWorker.ts` | B1, B4, B5 | File size check, canvas release on dispose, OOM detection |
+| `src/utils/gpu/WebGPUPipeline.ts` | B2 | Device-lost info getters |
+| `src/utils/imageWorker.ts` | A1, B1, B4, B5 | Geometry cache split, file size check, canvas release on dispose, OOM detection |
 | `src/utils/imageWorkerClient.ts` | B2 | Device-lost diagnostics, retry-on-next-render, backend diagnostics change callbacks |
 | `src/utils/fileBridge.ts` | B3 | Use tracked blob URL functions |
 | `src/utils/blobUrlTracker.ts` | B3 | **New file** — blob URL lifecycle audit with stale-age warnings |
@@ -542,7 +539,7 @@ A1 requires testing with all pipeline paths (preview, tiled, export) to ensure h
 | Main-thread size rejection | `App.test.tsx` | Oversized browser import is rejected before `file.arrayBuffer()` |
 | OOM error code | `imageWorker.test.ts` | `RangeError` in decode/render maps to `OUT_OF_MEMORY` code |
 | Blob URL tracker | `blobUrlTracker.test.ts` | `trackCreateObjectURL` increments count, `trackRevokeObjectURL` decrements, stale-age warning fires only for long-lived URLs |
-| Hash stability | `WebGPUPipeline.test.ts` | Same uniform payload produces same hash; different payload produces different hash |
+| Geometry cache split | `imageWorker.test.ts` | Crop-only change reuses rotation cache; rotation change invalidates rotation cache; eviction keeps current + previous only |
 | Geometry cleanup on cache replacement | `imageWorker.test.ts` | Replaced transformed canvases are eventually released when no longer referenced |
 | GPU diagnostics callback | `imageWorkerClient.test.ts` | Device loss pushes updated diagnostics and emits a one-shot user notification |
 
@@ -558,13 +555,27 @@ A1 requires testing with all pipeline paths (preview, tiled, export) to ensure h
 
 ---
 
+## Forward Compatibility with Phase 12 (Multi-Document)
+
+Phase 12 replaces the single-document model with an ordered array of tabs (up to `MAX_OPEN_TABS = 8`). The following Phase 11 work is designed to be multi-doc ready:
+
+- **B1 (file size pre-check)**: Applies per-import — works unchanged with multi-doc.
+- **B4 (canvas cleanup)**: The `releaseCanvasIfUnreferenced()` helper already scans all documents in the `documents` map, so it naturally extends to multi-doc. Phase 12 must ensure `handleDispose()` is called when closing a tab, which triggers the cleanup path hardened here.
+- **B5 (OOM detection)**: Applies per-operation — works unchanged.
+- **Memory estimation**: Already iterates all documents in the map — will automatically report total memory across all open tabs.
+
+Phase 12 should address:
+- **Decode cache eviction**: with multiple documents, the `decodeCache` in `imageWorkerClient.ts` will hold multiple entries and needs an LRU eviction policy.
+- **Geometry cache bounding per document**: Workstream A's rotation + crop cache split caps at 2 entries per cache level per document. With 8 open tabs, total geometry cache memory can reach ~8× per-document. The `MAX_OPEN_TABS` cap provides an implicit bound.
+
 ## Non-Goals
 
 These are explicitly out of scope for Phase 11:
 
 - **Decode cache eviction** (`imageWorkerClient.ts` `decodeCache`): the current single-document model means the cache holds at most one entry. This becomes relevant in Phase 12 (multi-document tabs) and will be addressed there.
-- **Geometry cache bounding**: the current `cache.clear()` on each new geometry key (line 426) means each cache holds at most one entry. This is correct for the single-document model.
+- **Geometry cache bounding**: Workstream A's rotation + crop cache split keeps at most 2 entries per cache level. This is correct for the single-document model; multi-doc bounding is implicit via `MAX_OPEN_TABS` in Phase 12.
 - **True GPU/CPU overlap or double-buffered readback**: Phase 11 does not redesign the readback flow. A real overlap implementation would need separate readback buffers and/or pipelining across tiles/jobs.
 - **GPU texture format changes**: no changes to `INTERMEDIATE_FORMAT` or texture pipeline topology.
-- **CPU pipeline optimisations**: covered in Phase 10.
+- **CPU pipeline optimisations**: covered in Phase 10 Workstream B.
+- **GPU uniform upload elision**: covered in Phase 10 Workstream D.
 - **Worker thread pooling**: beyond current scope; single-worker model remains.
