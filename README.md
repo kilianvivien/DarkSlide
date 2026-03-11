@@ -90,7 +90,7 @@ DarkSlide is built on top of some amazing open-source projects:
 | [Lucide](https://lucide.dev/) | ISC | Icon toolkit |
 | [Framer Motion](https://www.framer.com/motion/) | MIT | Animation library for React |
 | [UTIF.js](https://github.com/photopea/UTIF.js) | MIT | Fast TIFF decoder |
-| [rawler](https://github.com/dnglab/dnglab) | MIT | Pure-Rust RAW image decoder |
+| [rawler](https://github.com/dnglab/dnglab) | LGPL-2.1 | Pure-Rust RAW image decoder |
 
 ## 📜 License
 
