@@ -7,11 +7,13 @@
 
 ## ✨ Features
 
-- **Blazing Fast Conversion**: Leverages an optimized Worker-backed imaging pipeline and **WebGPU Acceleration** for real-time blurs, noise reduction, and main conversion loops.
-- **Precision Editing**: Float32 pipeline ensures edits are processed in normalized float space and only quantized upon final write-back, yielding professional-grade accuracy.
-- **Cross-Platform Experience**: Available as a native desktop application powered by **Tauri**, complete with native file dialogues, while still maintaining full compatibility as a browser-based web app. 
-- **Film Profiles & Presets**: Ships with a broad mix of color and black-and-white stocks. Edit per-slider with non-destructive undo/redo, auto-balance curves, highlight protection, sharpening, and built-in noise reduction.
-- **Pro-Level UI Tools**: Custom toolkit with multi-level zoom capability, pan viewport, histogram, split-view comparison toggle, advanced non-destructive crop overlays, and persistent preferences.
+- **Blazing Fast Conversion**: Optimized Worker-backed imaging pipeline with **WebGPU acceleration** for real-time blurs, noise reduction, and main conversion loops.
+- **Precision Editing**: Float32 pipeline processes edits in normalized float space and quantizes only on final write-back — professional-grade color accuracy throughout.
+- **RAW Import** *(desktop only)*: Native DNG, CR3, NEF, ARW, RAF, and RW2 decoding via the Tauri desktop app. Camera white-balance metadata pre-seeds the temperature/tint sliders; the browser build degrades gracefully with a clear "requires desktop app" notice.
+- **Black & White Conversion**: Dedicated B&W layer with per-channel luminance-mix controls, layered on top of the full color pipeline for maximum tonal flexibility.
+- **Film Profiles & Presets**: Ships with a broad mix of color and B&W stocks. Non-destructive undo/redo, auto-balance curves, highlight protection, sharpening, noise reduction, and importable/exportable `.darkslide` preset files.
+- **Cross-Platform**: Native desktop app via **Tauri** (native file dialogs, RAW support) with full parity as a browser-based web app.
+- **Pro-Level UI Tools**: Multi-level zoom, pan viewport, histogram, split-view before/after toggle, non-destructive crop with film-format ratio presets, and persistent preferences.
 
 ## 🚀 Getting Started
 
@@ -62,20 +64,20 @@ npm run tauri:dev
 
 - **Frontend:** React 19, Vite, Tailwind CSS (v4), TypeScript
 - **Desktop Host:** Tauri, Rust
-- **Image Processing:** Web Workers, WebGPU Compute Shaders, UTIF (TIFF parsing)
+- **Image Processing:** Web Workers, WebGPU Compute Shaders, UTIF (TIFF parsing), rawler (RAW decoding)
 - **UI & Animation:** Lucide React, Framer Motion
 
 ## 🗺 Roadmap
 
 DarkSlide is continuously evolving. Some of the major phases include:
 
-- ✅ **Phase 0-8:** Baseline stabilization, Worker-backed imaging, Better conversion quality, Tauri shell, Editing/UI polish, Float32 Color Negative Science, and **WebGPU** acceleration. 
-- 🔜 **Phase 9 (RAW Import Pipeline):** Incorporating the `rawler` Rust crate for direct DNG, CR3, NEF, ARW, RAF, and RW2 imports via the Tauri Desktop App.
-- 🔜 **Phase 10 (Pro Workflow):** Multi-document tabs for rolls of film, batch processing queue, and comprehensive ICC Color Management (P3 Retina XDR priority on macOS).
+- ✅ **Phases 0–9:** Baseline stabilization, Worker-backed imaging, better conversion quality, Tauri shell, editing/UI polish, Float32 color negative science, **WebGPU** acceleration, RAW import pipeline (DNG/CR3/NEF/ARW/RAF/RW2), B&W conversion layer, film-format crop ratios, and importable/exportable preset files.
+- 🔜 **Phase 10 (Render Performance):** Incremental render diffing, tile-based GPU dispatch, and progressive preview updates for large files.
+- 🔜 **Phase 11 (Pro Workflow):** Multi-document tabs for rolls of film, batch processing queue, and comprehensive ICC Color Management (P3 Retina XDR priority on macOS).
 
 *See the `plan.md` file for full details on DarkSlide's roadmap and design specifics.*
 
-## � Acknowledgements
+## 🙏 Acknowledgements
 
 DarkSlide is built on top of some amazing open-source projects:
 - [React](https://react.dev/) - The library for web and native user interfaces.
@@ -85,7 +87,8 @@ DarkSlide is built on top of some amazing open-source projects:
 - [Lucide](https://lucide.dev/) - Beautiful & consistent icon toolkit.
 - [Framer Motion](https://www.framer.com/motion/) - An open source motion library for React.
 - [UTIF.js](https://github.com/photopea/UTIF.js) - Fast and advanced TIFF decoder.
+- [rawler](https://github.com/dnglab/dnglab) - Pure-Rust RAW image decoder supporting DNG, CR3, NEF, ARW, RAF, and RW2.
 
-## �📜 License
+## 📜 License
 
 This project is licensed under the MIT License - see the [`LICENSE`](./LICENSE) file for details.
