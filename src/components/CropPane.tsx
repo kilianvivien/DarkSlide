@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import {
   ChevronDown,
   Crop as CropIcon,
@@ -12,7 +12,7 @@ import {
   Square,
 } from 'lucide-react';
 import { ASPECT_RATIOS, AspectRatioEntry } from '../constants';
-import { ConversionSettings, CropSettings, CropTab } from '../types';
+import { CropSettings, CropTab } from '../types';
 import { createCenteredAspectCrop, rotateCropClockwise } from '../utils/imagePipeline';
 import { Slider } from './Slider';
 
@@ -72,28 +72,36 @@ function buildRatioGroups() {
 const RATIO_GROUPS = buildRatioGroups();
 
 interface CropPaneProps {
-  settings: ConversionSettings;
+  crop: CropSettings;
+  rotation: number;
+  levelAngle: number;
   imageWidth: number;
   imageHeight: number;
   cropTab: CropTab;
   onCropTabChange: (tab: CropTab) => void;
-  onSettingsChange: (settings: Partial<ConversionSettings>) => void;
+  onCropChange: (crop: CropSettings) => void;
+  onRotate: (rotation: number, crop: CropSettings) => void;
+  onLevelAngleChange: (levelAngle: number) => void;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
   onDone: () => void;
   onResetCrop: () => void;
 }
 
-export const CropPane: React.FC<CropPaneProps> = ({
-  settings,
+export const CropPane = memo(function CropPane({
+  crop,
+  rotation,
+  levelAngle,
   imageWidth,
   imageHeight,
   cropTab,
   onCropTabChange,
-  onSettingsChange,
+  onCropChange,
+  onRotate,
+  onLevelAngleChange,
   onLevelInteractionChange,
   onDone,
   onResetCrop,
-}) => {
+}: CropPaneProps) {
   const [customWidth, setCustomWidth] = useState('2');
   const [customHeight, setCustomHeight] = useState('3');
   const [isCustomRatioOpen, setIsCustomRatioOpen] = useState(false);
@@ -115,15 +123,12 @@ export const CropPane: React.FC<CropPaneProps> = ({
   }, []);
 
   const handleRotate = () => {
-    const nextRotation = (settings.rotation + 90) % 360;
-    onSettingsChange({
-      rotation: nextRotation,
-      crop: rotateCropClockwise(settings.crop),
-    });
+    const nextRotation = (rotation + 90) % 360;
+    onRotate(nextRotation, rotateCropClockwise(crop));
   };
 
   const handleAspectChange = (aspect: number | null) => {
-    const newCrop: CropSettings = { ...settings.crop, aspectRatio: aspect };
+    const newCrop: CropSettings = { ...crop, aspectRatio: aspect };
 
     if (aspect) {
       Object.assign(newCrop, createCenteredAspectCrop(aspect, imageWidth, imageHeight));
@@ -134,7 +139,7 @@ export const CropPane: React.FC<CropPaneProps> = ({
       newCrop.height = 1;
     }
 
-    onSettingsChange({ crop: newCrop });
+    onCropChange(newCrop);
   };
 
   const getIcon = (entry: AspectRatioEntry) => {
@@ -153,14 +158,14 @@ export const CropPane: React.FC<CropPaneProps> = ({
   };
 
   const isAspectSelected = (preset: number | null) => {
-    if (preset === null) return settings.crop.aspectRatio === null;
-    const currentAspect = settings.crop.aspectRatio;
+    if (preset === null) return crop.aspectRatio === null;
+    const currentAspect = crop.aspectRatio;
     if (!currentAspect) return false;
     return Math.abs(currentAspect - preset) < 0.0001;
   };
 
   const isGroupSelected = (group: RatioGroup) => {
-    if (settings.crop.aspectRatio === null) {
+    if (crop.aspectRatio === null) {
       return false;
     }
 
@@ -269,25 +274,25 @@ export const CropPane: React.FC<CropPaneProps> = ({
           <RotateCw size={18} className="text-zinc-400" />
           <span className="text-sm font-medium">Rotate 90° Clockwise</span>
           <span className="text-[10px] text-zinc-500 ml-auto bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
-            {settings.rotation}°
+            {rotation}°
           </span>
         </button>
         <div className="mt-4 rounded-xl border border-zinc-800/70 bg-zinc-900/30 p-4">
           <Slider
             label="Level"
-            value={settings.levelAngle}
+            value={levelAngle}
             min={-10}
             max={10}
             step={0.1}
-            valueLabel={`${settings.levelAngle.toFixed(1)}°`}
-            onChange={(value) => onSettingsChange({ levelAngle: value })}
+            valueLabel={`${levelAngle.toFixed(1)}°`}
+            onChange={onLevelAngleChange}
             onInteractionStart={() => onLevelInteractionChange?.(true)}
             onInteractionEnd={() => onLevelInteractionChange?.(false)}
           />
           <button
             type="button"
-            onClick={() => onSettingsChange({ levelAngle: 0 })}
-            disabled={Math.abs(settings.levelAngle) < 0.05}
+            onClick={() => onLevelAngleChange(0)}
+            disabled={Math.abs(levelAngle) < 0.05}
             className="mt-1 text-[10px] uppercase tracking-[0.2em] text-zinc-500 transition-colors hover:text-zinc-300 disabled:cursor-default disabled:text-zinc-700"
           >
             Reset Level
@@ -423,4 +428,4 @@ export const CropPane: React.FC<CropPaneProps> = ({
       </div>
     </div>
   );
-};
+});

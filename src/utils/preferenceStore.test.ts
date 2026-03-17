@@ -5,7 +5,7 @@ import { loadPreferences, savePreferences, UserPreferences } from './preferenceS
 const VALID_PREFS: UserPreferences = {
   version: 1,
   lastProfileId: 'portra-400',
-  exportOptions: { format: 'image/png', quality: 0.85, filenameBase: 'test' },
+  exportOptions: { format: 'image/png', quality: 0.85, filenameBase: 'test', embedMetadata: false },
   sidebarTab: 'export',
   cropTab: 'Social',
   isLeftPaneOpen: false,
@@ -86,6 +86,27 @@ describe('loadPreferences', () => {
       ultraSmoothDrag: false,
     });
   });
+
+  it('defaults embedMetadata to true for older stored preferences', () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      version: 1,
+      lastProfileId: 'x',
+      exportOptions: {
+        format: 'image/jpeg',
+        quality: 0.92,
+        filenameBase: 'scan',
+      },
+      sidebarTab: 'adjust',
+      isLeftPaneOpen: true,
+      isRightPaneOpen: false,
+    }));
+
+    expect(loadPreferences()).toMatchObject({
+      exportOptions: expect.objectContaining({
+        embedMetadata: true,
+      }),
+    });
+  });
 });
 
 describe('savePreferences + loadPreferences round-trip', () => {
@@ -104,6 +125,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.ultraSmoothDrag).toBe(true);
     expect(loaded!.exportOptions.format).toBe('image/png');
     expect(loaded!.exportOptions.quality).toBe(0.85);
+    expect(loaded!.exportOptions.embedMetadata).toBe(false);
   });
 
   it('overwrites previous preferences on save', () => {

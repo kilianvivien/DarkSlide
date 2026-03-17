@@ -5,6 +5,7 @@ type TiffFrame = {
   height?: number;
   t256?: ArrayLike<number>;
   t257?: ArrayLike<number>;
+  t274?: ArrayLike<number>;
 };
 
 type TiffDecoder = {
@@ -29,6 +30,7 @@ export interface DecodedTiffRaster {
   data: Uint8ClampedArray;
   frameIndex: number;
   frameCount: number;
+  orientation?: number;
 }
 
 function normalizeRgbaBuffer(rgba: ArrayLike<number>) {
@@ -100,6 +102,7 @@ export function decodeTiffRaster(buffer: ArrayBuffer, decoder: TiffDecoder = UTI
         data: rgba,
         frameIndex,
         frameCount: frames.length,
+        orientation: Number.isFinite(Number(frame.t274?.[0])) ? Number(frame.t274?.[0]) : undefined,
       };
     } catch (error) {
       decodeFailure = error;

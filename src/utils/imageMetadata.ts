@@ -1,0 +1,219 @@
+import piexif from 'piexifjs';
+import { ExifMetadata, ExportFormat, ExportResult } from '../types';
+
+const PNG_SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+const PNG_TEXT_TYPE = 'tEXt';
+const PNG_IDAT_TYPE = 'IDAT';
+const PNG_IEND_TYPE = 'IEND';
+const DARKSLIDE_SOFTWARE_TAG = 'DarkSlide';
+const BINARY_STRING_CHUNK_SIZE = 0x8000;
+
+function arrayBufferToBinaryString(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let result = '';
+
+  for (let index = 0; index < bytes.length; index += BINARY_STRING_CHUNK_SIZE) {
+    const chunk = bytes.subarray(index, index + BINARY_STRING_CHUNK_SIZE);
+    result += String.fromCharCode(...chunk);
+  }
+
+  return result;
+}
+
+async function blobToBinaryString(blob: Blob) {
+  return arrayBufferToBinaryString(await blob.arrayBuffer());
+}
+
+function binaryStringToUint8Array(value: string) {
+  const bytes = new Uint8Array(value.length);
+  for (let index = 0; index < value.length; index += 1) {
+    bytes[index] = value.charCodeAt(index) & 0xff;
+  }
+  return bytes;
+}
+
+function binaryStringToBlob(value: string, type: string) {
+  return new Blob([binaryStringToUint8Array(value)], { type });
+}
+
+function writeUint32(target: Uint8Array, offset: number, value: number) {
+  target[offset] = (value >>> 24) & 0xff;
+  target[offset + 1] = (value >>> 16) & 0xff;
+  target[offset + 2] = (value >>> 8) & 0xff;
+  target[offset + 3] = value & 0xff;
+}
+
+function readUint32(target: Uint8Array, offset: number) {
+  return (
+    (target[offset] << 24)
+    | (target[offset + 1] << 16)
+    | (target[offset + 2] << 8)
+    | target[offset + 3]
+  ) >>> 0;
+}
+
+function createCrc32Table() {
+  const table = new Uint32Array(256);
+
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) === 1 ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+    }
+    table[index] = value >>> 0;
+  }
+
+  return table;
+}
+
+const CRC32_TABLE = createCrc32Table();
+
+function crc32(data: Uint8Array) {
+  let crc = 0xffffffff;
+
+  for (let index = 0; index < data.length; index += 1) {
+    crc = CRC32_TABLE[(crc ^ data[index]) & 0xff] ^ (crc >>> 8);
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createPngTextChunkBytes(key: string, value: string) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(`${key}\0${value}`);
+  const type = encoder.encode(PNG_TEXT_TYPE);
+  const chunk = new Uint8Array(4 + type.length + data.length + 4);
+
+  writeUint32(chunk, 0, data.length);
+  chunk.set(type, 4);
+  chunk.set(data, 8);
+  writeUint32(chunk, chunk.length - 4, crc32(chunk.subarray(4, chunk.length - 4)));
+
+  return chunk;
+}
+
+function getExifField(data: Record<number, unknown>, key: number) {
+  const value = data[key];
+  return typeof value === 'string' || typeof value === 'number' ? value : undefined;
+}
+
+export function extractExifMetadata(buffer: ArrayBuffer): ExifMetadata | undefined {
+  try {
+    const exif = piexif.load(arrayBufferToBinaryString(buffer));
+    const zeroth = exif['0th'] ?? {};
+    const exifIfd = exif.Exif ?? {};
+    const orientation = getExifField(zeroth, piexif.ImageIFD.Orientation);
+    const dateTimeOriginal = getExifField(exifIfd, piexif.ExifIFD.DateTimeOriginal);
+    const make = getExifField(zeroth, piexif.ImageIFD.Make);
+    const model = getExifField(zeroth, piexif.ImageIFD.Model);
+    const software = getExifField(zeroth, piexif.ImageIFD.Software);
+
+    const metadata: ExifMetadata = {
+      ...(typeof orientation === 'number' ? { orientation } : {}),
+      ...(typeof dateTimeOriginal === 'string' ? { dateTimeOriginal } : {}),
+      ...(typeof make === 'string' ? { make } : {}),
+      ...(typeof model === 'string' ? { model } : {}),
+      ...(typeof software === 'string' ? { software } : {}),
+    };
+
+    return Object.keys(metadata).length > 0 ? metadata : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function injectExifIntoJpeg(blob: Blob, sourceExif?: ExifMetadata): Promise<Blob> {
+  const exifData: Record<string, Record<number, unknown>> = {
+    '0th': {
+      [piexif.ImageIFD.Orientation]: 1,
+      [piexif.ImageIFD.Software]: DARKSLIDE_SOFTWARE_TAG,
+    },
+    Exif: {},
+  };
+
+  if (sourceExif?.dateTimeOriginal) {
+    exifData.Exif[piexif.ExifIFD.DateTimeOriginal] = sourceExif.dateTimeOriginal;
+  }
+  if (sourceExif?.make) {
+    exifData['0th'][piexif.ImageIFD.Make] = sourceExif.make;
+  }
+  if (sourceExif?.model) {
+    exifData['0th'][piexif.ImageIFD.Model] = sourceExif.model;
+  }
+
+  const exifBytes = piexif.dump(exifData);
+  const binary = await blobToBinaryString(blob);
+  return binaryStringToBlob(piexif.insert(exifBytes, binary), 'image/jpeg');
+}
+
+export async function injectPngTextChunk(blob: Blob, key: string, value: string): Promise<Blob> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (bytes.length < PNG_SIGNATURE.length || !PNG_SIGNATURE.every((byte, index) => bytes[index] === byte)) {
+    return blob;
+  }
+
+  let offset = PNG_SIGNATURE.length;
+  let insertOffset = bytes.length;
+
+  while (offset + 12 <= bytes.length) {
+    const chunkLength = readUint32(bytes, offset);
+    const typeOffset = offset + 4;
+    const dataOffset = typeOffset + 4;
+    const chunkType = String.fromCharCode(
+      bytes[typeOffset],
+      bytes[typeOffset + 1],
+      bytes[typeOffset + 2],
+      bytes[typeOffset + 3],
+    );
+
+    if (chunkType === PNG_IDAT_TYPE || chunkType === PNG_IEND_TYPE) {
+      insertOffset = offset;
+      break;
+    }
+
+    offset = dataOffset + chunkLength + 4;
+  }
+
+  const textChunk = createPngTextChunkBytes(key, value);
+  const result = new Uint8Array(bytes.length + textChunk.length);
+  result.set(bytes.subarray(0, insertOffset), 0);
+  result.set(textChunk, insertOffset);
+  result.set(bytes.subarray(insertOffset), insertOffset + textChunk.length);
+  return new Blob([result], { type: 'image/png' });
+}
+
+export async function finalizeExportBlob(
+  result: ExportResult,
+  format: ExportFormat,
+  embedMetadata: boolean,
+  sourceExif?: ExifMetadata,
+): Promise<ExportResult> {
+  if (!embedMetadata) {
+    return result;
+  }
+
+  try {
+    if (format === 'image/jpeg') {
+      return {
+        ...result,
+        blob: await injectExifIntoJpeg(result.blob, sourceExif),
+      };
+    }
+
+    if (format === 'image/png') {
+      return {
+        ...result,
+        blob: await injectPngTextChunk(result.blob, 'Software', DARKSLIDE_SOFTWARE_TAG),
+      };
+    }
+  } catch {
+    return result;
+  }
+
+  return result;
+}
+
+export const __testExports = {
+  arrayBufferToBinaryString,
+  blobToBinaryString,
+};

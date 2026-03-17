@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { CurvePoint, Curves } from '../types';
 
 interface CurvesControlProps {
@@ -10,18 +10,39 @@ interface CurvesControlProps {
 }
 
 type Channel = keyof Curves;
+const CHANNEL_COLORS: Record<Channel, string> = {
+  rgb: 'white',
+  red: '#ef4444',
+  green: '#22c55e',
+  blue: '#3b82f6',
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, isColor, onInteractionStart, onInteractionEnd }) => {
+function buildPath(channelPoints: CurvePoint[], size: number) {
+  return channelPoints.reduce((acc, point, index) => {
+    const pointX = (point.x / 255) * size;
+    const pointY = size - (point.y / 255) * size;
+    return acc + (index === 0 ? `M ${pointX} ${pointY}` : ` L ${pointX} ${pointY}`);
+  }, '');
+}
+
+export const CurvesControl = memo(function CurvesControl({
+  curves,
+  onChange,
+  isColor,
+  onInteractionStart,
+  onInteractionEnd,
+}: CurvesControlProps) {
   const [activeChannel, setActiveChannel] = useState<Channel>('rgb');
   const [draggingPoint, setDraggingPoint] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   const points = curves[activeChannel];
   const size = 200;
+  const gridPositions = useMemo(() => [size / 4, size / 2, (size * 3) / 4], [size]);
 
   const handleMouseDown = (index: number) => {
     onInteractionStart?.();
@@ -104,24 +125,7 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
     };
   }, [draggingPoint, points, activeChannel]);
 
-  const pathData = points.reduce((acc, p, i) => {
-    const x = (p.x / 255) * size;
-    const y = size - (p.y / 255) * size;
-    return acc + (i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`);
-  }, '');
-
-  const channelColors = {
-    rgb: 'white',
-    red: '#ef4444',
-    green: '#22c55e',
-    blue: '#3b82f6',
-  };
-
-  const buildPath = (channelPoints: CurvePoint[]) => channelPoints.reduce((acc, point, index) => {
-    const pointX = (point.x / 255) * size;
-    const pointY = size - (point.y / 255) * size;
-    return acc + (index === 0 ? `M ${pointX} ${pointY}` : ` L ${pointX} ${pointY}`);
-  }, '');
+  const pathData = useMemo(() => buildPath(points, size), [points, size]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -150,18 +154,18 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
           onDoubleClick={handleDoubleClick}
         >
           {/* Grid */}
-          <line x1="0" y1={size/4} x2={size} y2={size/4} stroke="#27272a" strokeWidth="1" />
-          <line x1="0" y1={size/2} x2={size} y2={size/2} stroke="#27272a" strokeWidth="1" />
-          <line x1="0" y1={size*0.75} x2={size} y2={size*0.75} stroke="#27272a" strokeWidth="1" />
-          <line x1={size/4} y1="0" x2={size/4} y2={size} stroke="#27272a" strokeWidth="1" />
-          <line x1={size/2} y1="0" x2={size/2} y2={size} stroke="#27272a" strokeWidth="1" />
-          <line x1={size*0.75} y1="0" x2={size*0.75} y2={size} stroke="#27272a" strokeWidth="1" />
+          {gridPositions.map((position) => (
+            <React.Fragment key={position}>
+              <line x1="0" y1={position} x2={size} y2={position} stroke="#27272a" strokeWidth="1" />
+              <line x1={position} y1="0" x2={position} y2={size} stroke="#27272a" strokeWidth="1" />
+            </React.Fragment>
+          ))}
 
           {/* Curve Path */}
           <path
             d={pathData}
             fill="none"
-            stroke={channelColors[activeChannel]}
+            stroke={CHANNEL_COLORS[activeChannel]}
             strokeWidth="2"
             className="transition-colors duration-300"
           />
@@ -174,9 +178,9 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
             return (
               <path
                 key={channel}
-                d={buildPath(channelPoints)}
+                d={buildPath(channelPoints, size)}
                 fill="none"
-                stroke={channelColors[channel]}
+                stroke={CHANNEL_COLORS[channel]}
                 strokeWidth="1"
                 opacity="0.15"
               />
@@ -205,7 +209,7 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
                 cx={(p.x / 255) * size}
                 cy={size - (p.y / 255) * size}
                 r={draggingPoint === i ? 7 : 5}
-                fill={channelColors[activeChannel]}
+                fill={CHANNEL_COLORS[activeChannel]}
                 stroke="#09090b"
                 strokeWidth="2"
                 className="pointer-events-none transition-all"
@@ -234,4 +238,4 @@ export const CurvesControl: React.FC<CurvesControlProps> = ({ curves, onChange, 
       </div>
     </div>
   );
-};
+});

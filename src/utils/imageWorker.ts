@@ -36,6 +36,7 @@ import {
 } from './imagePipeline';
 import { PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
+import { extractExifMetadata } from './imageMetadata';
 
 type WorkerRequest =
   | { id: string; type: 'decode'; payload: DecodeRequest }
@@ -100,7 +101,7 @@ function ensureCanvas(canvas: OffscreenCanvas | null, width: number, height: num
 
 async function decodeRasterBlob(buffer: ArrayBuffer, mime: string) {
   const blob = new Blob([buffer], { type: mime || 'image/png' });
-  const bitmap = await createImageBitmap(blob);
+  const bitmap = await createImageBitmap(blob, { imageOrientation: 'none' });
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not create decode canvas.');
@@ -118,7 +119,10 @@ function decodeTiff(buffer: ArrayBuffer) {
 
   const imageData = new ImageData(data, width, height);
   ctx.putImageData(imageData, 0, 0);
-  return canvas;
+  return {
+    canvas,
+    orientation: decoded.orientation,
+  };
 }
 
 function buildPreviewCanvas(source: OffscreenCanvas, maxDimension: number) {
@@ -366,9 +370,18 @@ async function handleDecode(payload: DecodeRequest) {
 
   const isTiff = extension === '.tif' || extension === '.tiff' || payload.mime === 'image/tiff';
   let decodedCanvas: OffscreenCanvas;
+  let exif: SourceMetadata['exif'];
 
   try {
-    decodedCanvas = isTiff ? decodeTiff(payload.buffer) : await decodeRasterBlob(payload.buffer, payload.mime);
+    if (isTiff) {
+      const decodedTiff = decodeTiff(payload.buffer);
+      decodedCanvas = decodedTiff.canvas;
+      exif = decodedTiff.orientation ? { orientation: decodedTiff.orientation } : undefined;
+    } else {
+      decodedCanvas = await decodeRasterBlob(payload.buffer, payload.mime);
+      const isJpeg = extension === '.jpg' || extension === '.jpeg' || payload.mime === 'image/jpeg';
+      exif = isJpeg ? extractExifMetadata(payload.buffer) : undefined;
+    }
   } catch (error) {
     if (error instanceof TiffDecodeError) {
       throw createError(error.code, error.message);
@@ -387,6 +400,7 @@ async function handleDecode(payload: DecodeRequest) {
     size: payload.size,
     width: decodedCanvas.width,
     height: decodedCanvas.height,
+    ...(exif ? { exif } : {}),
   };
 
   documents.set(payload.documentId, {

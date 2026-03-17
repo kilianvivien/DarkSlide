@@ -22,6 +22,15 @@ export interface CropSettings {
   aspectRatio: number | null;
 }
 
+export interface ExifMetadata {
+  orientation?: number;
+  dateTimeOriginal?: string;
+  make?: string;
+  model?: string;
+  software?: string;
+  iccProfileName?: string;
+}
+
 export type ExportFormat = 'image/jpeg' | 'image/png' | 'image/webp';
 export type TileSourceKind = 'preview' | 'source';
 export type PreviewMode = 'draft' | 'settled';
@@ -97,6 +106,7 @@ export interface ExportOptions {
   format: ExportFormat;
   quality: number;
   filenameBase: string;
+  embedMetadata: boolean;
 }
 
 export interface FilmProfile {
@@ -142,6 +152,7 @@ export interface SourceMetadata {
   size: number;
   width: number;
   height: number;
+  exif?: ExifMetadata;
 }
 
 export interface DecodedImage {
@@ -204,6 +215,7 @@ export interface ExportRequest {
   settings: ConversionSettings;
   isColor: boolean;
   options: ExportOptions;
+  sourceExif?: ExifMetadata;
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;

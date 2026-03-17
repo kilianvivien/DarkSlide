@@ -229,16 +229,21 @@ function createFile(name: string, type: string) {
   return file;
 }
 
-function createDecodedImage(width: number, height: number) {
+function createDecodedImage(width: number, height: number, options: { exifOrientation?: number; mime?: string; extension?: string } = {}) {
   return {
     metadata: {
       id: `metadata-${width}-${height}`,
-      name: `scan-${width}x${height}.tiff`,
-      mime: 'image/tiff',
-      extension: '.tiff',
+      name: `scan-${width}x${height}${options.extension ?? '.tiff'}`,
+      mime: options.mime ?? 'image/tiff',
+      extension: options.extension ?? '.tiff',
       size: width * height,
       width,
       height,
+      ...(options.exifOrientation ? {
+        exif: {
+          orientation: options.exifOrientation,
+        },
+      } : {}),
     },
     previewLevels: [
       {
@@ -414,6 +419,34 @@ describe('App import and preview pipeline', () => {
 
     const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;
     expect(diagnostics.some((entry) => entry.code === 'RAW_DECODED' && entry.message.includes('scan.dng'))).toBe(true);
+  });
+
+  it('auto-applies EXIF orientation for raster imports exactly once', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200, {
+      exifOrientation: 6,
+      mime: 'image/jpeg',
+      extension: '.jpg',
+    }));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        rotation: number;
+      };
+    };
+
+    expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
   it('keeps the RAW import result available as a profile after switching away', async () => {

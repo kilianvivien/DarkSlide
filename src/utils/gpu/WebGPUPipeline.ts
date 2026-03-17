@@ -49,6 +49,18 @@ function copyWholeImage(source: Uint8ClampedArray, width: number, height: number
   return new ImageData(new Uint8ClampedArray(source), width, height);
 }
 
+export function hashFloat32Array(data: Float32Array) {
+  const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  let hash = 2166136261;
+
+  for (let index = 0; index < bytes.length; index += 1) {
+    hash ^= bytes[index];
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return hash >>> 0;
+}
+
 export class WebGPUPipeline {
   readonly adapterName: string | null;
 
@@ -108,6 +120,10 @@ export class WebGPUPipeline {
   private currentTextureHeight = 0;
 
   private currentReadbackSize = 0;
+
+  private lastProcessingUniformsHash: number | null = null;
+
+  private lastCurveLutHash: number | null = null;
 
   private lost = false;
 
@@ -195,6 +211,8 @@ export class WebGPUPipeline {
 
     void this.device.lost.then(() => {
       this.lost = true;
+      this.lastProcessingUniformsHash = null;
+      this.lastCurveLutHash = null;
     });
   }
 
@@ -471,12 +489,30 @@ export class WebGPUPipeline {
       },
     );
 
-    this.device.queue.writeBuffer(
-      this.processingUniformBuffer,
-      0,
-      buildProcessingUniforms(settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter),
+    const processingUniforms = buildProcessingUniforms(
+      settings,
+      isColor,
+      comparisonMode,
+      maskTuning,
+      colorMatrix,
+      tonalCharacter,
     );
-    this.device.queue.writeBuffer(this.curveLutBuffer, 0, buildCurveLutBuffer(settings));
+    const processingUniformsHash = hashFloat32Array(processingUniforms);
+    if (processingUniformsHash !== this.lastProcessingUniformsHash) {
+      this.device.queue.writeBuffer(
+        this.processingUniformBuffer,
+        0,
+        processingUniforms,
+      );
+      this.lastProcessingUniformsHash = processingUniformsHash;
+    }
+
+    const curveLut = buildCurveLutBuffer(settings);
+    const curveLutHash = hashFloat32Array(curveLut);
+    if (curveLutHash !== this.lastCurveLutHash) {
+      this.device.queue.writeBuffer(this.curveLutBuffer, 0, curveLut);
+      this.lastCurveLutHash = curveLutHash;
+    }
 
     const encoder = this.device.createCommandEncoder();
 
@@ -645,6 +681,8 @@ export class WebGPUPipeline {
     this.curveLutBuffer.destroy();
     this.blurUniformBuffer.destroy();
     this.effectUniformBuffer.destroy();
+    this.lastProcessingUniformsHash = null;
+    this.lastCurveLutHash = null;
     this.device.destroy();
   }
 }

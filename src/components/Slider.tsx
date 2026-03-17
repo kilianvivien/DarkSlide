@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo, useCallback } from 'react';
 
 interface SliderProps {
   label: string;
@@ -13,7 +13,7 @@ interface SliderProps {
   onInteractionEnd?: () => void;
 }
 
-export const Slider: React.FC<SliderProps> = ({
+export const Slider = memo(function Slider({
   label,
   value,
   min,
@@ -24,7 +24,11 @@ export const Slider: React.FC<SliderProps> = ({
   valueLabel,
   onInteractionStart,
   onInteractionEnd,
-}) => {
+}: SliderProps) {
+  const handleChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    onChange(parseFloat(event.target.value));
+  }, [onChange]);
+
   return (
     <div className="flex flex-col gap-1.5 mb-4">
       <div className="flex justify-between items-center px-1">
@@ -37,7 +41,7 @@ export const Slider: React.FC<SliderProps> = ({
         max={max}
         step={step}
         value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
+        onChange={handleChange}
         onPointerDown={onInteractionStart}
         onPointerUp={onInteractionEnd}
         onPointerCancel={onInteractionEnd}
@@ -48,4 +52,4 @@ export const Slider: React.FC<SliderProps> = ({
       />
     </div>
   );
-};
+});

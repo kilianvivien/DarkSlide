@@ -12,6 +12,10 @@ import {
 } from '../types';
 import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
 
+const LUMA_R = 0.299;
+const LUMA_G = 0.587;
+const LUMA_B = 0.114;
+
 export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -242,7 +246,7 @@ function applyFilmBaseCompensation(value: number, sampleValue: number) {
 }
 
 function mixBlackAndWhiteChannels(r: number, g: number, b: number, redMix: number, greenMix: number, blueMix: number) {
-  const baseGray = 0.299 * r + 0.587 * g + 0.114 * b;
+  const baseGray = LUMA_R * r + LUMA_G * g + LUMA_B * b;
   return clamp(
     baseGray
       + (r - baseGray) * (redMix / 100)
@@ -390,7 +394,7 @@ export function accumulateHistogram(
     histogram.r[data[index]] += 1;
     histogram.g[data[index + 1]] += 1;
     histogram.b[data[index + 2]] += 1;
-    histogram.l[Math.round(0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2])] += 1;
+    histogram.l[Math.round(LUMA_R * data[index] + LUMA_G * data[index + 1] + LUMA_B * data[index + 2])] += 1;
   }
 }
 
@@ -452,8 +456,8 @@ function applyNoiseReduction(imageData: ImageData, strength: number): void {
   const blurred = separableGaussianBlur(data, width, height, 1.5);
 
   for (let i = 0; i < data.length; i += 4) {
-    const lumOrig = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-    const lumBlur = 0.299 * blurred[i] + 0.587 * blurred[i + 1] + 0.114 * blurred[i + 2];
+    const lumOrig = LUMA_R * data[i] + LUMA_G * data[i + 1] + LUMA_B * data[i + 2];
+    const lumBlur = LUMA_R * blurred[i] + LUMA_G * blurred[i + 1] + LUMA_B * blurred[i + 2];
     const lumNew = lumOrig + (lumBlur - lumOrig) * factor;
     const lumScale = lumOrig > 0.001 ? lumNew / lumOrig : 1;
     data[i] = clamp(Math.round(data[i] * lumScale), 0, 255);
@@ -491,6 +495,9 @@ export function processImageData(
   const lutR = createCurveLut(effectiveSettings.curves.red);
   const lutG = createCurveLut(effectiveSettings.curves.green);
   const lutB = createCurveLut(effectiveSettings.curves.blue);
+  const fusedR = new Float32Array(256);
+  const fusedG = new Float32Array(256);
+  const fusedB = new Float32Array(256);
   const histogram = buildEmptyHistogram();
   const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
   const contrastFactor = (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast));
@@ -501,6 +508,12 @@ export function processImageData(
   const temperatureShift = effectiveSettings.temperature / 255;
   const tintShift = effectiveSettings.tint / 255;
   const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
+
+  for (let index = 0; index < 256; index += 1) {
+    fusedR[index] = lutR[lutRGB[index]] / 255;
+    fusedG[index] = lutG[lutRGB[index]] / 255;
+    fusedB[index] = lutB[lutRGB[index]] / 255;
+  }
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -541,7 +554,7 @@ export function processImageData(
             effectiveSettings.blackAndWhite.greenMix,
             effectiveSettings.blackAndWhite.blueMix,
           )
-          : 0.299 * r + 0.587 * g + 0.114 * b;
+          : LUMA_R * r + LUMA_G * g + LUMA_B * b;
         r = gray;
         g = gray;
         b = gray;
@@ -563,13 +576,12 @@ export function processImageData(
       g = applyTonalCharacter(g, effectiveSettings.highlightProtection, tonalCharacter);
       b = applyTonalCharacter(b, effectiveSettings.highlightProtection, tonalCharacter);
 
+      const gray = LUMA_R * r + LUMA_G * g + LUMA_B * b;
       if (isColor && !effectiveSettings.blackAndWhite.enabled) {
-        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
         r = gray + (r - gray) * saturationFactor;
         g = gray + (g - gray) * saturationFactor;
         b = gray + (b - gray) * saturationFactor;
       } else {
-        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
         [r, g, b] = shouldUseBlackAndWhite
           ? applyBlackAndWhiteTone(gray, effectiveSettings.blackAndWhite.tone)
           : [gray, gray, gray];
@@ -579,9 +591,9 @@ export function processImageData(
       const mappedG = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
       const mappedB = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
 
-      r = lutR[lutRGB[mappedR]] / 255;
-      g = lutG[lutRGB[mappedG]] / 255;
-      b = lutB[lutRGB[mappedB]] / 255;
+      r = fusedR[mappedR];
+      g = fusedG[mappedG];
+      b = fusedB[mappedB];
     }
 
     const finalR = clamp(Math.round(r * 255), 0, 255);

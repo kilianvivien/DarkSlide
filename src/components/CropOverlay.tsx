@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { CropSettings } from '../types';
 import { getNormalizedAspectRatio } from '../utils/imagePipeline';
 
@@ -24,14 +24,14 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export const CropOverlay: React.FC<CropOverlayProps> = ({
+export const CropOverlay = memo(function CropOverlay({
   crop,
   imageWidth,
   imageHeight,
   onChange,
   onInteractionStart,
   onInteractionEnd,
-}) => {
+}: CropOverlayProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const pendingCropRef = useRef<CropSettings | null>(null);
   const frameRequestRef = useRef<number | null>(null);
@@ -204,4 +204,4 @@ export const CropOverlay: React.FC<CropOverlayProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -1,11 +1,13 @@
-import React, { useMemo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { HistogramData } from '../types';
+
+const BLEND_SCREEN = { mixBlendMode: 'screen' as const };
 
 interface HistogramProps {
   data: HistogramData | null;
 }
 
-export const Histogram: React.FC<HistogramProps> = ({ data }) => {
+export const Histogram = memo(function Histogram({ data }: HistogramProps) {
   const paths = useMemo(() => {
     if (!data) return null;
 
@@ -56,9 +58,9 @@ export const Histogram: React.FC<HistogramProps> = ({ data }) => {
           className="w-full h-full opacity-80"
         >
           <path d={paths.l} fill="rgba(255,255,255,0.1)" />
-          <path d={paths.r} fill="rgba(239,68,68,0.3)" style={{ mixBlendMode: 'screen' }} />
-          <path d={paths.g} fill="rgba(34,197,94,0.3)" style={{ mixBlendMode: 'screen' }} />
-          <path d={paths.b} fill="rgba(59,130,246,0.3)" style={{ mixBlendMode: 'screen' }} />
+          <path d={paths.r} fill="rgba(239,68,68,0.3)" style={BLEND_SCREEN} />
+          <path d={paths.g} fill="rgba(34,197,94,0.3)" style={BLEND_SCREEN} />
+          <path d={paths.b} fill="rgba(59,130,246,0.3)" style={BLEND_SCREEN} />
         </svg>
 
         {/* Grid lines */}
@@ -90,4 +92,4 @@ export const Histogram: React.FC<HistogramProps> = ({ data }) => {
       </div>
     </div>
   );
-};
+});

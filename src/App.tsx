@@ -36,7 +36,7 @@ import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, estimateFilmBaseSample, getFilmBaseCorrectionSettings, isRawExtension } from './utils/rawImport';
+import { buildRawInitialSettings, createRawImportProfile, estimateFilmBaseSample, getFilmBaseCorrectionSettings, isRawExtension, rotationFromExifOrientation } from './utils/rawImport';
 
 interface RawDecodeResult {
   width: number;
@@ -963,6 +963,14 @@ export default function App() {
     setIsAdjustingCrop(false);
   }, []);
 
+  const handleToggleFilmBasePicker = useCallback(() => {
+    setIsPickingFilmBase((current) => !current);
+  }, []);
+
+  const handleOpenSettingsModal = useCallback(() => {
+    setShowSettingsModal(true);
+  }, []);
+
   const handleCropTabChange = useCallback((tab: CropTab) => {
     setCropTab(tab);
     savePreferences({ ...prefsSnapshotRef.current, cropTab: tab });
@@ -975,6 +983,10 @@ export default function App() {
     });
   }, [handleSettingsChange]);
 
+  const handleCropOverlayChange = useCallback((crop: ConversionSettings['crop']) => {
+    handleSettingsChange({ crop });
+  }, [handleSettingsChange]);
+
   const handleExportOptionsChange = useCallback((options: Partial<WorkspaceDocument['exportOptions']>) => {
     updateDocument((current) => ({
       ...current,
@@ -984,13 +996,14 @@ export default function App() {
       },
       dirty: true,
     }));
-    if (options.format !== undefined || options.quality !== undefined) {
+    if (options.format !== undefined || options.quality !== undefined || options.embedMetadata !== undefined) {
       savePreferences({
         ...prefsSnapshotRef.current,
         exportOptions: {
           ...prefsSnapshotRef.current.exportOptions,
           ...(options.format !== undefined ? { format: options.format } : {}),
           ...(options.quality !== undefined ? { quality: options.quality } : {}),
+          ...(options.embedMetadata !== undefined ? { embedMetadata: options.embedMetadata } : {}),
         },
       });
     }
@@ -1265,6 +1278,14 @@ export default function App() {
           mime: file.type || 'application/octet-stream',
           size: sourceFileSize,
         });
+
+        const rotationFromMetadata = rotationFromExifOrientation(decoded.metadata.exif?.orientation);
+        if (rotationFromMetadata !== 0) {
+          initialSettings = {
+            ...initialSettings,
+            rotation: rotationFromMetadata,
+          };
+        }
       }
 
       if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
@@ -1297,6 +1318,7 @@ export default function App() {
           ...(savedPrefs?.exportOptions ? {
             format: savedPrefs.exportOptions.format,
             quality: savedPrefs.exportOptions.quality,
+            embedMetadata: savedPrefs.exportOptions.embedMetadata,
           } : {}),
           filenameBase: sanitizeFilenameBase(file.name),
         },
@@ -1630,6 +1652,7 @@ export default function App() {
         settings: documentState.settings,
         isColor: activeProfile.type === 'color',
         options: documentState.exportOptions,
+        sourceExif: documentState.source.exif,
         maskTuning: activeProfile.maskTuning,
         colorMatrix: activeProfile.colorMatrix,
         tonalCharacter: activeProfile.tonalCharacter,
@@ -1653,6 +1676,10 @@ export default function App() {
   }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, refreshRenderBackendDiagnostics]);
 
   handleDownloadRef.current = handleDownload;
+
+  const handleExportClick = useCallback(() => {
+    void handleDownload();
+  }, [handleDownload]);
 
   const handleCanvasClick = useCallback(async (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!documentState || !displaySettings || !displayCanvasRef.current || !workerClientRef.current) return;
@@ -1821,8 +1848,8 @@ export default function App() {
                 activeProfile={documentState ? activeProfile : null}
                 histogramData={documentState?.histogram ?? null}
                 isPickingFilmBase={isPickingFilmBase}
-                onTogglePicker={() => setIsPickingFilmBase((current) => !current)}
-                onExport={() => void handleDownload()}
+                onTogglePicker={handleToggleFilmBasePicker}
+                onExport={handleExportClick}
                 isExporting={isExporting}
                 activeTab={sidebarTab}
                 onTabChange={handleSidebarTabChange}
@@ -1832,7 +1859,7 @@ export default function App() {
                 onResetCrop={handleResetCrop}
                 activePointPicker={activePointPicker}
                 onSetPointPicker={setActivePointPicker}
-                onOpenSettings={() => setShowSettingsModal(true)}
+                onOpenSettings={handleOpenSettingsModal}
               />
             </motion.div>
           )}
@@ -2076,7 +2103,7 @@ export default function App() {
                         imageHeight={cropImageSize.height}
                         onInteractionStart={handleCropInteractionStart}
                         onInteractionEnd={handleCropInteractionEnd}
-                        onChange={(crop) => handleSettingsChange({ crop })}
+                        onChange={handleCropOverlayChange}
                       />
                     )}
                     </div>

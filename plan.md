@@ -99,7 +99,7 @@ Custom presets currently live only in localStorage and cannot be shared, backed 
 - **Preset metadata display**: the custom preset list shows the film stock, scanner type badge, and color/bw tag below the preset name, giving users at-a-glance context for each saved look.
 - **Browser / Tauri parity**: export uses the file bridge (`fileBridge.ts`) for the save dialog on desktop and a temporary `<a>` download on web. Import uses the native open dialog on desktop and a hidden `<input type="file">` on web.
 
-## Phase 10: Render Performance
+## Phase 10: Render Performance [complete]
 Quick-win optimisations targeting interactive editing responsiveness. These changes are low-risk refactors with measurable impact, particularly on large scans (24–120 MP) where per-frame render time directly affects the slider-drag experience.
 
 ### React rendering efficiency
@@ -188,4 +188,4 @@ The current pipeline renders and exports in uncalibrated sRGB. On MacBook Pro an
 - **Partially implemented**: Phase 9 editing workflow enhancements. Feature A (film-format crop ratios) and Feature B (preset export/import) are done; Feature C (RAW import pipeline) remains to be implemented.
 - **Next up**: finish Phase 9 with the remaining RAW import pipeline work, then revisit calibrated density/log inversion using real scanner references.
 - **Deferred**: multi-document tabs, batch processing, ICC profiles, session recovery, contact sheet export.
-- **Planned (post-beta)**: render performance (Phase 10), GPU & memory hardening (Phase 11), pro workflow — multi-document / batch / ICC / contact sheet (Phase 12), and a calibrated real-reference revisit of the deferred log-inversion experiment.
+- **Planned (post-beta)**: GPU & memory hardening (Phase 11), pro workflow — multi-document / batch / ICC / contact sheet (Phase 12), and a calibrated real-reference revisit of the deferred log-inversion experiment.

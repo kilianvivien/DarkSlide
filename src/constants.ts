@@ -19,6 +19,7 @@ export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   format: 'image/jpeg',
   quality: 0.92,
   filenameBase: 'darkslide-converted',
+  embedMetadata: true,
 };
 
 export function createDefaultSettings(overrides: Partial<ConversionSettings> = {}): ConversionSettings {

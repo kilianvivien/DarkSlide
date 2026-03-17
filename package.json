@@ -15,13 +15,14 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.1.14",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
-    "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "piexifjs": "^1.0.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "utif": "^3.1.0",

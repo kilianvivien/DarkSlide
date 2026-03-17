@@ -25,6 +25,7 @@ import {
 import { appendDiagnostic } from './diagnostics';
 import { accumulateHistogram, buildEmptyHistogram, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
+import { finalizeExportBlob } from './imageMetadata';
 
 type WorkerRequest =
   | { id: string; type: 'decode'; payload: DecodeRequest }
@@ -969,7 +970,13 @@ export class ImageWorkerClient {
 
   async export(payload: ExportRequest) {
     await this.ensureDocumentLoaded(payload.documentId);
-    return this.exportInternal(payload, true);
+    const result = await this.exportInternal(payload, true);
+    return finalizeExportBlob(
+      result,
+      payload.options.format,
+      payload.options.embedMetadata,
+      payload.sourceExif,
+    );
   }
 
   private async exportInternal(payload: ExportRequest, allowRecovery: boolean) {

@@ -1,3 +1,4 @@
+import { DEFAULT_EXPORT_OPTIONS } from '../constants';
 import { CropTab, ExportOptions } from '../types';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
@@ -39,6 +40,10 @@ export function loadPreferences(): UserPreferences | null {
     if (!isValidPreferences(parsed)) return null;
     return {
       ...parsed,
+      exportOptions: {
+        ...DEFAULT_EXPORT_OPTIONS,
+        ...parsed.exportOptions,
+      },
       cropTab: parsed.cropTab ?? 'Film',
       gpuRendering: parsed.gpuRendering ?? true,
       ultraSmoothDrag: parsed.ultraSmoothDrag ?? false,

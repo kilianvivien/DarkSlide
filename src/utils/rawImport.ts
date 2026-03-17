@@ -14,9 +14,12 @@ export function isRawExtension(extension: string) {
 export function rotationFromExifOrientation(orientation: number | null | undefined) {
   switch (orientation) {
     case 3:
+    case 4:
       return 180;
+    case 5:
     case 6:
       return 90;
+    case 7:
     case 8:
       return 270;
     default:

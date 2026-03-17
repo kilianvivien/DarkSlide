@@ -50,6 +50,7 @@ describe('Sidebar', () => {
           format: 'image/jpeg',
           quality: 0.92,
           filenameBase: 'test',
+          embedMetadata: true,
         }}
         cropImageWidth={4032}
         cropImageHeight={6048}
@@ -96,6 +97,7 @@ describe('Sidebar', () => {
           format: 'image/jpeg',
           quality: 0.92,
           filenameBase: 'test',
+          embedMetadata: true,
         }}
         cropImageWidth={4032}
         cropImageHeight={6048}
