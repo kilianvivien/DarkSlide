@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_FILE_SIZE_BYTES } from './constants';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -43,7 +44,11 @@ const workerState = vi.hoisted(() => ({
     maxBufferSize: null,
     gpuDisabledReason: 'unsupported',
     lastError: null,
+    workerMemory: null,
+    activeBlobUrlCount: null,
+    oldestActiveBlobUrlAgeMs: null,
   })),
+  constructorOptions: [] as Array<Record<string, unknown>>,
 }));
 
 const coreState = vi.hoisted(() => ({
@@ -178,6 +183,10 @@ vi.mock('./hooks/useCustomPresets', () => ({
 
 vi.mock('./utils/imageWorkerClient', () => ({
   ImageWorkerClient: class MockImageWorkerClient {
+    constructor(options: Record<string, unknown> = {}) {
+      workerState.constructorOptions.push(options);
+    }
+
     decode = workerState.decode;
 
     render = workerState.render;
@@ -300,6 +309,7 @@ describe('App import and preview pipeline', () => {
     workerState.disposeDocument.mockClear();
     workerState.setGPUEnabled.mockReset();
     workerState.getGPUDiagnostics.mockClear();
+    workerState.constructorOptions = [];
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     fileBridgeState.openImageFile.mockReset();
     fileBridgeState.openImageFileByPath.mockReset();
@@ -368,6 +378,22 @@ describe('App import and preview pipeline', () => {
 
     expect(workerState.decode).not.toHaveBeenCalled();
     expect(screen.getByText(/RAW files \(.dng, .cr3, .nef, .arw, .raf, .rw2\) require the DarkSlide desktop app\./)).toBeInTheDocument();
+  });
+
+  it('rejects oversized raster files before reading them into an ArrayBuffer', async () => {
+    render(<App />);
+
+    const file = createFile('huge-scan.tiff', 'image/tiff');
+    Object.defineProperty(file, 'size', {
+      configurable: true,
+      value: MAX_FILE_SIZE_BYTES + 1,
+    });
+
+    await uploadFile(file);
+
+    expect((file.arrayBuffer as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect(workerState.decode).not.toHaveBeenCalled();
+    expect(screen.getByText(/File is too large/)).toBeInTheDocument();
   });
 
   it('routes desktop RAW imports through the Tauri decode command before handing RGBA to the worker', async () => {

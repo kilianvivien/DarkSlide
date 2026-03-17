@@ -21,9 +21,11 @@ import {
   RenderResult,
   SampleRequest,
   TileSourceKind,
+  WorkerMemoryDiagnostics,
 } from '../types';
 import { appendDiagnostic } from './diagnostics';
 import { accumulateHistogram, buildEmptyHistogram, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
+import { getBlobUrlDiagnostics } from './blobUrlTracker';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
 import { finalizeExportBlob } from './imageMetadata';
 
@@ -35,6 +37,7 @@ type WorkerRequest =
   | { id: string; type: 'cancel-job'; payload: CancelTileJobRequest }
   | { id: string; type: 'sample-film-base'; payload: SampleRequest }
   | { id: string; type: 'export'; payload: ExportRequest }
+  | { id: string; type: 'diagnostics'; payload: Record<string, never> }
   | { id: string; type: 'dispose'; payload: { documentId: string } };
 
 type WorkerError = { code: string; message: string };
@@ -50,10 +53,17 @@ type WorkerResponse =
       | ReadTileResult
       | ExportResult
       | FilmBaseSample
+      | WorkerMemoryDiagnostics
       | { disposed: true }
       | { cancelled: true };
   }
   | { id: string; ok: false; error: WorkerError };
+
+type ImageWorkerClientOptions = {
+  gpuEnabled?: boolean;
+  onBackendDiagnosticsChange?: (diagnostics: RenderBackendDiagnostics) => void;
+  onGPUDeviceLost?: (message: string) => void;
+};
 
 type PendingResolver = {
   resolve: (value: unknown) => void;
@@ -187,6 +197,18 @@ export class ImageWorkerClient {
 
   private lastGPUError: string | null = null;
 
+  private workerMemory: WorkerMemoryDiagnostics | null = null;
+
+  private activeBlobUrlCount: number | null = null;
+
+  private oldestActiveBlobUrlAgeMs: number | null = null;
+
+  private readonly onBackendDiagnosticsChange?: (diagnostics: RenderBackendDiagnostics) => void;
+
+  private readonly onGPUDeviceLost?: (message: string) => void;
+
+  private gpuDeviceLostNotified = false;
+
   private backendMode: RenderBackendDiagnostics['backendMode'] = 'cpu-worker';
 
   private sourceKind: TileSourceKind | null = null;
@@ -233,9 +255,11 @@ export class ImageWorkerClient {
 
   private lastDraftHistogramDocumentId: string | null = null;
 
-  constructor(options: { gpuEnabled?: boolean } = {}) {
+  constructor(options: ImageWorkerClientOptions = {}) {
     this.gpuEnabled = options.gpuEnabled ?? true;
     this.gpuDisabledReason = this.gpuEnabled ? null : 'user';
+    this.onBackendDiagnosticsChange = options.onBackendDiagnosticsChange;
+    this.onGPUDeviceLost = options.onGPUDeviceLost;
     this.worker = this.createWorker();
   }
 
@@ -371,6 +395,50 @@ export class ImageWorkerClient {
     this.gpuDisabledReason = reason;
     this.gpuInitAttempted = allowRetry ? false : this.gpuInitAttempted;
     this.lastGPUError = error instanceof Error ? error.message : (typeof error === 'string' ? error : this.lastGPUError);
+    this.emitBackendDiagnosticsChange();
+  }
+
+  private getCachedGPUDiagnostics(): RenderBackendDiagnostics {
+    const blobDiagnostics = getBlobUrlDiagnostics();
+    this.activeBlobUrlCount = blobDiagnostics.activeBlobUrlCount;
+    this.oldestActiveBlobUrlAgeMs = blobDiagnostics.oldestActiveBlobUrlAgeMs;
+
+    return {
+      gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
+      gpuEnabled: this.gpuEnabled,
+      gpuActive: this.gpuPipeline !== null,
+      gpuAdapterName: this.gpuPipeline?.adapterName ?? null,
+      backendMode: this.backendMode,
+      sourceKind: this.sourceKind,
+      previewMode: this.previewMode,
+      previewLevelId: this.previewLevelId,
+      interactionQuality: this.interactionQuality,
+      histogramMode: this.histogramMode,
+      tileSize: this.tileSize,
+      halo: this.halo,
+      tileCount: this.tileCount,
+      intermediateFormat: this.intermediateFormat,
+      usedCpuFallback: this.usedCpuFallback,
+      fallbackReason: this.fallbackReason,
+      jobDurationMs: this.jobDurationMs,
+      geometryCacheHit: this.geometryCacheHit,
+      coalescedPreviewRequests: this.coalescedPreviewRequests,
+      cancelledPreviewJobs: this.cancelledPreviewJobs,
+      previewBackend: this.previewBackend,
+      lastPreviewJob: this.lastPreviewJob,
+      lastExportJob: this.lastExportJob,
+      maxStorageBufferBindingSize: this.gpuPipeline?.limits.maxStorageBufferBindingSize ?? null,
+      maxBufferSize: this.gpuPipeline?.limits.maxBufferSize ?? null,
+      gpuDisabledReason: this.gpuDisabledReason,
+      lastError: this.lastGPUError,
+      workerMemory: this.workerMemory,
+      activeBlobUrlCount: this.activeBlobUrlCount,
+      oldestActiveBlobUrlAgeMs: this.oldestActiveBlobUrlAgeMs,
+    };
+  }
+
+  private emitBackendDiagnosticsChange() {
+    this.onBackendDiagnosticsChange?.(this.getCachedGPUDiagnostics());
   }
 
   private updateBackendState(update: Partial<Pick<
@@ -404,6 +472,7 @@ export class ImageWorkerClient {
     if (update.fallbackReason !== undefined) this.fallbackReason = update.fallbackReason;
     if (update.jobDurationMs !== undefined) this.jobDurationMs = update.jobDurationMs;
     if (update.geometryCacheHit !== undefined) this.geometryCacheHit = update.geometryCacheHit;
+    this.emitBackendDiagnosticsChange();
   }
 
   private async ensureGPU() {
@@ -418,11 +487,17 @@ export class ImageWorkerClient {
     }
 
     if (this.gpuPipeline?.isLost()) {
-      this.resetGPU('device-lost', 'WebGPU device was lost.', true);
+      const lostInfo = this.gpuPipeline.getLostInfo();
+      this.resetGPU(
+        'device-lost',
+        lostInfo?.message ?? 'GPU device was lost. DarkSlide will retry on the next render.',
+        true,
+      );
     }
 
     if (this.gpuPipeline) {
       this.gpuDisabledReason = null;
+      this.emitBackendDiagnosticsChange();
       return this.gpuPipeline;
     }
 
@@ -435,18 +510,43 @@ export class ImageWorkerClient {
     if (!this.gpuPipeline) {
       this.gpuDisabledReason = 'initialization-failed';
       this.lastGPUError ??= 'Unable to initialize WebGPU.';
+      this.emitBackendDiagnosticsChange();
       return null;
     }
 
     this.gpuDisabledReason = null;
     this.lastGPUError = null;
+    this.gpuDeviceLostNotified = false;
+    this.emitBackendDiagnosticsChange();
     return this.gpuPipeline;
   }
 
   private handleGPUFailure(error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    const reason = /device was lost/i.test(message) ? 'device-lost' : 'initialization-failed';
-    this.resetGPU(reason, message, true);
+    const lostInfo = this.gpuPipeline?.getLostInfo();
+    const isDeviceLost = lostInfo !== null || /device was lost/i.test(message);
+    const reason = isDeviceLost ? 'device-lost' : 'initialization-failed';
+    const detail = lostInfo?.message ?? message;
+
+    appendDiagnostic({
+      level: 'error',
+      code: isDeviceLost ? 'GPU_DEVICE_LOST' : 'GPU_FAILURE',
+      message: isDeviceLost
+        ? 'GPU device was lost. Falling back to CPU rendering.'
+        : `GPU pipeline error: ${detail}`,
+      context: {
+        reason: lostInfo?.reason ?? reason,
+        originalError: message,
+        adapterName: this.gpuPipeline?.adapterName ?? 'unknown',
+      },
+    });
+
+    if (isDeviceLost && !this.gpuDeviceLostNotified) {
+      this.gpuDeviceLostNotified = true;
+      this.onGPUDeviceLost?.(detail || 'GPU unavailable — retrying on the next render');
+    }
+
+    this.resetGPU(reason, detail, true);
   }
 
   private canAttemptGPU() {
@@ -659,6 +759,7 @@ export class ImageWorkerClient {
 
     if (!enabled) {
       this.gpuInitAttempted = false;
+      this.gpuDeviceLostNotified = false;
       this.resetGPU('user');
       this.markCpuWorkerBackend('preview');
       return;
@@ -667,40 +768,25 @@ export class ImageWorkerClient {
     this.gpuDisabledReason = null;
     this.lastGPUError = null;
     this.gpuInitAttempted = false;
+    this.gpuDeviceLostNotified = false;
+    this.emitBackendDiagnosticsChange();
   }
 
   async getGPUDiagnostics(): Promise<RenderBackendDiagnostics> {
     const gpu = this.canAttemptGPU() ? await this.ensureGPU() : null;
+    if (gpu) {
+      this.gpuDisabledReason = null;
+    }
 
-    return {
-      gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
-      gpuEnabled: this.gpuEnabled,
-      gpuActive: gpu !== null,
-      gpuAdapterName: gpu?.adapterName ?? null,
-      backendMode: this.backendMode,
-      sourceKind: this.sourceKind,
-      previewMode: this.previewMode,
-      previewLevelId: this.previewLevelId,
-      interactionQuality: this.interactionQuality,
-      histogramMode: this.histogramMode,
-      tileSize: this.tileSize,
-      halo: this.halo,
-      tileCount: this.tileCount,
-      intermediateFormat: this.intermediateFormat,
-      usedCpuFallback: this.usedCpuFallback,
-      fallbackReason: this.fallbackReason,
-      jobDurationMs: this.jobDurationMs,
-      geometryCacheHit: this.geometryCacheHit,
-      coalescedPreviewRequests: this.coalescedPreviewRequests,
-      cancelledPreviewJobs: this.cancelledPreviewJobs,
-      previewBackend: this.previewBackend,
-      lastPreviewJob: this.lastPreviewJob,
-      lastExportJob: this.lastExportJob,
-      maxStorageBufferBindingSize: gpu?.limits.maxStorageBufferBindingSize ?? null,
-      maxBufferSize: gpu?.limits.maxBufferSize ?? null,
-      gpuDisabledReason: this.gpuDisabledReason,
-      lastError: this.lastGPUError,
-    };
+    try {
+      this.workerMemory = await this.request<WorkerMemoryDiagnostics>('diagnostics', {});
+    } catch {
+      this.workerMemory = null;
+    }
+
+    const diagnostics = this.getCachedGPUDiagnostics();
+    this.emitBackendDiagnosticsChange();
+    return diagnostics;
   }
 
   async decode(payload: DecodeRequest) {
@@ -743,6 +829,7 @@ export class ImageWorkerClient {
           null,
           null,
         );
+        this.emitBackendDiagnosticsChange();
         if (this.activePreviewJobId === jobId) {
           this.activePreviewJobId = null;
         }
@@ -773,6 +860,7 @@ export class ImageWorkerClient {
           null,
           null,
         );
+        this.emitBackendDiagnosticsChange();
         if (this.activePreviewJobId === jobId) {
           this.activePreviewJobId = null;
         }
@@ -872,6 +960,7 @@ export class ImageWorkerClient {
       });
       this.previewBackend = backendMode;
       this.lastPreviewJob = snapshot;
+      this.emitBackendDiagnosticsChange();
 
       if (shouldLogDraftFrameDiagnostics) {
         appendDiagnostic({
@@ -936,6 +1025,7 @@ export class ImageWorkerClient {
         null,
         null,
       );
+      this.emitBackendDiagnosticsChange();
       appendDiagnostic({
         level: 'info',
         code: 'GPU_FALLBACK_CPU',
@@ -1080,6 +1170,7 @@ export class ImageWorkerClient {
         geometryCacheHit: prepared.geometryCacheHit,
       });
       this.lastExportJob = snapshot;
+      this.emitBackendDiagnosticsChange();
 
       appendDiagnostic({
         level: 'info',
@@ -1126,6 +1217,7 @@ export class ImageWorkerClient {
         null,
         null,
       );
+      this.emitBackendDiagnosticsChange();
       appendDiagnostic({
         level: 'info',
         code: 'GPU_FALLBACK_CPU',

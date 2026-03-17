@@ -14,6 +14,7 @@ const gpuState = vi.hoisted(() => ({
     processTile: vi.fn(),
     destroy: vi.fn(),
     isLost: vi.fn(() => false),
+    getLostInfo: vi.fn(() => null),
   },
 }));
 
@@ -79,6 +80,8 @@ describe('ImageWorkerClient', () => {
     gpuState.instance.destroy.mockReset();
     gpuState.instance.isLost.mockReset();
     gpuState.instance.isLost.mockReturnValue(false);
+    gpuState.instance.getLostInfo.mockReset();
+    gpuState.instance.getLostInfo.mockReturnValue(null);
     diagnosticsState.appendDiagnostic.mockReset();
     Reflect.deleteProperty(navigator, 'gpu');
   });
@@ -780,11 +783,34 @@ describe('ImageWorkerClient', () => {
     const result3 = await resolveRender(3);
     expect(result3.histogram.r[90]).toBe(1);
 
-    const diagnostics = await client.getGPUDiagnostics();
+    const diagnosticsPromise = client.getGPUDiagnostics();
+    await flushAsyncWork();
+    const diagnosticsRequest = worker.postedMessages.at(-1);
+    expect(diagnosticsRequest?.type).toBe('diagnostics');
+    worker.onmessage?.({
+      data: {
+        id: diagnosticsRequest?.id,
+        ok: true,
+        payload: {
+          documentCount: 1,
+          totalPreviewCanvases: 3,
+          tileJobCount: 0,
+          cancelledJobCount: 2,
+          estimatedMemoryBytes: 1024,
+        },
+      },
+    } as MessageEvent);
+
+    const diagnostics = await diagnosticsPromise;
     expect(diagnostics.lastPreviewJob).toMatchObject({
       interactionQuality: 'ultra-smooth',
       histogramMode: 'throttled',
       previewLevelId: 'preview-512',
+    });
+    expect(diagnostics.workerMemory).toMatchObject({
+      documentCount: 1,
+      totalPreviewCanvases: 3,
+      cancelledJobCount: 2,
     });
     expect(diagnosticsState.appendDiagnostic).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'GPU_TILE_JOB_STARTED' }));
     expect(diagnosticsState.appendDiagnostic).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'GPU_TILE_JOB_COMPLETED' }));
@@ -943,5 +969,168 @@ describe('ImageWorkerClient', () => {
       },
     });
     expect(gpuState.instance.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies the UI immediately when the GPU device is lost and keeps CPU fallback enabled for the retry', async () => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+    gpuState.instance.getLostInfo.mockReturnValue({
+      reason: 'destroyed',
+      message: 'GPU device was lost. DarkSlide will retry on the next render.',
+    });
+    gpuState.instance.processPreviewImage.mockRejectedValueOnce(new Error('WebGPU device was lost.'));
+
+    const onBackendDiagnosticsChange = vi.fn();
+    const onGPUDeviceLost = vi.fn();
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient({
+      onBackendDiagnosticsChange,
+      onGPUDeviceLost,
+    });
+    const worker = MockWorker.instances[0];
+
+    const pending = client.render({
+      documentId: 'doc-1',
+      settings: {
+        exposure: 0,
+        contrast: 0,
+        saturation: 100,
+        temperature: 0,
+        tint: 0,
+        redBalance: 1,
+        greenBalance: 1,
+        blueBalance: 1,
+        blackPoint: 0,
+        whitePoint: 255,
+        highlightProtection: 0,
+        curves: {
+          rgb: [],
+          red: [],
+          green: [],
+          blue: [],
+        },
+        rotation: 0,
+        levelAngle: 0,
+        crop: {
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          aspectRatio: null,
+        },
+        filmBaseSample: null,
+        blackAndWhite: {
+          enabled: false,
+          redMix: 0,
+          greenMix: 0,
+          blueMix: 0,
+          tone: 0,
+        },
+        sharpen: { enabled: false, radius: 1, amount: 0 },
+        noiseReduction: { enabled: false, luminanceStrength: 0 },
+      },
+      isColor: true,
+      revision: 7,
+      targetMaxDimension: 1024,
+      comparisonMode: 'processed',
+    });
+
+    await flushAsyncWork();
+
+    const prepareRequest = worker.postedMessages[0];
+    worker.onmessage?.({
+      data: {
+        id: prepareRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:7:preview',
+          sourceKind: 'preview',
+          width: 1,
+          height: 1,
+          previewLevelId: 'preview-1024',
+          tileSize: 1024,
+          halo: 0,
+          geometryCacheHit: true,
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const tileRequest = worker.postedMessages[1];
+    worker.onmessage?.({
+      data: {
+        id: tileRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:7:preview',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          haloLeft: 0,
+          haloTop: 0,
+          haloRight: 0,
+          haloBottom: 0,
+          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork(8);
+
+    const cancelRequest = worker.postedMessages[2];
+    worker.onmessage?.({
+      data: {
+        id: cancelRequest?.id,
+        ok: true,
+        payload: {
+          cancelled: true,
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork(8);
+
+    const cpuRetryRequest = worker.postedMessages.find((message, index) => index > 2 && message.type === 'render');
+    expect(cpuRetryRequest).toBeTruthy();
+
+    worker.onmessage?.({
+      data: {
+        id: cpuRetryRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 7,
+          width: 8,
+          height: 8,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray(256), 8, 8),
+          histogram: {
+            r: new Array(256).fill(1),
+            g: new Array(256).fill(1),
+            b: new Array(256).fill(1),
+            l: new Array(256).fill(1),
+          },
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toMatchObject({
+      revision: 7,
+    });
+    expect(onGPUDeviceLost).toHaveBeenCalledWith('GPU device was lost. DarkSlide will retry on the next render.');
+    expect(onBackendDiagnosticsChange).toHaveBeenCalledWith(expect.objectContaining({
+      gpuDisabledReason: 'device-lost',
+    }));
+    expect(diagnosticsState.appendDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'GPU_DEVICE_LOST',
+      level: 'error',
+    }));
   });
 });

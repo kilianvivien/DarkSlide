@@ -33,7 +33,7 @@ declare global {
   interface GPUDevice {
     limits: GPUSupportedLimits;
     queue: GPUQueue;
-    lost: Promise<unknown>;
+    lost: Promise<GPUDeviceLostInfo>;
     createShaderModule(descriptor: { code: string }): GPUShaderModule;
     createComputePipeline(descriptor: {
       layout: 'auto' | GPUPipelineLayout;
@@ -59,6 +59,11 @@ declare global {
   }
 
   interface GPUShaderModule {}
+
+  interface GPUDeviceLostInfo {
+    reason?: string;
+    message?: string;
+  }
 
   interface GPUPipelineLayout {}
 

@@ -127,6 +127,10 @@ export class WebGPUPipeline {
 
   private lost = false;
 
+  private lostReason = '';
+
+  private lostMessage = '';
+
   private destroyed = false;
 
   private constructor(device: GPUDevice, adapterName: string | null, module: GPUShaderModule) {
@@ -209,8 +213,10 @@ export class WebGPUPipeline {
       primitive: { topology: 'triangle-list' },
     });
 
-    void this.device.lost.then(() => {
+    void this.device.lost.then((info) => {
       this.lost = true;
+      this.lostReason = info.reason ?? 'unknown';
+      this.lostMessage = info.message ?? 'GPU device was lost.';
       this.lastProcessingUniformsHash = null;
       this.lastCurveLutHash = null;
     });
@@ -269,6 +275,17 @@ export class WebGPUPipeline {
 
   isLost() {
     return this.lost;
+  }
+
+  getLostInfo() {
+    if (!this.lost) {
+      return null;
+    }
+
+    return {
+      reason: this.lostReason,
+      message: this.lostMessage,
+    };
   }
 
   private ensureTextures(width: number, height: number) {

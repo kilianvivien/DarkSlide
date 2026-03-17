@@ -2,6 +2,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from '../constants';
 import type { ExportFormat } from '../types';
 import { getFileExtension } from './imagePipeline';
+import { trackCreateObjectURL, trackRevokeObjectURL } from './blobUrlTracker';
 import { isRawExtension } from './rawImport';
 
 const SUPPORTED_DIALOG_EXTENSIONS = SUPPORTED_EXTENSIONS.map((extension) => extension.slice(1));
@@ -123,12 +124,12 @@ export async function saveExportBlob(blob: Blob, filename: string, format: Expor
     return 'saved' as const;
   }
 
-  const url = URL.createObjectURL(blob);
+  const url = trackCreateObjectURL(blob);
   const link = document.createElement('a');
   link.download = filename;
   link.href = url;
   link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  window.setTimeout(() => trackRevokeObjectURL(url), 1000);
   return 'saved' as const;
 }
 
@@ -153,12 +154,12 @@ export async function savePresetFile(json: string, filename: string): Promise<'s
     return 'saved';
   }
 
-  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  const url = trackCreateObjectURL(new Blob([json], { type: 'application/json' }));
   const link = document.createElement('a');
   link.download = filename;
   link.href = url;
   link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  window.setTimeout(() => trackRevokeObjectURL(url), 1000);
   return 'saved';
 }
 

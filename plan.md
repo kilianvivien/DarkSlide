@@ -124,25 +124,21 @@ Exported images currently carry no metadata — the original scan's EXIF data (o
 - **EXIF write on export**: embed a minimal EXIF block in exported JPEG files containing: orientation (always 1 / top-left after conversion), original date/time (preserved from source), software tag ("DarkSlide"), and color space tag (sRGB or Display P3 per export settings). Use a compact EXIF writer to inject the block into the JPEG blob before download.
 - **Export toggle**: add an "Embed metadata" checkbox in the Export tab (default on). When off, the export is metadata-free — useful for privacy-conscious sharing.
 
-## Phase 11: GPU & Memory Hardening
-Deeper optimisations and safety nets targeting stability under heavy workloads — large scans, long editing sessions, and GPU edge cases. Lower risk than feature work but requires careful testing.
+## Phase 11: Worker & Memory Hardening [complete]
+Phase 11 shipped the defensive stability work needed for large scans, long editing sessions, and GPU edge cases. The focus was cache structure, memory release, diagnostics visibility, and clearer failure handling rather than new user-facing features.
 
-### GPU buffer caching
-The WebGPU pipeline currently rewrites all uniform buffers and curve LUTs on every render dispatch, even when settings have not changed between frames. For rapid slider drags this means redundant GPU uploads on every interaction frame.
+### Geometry cache hardening
+- **Split rotation and crop caches**: the worker tile path now keeps rotation and crop stages in separate caches so crop drags can reuse rotated canvases instead of forcing a full geometry recompute.
+- **Bounded cache eviction**: rotation and crop caches keep only current + previous entries per source kind, reducing long-session buildup while preserving the common back-and-forth editing path.
+- **Safer canvas lifecycle**: cache eviction, tile-job cleanup, and document disposal now release transformed canvases only when no cache or active tile job still references them.
 
-- **Settings revision tracking**: add a `settingsRevision` counter incremented on each `ConversionSettings` change. The `WebGPUPipeline` compares the incoming revision against the last-uploaded revision and skips `writeBuffer` calls when they match.
-- **Curve LUT diff**: curve LUTs are 4 × 256-entry arrays. Hash or checksum the combined LUT before upload; skip the `writeBuffer` if unchanged. This avoids the most expensive per-render upload (4 KB) during non-curve edits.
-- **Texture reuse on partial resize**: `ensureTextures()` currently destroys and recreates all work textures when any dimension changes. Track width and height independently so a crop-height change does not force reallocation of textures whose width has not changed.
-- **Readback overlap**: the current `mapAsync(GPUMapMode.READ)` call blocks the worker until the GPU finishes. Where possible, submit the readback request and continue CPU-side work (e.g. histogram binning prep) before awaiting the mapped buffer, reducing idle stall time.
-
-### Memory hardening
-The app currently relies on browser dimension caps (120 MP, 18k px) and a 50-entry undo limit to bound memory. Several edge cases can still cause problems during long sessions or with adversarial inputs.
-
-- **File size pre-check**: before calling `arrayBuffer()` on an imported file, check `file.size` against a configurable ceiling (default: 500 MB). Reject with a user-friendly message instead of risking an allocation failure mid-decode.
-- **GPU device-lost recovery**: register a `device.lost` handler in `WebGPUPipeline`. On loss, log the reason to diagnostics, tear down all GPU resources, and fall back to the CPU path for the remainder of the session. Surface a non-blocking toast in the UI ("GPU unavailable — using CPU rendering").
-- **Blob URL audit**: ensure every `URL.createObjectURL()` call in the codebase has a corresponding `revokeObjectURL()`. Add a debug-mode leak detector that warns in the console if unreleased blob URLs exceed a threshold (e.g. 20).
-- **Worker memory cap**: after each export or document close, force-release the source canvas and preview pyramid for the disposed document. Log the approximate retained size to diagnostics so memory growth is observable.
-- **Graceful OOM messaging**: wrap the main decode and render paths in a try/catch that detects `RangeError` (typed-array allocation failure) and surfaces a specific "Image too large for available memory" error instead of a generic crash.
+### Memory and resilience hardening
+- **File size pre-checks**: imports are rejected before `arrayBuffer()` allocation when the source exceeds the configured ceiling, with a matching worker-side guard kept as defense in depth.
+- **Graceful OOM reporting**: worker decode/render failures now detect allocation-style `RangeError` cases and return a specific out-of-memory message instead of a generic worker error.
+- **GPU device-lost recovery**: the WebGPU path now records device-loss details, logs them to diagnostics, tears down GPU state, falls back cleanly to CPU rendering, and retries GPU on a later render attempt.
+- **Blob URL audit**: browser download paths now use tracked object-URL creation/revocation, with debug diagnostics for active blob URLs and stale blob ages.
+- **Worker memory diagnostics**: the diagnostics panel now reports approximate retained worker memory, document/preview/tile-job counts, and recent cancellation activity.
+- **Explicit worker cleanup**: source canvases, preview canvases, cached geometry canvases, and shared scratch canvases are explicitly released when documents are closed.
 
 ## Phase 12: Pro Workflow
 The single-document model is the right constraint for beta, but serious film photographers work with rolls, not individual frames. This phase lifts that constraint and adds the colour-management plumbing needed for print-accurate output.
@@ -186,6 +182,6 @@ The current pipeline renders and exports in uncalibrated sRGB. On MacBook Pro an
 ## Current Implementation Status
 - **Implemented**: package cleanup, document model, versioned preset storage, diagnostics, worker-backed decode/render/export, preview pyramids, blob export, before/after toggle, crop overlay, safer film-base sampling, per-channel curves, histogram, undo/redo, keyboard shortcuts, zoom and pan controls, expanded built-in film profiles, custom preset persistence, sharpening and luminance noise reduction controls, Tauri desktop shell scaffold, native desktop file dialogs with browser fallback, settings modal, export tab button, undoable reset, histogram legend, crop UX improvements, custom presets tabs, curves auto-balance, portal-based custom tooltips, persistent user preferences, recent files list, automated regression test suite, float-space pipeline processing, per-stock color matrices, tonal-character metadata, synthetic ΔE validation, picker loupe, advanced crop ratio controls, WebGPU compute pipeline (GPU blur, main conversion loop, histogram reduction, export path, CPU fallback, Diagnostics panel reporting).
 - **Partially implemented**: Phase 9 editing workflow enhancements. Feature A (film-format crop ratios) and Feature B (preset export/import) are done; Feature C (RAW import pipeline) remains to be implemented.
-- **Next up**: finish Phase 9 with the remaining RAW import pipeline work, then revisit calibrated density/log inversion using real scanner references.
+- **Next up**: move into Phase 12 workflow expansion while continuing the real-reference calibration follow-up from Phase 7.
 - **Deferred**: multi-document tabs, batch processing, ICC profiles, session recovery, contact sheet export.
-- **Planned (post-beta)**: GPU & memory hardening (Phase 11), pro workflow — multi-document / batch / ICC / contact sheet (Phase 12), and a calibrated real-reference revisit of the deferred log-inversion experiment.
+- **Planned (post-beta)**: pro workflow — multi-document / batch / ICC / contact sheet (Phase 12), plus a calibrated real-reference revisit of the deferred log-inversion experiment.

@@ -74,7 +74,7 @@ function getRenderBackendDetail(diagnostics: RenderBackendDiagnostics) {
     return 'This browser or webview does not expose navigator.gpu.';
   }
   if (diagnostics.gpuDisabledReason === 'device-lost') {
-    return diagnostics.lastError ?? 'The GPU device was lost. DarkSlide will retry on the next render.';
+    return 'GPU device was lost. DarkSlide will retry on the next render.';
   }
   if (diagnostics.gpuDisabledReason === 'initialization-failed') {
     return diagnostics.lastError ?? 'WebGPU initialization failed, so rendering fell back to the CPU path.';
@@ -111,6 +111,18 @@ function formatBytes(value: number | null) {
 
   const mib = value / (1024 ** 2);
   return `${mib.toFixed(0)} MiB`;
+}
+
+function formatAgeMs(value: number | null) {
+  if (value === null) {
+    return 'Unavailable';
+  }
+
+  if (value < 1000) {
+    return `${value} ms`;
+  }
+
+  return `${(value / 1000).toFixed(1)} s`;
 }
 
 function getStatusBadge(diagnostics: RenderBackendDiagnostics): { label: string; color: 'green' | 'amber' | 'red' | 'zinc' } {
@@ -352,10 +364,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     { label: 'Max buffer', value: formatBytes(d.maxBufferSize), mono: true },
                     { label: 'Current path', value: getBackendModeLabel(d.backendMode), mono: false },
                   ];
+                  const runtimeItems: DiagnosticCardItem[] = [
+                    { label: 'Worker docs', value: d.workerMemory?.documentCount ?? '—', mono: true },
+                    { label: 'Preview canvases', value: d.workerMemory?.totalPreviewCanvases ?? '—', mono: true },
+                    { label: 'Tile jobs', value: d.workerMemory?.tileJobCount ?? '—', mono: true },
+                    { label: 'Cancelled jobs', value: d.workerMemory?.cancelledJobCount ?? '—', mono: true },
+                    { label: 'Est. memory', value: formatBytes(d.workerMemory?.estimatedMemoryBytes ?? null), mono: true },
+                    { label: 'Blob URLs', value: d.activeBlobUrlCount ?? '—', mono: true },
+                    { label: 'Oldest blob age', value: formatAgeMs(d.oldestActiveBlobUrlAgeMs), mono: true },
+                  ];
                   const groups = [
                     { title: 'Last Preview Render', items: previewItems },
                     { title: 'Last Export Render', items: exportItems },
                     { title: 'GPU State', items: sharedItems },
+                    { title: 'Runtime Memory', items: runtimeItems },
                   ];
 
                   return (

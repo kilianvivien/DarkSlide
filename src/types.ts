@@ -330,6 +330,9 @@ export interface RenderBackendDiagnostics {
   maxBufferSize: number | null;
   gpuDisabledReason: 'user' | 'unsupported' | 'initialization-failed' | 'device-lost' | null;
   lastError: string | null;
+  workerMemory: WorkerMemoryDiagnostics | null;
+  activeBlobUrlCount: number | null;
+  oldestActiveBlobUrlAgeMs: number | null;
 }
 
 export interface SampleRequest {
@@ -347,6 +350,14 @@ export interface DiagnosticsEntry {
   message: string;
   timestamp: string;
   context?: Record<string, string | number | boolean | null>;
+}
+
+export interface WorkerMemoryDiagnostics {
+  documentCount: number;
+  totalPreviewCanvases: number;
+  tileJobCount: number;
+  cancelledJobCount: number;
+  estimatedMemoryBytes: number;
 }
 
 export interface VersionedPresetStore {

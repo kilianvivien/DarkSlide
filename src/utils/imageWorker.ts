@@ -20,6 +20,7 @@ import {
   SampleRequest,
   SourceMetadata,
   TileSourceKind,
+  WorkerMemoryDiagnostics,
 } from '../types';
 import {
   assertSupportedDimensions,
@@ -34,9 +35,12 @@ import {
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
-import { PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constants';
+import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
 import { extractExifMetadata } from './imageMetadata';
+import {
+  prepareGeometryCacheEntry,
+} from './workerGeometryCache';
 
 type WorkerRequest =
   | { id: string; type: 'decode'; payload: DecodeRequest }
@@ -46,12 +50,13 @@ type WorkerRequest =
   | { id: string; type: 'cancel-job'; payload: CancelTileJobRequest }
   | { id: string; type: 'sample-film-base'; payload: SampleRequest }
   | { id: string; type: 'export'; payload: ExportRequest }
+  | { id: string; type: 'diagnostics'; payload: Record<string, never> }
   | { id: string; type: 'dispose'; payload: { documentId: string } };
 
 type WorkerError = { code: string; message: string };
 
 type WorkerResponse =
-  | { id: string; ok: true; payload: DecodedImage | RenderResult | PreparedTileJobResult | ReadTileResult | ExportResult | RawExportResult | FilmBaseSample | { disposed: true } | { cancelled: true } }
+  | { id: string; ok: true; payload: DecodedImage | RenderResult | PreparedTileJobResult | ReadTileResult | ExportResult | RawExportResult | FilmBaseSample | WorkerMemoryDiagnostics | { disposed: true } | { cancelled: true } }
   | { id: string; ok: false; error: WorkerError };
 
 interface StoredPreview {
@@ -63,8 +68,8 @@ interface StoredDocument {
   metadata: SourceMetadata;
   sourceCanvas: OffscreenCanvas;
   previews: StoredPreview[];
-  previewGeometryCache: Map<string, StoredTileJob>;
-  sourceGeometryCache: Map<string, StoredTileJob>;
+  rotationCache: Map<string, OffscreenCanvas>;
+  cropCache: Map<string, StoredTileJob>;
 }
 
 interface StoredTileJob {
@@ -79,10 +84,11 @@ interface StoredTileJob {
 
 const documents = new Map<string, StoredDocument>();
 const tileJobs = new Map<string, StoredTileJob>();
-const cancelledJobs = new Set<string>();
+const cancelledJobs = new Map<string, number>();
 let rotateCanvas: OffscreenCanvas | null = null;
 let outputCanvas: OffscreenCanvas | null = null;
 const TILE_SIZE = 1024;
+const CANCELLED_JOB_TTL_MS = 2_000;
 
 function reply(response: WorkerResponse) {
   self.postMessage(response);
@@ -97,6 +103,40 @@ function ensureCanvas(canvas: OffscreenCanvas | null, width: number, height: num
   if (next.width !== Math.max(1, width)) next.width = Math.max(1, width);
   if (next.height !== Math.max(1, height)) next.height = Math.max(1, height);
   return next;
+}
+
+function releaseCanvas(canvas: OffscreenCanvas) {
+  try {
+    canvas.width = 1;
+    canvas.height = 1;
+  } catch {
+    // Ignore detached canvas cleanup failures.
+  }
+}
+
+function releaseCanvasIfUnreferenced(canvas: OffscreenCanvas) {
+  const stillReferencedByCache = Array.from(documents.values()).some((document) => (
+    Array.from(document.rotationCache.values()).some((entry) => entry === canvas)
+    || Array.from(document.cropCache.values()).some((job) => job.transformedCanvas === canvas)
+  ));
+  const stillReferencedByTileJob = Array.from(tileJobs.values()).some((job) => job.transformedCanvas === canvas);
+
+  if (!stillReferencedByCache && !stillReferencedByTileJob) {
+    releaseCanvas(canvas);
+  }
+}
+
+function pruneCancelledJobs(now = performance.now()) {
+  for (const [jobId, cancelledAt] of cancelledJobs.entries()) {
+    if (now - cancelledAt > CANCELLED_JOB_TTL_MS) {
+      cancelledJobs.delete(jobId);
+    }
+  }
+}
+
+function isRecentlyCancelledJob(jobId: string) {
+  pruneCancelledJobs();
+  return cancelledJobs.has(jobId);
 }
 
 async function decodeRasterBlob(buffer: ArrayBuffer, mime: string) {
@@ -211,14 +251,13 @@ function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
   };
 }
 
-function renderTransformedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
+function renderRotatedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
   const rotation = settings.rotation + settings.levelAngle;
   const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
     sourceCanvas.width,
     sourceCanvas.height,
     rotation,
   );
-  const cropBounds = getCropPixelBounds(normalizeCrop(settings), rotatedWidth, rotatedHeight);
 
   const localRotateCanvas = new OffscreenCanvas(rotatedWidth, rotatedHeight);
   const rotateCtx = localRotateCanvas.getContext('2d', { willReadFrequently: true });
@@ -231,12 +270,18 @@ function renderTransformedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: 
   rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
   rotateCtx.setTransform(1, 0, 0, 1, 0, 0);
 
+  return localRotateCanvas;
+}
+
+function renderCroppedCanvasForJob(rotatedCanvas: OffscreenCanvas, settings: ConversionSettings) {
+  const cropBounds = getCropPixelBounds(normalizeCrop(settings), rotatedCanvas.width, rotatedCanvas.height);
+
   const localOutputCanvas = new OffscreenCanvas(cropBounds.width, cropBounds.height);
   const outputCtx = localOutputCanvas.getContext('2d', { willReadFrequently: true });
   if (!outputCtx) throw new Error('Could not create output canvas.');
   outputCtx.clearRect(0, 0, cropBounds.width, cropBounds.height);
   outputCtx.drawImage(
-    localRotateCanvas,
+    rotatedCanvas,
     cropBounds.x,
     cropBounds.y,
     cropBounds.width,
@@ -296,28 +341,113 @@ function getTileSource(document: StoredDocument, payload: PrepareTileJobRequest)
   };
 }
 
-function createGeometryCacheKey(
-  sourceKind: TileSourceKind,
-  previewLevelId: string | null,
-  settings: ConversionSettings,
-) {
-  const crop = normalizeCrop(settings);
-  return JSON.stringify({
-    sourceKind,
-    previewLevelId,
-    crop,
-    rotation: settings.rotation,
-    levelAngle: settings.levelAngle,
-  });
-}
-
-function getGeometryCache(document: StoredDocument, sourceKind: TileSourceKind) {
-  return sourceKind === 'preview' ? document.previewGeometryCache : document.sourceGeometryCache;
-}
-
-function clearTileJob(jobId: string) {
+function clearTileJob(jobId: string, preserveCancellation = false) {
+  const job = tileJobs.get(jobId);
   tileJobs.delete(jobId);
-  cancelledJobs.delete(jobId);
+  if (!preserveCancellation) {
+    cancelledJobs.delete(jobId);
+  }
+  if (job) {
+    releaseCanvasIfUnreferenced(job.transformedCanvas);
+  }
+}
+
+function estimateMemoryBytes() {
+  let total = 0;
+
+  for (const document of documents.values()) {
+    total += document.sourceCanvas.width * document.sourceCanvas.height * 4;
+
+    for (const preview of document.previews) {
+      if (preview.canvas !== document.sourceCanvas) {
+        total += preview.canvas.width * preview.canvas.height * 4;
+      }
+    }
+
+    for (const canvas of document.rotationCache.values()) {
+      total += canvas.width * canvas.height * 4;
+    }
+
+    for (const job of document.cropCache.values()) {
+      total += job.width * job.height * 4;
+    }
+  }
+
+  for (const job of tileJobs.values()) {
+    total += job.width * job.height * 4;
+  }
+
+  if (rotateCanvas) total += rotateCanvas.width * rotateCanvas.height * 4;
+  if (outputCanvas) total += outputCanvas.width * outputCanvas.height * 4;
+
+  return total;
+}
+
+function handleDiagnostics() {
+  pruneCancelledJobs();
+  let totalPreviewCanvases = 0;
+  for (const document of documents.values()) {
+    totalPreviewCanvases += document.previews.length;
+  }
+
+  return {
+    documentCount: documents.size,
+    totalPreviewCanvases,
+    tileJobCount: tileJobs.size,
+    cancelledJobCount: cancelledJobs.size,
+    estimatedMemoryBytes: estimateMemoryBytes(),
+  } satisfies WorkerMemoryDiagnostics;
+}
+
+function releaseEvictedRotationCanvases(canvases: OffscreenCanvas[]) {
+  canvases.forEach((canvas) => releaseCanvasIfUnreferenced(canvas));
+}
+
+function releaseEvictedCropJobs(jobs: StoredTileJob[]) {
+  jobs.forEach((job) => releaseCanvasIfUnreferenced(job.transformedCanvas));
+}
+
+function handleDispose(documentId: string) {
+  const document = documents.get(documentId);
+  if (!document) {
+    return { disposed: true } as const;
+  }
+
+  Array.from(tileJobs.entries())
+    .filter(([, job]) => job.documentId === documentId)
+    .forEach(([jobId]) => clearTileJob(jobId));
+
+  for (const [cacheKey, canvas] of Array.from(document.rotationCache.entries())) {
+    document.rotationCache.delete(cacheKey);
+    releaseCanvasIfUnreferenced(canvas);
+  }
+
+  for (const [cacheKey, job] of Array.from(document.cropCache.entries())) {
+    document.cropCache.delete(cacheKey);
+    releaseCanvasIfUnreferenced(job.transformedCanvas);
+  }
+
+  documents.delete(documentId);
+
+  for (const preview of document.previews) {
+    if (preview.canvas !== document.sourceCanvas) {
+      releaseCanvas(preview.canvas);
+    }
+  }
+  releaseCanvas(document.sourceCanvas);
+
+  if (documents.size === 0) {
+    if (rotateCanvas) {
+      releaseCanvas(rotateCanvas);
+      rotateCanvas = null;
+    }
+    if (outputCanvas) {
+      releaseCanvas(outputCanvas);
+      outputCanvas = null;
+    }
+  }
+
+  return { disposed: true } as const;
 }
 
 async function handleDecode(payload: DecodeRequest) {
@@ -353,14 +483,21 @@ async function handleDecode(payload: DecodeRequest) {
       metadata,
       sourceCanvas: canvas,
       previews: previewStore,
-      previewGeometryCache: new Map(),
-      sourceGeometryCache: new Map(),
+      rotationCache: new Map(),
+      cropCache: new Map(),
     });
 
     return {
       metadata,
       previewLevels: previewStore.map((preview) => preview.level),
     } satisfies DecodedImage;
+  }
+
+  if (payload.buffer.byteLength > MAX_FILE_SIZE_BYTES) {
+    throw createError(
+      'FILE_TOO_LARGE',
+      `File size (${Math.round(payload.buffer.byteLength / 1024 / 1024)} MB) exceeds the ${Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB limit. Try a smaller scan or reduce the scan resolution.`,
+    );
   }
 
   const extension = getFileExtension(payload.fileName);
@@ -407,8 +544,8 @@ async function handleDecode(payload: DecodeRequest) {
     metadata,
     sourceCanvas: decodedCanvas,
     previews: previewStore,
-    previewGeometryCache: new Map(),
-    sourceGeometryCache: new Map(),
+    rotationCache: new Map(),
+    cropCache: new Map(),
   });
 
   return {
@@ -421,30 +558,32 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
   const document = getStoredDocument(payload.documentId);
   clearTileJob(payload.jobId);
   const source = getTileSource(document, payload);
-  const cache = getGeometryCache(document, payload.sourceKind);
-  const geometryCacheKey = createGeometryCacheKey(payload.sourceKind, source.previewLevelId, payload.settings);
-  let storedJob = cache.get(geometryCacheKey);
-  let geometryCacheHit = true;
-
-  if (!storedJob) {
-    const transformed = renderTransformedCanvasForJob(source.canvas, payload.settings);
-    storedJob = {
-      documentId: payload.documentId,
-      sourceKind: payload.sourceKind,
-      previewLevelId: source.previewLevelId,
-      transformedCanvas: transformed.canvas,
-      width: transformed.width,
-      height: transformed.height,
-      halo: 0,
-    };
-    cache.clear();
-    cache.set(geometryCacheKey, storedJob);
-    geometryCacheHit = false;
-  }
+  const prepared = prepareGeometryCacheEntry({
+    rotationCache: document.rotationCache,
+    cropCache: document.cropCache,
+    sourceKind: payload.sourceKind,
+    previewLevelId: source.previewLevelId,
+    settings: payload.settings,
+    createRotation: () => renderRotatedCanvasForJob(source.canvas, payload.settings),
+    createCrop: (rotationCanvas) => {
+      const transformed = renderCroppedCanvasForJob(rotationCanvas, payload.settings);
+      return {
+        documentId: payload.documentId,
+        sourceKind: payload.sourceKind,
+        previewLevelId: source.previewLevelId,
+        transformedCanvas: transformed.canvas,
+        width: transformed.width,
+        height: transformed.height,
+        halo: 0,
+      } satisfies StoredTileJob;
+    },
+  });
+  releaseEvictedRotationCanvases(prepared.evictedRotations);
+  releaseEvictedCropJobs(prepared.evictedCrops);
 
   const halo = getHalo(payload.settings, payload.comparisonMode);
   tileJobs.set(payload.jobId, {
-    ...storedJob,
+    ...prepared.cropJob,
     halo,
   });
 
@@ -452,17 +591,17 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
     documentId: payload.documentId,
     jobId: payload.jobId,
     sourceKind: payload.sourceKind,
-    width: storedJob.width,
-    height: storedJob.height,
+    width: prepared.cropJob.width,
+    height: prepared.cropJob.height,
     previewLevelId: source.previewLevelId,
     tileSize: TILE_SIZE,
     halo,
-    geometryCacheHit,
+    geometryCacheHit: prepared.geometryCacheHit,
   } satisfies PreparedTileJobResult;
 }
 
 function handleReadTile(payload: ReadTileRequest) {
-  if (cancelledJobs.has(payload.jobId)) {
+  if (isRecentlyCancelledJob(payload.jobId)) {
     throw createError('JOB_CANCELLED', 'The tile job was cancelled.');
   }
 
@@ -485,7 +624,7 @@ function handleReadTile(payload: ReadTileRequest) {
   const readHeight = payload.height + haloTop + haloBottom;
   const imageData = ctx.getImageData(readX, readY, readWidth, readHeight);
 
-  if (cancelledJobs.has(payload.jobId)) {
+  if (isRecentlyCancelledJob(payload.jobId)) {
     throw createError('JOB_CANCELLED', 'The tile job was cancelled.');
   }
 
@@ -505,8 +644,9 @@ function handleReadTile(payload: ReadTileRequest) {
 }
 
 function handleCancelJob(payload: CancelTileJobRequest) {
-  cancelledJobs.add(payload.jobId);
-  tileJobs.delete(payload.jobId);
+  pruneCancelledJobs();
+  cancelledJobs.set(payload.jobId, performance.now());
+  clearTileJob(payload.jobId, true);
   return { cancelled: true } as const;
 }
 
@@ -626,14 +766,11 @@ async function handleExport(payload: ExportRequest) {
 
 self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
+  pruneCancelledJobs();
 
   try {
     if (request.type === 'dispose') {
-      documents.delete(request.payload.documentId);
-      Array.from(tileJobs.entries())
-        .filter(([, job]) => job.documentId === request.payload.documentId)
-        .forEach(([jobId]) => clearTileJob(jobId));
-      reply({ id: request.id, ok: true, payload: { disposed: true } });
+      reply({ id: request.id, ok: true, payload: handleDispose(request.payload.documentId) });
       return;
     }
 
@@ -669,15 +806,25 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
     if (request.type === 'export') {
       reply({ id: request.id, ok: true, payload: await handleExport(request.payload) });
+      return;
+    }
+
+    if (request.type === 'diagnostics') {
+      reply({ id: request.id, ok: true, payload: handleDiagnostics() });
+      return;
     }
   } catch (error) {
     const failure = error as Partial<WorkerError> & { message?: string };
+    const isOOM = error instanceof RangeError
+      || Boolean(failure.message && /invalid array length|out of memory|allocation failed/i.test(failure.message));
     reply({
       id: request.id,
       ok: false,
       error: createError(
-        failure.code ?? 'WORKER_ERROR',
-        failure.message ?? String(error),
+        isOOM ? 'OUT_OF_MEMORY' : (failure.code ?? 'WORKER_ERROR'),
+        isOOM
+          ? 'Image too large for available memory. Try closing other tabs or using a smaller scan resolution.'
+          : (failure.message ?? String(error)),
       ),
     });
   }

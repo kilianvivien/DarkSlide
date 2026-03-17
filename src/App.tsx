@@ -22,7 +22,7 @@ import { Sidebar } from './components/Sidebar';
 import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
-import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, SUPPORTED_EXTENSIONS } from './constants';
+import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, SUPPORTED_EXTENSIONS } from './constants';
 import { ColorMatrix, ConversionSettings, CropTab, DecodedImage, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, TonalCharacter, WorkspaceDocument } from './types';
 import { useHistory } from './hooks/useHistory';
 import { useCustomPresets } from './hooks/useCustomPresets';
@@ -51,6 +51,12 @@ function formatError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const readable = message.includes(': ') ? message.split(': ').slice(1).join(': ') : message;
   return readable || 'Unknown error.';
+}
+
+function getErrorCode(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = message.split(':')[0]?.trim();
+  return code || null;
 }
 
 function isIgnorableRenderError(error: unknown) {
@@ -164,6 +170,10 @@ type BlockingOverlayState = {
   detail: string;
 };
 
+type TransientNoticeState = {
+  message: string;
+};
+
 export default function App() {
   const initialPreferences = useMemo(() => loadPreferences(), []);
   const usesNativeFileDialogs = isDesktopShell();
@@ -192,6 +202,7 @@ export default function App() {
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
+  const [transientNotice, setTransientNotice] = useState<TransientNoticeState | null>(null);
   const [renderBackendDiagnostics, setRenderBackendDiagnostics] = useState<RenderBackendDiagnostics>({
     gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
     gpuEnabled: initialPreferences?.gpuRendering ?? true,
@@ -220,6 +231,9 @@ export default function App() {
     maxBufferSize: null,
     gpuDisabledReason: (typeof navigator === 'undefined' || !('gpu' in navigator)) ? 'unsupported' : ((initialPreferences?.gpuRendering ?? true) ? null : 'user'),
     lastError: null,
+    workerMemory: null,
+    activeBlobUrlCount: null,
+    oldestActiveBlobUrlAgeMs: null,
   });
 
   const [displayScaleFactor, setDisplayScaleFactor] = useState(() => (
@@ -245,11 +259,24 @@ export default function App() {
   const handleDownloadRef = useRef<(() => void) | null>(null);
   const handleResetRef = useRef<(() => void) | null>(null);
   const handleCopyDebugInfoRef = useRef<(() => Promise<void>) | null>(null);
+  const transientNoticeTimeoutRef = useRef<number | null>(null);
   const tauriWindowRef = useRef<{
     startDragging: () => Promise<void>;
     scaleFactor: () => Promise<number>;
     onScaleChanged: (handler: ({ payload }: { payload: { scaleFactor: number } }) => void) => Promise<() => void>;
   } | null>(null);
+
+  const showTransientNotice = useCallback((message: string) => {
+    if (transientNoticeTimeoutRef.current !== null) {
+      window.clearTimeout(transientNoticeTimeoutRef.current);
+    }
+
+    setTransientNotice({ message });
+    transientNoticeTimeoutRef.current = window.setTimeout(() => {
+      setTransientNotice(null);
+      transientNoticeTimeoutRef.current = null;
+    }, 4000);
+  }, []);
 
   const { customPresets, savePreset, importPreset, deletePreset } = useCustomPresets();
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
@@ -456,11 +483,20 @@ export default function App() {
   }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
 
   useEffect(() => {
-    workerClientRef.current = new ImageWorkerClient({ gpuEnabled: initialPreferences?.gpuRendering ?? true });
+    workerClientRef.current = new ImageWorkerClient({
+      gpuEnabled: initialPreferences?.gpuRendering ?? true,
+      onBackendDiagnosticsChange: setRenderBackendDiagnostics,
+      onGPUDeviceLost: (message) => {
+        showTransientNotice(message || 'GPU unavailable — retrying on the next render');
+      },
+    });
     void workerClientRef.current.getGPUDiagnostics().then(setRenderBackendDiagnostics).catch(() => {
       // Ignore diagnostics refresh failures during startup.
     });
     return () => {
+      if (transientNoticeTimeoutRef.current !== null) {
+        window.clearTimeout(transientNoticeTimeoutRef.current);
+      }
       if (previewRetryFrameRef.current !== null) {
         window.cancelAnimationFrame(previewRetryFrameRef.current);
       }
@@ -470,7 +506,7 @@ export default function App() {
       workerClientRef.current?.terminate();
       workerClientRef.current = null;
     };
-  }, [initialPreferences]);
+  }, [initialPreferences, showTransientNotice]);
 
   // Restore UI layout from stored preferences on first mount
   useEffect(() => {
@@ -1096,6 +1132,20 @@ export default function App() {
       return;
     }
 
+    if (!rawImport && sourceFileSize > MAX_FILE_SIZE_BYTES) {
+      setError(`File is too large (${Math.round(sourceFileSize / 1024 / 1024)} MB). Maximum supported size is ${Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB.`);
+      appendDiagnostic({
+        level: 'error',
+        code: 'FILE_TOO_LARGE',
+        message: file.name,
+        context: {
+          limitBytes: MAX_FILE_SIZE_BYTES,
+          size: sourceFileSize,
+        },
+      });
+      return;
+    }
+
     setError(null);
     setIsPickingFilmBase(false);
     setIsCropOverlayVisible(false);
@@ -1352,6 +1402,7 @@ export default function App() {
       if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) return;
 
       const message = formatError(importError);
+      const errorCode = getErrorCode(importError);
       activeDocumentIdRef.current = null;
       appendDiagnostic({
         level: 'error',
@@ -1363,7 +1414,7 @@ export default function App() {
           importSession,
         },
       });
-      setError(`Import failed. ${message}`);
+      setError(errorCode === 'OUT_OF_MEMORY' ? message : `Import failed. ${message}`);
       setDocumentState(null);
       setPreviewVisibility(false);
       clearCanvas();
@@ -2163,6 +2214,19 @@ export default function App() {
               <FileWarning size={18} className="text-red-400 shrink-0" />
               <span>{error}</span>
               <button onClick={() => setError(null)} className="ml-2 opacity-50 hover:opacity-100">✕</button>
+            </motion.div>
+          )}
+
+          {transientNotice && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="absolute bottom-28 right-8 flex items-center gap-3 px-4 py-3 bg-amber-950/55 border border-amber-800/60 rounded-xl text-amber-100 text-sm backdrop-blur-xl shadow-2xl z-50 max-w-md"
+            >
+              <FileWarning size={18} className="text-amber-300 shrink-0" />
+              <span>{transientNotice.message}</span>
+              <button onClick={() => setTransientNotice(null)} className="ml-2 opacity-50 hover:opacity-100">✕</button>
             </motion.div>
           )}
           </div>
