@@ -13,6 +13,8 @@ export interface UserPreferences {
   isRightPaneOpen: boolean;
   gpuRendering: boolean;
   ultraSmoothDrag: boolean;
+  externalEditorPath: string | null;
+  externalEditorName: string | null;
 }
 
 function isValidPreferences(value: unknown): value is UserPreferences {
@@ -34,7 +36,9 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     typeof prefs.isLeftPaneOpen === 'boolean' &&
     typeof prefs.isRightPaneOpen === 'boolean' &&
     (prefs.gpuRendering === undefined || typeof prefs.gpuRendering === 'boolean') &&
-    (prefs.ultraSmoothDrag === undefined || typeof prefs.ultraSmoothDrag === 'boolean')
+    (prefs.ultraSmoothDrag === undefined || typeof prefs.ultraSmoothDrag === 'boolean') &&
+    (prefs.externalEditorPath === undefined || prefs.externalEditorPath === null || typeof prefs.externalEditorPath === 'string') &&
+    (prefs.externalEditorName === undefined || prefs.externalEditorName === null || typeof prefs.externalEditorName === 'string')
   );
 }
 
@@ -99,6 +103,8 @@ function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPr
     isRightPaneOpen: legacy.isRightPaneOpen,
     gpuRendering: legacy.gpuRendering ?? true,
     ultraSmoothDrag: legacy.ultraSmoothDrag ?? false,
+    externalEditorPath: null,
+    externalEditorName: null,
   };
 }
 
@@ -121,6 +127,8 @@ export function loadPreferences(): UserPreferences | null {
       cropTab: parsed.cropTab ?? 'Film',
       gpuRendering: parsed.gpuRendering ?? true,
       ultraSmoothDrag: parsed.ultraSmoothDrag ?? false,
+      externalEditorPath: parsed.externalEditorPath ?? null,
+      externalEditorName: parsed.externalEditorName ?? null,
     };
   } catch {
     return null;

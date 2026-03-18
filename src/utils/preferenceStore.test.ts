@@ -19,6 +19,8 @@ const VALID_PREFS: UserPreferences = {
   isRightPaneOpen: true,
   gpuRendering: false,
   ultraSmoothDrag: true,
+  externalEditorPath: null,
+  externalEditorName: null,
 };
 
 beforeEach(() => {

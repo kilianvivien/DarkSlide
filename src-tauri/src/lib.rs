@@ -76,6 +76,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![decode_raw])
         .setup(|app| {
             let import_item = MenuItemBuilder::with_id("open", "Import...")
@@ -84,6 +85,10 @@ pub fn run() {
             let export_item = MenuItemBuilder::with_id("export", "Export...")
                 .accelerator("CmdOrCtrl+E")
                 .build(app)?;
+            let open_in_editor_item =
+                MenuItemBuilder::with_id("open-in-editor", "Open in Editor…")
+                    .accelerator("Shift+CmdOrCtrl+O")
+                    .build(app)?;
             let close_image_item = MenuItemBuilder::with_id("close-image", "Close Image")
                 .accelerator("CmdOrCtrl+W")
                 .build(app)?;
@@ -128,6 +133,7 @@ pub fn run() {
                 .item(&import_item)
                 .separator()
                 .item(&export_item)
+                .item(&open_in_editor_item)
                 .separator()
                 .item(&close_image_item)
                 .build()?;

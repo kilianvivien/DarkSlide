@@ -309,6 +309,50 @@ export async function openPresetFile(): Promise<{ content: string; fileName: str
   };
 }
 
+export async function openInExternalEditor(
+  blob: Blob,
+  filename: string,
+  editorPath: string | null,
+): Promise<'opened' | 'error'> {
+  if (!isDesktopShell()) return 'error';
+
+  const [{ writeFile }, { tempDir }, { openPath }] = await Promise.all([
+    import('@tauri-apps/plugin-fs'),
+    import('@tauri-apps/api/path'),
+    import('@tauri-apps/plugin-opener'),
+  ]);
+
+  const dir = await tempDir();
+  const tempPath = `${dir}${filename}`;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  await writeFile(tempPath, bytes);
+
+  if (editorPath) {
+    await openPath(tempPath, editorPath);
+  } else {
+    await openPath(tempPath);
+  }
+
+  return 'opened';
+}
+
+export async function chooseApplicationPath(): Promise<{ path: string; name: string } | null> {
+  if (!isDesktopShell()) return null;
+
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const selected = await open({
+    title: 'Choose Application',
+    directory: false,
+    multiple: false,
+    filters: [{ name: 'Applications', extensions: ['app'] }],
+  });
+
+  if (!selected || Array.isArray(selected)) return null;
+
+  const name = selected.split('/').pop()?.replace(/\.app$/, '') ?? selected;
+  return { path: selected, name };
+}
+
 export async function confirmDeletePreset(name: string): Promise<boolean> {
   const message = `Delete preset "${name}"?`;
 

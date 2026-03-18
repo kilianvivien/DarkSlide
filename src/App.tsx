@@ -32,7 +32,7 @@ import { useViewportZoom } from './hooks/useViewportZoom';
 import { ZoomBar } from './components/ZoomBar';
 import { MagnifierLoupe } from './components/MagnifierLoupe';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
-import { isDesktopShell, openImageFile, saveExportBlob } from './utils/fileBridge';
+import { isDesktopShell, openImageFile, saveExportBlob, openInExternalEditor, chooseApplicationPath } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
@@ -257,6 +257,8 @@ export default function App() {
   const [contactSheetSharedColorManagement, setContactSheetSharedColorManagement] = useState<ColorManagementSettings | null>(null);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
+  const [externalEditorPath, setExternalEditorPath] = useState<string | null>(() => initialPreferences?.externalEditorPath ?? null);
+  const [externalEditorName, setExternalEditorName] = useState<string | null>(() => initialPreferences?.externalEditorName ?? null);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
   const [transientNotice, setTransientNotice] = useState<TransientNoticeState | null>(null);
@@ -316,6 +318,7 @@ export default function App() {
   const pendingInteractivePreviewRef = useRef<QueuedPreviewRender | null>(null);
   const interactionJustEndedRef = useRef(false);
   const handleDownloadRef = useRef<(() => void) | null>(null);
+  const handleOpenInEditorRef = useRef<(() => void) | null>(null);
   const handleResetRef = useRef<(() => void) | null>(null);
   const handleCopyDebugInfoRef = useRef<(() => Promise<void>) | null>(null);
   const transientNoticeTimeoutRef = useRef<number | null>(null);
@@ -386,6 +389,8 @@ export default function App() {
     isRightPaneOpen: true,
     gpuRendering: initialPreferences?.gpuRendering ?? true,
     ultraSmoothDrag: initialPreferences?.ultraSmoothDrag ?? false,
+    externalEditorPath: initialPreferences?.externalEditorPath ?? null,
+    externalEditorName: initialPreferences?.externalEditorName ?? null,
   });
   prefsSnapshotRef.current = {
     version: 2,
@@ -397,6 +402,8 @@ export default function App() {
     isRightPaneOpen,
     gpuRendering: gpuRenderingEnabled,
     ultraSmoothDrag: ultraSmoothDragEnabled,
+    externalEditorPath,
+    externalEditorName,
   };
   const activeProfile = documentState
     ? profilesById.get(documentState.profileId) ?? fallbackProfile
@@ -1937,7 +1944,11 @@ export default function App() {
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
         event.preventDefault();
-        void handleOpenImage();
+        if (event.shiftKey && documentState) {
+          void handleOpenInEditorRef.current?.();
+        } else if (!event.shiftKey) {
+          void handleOpenImage();
+        }
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'w' && documentState) {
@@ -2022,6 +2033,7 @@ export default function App() {
           switch (event.payload) {
             case 'open': void handleOpenImage(); break;
             case 'export': void handleDownloadRef.current?.(); break;
+            case 'open-in-editor': void handleOpenInEditorRef.current?.(); break;
             case 'batch-export': setShowBatchModal(true); break;
             case 'close-image': void handleCloseImage(); break;
             case 'reset-adjustments': handleResetRef.current?.(); break;
@@ -2170,6 +2182,60 @@ export default function App() {
   const handleExportClick = useCallback(() => {
     void handleDownload();
   }, [handleDownload]);
+
+  const handleOpenInEditor = useCallback(async () => {
+    const worker = workerClientRef.current;
+    if (!worker || !documentState) return;
+
+    setDocumentState((current) => current ? { ...current, status: 'exporting' } : current);
+    try {
+      const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
+      const result = await worker.export({
+        documentId: documentState.id,
+        settings: documentState.settings,
+        isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+        inputProfileId,
+        outputProfileId: documentState.exportOptions.outputProfileId,
+        options: documentState.exportOptions,
+        sourceExif: documentState.source.exif,
+        maskTuning: activeProfile.maskTuning,
+        colorMatrix: activeProfile.colorMatrix,
+        tonalCharacter: activeProfile.tonalCharacter,
+      });
+
+      const editorPath = prefsSnapshotRef.current.externalEditorPath;
+      const editorName = prefsSnapshotRef.current.externalEditorName;
+      const openResult = await openInExternalEditor(result.blob, result.filename, editorPath);
+      if (openResult === 'opened') {
+        showTransientNotice(`Opened in ${editorName || 'external editor'}`);
+      }
+      setDocumentState((current) => current ? { ...current, status: 'ready' } : current);
+    } catch (err) {
+      const message = formatError(err);
+      setError(`Open in editor failed. ${message}`);
+      setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'EXPORT_FAILED' } : current);
+    }
+  }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, showTransientNotice]);
+  handleOpenInEditorRef.current = handleOpenInEditor;
+
+  const handleOpenInEditorClick = useCallback(() => {
+    void handleOpenInEditor();
+  }, [handleOpenInEditor]);
+
+  const handleChooseExternalEditor = useCallback(async () => {
+    const result = await chooseApplicationPath();
+    if (result) {
+      setExternalEditorPath(result.path);
+      setExternalEditorName(result.name);
+      savePreferences({ ...prefsSnapshotRef.current, externalEditorPath: result.path, externalEditorName: result.name });
+    }
+  }, []);
+
+  const handleClearExternalEditor = useCallback(() => {
+    setExternalEditorPath(null);
+    setExternalEditorName(null);
+    savePreferences({ ...prefsSnapshotRef.current, externalEditorPath: null, externalEditorName: null });
+  }, []);
 
   const handleCanvasClick = useCallback(async (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!documentState || !displaySettings || !displayCanvasRef.current || !workerClientRef.current) return;
@@ -2393,6 +2459,7 @@ export default function App() {
                 activePointPicker={activePointPicker}
                 onSetPointPicker={setActivePointPicker}
                 onOpenSettings={handleOpenSettingsModal}
+                onOpenInEditor={handleOpenInEditorClick}
               />
             </motion.div>
           )}
@@ -2788,6 +2855,10 @@ export default function App() {
         colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
         sourceMetadata={documentState?.source ?? null}
         onColorManagementChange={handleColorManagementChange}
+        externalEditorPath={externalEditorPath}
+        externalEditorName={externalEditorName}
+        onChooseExternalEditor={handleChooseExternalEditor}
+        onClearExternalEditor={handleClearExternalEditor}
       />
       <BatchModal
         isOpen={showBatchModal}
