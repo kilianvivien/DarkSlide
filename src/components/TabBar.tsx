@@ -31,8 +31,8 @@ export function TabBar({
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
 
   return (
-    <div className="flex h-11 items-center gap-2 border-b border-zinc-800 bg-zinc-950/85 px-3">
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-1 pt-1">
+    <div className="flex h-10 items-center gap-1.5 border-b border-zinc-800/80 bg-zinc-950 px-2">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
 
@@ -46,7 +46,7 @@ export function TabBar({
               {isActive && (
                 <motion.div
                   layoutId="active-tab-pill"
-                  className="absolute inset-0 rounded-xl border border-zinc-600 bg-zinc-900 shadow-lg shadow-black/20"
+                  className="absolute inset-0 rounded-lg bg-zinc-800/80 ring-1 ring-inset ring-zinc-700/60"
                   transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                 />
               )}
@@ -62,10 +62,10 @@ export function TabBar({
                   }
                   setDraggedTabId(null);
                 }}
-                className={`group relative z-10 flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs transition-[border-color,color,transform] duration-200 ${
+                className={`group relative z-10 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors duration-150 ${
                   isActive
-                    ? 'border-transparent bg-transparent text-zinc-100'
-                    : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900 hover:text-zinc-200'
+                    ? 'text-zinc-100'
+                    : 'text-zinc-500 hover:bg-zinc-900/70 hover:text-zinc-300'
                 }`}
               >
                 <button
@@ -74,8 +74,8 @@ export function TabBar({
                   className="flex min-w-0 items-center gap-2"
                   title={tab.document.source.name}
                 >
-                  <span className={`h-2 w-2 rounded-full transition-colors ${tab.document.dirty ? 'bg-amber-400' : 'bg-zinc-700'}`} />
-                  <span className="max-w-[180px] truncate">{truncateLabel(tab.document.source.name)}</span>
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors ${tab.document.dirty ? 'bg-amber-400' : isActive ? 'bg-zinc-500' : 'bg-zinc-700'}`} />
+                  <span className="max-w-[160px] truncate font-medium">{truncateLabel(tab.document.source.name)}</span>
                 </button>
                 <button
                   type="button"
@@ -83,10 +83,10 @@ export function TabBar({
                     event.stopPropagation();
                     onCloseTab(tab.id);
                   }}
-                  className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                  className={`rounded p-0.5 transition-colors hover:text-zinc-100 ${isActive ? 'text-zinc-400' : 'text-zinc-600 opacity-0 group-hover:opacity-100'}`}
                   aria-label={`Close ${tab.document.source.name}`}
                 >
-                  <X size={12} />
+                  <X size={11} />
                 </button>
               </div>
             </motion.div>
@@ -97,10 +97,10 @@ export function TabBar({
       <button
         type="button"
         onClick={onCreateTab}
-        className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-400 transition-all hover:border-zinc-700 hover:bg-zinc-900 hover:text-zinc-100"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300"
         aria-label="Open another image"
       >
-        <Plus size={15} />
+        <Plus size={14} />
       </button>
     </div>
   );

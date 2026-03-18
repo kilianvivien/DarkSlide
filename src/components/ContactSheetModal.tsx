@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Download, X } from 'lucide-react';
+import { Check, Download, X } from 'lucide-react';
 import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
 import { ConversionSettings, FilmProfile } from '../types';
 import { saveExportBlob } from '../utils/fileBridge';
@@ -27,6 +27,30 @@ function hexToRgb(hex: string): [number, number, number] {
     parseInt(safeHex.slice(2, 4), 16),
     parseInt(safeHex.slice(4, 6), 16),
   ];
+}
+
+function CheckOption({
+  checked,
+  disabled,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={`flex items-center gap-3 text-sm ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
+      <input type="checkbox" className="sr-only" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
+        checked ? 'border-zinc-100 bg-zinc-100' : 'border-zinc-600'
+      }`}>
+        {checked && <Check size={10} className="text-zinc-950" strokeWidth={3} />}
+      </span>
+      <span className="text-zinc-300">{children}</span>
+    </label>
+  );
 }
 
 export function ContactSheetModal({
@@ -164,231 +188,292 @@ export function ContactSheetModal({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm"
             onClick={onClose}
           />
 
           <motion.div
             key="contact-sheet-modal"
-            initial={{ opacity: 0, scale: 0.96, y: -8 }}
+            initial={{ opacity: 0, scale: 0.97, y: -6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: -8 }}
-            transition={{ type: 'spring', bounce: 0.1, duration: 0.25 }}
+            exit={{ opacity: 0, scale: 0.97, y: -6 }}
+            transition={{ type: 'spring', bounce: 0.08, duration: 0.22 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-6 pointer-events-none"
           >
             <div
-              className="pointer-events-auto flex h-full max-h-[900px] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950 shadow-2xl"
+              className="pointer-events-auto flex h-full max-h-[900px] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-2xl shadow-black/60"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-zinc-100">Contact Sheet</h2>
-                  <p className="text-sm text-zinc-500">Build a proof sheet from the items currently queued in batch export.</p>
+                  <h2 className="text-base font-semibold text-zinc-100">Contact Sheet</h2>
+                  <p className="mt-0.5 text-xs text-zinc-500">Build a proof sheet from the items currently queued in batch export.</p>
                 </div>
-                <button type="button" onClick={onClose} className="rounded-xl p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200">
-                  <X size={18} />
+                <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
+                  <X size={16} />
                 </button>
               </div>
 
+              {/* Body */}
               <div className="grid min-h-0 flex-1 lg:grid-cols-[1fr_1fr]">
-                <div className="min-h-0 overflow-y-auto border-r border-zinc-800 px-6 py-5">
-                  <div className="mb-4 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-zinc-200">Batch Items</h3>
+                {/* Left: item list */}
+                <div className="min-h-0 overflow-y-auto border-r border-zinc-800/80 px-5 py-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Batch Items</h3>
                     <button
                       type="button"
                       onClick={() => setSelectedIds((current) => current.length === entries.length ? [] : entries.map((entry) => entry.id))}
-                      className="text-xs uppercase tracking-widest text-zinc-500 hover:text-zinc-300"
+                      className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600 transition-colors hover:text-zinc-300"
                     >
-                      {selectedIds.length === entries.length ? 'Deselect all' : 'Select all'}
+                      {selectedIds.length === entries.length ? 'Deselect All' : 'Select All'}
                     </button>
                   </div>
-                  <div className="space-y-3">
-                    {entries.map((entry) => (
-                      <label key={entry.id} className="flex items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-sm text-zinc-200">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.includes(entry.id)}
-                          onChange={(event) => {
-                            setSelectedIds((current) => (
-                              event.target.checked
-                                ? [...current, entry.id]
-                                : current.filter((id) => id !== entry.id)
-                            ));
-                          }}
-                        />
-                        <div className="min-w-0">
-                          <p className="truncate font-medium">{entry.filename}</p>
-                          <p className="text-xs text-zinc-500">
-                            {entry.kind === 'open-tab' ? 'Open in app' : 'Added file'}
-                          </p>
-                        </div>
-                      </label>
-                    ))}
+                  <div className="space-y-2">
+                    {entries.map((entry) => {
+                      const isChecked = selectedIds.includes(entry.id);
+                      return (
+                        <label
+                          key={entry.id}
+                          className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-3.5 py-3 transition-colors hover:border-zinc-700/80 hover:bg-zinc-900/60"
+                        >
+                          <input
+                            type="checkbox"
+                            className="sr-only"
+                            checked={isChecked}
+                            onChange={(event) => {
+                              setSelectedIds((current) => (
+                                event.target.checked
+                                  ? [...current, entry.id]
+                                  : current.filter((id) => id !== entry.id)
+                              ));
+                            }}
+                          />
+                          <span className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
+                            isChecked ? 'border-zinc-100 bg-zinc-100' : 'border-zinc-600'
+                          }`}>
+                            {isChecked && <Check size={10} className="text-zinc-950" strokeWidth={3} />}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-zinc-200">{entry.filename}</p>
+                            <p className="text-xs text-zinc-600">
+                              {entry.kind === 'open-tab' ? 'Open in app' : 'Added file'}
+                            </p>
+                          </div>
+                        </label>
+                      );
+                    })}
                   </div>
                 </div>
 
+                {/* Right: layout & export settings */}
                 <div className="min-h-0 overflow-y-auto px-6 py-5">
-                  <div className="space-y-6">
-              <section className="grid gap-4 sm:grid-cols-2">
-                <label className="block text-sm text-zinc-300">
-                  Columns
-                  <input
-                    type="number"
-                    min={1}
-                    max={8}
-                    value={columns}
-                    onChange={(event) => setColumns(Number(event.target.value))}
-                    className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
-                  />
-                </label>
-                <label className="block text-sm text-zinc-300">
-                  Margin
-                  <input
-                    type="range"
-                    min={0}
-                    max={64}
-                    value={margin}
-                    onChange={(event) => setMargin(Number(event.target.value))}
-                    className="mt-3 w-full"
-                  />
-                  <span className="mt-1 block text-xs text-zinc-500">{margin}px</span>
-                </label>
-              </section>
+                  <div className="space-y-5">
 
-              <section className="space-y-3">
-                <h3 className="text-sm font-semibold text-zinc-200">Cell Size</h3>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { label: 'Small', value: 256 },
-                    { label: 'Medium', value: 512 },
-                    { label: 'Large', value: 1024 },
-                  ].map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setCellMaxDimension(option.value)}
-                      className={`rounded-xl border px-3 py-2 text-sm ${
-                        cellMaxDimension === option.value
-                          ? 'border-zinc-100 bg-zinc-100 text-zinc-950'
-                          : 'border-zinc-800 bg-zinc-900 text-zinc-400'
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </section>
+                    {/* Layout */}
+                    <section className="space-y-4">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Layout</h3>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="mb-1.5 text-xs text-zinc-400">Columns</p>
+                          <input
+                            type="number"
+                            min={1}
+                            max={8}
+                            value={columns}
+                            onChange={(event) => setColumns(Number(event.target.value))}
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <div className="mb-1.5 flex items-center justify-between">
+                            <p className="text-xs text-zinc-400">Margin</p>
+                            <span className="text-xs tabular-nums text-zinc-600">{margin}px</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={64}
+                            value={margin}
+                            onChange={(event) => setMargin(Number(event.target.value))}
+                            className="mt-2 w-full"
+                          />
+                        </div>
+                      </div>
+                    </section>
 
-              <section className="grid gap-4 sm:grid-cols-2">
-                <label className="block text-sm text-zinc-300">
-                  Background
-                  <input
-                    type="color"
-                    value={background}
-                    onChange={(event) => setBackground(event.target.value)}
-                    className="mt-2 h-11 w-full rounded-xl border border-zinc-800 bg-zinc-900"
-                  />
-                </label>
-                <label className="flex items-center gap-3 pt-8 text-sm text-zinc-300">
-                  <input
-                    type="checkbox"
-                    checked={showCaptions}
-                    onChange={(event) => setShowCaptions(event.target.checked)}
-                  />
-                  Show captions
-                </label>
-              </section>
+                    <div className="border-t border-zinc-800/80" />
 
-              {showCaptions && (
-                <label className="block text-sm text-zinc-300">
-                  Caption font size
-                  <input
-                    type="range"
-                    min={12}
-                    max={24}
-                    value={captionFontSize}
-                    onChange={(event) => setCaptionFontSize(Number(event.target.value))}
-                    className="mt-3 w-full"
-                  />
-                  <span className="mt-1 block text-xs text-zinc-500">{captionFontSize}px</span>
-                </label>
-              )}
+                    {/* Cell Size */}
+                    <section className="space-y-3">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Cell Size</h3>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {[
+                          { label: 'Small', value: 256 },
+                          { label: 'Medium', value: 512 },
+                          { label: 'Large', value: 1024 },
+                        ].map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setCellMaxDimension(option.value)}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                              cellMaxDimension === option.value
+                                ? 'border-zinc-100 bg-zinc-100 text-zinc-950'
+                                : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
 
-              <section className="space-y-3">
-                <h3 className="text-sm font-semibold text-zinc-200">Export</h3>
-                <div className="grid grid-cols-2 gap-2">
-                  {(['image/jpeg', 'image/png'] as const).map((candidate) => (
-                    <button
-                      key={candidate}
-                      type="button"
-                      onClick={() => setFormat(candidate)}
-                      className={`rounded-xl border px-3 py-2 text-sm ${
-                        format === candidate
-                          ? 'border-zinc-100 bg-zinc-100 text-zinc-950'
-                          : 'border-zinc-800 bg-zinc-900 text-zinc-400'
-                      }`}
-                    >
-                      {candidate.split('/')[1]}
-                    </button>
-                  ))}
-                </div>
-                {format === 'image/jpeg' && (
-                  <label className="block text-sm text-zinc-300">
-                    Quality
-                    <input
-                      type="range"
-                      min={10}
-                      max={100}
-                      value={Math.round(quality * 100)}
-                      onChange={(event) => setQuality(Number(event.target.value) / 100)}
-                      className="mt-3 w-full"
-                    />
-                  </label>
-                )}
-                <label className="block text-sm text-zinc-300">
-                  Output filename
-                  <input
-                    type="text"
-                    value={filenameBase}
-                    onChange={(event) => setFilenameBase(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
-                  />
-                </label>
-                <label className="flex items-center gap-3 text-sm text-zinc-300">
-                  <input type="checkbox" checked={embedMetadata} onChange={(event) => setEmbedMetadata(event.target.checked)} />
-                  Embed metadata
-                </label>
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-zinc-500">Color Profile</p>
-                  <label className="flex items-center gap-3 text-sm text-zinc-300">
-                    <input type="radio" checked={iccEmbedMode === 'srgb'} onChange={() => setIccEmbedMode('srgb')} />
-                    sRGB
-                  </label>
-                  <label className="flex items-center gap-3 text-sm text-zinc-300">
-                    <input type="radio" checked={iccEmbedMode === 'none'} onChange={() => setIccEmbedMode('none')} />
-                    None
-                  </label>
-                </div>
-              </section>
+                    <div className="border-t border-zinc-800/80" />
+
+                    {/* Appearance */}
+                    <section className="space-y-3">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Appearance</h3>
+                      <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                          <p className="mb-1.5 text-xs text-zinc-400">Background</p>
+                          <div className="relative">
+                            <div className="h-9 w-full overflow-hidden rounded-lg border border-zinc-800">
+                              <input
+                                type="color"
+                                value={background}
+                                onChange={(event) => setBackground(event.target.value)}
+                                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                              />
+                              <div className="h-full w-full" style={{ backgroundColor: background }} />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex-1 pt-6">
+                          <CheckOption
+                            checked={showCaptions}
+                            onChange={setShowCaptions}
+                          >
+                            Show captions
+                          </CheckOption>
+                        </div>
+                      </div>
+                      {showCaptions && (
+                        <div>
+                          <div className="mb-1.5 flex items-center justify-between">
+                            <p className="text-xs text-zinc-400">Caption font size</p>
+                            <span className="text-xs tabular-nums text-zinc-600">{captionFontSize}px</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={12}
+                            max={24}
+                            value={captionFontSize}
+                            onChange={(event) => setCaptionFontSize(Number(event.target.value))}
+                            className="w-full"
+                          />
+                        </div>
+                      )}
+                    </section>
+
+                    <div className="border-t border-zinc-800/80" />
+
+                    {/* Export */}
+                    <section className="space-y-3">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Export</h3>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {(['image/jpeg', 'image/png'] as const).map((candidate) => (
+                          <button
+                            key={candidate}
+                            type="button"
+                            onClick={() => setFormat(candidate)}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors ${
+                              format === candidate
+                                ? 'border-zinc-100 bg-zinc-100 text-zinc-950'
+                                : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'
+                            }`}
+                          >
+                            {candidate.split('/')[1]}
+                          </button>
+                        ))}
+                      </div>
+                      {format === 'image/jpeg' && (
+                        <div>
+                          <div className="mb-1.5 flex items-center justify-between">
+                            <p className="text-xs text-zinc-400">Quality</p>
+                            <span className="text-xs tabular-nums text-zinc-600">{Math.round(quality * 100)}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={10}
+                            max={100}
+                            value={Math.round(quality * 100)}
+                            onChange={(event) => setQuality(Number(event.target.value) / 100)}
+                            className="w-full"
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <p className="mb-1.5 text-xs text-zinc-400">Output filename</p>
+                        <input
+                          type="text"
+                          value={filenameBase}
+                          onChange={(event) => setFilenameBase(event.target.value)}
+                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                        />
+                      </div>
+                      <CheckOption
+                        checked={embedMetadata}
+                        onChange={setEmbedMetadata}
+                      >
+                        Embed metadata
+                      </CheckOption>
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Color Profile</p>
+                        <div className="flex gap-4">
+                          {(['srgb', 'none'] as const).map((mode) => (
+                            <label key={mode} className="flex cursor-pointer items-center gap-2.5 text-sm">
+                              <input
+                                type="radio"
+                                className="sr-only"
+                                checked={iccEmbedMode === mode}
+                                onChange={() => setIccEmbedMode(mode)}
+                              />
+                              <span className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full border transition-colors ${
+                                iccEmbedMode === mode ? 'border-zinc-100' : 'border-zinc-600'
+                              }`}>
+                                {iccEmbedMode === mode && <span className="h-[5px] w-[5px] rounded-full bg-zinc-100" />}
+                              </span>
+                              <span className="text-zinc-300">{mode === 'srgb' ? 'sRGB' : 'None'}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </section>
+
                   </div>
                 </div>
               </div>
 
               {error && (
-                <div className="border-t border-zinc-800 px-6 py-3 text-sm text-red-300">{error}</div>
+                <div className="border-t border-zinc-800/80 px-6 py-3 text-xs text-red-400">{error}</div>
               )}
 
-              <div className="flex items-center justify-end gap-3 border-t border-zinc-800 px-6 py-4">
-                <button type="button" onClick={onClose} className="rounded-xl border border-zinc-800 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-900">
+              <div className="flex items-center justify-end gap-2.5 border-t border-zinc-800/80 px-6 py-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg border border-zinc-800 px-4 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
+                >
                   Close
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleGenerate()}
                   disabled={isGenerating || selectedEntries.length === 0}
-                  className="inline-flex items-center gap-2 rounded-xl bg-zinc-100 px-4 py-2 text-sm font-semibold text-zinc-950 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-white disabled:opacity-50"
                 >
-                  <Download size={15} />
+                  <Download size={14} />
                   {isGenerating ? 'Generating…' : 'Generate Sheet'}
                 </button>
               </div>
