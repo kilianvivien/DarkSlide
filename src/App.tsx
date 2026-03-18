@@ -226,6 +226,8 @@ export default function App() {
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
   const [transientNotice, setTransientNotice] = useState<TransientNoticeState | null>(null);
+  const [showTabSwitchOverlay, setShowTabSwitchOverlay] = useState(false);
+  const [tabSwitchOverlayKey, setTabSwitchOverlayKey] = useState(0);
   const [renderBackendDiagnostics, setRenderBackendDiagnostics] = useState<RenderBackendDiagnostics>({
     gpuAvailable: typeof navigator !== 'undefined' && 'gpu' in navigator,
     gpuEnabled: initialPreferences?.gpuRendering ?? true,
@@ -283,6 +285,7 @@ export default function App() {
   const handleResetRef = useRef<(() => void) | null>(null);
   const handleCopyDebugInfoRef = useRef<(() => Promise<void>) | null>(null);
   const transientNoticeTimeoutRef = useRef<number | null>(null);
+  const tabSwitchOverlayTimeoutRef = useRef<number | null>(null);
   const previousActiveTabIdRef = useRef<string | null>(null);
   const interactionSnapshotRef = useRef<ConversionSettings | null>(null);
   const tauriWindowRef = useRef<{
@@ -641,6 +644,9 @@ export default function App() {
     return () => {
       if (transientNoticeTimeoutRef.current !== null) {
         window.clearTimeout(transientNoticeTimeoutRef.current);
+      }
+      if (tabSwitchOverlayTimeoutRef.current !== null) {
+        window.clearTimeout(tabSwitchOverlayTimeoutRef.current);
       }
       if (previewRetryFrameRef.current !== null) {
         window.cancelAnimationFrame(previewRetryFrameRef.current);
@@ -1223,6 +1229,22 @@ export default function App() {
 
     if (previousTabId === activeTabId) {
       return;
+    }
+
+    if (tabSwitchOverlayTimeoutRef.current !== null) {
+      window.clearTimeout(tabSwitchOverlayTimeoutRef.current);
+      tabSwitchOverlayTimeoutRef.current = null;
+    }
+
+    if (previousTabId && activeTabId) {
+      setTabSwitchOverlayKey((current) => current + 1);
+      setShowTabSwitchOverlay(true);
+      tabSwitchOverlayTimeoutRef.current = window.setTimeout(() => {
+        setShowTabSwitchOverlay(false);
+        tabSwitchOverlayTimeoutRef.current = null;
+      }, 220);
+    } else {
+      setShowTabSwitchOverlay(false);
     }
 
     if (previousTabId) {
@@ -2450,6 +2472,22 @@ export default function App() {
                       onSetZoom={setZoomLevel}
                     />
                   </div>
+
+                  <AnimatePresence initial={false}>
+                    {showTabSwitchOverlay && (
+                      <motion.div
+                        key={tabSwitchOverlayKey}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: [0, 0.16, 0] }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.22, ease: 'easeOut' }}
+                        className="pointer-events-none absolute inset-0 z-10"
+                        style={{
+                          background: 'radial-gradient(circle at center, rgba(24,24,27,0.28), rgba(24,24,27,0.14) 46%, rgba(24,24,27,0) 76%)',
+                        }}
+                      />
+                    )}
+                  </AnimatePresence>
 
                   <div
                     className="absolute inset-0 flex items-center justify-center will-change-transform"
