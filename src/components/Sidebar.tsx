@@ -19,6 +19,7 @@ import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
 import { Slider } from './Slider';
+import { APP_VERSION_LABEL } from '../appVersion';
 
 const ADJUST_PANE_INITIAL = { opacity: 0, x: -10 };
 const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0 };
@@ -688,7 +689,10 @@ export const Sidebar = memo(function Sidebar({
         </div>
       </div>
 
-      <div className="shrink-0 px-6 py-3 border-t border-zinc-800/50 flex items-center justify-end">
+      <div className="shrink-0 px-6 py-3 border-t border-zinc-800/50 flex items-center justify-between gap-3">
+        <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-600">
+          {APP_VERSION_LABEL}
+        </span>
         <button
           onClick={onOpenSettings}
           data-tip="Settings (⌘,)"
