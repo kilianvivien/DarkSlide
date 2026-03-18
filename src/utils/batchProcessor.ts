@@ -1,12 +1,15 @@
-import { BatchProgressEvent, ColorManagementSettings, ConversionSettings, ExportOptions, FilmProfile, SourceMetadata } from '../types';
+import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, ExportOptions, FilmProfile, SourceMetadata } from '../types';
 import { ImageWorkerClient } from './imageWorkerClient';
-import { getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
-import { saveExportBlob, saveToDirectory } from './fileBridge';
+import { getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
+import { isRawExtension } from './rawImport';
+import { getColorProfileIdFromName } from './colorProfiles';
+import { isDesktopShell, saveExportBlob, saveToDirectory } from './fileBridge';
 
 export interface BatchJobEntry {
   id: string;
   kind: 'open-tab' | 'file';
   file?: File;
+  nativePath?: string;
   documentId?: string;
   sourceMetadata?: SourceMetadata;
   filename: string;
@@ -36,7 +39,32 @@ async function saveBatchExport(blob: Blob, filename: string, format: ExportOptio
   return saveExportBlob(blob, filename, format);
 }
 
-function resolveBatchInputProfileId(sourceMetadata: SourceMetadata | undefined, colorManagement: ColorManagementSettings) {
+interface RawDecodeResult {
+  width: number;
+  height: number;
+  data: ArrayLike<number>;
+  color_space: string;
+  white_balance?: [number, number, number] | null;
+  orientation?: number | null;
+}
+
+function rgbToRgba(rgb: ArrayLike<number>, width: number, height: number) {
+  const expectedLength = width * height * 3;
+  if (rgb.length !== expectedLength) {
+    throw new Error(`RAW decode returned ${rgb.length} RGB bytes for a ${width}×${height} image.`);
+  }
+
+  const rgba = new Uint8Array(width * height * 4);
+  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < rgb.length; sourceIndex += 3, targetIndex += 4) {
+    rgba[targetIndex] = rgb[sourceIndex] ?? 0;
+    rgba[targetIndex + 1] = rgb[sourceIndex + 1] ?? 0;
+    rgba[targetIndex + 2] = rgb[sourceIndex + 2] ?? 0;
+    rgba[targetIndex + 3] = 255;
+  }
+  return rgba;
+}
+
+function resolveBatchInputProfileId(sourceMetadata: SourceMetadata | undefined, colorManagement: ColorManagementSettings): ColorProfileId {
   if (colorManagement.inputMode === 'override') {
     return colorManagement.inputProfileId;
   }
@@ -68,21 +96,50 @@ export async function* runBatch(
       let sourceMetadata = entry.sourceMetadata;
 
       if (entry.kind === 'file') {
-        if (!entry.file) {
-          throw new Error(`Missing file for batch entry "${entry.filename}".`);
+        const extension = getFileExtension(entry.filename);
+        const isRaw = isRawExtension(extension);
+
+        if (isRaw) {
+          if (!isDesktopShell() || !entry.nativePath) {
+            throw new Error(`RAW files require the desktop app. Missing native path for "${entry.filename}".`);
+          }
+
+          const { invoke } = await import('@tauri-apps/api/core');
+          const rawResult = await invoke<RawDecodeResult>('decode_raw', { path: entry.nativePath });
+          yield { type: 'progress', entryId: entry.id, progress: 0.25 };
+
+          const rgba = rgbToRgba(rawResult.data, rawResult.width, rawResult.height);
+          const decoded = await workerClient.decode({
+            documentId,
+            buffer: rgba.buffer,
+            fileName: entry.filename,
+            mime: 'image/x-raw-rgba',
+            size: entry.size,
+            rawDimensions: {
+              width: rawResult.width,
+              height: rawResult.height,
+            },
+            declaredColorProfileName: rawResult.color_space,
+            declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
+          });
+          sourceMetadata = decoded.metadata;
+        } else {
+          if (!entry.file) {
+            throw new Error(`Missing file for batch entry "${entry.filename}".`);
+          }
+
+          const buffer = await entry.file.arrayBuffer();
+          yield { type: 'progress', entryId: entry.id, progress: 0.25 };
+
+          const decoded = await workerClient.decode({
+            documentId,
+            buffer,
+            fileName: entry.filename,
+            mime: entry.file.type || 'application/octet-stream',
+            size: entry.file.size,
+          });
+          sourceMetadata = decoded.metadata;
         }
-
-        const buffer = await entry.file.arrayBuffer();
-        yield { type: 'progress', entryId: entry.id, progress: 0.25 };
-
-        const decoded = await workerClient.decode({
-          documentId,
-          buffer,
-          fileName: entry.filename,
-          mime: entry.file.type || 'application/octet-stream',
-          size: entry.file.size,
-        });
-        sourceMetadata = decoded.metadata;
       } else {
         yield { type: 'progress', entryId: entry.id, progress: 0.35 };
       }

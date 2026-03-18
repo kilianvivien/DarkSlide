@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
-import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES } from '../constants';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile } from '../types';
 import { openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
 import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
@@ -180,18 +180,22 @@ export function BatchModal({
     );
   }
 
-  const addFiles = (files: File[]) => {
-    const nextEntries = files.map((file) => ({
-      id: crypto.randomUUID(),
-      kind: 'file' as const,
-      file,
-      filename: file.name,
-      size: file.size,
-      status: 'pending' as const,
-      errorMessage: file.size > MAX_FILE_SIZE_BYTES
-        ? `File exceeds ${Math.round(MAX_FILE_SIZE_BYTES / (1024 * 1024))} MB.`
-        : undefined,
-    }));
+  const addFiles = (files: Array<{ file: File; nativePath?: string; nativeSize?: number }>) => {
+    const nextEntries = files.map(({ file, nativePath, nativeSize }) => {
+      const size = nativeSize ?? file.size;
+      return {
+        id: crypto.randomUUID(),
+        kind: 'file' as const,
+        file,
+        nativePath,
+        filename: file.name,
+        size,
+        status: 'pending' as const,
+        errorMessage: !nativePath && size > MAX_FILE_SIZE_BYTES
+          ? `File exceeds ${Math.round(MAX_FILE_SIZE_BYTES / (1024 * 1024))} MB.`
+          : undefined,
+      };
+    });
 
     setEntries((current) => [...current, ...nextEntries]);
   };
@@ -200,7 +204,7 @@ export function BatchModal({
     try {
       const nativeFiles = await openMultipleImageFiles();
       if (nativeFiles.length > 0) {
-        addFiles(nativeFiles.map((entry) => entry.file));
+        addFiles(nativeFiles.map((entry) => ({ file: entry.file, nativePath: entry.path, nativeSize: entry.size })));
         return;
       }
 
@@ -321,7 +325,7 @@ export function BatchModal({
                 event.preventDefault();
                 const files = Array.from(event.dataTransfer.files ?? []) as File[];
                 if (files.length > 0) {
-                  addFiles(files);
+                  addFiles(files.map((file) => ({ file })));
                 }
               }}
             >
@@ -386,11 +390,11 @@ export function BatchModal({
                       ref={fileInputRef}
                       type="file"
                       multiple
-                      accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff"
+                      accept={`image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff,${RAW_EXTENSIONS.join(',')}`}
                       className="hidden"
                       onChange={(event) => {
                         const files = Array.from(event.target.files ?? []) as File[];
-                        addFiles(files);
+                        addFiles(files.map((file) => ({ file })));
                         event.target.value = '';
                       }}
                     />

@@ -130,8 +130,8 @@ export async function openMultipleImageFiles(): Promise<NativeOpenFileResult[]> 
     multiple: true,
     filters: [
       {
-        name: 'Supported Images',
-        extensions: SUPPORTED_DIALOG_EXTENSIONS,
+        name: 'All Supported Images',
+        extensions: isDesktopShell() ? ALL_DIALOG_EXTENSIONS : SUPPORTED_DIALOG_EXTENSIONS,
       },
     ],
   });
