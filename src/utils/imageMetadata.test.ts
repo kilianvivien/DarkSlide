@@ -55,7 +55,8 @@ describe('image metadata helpers', () => {
         quality: 0.92,
         filenameBase: 'scan',
         embedMetadata: true,
-        iccEmbedMode: 'none',
+        outputProfileId: 'srgb',
+        embedOutputProfile: false,
       },
       extracted,
     );
@@ -80,7 +81,8 @@ describe('image metadata helpers', () => {
         quality: 0.92,
         filenameBase: 'scan',
         embedMetadata: false,
-        iccEmbedMode: 'none',
+        outputProfileId: 'srgb',
+        embedOutputProfile: false,
       },
       {
         orientation: 6,

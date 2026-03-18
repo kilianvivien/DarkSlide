@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { createDefaultSettings, FILM_PROFILES } from '../constants';
+import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, FILM_PROFILES } from '../constants';
 
 vi.mock('motion/react', async () => {
   const ReactModule = await import('react');
@@ -51,22 +51,24 @@ describe('Sidebar', () => {
           quality: 0.92,
           filenameBase: 'test',
           embedMetadata: true,
-          iccEmbedMode: 'srgb',
+          outputProfileId: 'srgb',
+          embedOutputProfile: true,
         }}
+        colorManagement={DEFAULT_COLOR_MANAGEMENT}
+        sourceMetadata={null}
         cropImageWidth={4032}
         cropImageHeight={6048}
         onLevelInteractionChange={vi.fn()}
         onSettingsChange={vi.fn()}
         onExportOptionsChange={vi.fn()}
+        onColorManagementChange={vi.fn()}
         activeProfile={bwProfile ?? null}
         histogramData={null}
         isPickingFilmBase={false}
         onTogglePicker={vi.fn()}
         onExport={vi.fn()}
         onOpenBatchExport={vi.fn()}
-        onOpenContactSheet={vi.fn()}
         isExporting={false}
-        canOpenContactSheet={false}
         activeTab="adjust"
         onTabChange={vi.fn()}
         cropTab="Film"
@@ -102,22 +104,24 @@ describe('Sidebar', () => {
           quality: 0.92,
           filenameBase: 'test',
           embedMetadata: true,
-          iccEmbedMode: 'srgb',
+          outputProfileId: 'srgb',
+          embedOutputProfile: true,
         }}
+        colorManagement={DEFAULT_COLOR_MANAGEMENT}
+        sourceMetadata={null}
         cropImageWidth={4032}
         cropImageHeight={6048}
         onLevelInteractionChange={vi.fn()}
         onSettingsChange={vi.fn()}
         onExportOptionsChange={vi.fn()}
+        onColorManagementChange={vi.fn()}
         activeProfile={colorProfile ?? null}
         histogramData={null}
         isPickingFilmBase={false}
         onTogglePicker={vi.fn()}
         onExport={vi.fn()}
         onOpenBatchExport={vi.fn()}
-        onOpenContactSheet={vi.fn()}
         isExporting={false}
-        canOpenContactSheet={false}
         activeTab="adjust"
         onTabChange={vi.fn()}
         cropTab="Film"

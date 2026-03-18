@@ -1,4 +1,5 @@
 import {
+  ColorProfileId,
   ColorMatrix,
   ConversionSettings,
   CurvePoint,
@@ -11,6 +12,7 @@ import {
   TonalCharacter,
 } from '../types';
 import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
+import { convertRgbBetweenProfiles, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
 
 const LUMA_R = 0.299;
 const LUMA_G = 0.587;
@@ -294,9 +296,12 @@ export function buildProcessingUniforms(
   maskTuning?: MaskTuning,
   colorMatrix?: ColorMatrix,
   tonalCharacter?: TonalCharacter,
+  inputProfileId: ColorProfileId = 'srgb',
+  outputProfileId: ColorProfileId = 'srgb',
 ) {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
+  const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
 
   return new Float32Array([
     comparisonMode === 'processed' ? 1 : 0,
@@ -354,8 +359,23 @@ export function buildProcessingUniforms(
     0,
 
     colorMatrix ? 1 : 0,
+    getTransferMode(inputProfileId),
+    getTransferMode(outputProfileId),
     0,
+
+    profileTransform[0],
+    profileTransform[1],
+    profileTransform[2],
     0,
+
+    profileTransform[3],
+    profileTransform[4],
+    profileTransform[5],
+    0,
+
+    profileTransform[6],
+    profileTransform[7],
+    profileTransform[8],
     0,
   ]);
 }
@@ -487,6 +507,8 @@ export function processImageData(
   maskTuning?: MaskTuning,
   colorMatrix?: ColorMatrix,
   tonalCharacter?: TonalCharacter,
+  inputProfileId: ColorProfileId = 'srgb',
+  outputProfileId: ColorProfileId = 'srgb',
 ): HistogramData {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
 
@@ -519,6 +541,8 @@ export function processImageData(
     let r = data[index] / 255;
     let g = data[index + 1] / 255;
     let b = data[index + 2] / 255;
+
+    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
 
     if (comparisonMode === 'processed') {
       r = 1 - r;

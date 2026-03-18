@@ -1,4 +1,4 @@
-import { ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, TonalCharacter } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, TonalCharacter } from './types';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -20,7 +20,15 @@ export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   quality: 0.92,
   filenameBase: 'darkslide-converted',
   embedMetadata: true,
-  iccEmbedMode: 'srgb',
+  outputProfileId: 'srgb',
+  embedOutputProfile: true,
+};
+
+export const DEFAULT_COLOR_MANAGEMENT: ColorManagementSettings = {
+  inputMode: 'auto',
+  inputProfileId: 'srgb',
+  outputProfileId: DEFAULT_EXPORT_OPTIONS.outputProfileId,
+  embedOutputProfile: DEFAULT_EXPORT_OPTIONS.embedOutputProfile,
 };
 
 export function createDefaultSettings(overrides: Partial<ConversionSettings> = {}): ConversionSettings {

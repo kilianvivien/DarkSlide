@@ -14,12 +14,13 @@ import {
   SlidersHorizontal,
   Wand2,
 } from 'lucide-react';
-import { ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
 import { Slider } from './Slider';
 import { APP_VERSION_LABEL } from '../appVersion';
+import { getColorProfileDescription } from '../utils/colorProfiles';
 
 const ADJUST_PANE_INITIAL = { opacity: 0, x: -10 };
 const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0 };
@@ -36,6 +37,8 @@ const POINT_PICKERS = [
   { mode: 'grey' as const, label: 'Grey', swatchClass: 'bg-zinc-500 border-zinc-400' },
   { mode: 'white' as const, label: 'White', swatchClass: 'bg-white border-zinc-300' },
 ];
+
+const COLOR_PROFILE_IDS: ColorProfileId[] = ['srgb', 'display-p3', 'adobe-rgb'];
 
 type ScalarSliderKey =
   | 'exposure'
@@ -110,11 +113,14 @@ function computeAutoBalance(data: HistogramData, isColor: boolean): Curves {
 interface SidebarProps {
   settings: ConversionSettings;
   exportOptions: ExportOptions;
+  colorManagement: ColorManagementSettings;
+  sourceMetadata: SourceMetadata | null;
   cropImageWidth: number;
   cropImageHeight: number;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onExportOptionsChange: (options: Partial<ExportOptions>) => void;
+  onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
   activeProfile: FilmProfile | null;
@@ -140,11 +146,14 @@ interface SidebarProps {
 export const Sidebar = memo(function Sidebar({
   settings,
   exportOptions,
+  colorManagement,
+  sourceMetadata,
   cropImageWidth,
   cropImageHeight,
   onLevelInteractionChange,
   onSettingsChange,
   onExportOptionsChange,
+  onColorManagementChange,
   onInteractionStart,
   onInteractionEnd,
   activeProfile,
@@ -316,13 +325,21 @@ export const Sidebar = memo(function Sidebar({
     onExportOptionsChange({ embedMetadata: event.target.checked });
   }, [onExportOptionsChange]);
 
-  const handleIccEmbedModeChange = useCallback((iccEmbedMode: ExportOptions['iccEmbedMode']) => {
-    onExportOptionsChange({ iccEmbedMode });
-  }, [onExportOptionsChange]);
+
+  const handleOutputProfileChange = useCallback((outputProfileId: ColorProfileId) => {
+    onColorManagementChange({ outputProfileId });
+  }, [onColorManagementChange]);
+
+  const handleEmbedOutputProfileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    onColorManagementChange({ embedOutputProfile: event.target.checked });
+  }, [onColorManagementChange]);
 
   const handlePointPickerToggle = useCallback((mode: 'black' | 'white' | 'grey') => {
     onSetPointPicker(activePointPicker === mode ? null : mode);
   }, [activePointPicker, onSetPointPicker]);
+
+
+  const isWebpExport = exportOptions.format === 'image/webp';
 
   return (
     <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden">
@@ -632,26 +649,34 @@ export const Sidebar = memo(function Sidebar({
                       Embed metadata
                     </label>
 
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Color Profile</label>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Output Profile</label>
+                      {COLOR_PROFILE_IDS.map((profileId) => (
+                        <label key={profileId} className={`flex items-center gap-2 text-xs ${isWebpExport && profileId !== 'srgb' ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                          <input
+                            type="radio"
+                            checked={colorManagement.outputProfileId === profileId}
+                            onChange={() => handleOutputProfileChange(profileId)}
+                            disabled={isWebpExport && profileId !== 'srgb'}
+                            className="rounded border-zinc-600 bg-zinc-800"
+                          />
+                          {getColorProfileDescription(profileId)}
+                        </label>
+                      ))}
                       <label className="flex items-center gap-2 text-xs text-zinc-400">
                         <input
-                          type="radio"
-                          checked={exportOptions.iccEmbedMode === 'srgb'}
-                          onChange={() => handleIccEmbedModeChange('srgb')}
+                          type="checkbox"
+                          checked={colorManagement.embedOutputProfile}
+                          onChange={handleEmbedOutputProfileChange}
                           className="rounded border-zinc-600 bg-zinc-800"
                         />
-                        sRGB
+                        Embed ICC profile
                       </label>
-                      <label className="flex items-center gap-2 text-xs text-zinc-400">
-                        <input
-                          type="radio"
-                          checked={exportOptions.iccEmbedMode === 'none'}
-                          onChange={() => handleIccEmbedModeChange('none')}
-                          className="rounded border-zinc-600 bg-zinc-800"
-                        />
-                        None
-                      </label>
+                      {isWebpExport && (
+                        <p className="text-[11px] text-zinc-500">
+                          WebP export is limited to sRGB for now.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </section>

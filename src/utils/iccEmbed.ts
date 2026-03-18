@@ -3,7 +3,6 @@ import { ExportFormat } from '../types';
 const JPEG_SOI_MARKER = 0xffd8;
 const PNG_SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const PNG_IHDR = 'IHDR';
-const ICC_CHUNK_PROFILE_NAME = 'sRGB';
 const JPEG_ICC_SIGNATURE = new TextEncoder().encode('ICC_PROFILE\0');
 const MAX_JPEG_ICC_CHUNK = 65_519;
 
@@ -216,7 +215,7 @@ export async function embedIccInJpeg(jpegBlob: Blob, iccProfile: Uint8Array) {
   return new Blob([result], { type: 'image/jpeg' });
 }
 
-export async function embedIccInPng(pngBlob: Blob, iccProfile: Uint8Array) {
+export async function embedIccInPng(pngBlob: Blob, iccProfile: Uint8Array, profileName = 'ICC Profile') {
   const sourceBytes = stripExistingPngIccChunks(new Uint8Array(await pngBlob.arrayBuffer()));
   if (sourceBytes.length < PNG_SIGNATURE.length || !PNG_SIGNATURE.every((byte, index) => sourceBytes[index] === byte)) {
     return pngBlob;
@@ -239,12 +238,12 @@ export async function embedIccInPng(pngBlob: Blob, iccProfile: Uint8Array) {
   }
 
   const ihdrEnd = offset + 12 + ihdrLength;
-  const profileName = new TextEncoder().encode(`${ICC_CHUNK_PROFILE_NAME}\0`);
+  const encodedProfileName = new TextEncoder().encode(`${profileName}\0`);
   const compressedProfile = deflateStore(iccProfile);
-  const chunkData = new Uint8Array(profileName.length + 1 + compressedProfile.length);
-  chunkData.set(profileName, 0);
-  chunkData[profileName.length] = 0;
-  chunkData.set(compressedProfile, profileName.length + 1);
+  const chunkData = new Uint8Array(encodedProfileName.length + 1 + compressedProfile.length);
+  chunkData.set(encodedProfileName, 0);
+  chunkData[encodedProfileName.length] = 0;
+  chunkData.set(compressedProfile, encodedProfileName.length + 1);
   const iccChunk = buildPngChunk('iCCP', chunkData);
 
   const result = concatUint8Arrays([
@@ -256,13 +255,13 @@ export async function embedIccInPng(pngBlob: Blob, iccProfile: Uint8Array) {
   return new Blob([result], { type: 'image/png' });
 }
 
-export async function embedIccInBlob(blob: Blob, iccProfile: Uint8Array, format: ExportFormat) {
+export async function embedIccInBlob(blob: Blob, iccProfile: Uint8Array, format: ExportFormat, profileName?: string) {
   if (format === 'image/jpeg') {
     return embedIccInJpeg(blob, iccProfile);
   }
 
   if (format === 'image/png') {
-    return embedIccInPng(blob, iccProfile);
+    return embedIccInPng(blob, iccProfile, profileName);
   }
 
   return blob;

@@ -3,6 +3,7 @@ import type { ZoomLevel } from './hooks/useViewportZoom';
 export type FilmType = 'color' | 'bw';
 export type CropTab = 'Film' | 'Print' | 'Social' | 'Digital';
 export type ScannerType = 'flatbed' | 'camera' | 'dedicated' | 'smartphone';
+export type ColorProfileId = 'srgb' | 'display-p3' | 'adobe-rgb';
 
 export interface CurvePoint {
   x: number;
@@ -104,12 +105,20 @@ export interface ConversionSettings {
   noiseReduction: NoiseReductionSettings;
 }
 
+export interface ColorManagementSettings {
+  inputMode: 'auto' | 'override';
+  inputProfileId: ColorProfileId;
+  outputProfileId: ColorProfileId;
+  embedOutputProfile: boolean;
+}
+
 export interface ExportOptions {
   format: ExportFormat;
   quality: number;
   filenameBase: string;
   embedMetadata: boolean;
-  iccEmbedMode: 'srgb' | 'none';
+  outputProfileId: ColorProfileId;
+  embedOutputProfile: boolean;
 }
 
 export interface FilmProfile {
@@ -156,6 +165,11 @@ export interface SourceMetadata {
   width: number;
   height: number;
   exif?: ExifMetadata;
+  embeddedColorProfileName?: string | null;
+  embeddedColorProfileId?: ColorProfileId | null;
+  decoderColorProfileName?: string | null;
+  decoderColorProfileId?: ColorProfileId | null;
+  unsupportedColorProfileName?: string | null;
 }
 
 export interface DecodedImage {
@@ -168,6 +182,7 @@ export interface WorkspaceDocument {
   source: SourceMetadata;
   previewLevels: PreviewLevel[];
   settings: ConversionSettings;
+  colorManagement: ColorManagementSettings;
   rawImportProfile?: FilmProfile | null;
   profileId: string;
   exportOptions: ExportOptions;
@@ -195,12 +210,16 @@ export interface DecodeRequest {
   mime: string;
   size: number;
   rawDimensions?: { width: number; height: number };
+  declaredColorProfileName?: string | null;
+  declaredColorProfileId?: ColorProfileId | null;
 }
 
 export interface RenderRequest {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  inputProfileId?: ColorProfileId;
+  outputProfileId?: ColorProfileId;
   revision: number;
   targetMaxDimension: number;
   comparisonMode: 'processed' | 'original';
@@ -227,6 +246,8 @@ export interface ExportRequest {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  inputProfileId?: ColorProfileId;
+  outputProfileId?: ColorProfileId;
   options: ExportOptions;
   sourceExif?: ExifMetadata;
   maskTuning?: MaskTuning;
@@ -256,6 +277,7 @@ export interface ContactSheetRequest {
   exportOptions: ExportOptions;
   settingsPerCell: ConversionSettings[];
   profilePerCell: FilmProfile[];
+  colorManagementPerCell: ColorManagementSettings[];
 }
 
 export interface ContactSheetResult {
@@ -383,6 +405,8 @@ export interface RenderBackendDiagnostics {
 export interface SampleRequest {
   documentId: string;
   settings: ConversionSettings;
+  inputProfileId?: ColorProfileId;
+  outputProfileId?: ColorProfileId;
   targetMaxDimension: number;
   x: number;
   y: number;

@@ -6,6 +6,7 @@ type TiffFrame = {
   t256?: ArrayLike<number>;
   t257?: ArrayLike<number>;
   t274?: ArrayLike<number>;
+  t34675?: ArrayLike<number>;
 };
 
 type TiffDecoder = {
@@ -31,6 +32,7 @@ export interface DecodedTiffRaster {
   frameIndex: number;
   frameCount: number;
   orientation?: number;
+  iccProfile?: Uint8Array;
 }
 
 function normalizeRgbaBuffer(rgba: ArrayLike<number>) {
@@ -40,6 +42,19 @@ function normalizeRgbaBuffer(rgba: ArrayLike<number>) {
 
   const view = rgba as ArrayBufferView;
   return new Uint8ClampedArray(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
+}
+
+function normalizeByteBuffer(buffer: ArrayLike<number> | undefined) {
+  if (!buffer) {
+    return undefined;
+  }
+
+  if (!ArrayBuffer.isView(buffer)) {
+    return Uint8Array.from(buffer);
+  }
+
+  const view = buffer as ArrayBufferView;
+  return new Uint8Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
 }
 
 function getFrameDimension(frame: TiffFrame | undefined, key: 'width' | 'height') {
@@ -103,6 +118,7 @@ export function decodeTiffRaster(buffer: ArrayBuffer, decoder: TiffDecoder = UTI
         frameIndex,
         frameCount: frames.length,
         orientation: Number.isFinite(Number(frame.t274?.[0])) ? Number(frame.t274?.[0]) : undefined,
+        iccProfile: normalizeByteBuffer(frame.t34675),
       };
     } catch (error) {
       decodeFailure = error;

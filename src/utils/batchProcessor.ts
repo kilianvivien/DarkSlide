@@ -1,4 +1,4 @@
-import { BatchProgressEvent, ConversionSettings, ExportOptions, FilmProfile } from '../types';
+import { BatchProgressEvent, ColorManagementSettings, ConversionSettings, ExportOptions, FilmProfile, SourceMetadata } from '../types';
 import { ImageWorkerClient } from './imageWorkerClient';
 import { getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { saveExportBlob, saveToDirectory } from './fileBridge';
@@ -8,6 +8,7 @@ export interface BatchJobEntry {
   kind: 'open-tab' | 'file';
   file?: File;
   documentId?: string;
+  sourceMetadata?: SourceMetadata;
   filename: string;
   size: number;
   status: 'pending' | 'processing' | 'done' | 'error';
@@ -35,11 +36,20 @@ async function saveBatchExport(blob: Blob, filename: string, format: ExportOptio
   return saveExportBlob(blob, filename, format);
 }
 
+function resolveBatchInputProfileId(sourceMetadata: SourceMetadata | undefined, colorManagement: ColorManagementSettings) {
+  if (colorManagement.inputMode === 'override') {
+    return colorManagement.inputProfileId;
+  }
+
+  return sourceMetadata?.decoderColorProfileId ?? sourceMetadata?.embeddedColorProfileId ?? 'srgb';
+}
+
 export async function* runBatch(
   workerClient: ImageWorkerClient,
   entries: BatchJobEntry[],
   sharedSettings: ConversionSettings,
   sharedProfile: FilmProfile,
+  sharedColorManagement: ColorManagementSettings,
   exportOptions: ExportOptions,
   outputPath: string | null,
   cancelToken: { cancelled: boolean },
@@ -55,6 +65,7 @@ export async function* runBatch(
 
     try {
       const documentId = entry.kind === 'open-tab' ? (entry.documentId ?? entry.id) : entry.id;
+      let sourceMetadata = entry.sourceMetadata;
 
       if (entry.kind === 'file') {
         if (!entry.file) {
@@ -64,13 +75,14 @@ export async function* runBatch(
         const buffer = await entry.file.arrayBuffer();
         yield { type: 'progress', entryId: entry.id, progress: 0.25 };
 
-        await workerClient.decode({
+        const decoded = await workerClient.decode({
           documentId,
           buffer,
           fileName: entry.filename,
           mime: entry.file.type || 'application/octet-stream',
           size: entry.file.size,
         });
+        sourceMetadata = decoded.metadata;
       } else {
         yield { type: 'progress', entryId: entry.id, progress: 0.35 };
       }
@@ -81,6 +93,8 @@ export async function* runBatch(
         documentId,
         settings: sharedSettings,
         isColor: sharedProfile.type === 'color' && !sharedSettings.blackAndWhite.enabled,
+        inputProfileId: resolveBatchInputProfileId(sourceMetadata, sharedColorManagement),
+        outputProfileId: exportOptions.outputProfileId,
         options: exportOptions,
         maskTuning: sharedProfile.maskTuning,
         colorMatrix: sharedProfile.colorMatrix,

@@ -22,11 +22,11 @@ import { Sidebar } from './components/Sidebar';
 import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
-import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, MAX_OPEN_TABS, SUPPORTED_EXTENSIONS } from './constants';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, MAX_OPEN_TABS, SUPPORTED_EXTENSIONS } from './constants';
 import { BatchModal } from './components/BatchModal';
 import { ContactSheetModal } from './components/ContactSheetModal';
 import { TabBar } from './components/TabBar';
-import { ColorMatrix, ConversionSettings, CropTab, DecodedImage, DocumentTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, TonalCharacter, WorkspaceDocument } from './types';
+import { ColorManagementSettings, ColorMatrix, ColorProfileId, ConversionSettings, CropTab, DecodedImage, DocumentTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, SourceMetadata, TonalCharacter, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useViewportZoom } from './hooks/useViewportZoom';
 import { ZoomBar } from './components/ZoomBar';
@@ -38,6 +38,7 @@ import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
+import { getColorProfileDescription, getColorProfileIdFromName, supportsDisplayP3Canvas } from './utils/colorProfiles';
 import { buildRawInitialSettings, createRawImportProfile, estimateFilmBaseSample, getFilmBaseCorrectionSettings, isRawExtension, rotationFromExifOrientation } from './utils/rawImport';
 import { BatchJobEntry } from './utils/batchProcessor';
 
@@ -48,6 +49,31 @@ interface RawDecodeResult {
   color_space: string;
   white_balance?: [number, number, number] | null;
   orientation?: number | null;
+}
+
+function resolveAutoInputProfileId(source: Pick<SourceMetadata, 'decoderColorProfileId' | 'embeddedColorProfileId'>): ColorProfileId {
+  return source.decoderColorProfileId ?? source.embeddedColorProfileId ?? 'srgb';
+}
+
+function getResolvedInputProfileId(
+  source: Pick<SourceMetadata, 'decoderColorProfileId' | 'embeddedColorProfileId'>,
+  colorManagement: Pick<ColorManagementSettings, 'inputMode' | 'inputProfileId'>,
+) {
+  return colorManagement.inputMode === 'override'
+    ? colorManagement.inputProfileId
+    : resolveAutoInputProfileId(source);
+}
+
+function createDocumentColorManagement(
+  source: Pick<SourceMetadata, 'decoderColorProfileId' | 'embeddedColorProfileId'>,
+  exportOptions = DEFAULT_EXPORT_OPTIONS,
+): ColorManagementSettings {
+  return {
+    ...DEFAULT_COLOR_MANAGEMENT,
+    inputProfileId: resolveAutoInputProfileId(source),
+    outputProfileId: exportOptions.outputProfileId,
+    embedOutputProfile: exportOptions.embedOutputProfile,
+  };
 }
 
 function formatError(error: unknown) {
@@ -111,6 +137,13 @@ function normalizePreviewImageData(imageData: ImageData, width: number, height: 
 }
 
 function getCanvas2dContext(canvas: HTMLCanvasElement) {
+  if (supportsDisplayP3Canvas()) {
+    return canvas.getContext('2d', {
+      willReadFrequently: true,
+      colorSpace: 'display-p3',
+    } as CanvasRenderingContext2DSettings) ?? canvas.getContext('2d');
+  }
+
   return canvas.getContext('2d', { willReadFrequently: true }) ?? canvas.getContext('2d');
 }
 
@@ -221,6 +254,7 @@ export default function App() {
   const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
   const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
   const [contactSheetSharedProfile, setContactSheetSharedProfile] = useState<FilmProfile | null>(null);
+  const [contactSheetSharedColorManagement, setContactSheetSharedColorManagement] = useState<ColorManagementSettings | null>(null);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
@@ -343,7 +377,7 @@ export default function App() {
 
   // Snapshot of the latest preference-relevant state, updated on every render so handlers can always read fresh values
   const prefsSnapshotRef = useRef<UserPreferences>({
-    version: 1,
+    version: 2,
     lastProfileId: fallbackProfile.id,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     sidebarTab: 'adjust',
@@ -354,7 +388,7 @@ export default function App() {
     ultraSmoothDrag: initialPreferences?.ultraSmoothDrag ?? false,
   });
   prefsSnapshotRef.current = {
-    version: 1,
+    version: 2,
     lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
     exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
     sidebarTab,
@@ -862,7 +896,12 @@ export default function App() {
     const worker = workerClientRef.current;
     if (!worker) return;
 
-    const revision = (tabsRef.current.find((tab) => tab.id === documentId)?.document.renderRevision ?? 0) + 1;
+    const activeTabDocument = tabsRef.current.find((tab) => tab.id === documentId)?.document ?? null;
+    const revision = (activeTabDocument?.renderRevision ?? 0) + 1;
+    const inputProfileId = activeTabDocument
+      ? getResolvedInputProfileId(activeTabDocument.source, activeTabDocument.colorManagement)
+      : 'srgb';
+    const outputProfileId = activeTabDocument?.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     activeRenderRequestRef.current = { documentId, revision };
 
     const shouldLogInteractiveDraftDiagnostics = !(previewMode === 'draft' && interactionQuality !== null);
@@ -888,6 +927,8 @@ export default function App() {
         documentId,
         settings,
         isColor,
+        inputProfileId,
+        outputProfileId,
         revision,
         targetMaxDimension: nextTargetMaxDimension,
         comparisonMode: nextComparisonMode,
@@ -1173,31 +1214,85 @@ export default function App() {
   }, [handleSettingsChange]);
 
   const handleExportOptionsChange = useCallback((options: Partial<WorkspaceDocument['exportOptions']>) => {
+    const normalizedOptions = options.format === 'image/webp'
+      ? {
+        ...options,
+        outputProfileId: 'srgb' as const,
+      }
+      : options;
+
     if (documentState) {
       updateDocument((current) => ({
         ...current,
         exportOptions: {
           ...current.exportOptions,
-          ...options,
+          ...normalizedOptions,
+        },
+        colorManagement: {
+          ...current.colorManagement,
+          ...(normalizedOptions.outputProfileId !== undefined ? { outputProfileId: normalizedOptions.outputProfileId } : {}),
+          ...(normalizedOptions.embedOutputProfile !== undefined ? { embedOutputProfile: normalizedOptions.embedOutputProfile } : {}),
         },
         dirty: true,
       }));
     }
 
     if (
-      options.format !== undefined
-      || options.quality !== undefined
-      || options.embedMetadata !== undefined
-      || options.iccEmbedMode !== undefined
+      normalizedOptions.format !== undefined
+      || normalizedOptions.quality !== undefined
+      || normalizedOptions.embedMetadata !== undefined
+      || normalizedOptions.outputProfileId !== undefined
+      || normalizedOptions.embedOutputProfile !== undefined
     ) {
       savePreferences({
         ...prefsSnapshotRef.current,
         exportOptions: {
           ...prefsSnapshotRef.current.exportOptions,
-          ...(options.format !== undefined ? { format: options.format } : {}),
-          ...(options.quality !== undefined ? { quality: options.quality } : {}),
-          ...(options.embedMetadata !== undefined ? { embedMetadata: options.embedMetadata } : {}),
-          ...(options.iccEmbedMode !== undefined ? { iccEmbedMode: options.iccEmbedMode } : {}),
+          ...(normalizedOptions.format !== undefined ? { format: normalizedOptions.format } : {}),
+          ...(normalizedOptions.quality !== undefined ? { quality: normalizedOptions.quality } : {}),
+          ...(normalizedOptions.embedMetadata !== undefined ? { embedMetadata: normalizedOptions.embedMetadata } : {}),
+          ...(normalizedOptions.outputProfileId !== undefined ? { outputProfileId: normalizedOptions.outputProfileId } : {}),
+          ...(normalizedOptions.embedOutputProfile !== undefined ? { embedOutputProfile: normalizedOptions.embedOutputProfile } : {}),
+        },
+      });
+    }
+  }, [documentState, updateDocument]);
+
+  const handleColorManagementChange = useCallback((options: Partial<ColorManagementSettings>) => {
+    if (!documentState) {
+      return;
+    }
+
+    updateDocument((current) => {
+      const nextColorManagement = {
+        ...current.colorManagement,
+        ...options,
+      };
+      const nextOutputProfileId = current.exportOptions.format === 'image/webp'
+        ? 'srgb'
+        : nextColorManagement.outputProfileId;
+      return {
+        ...current,
+        colorManagement: {
+          ...nextColorManagement,
+          outputProfileId: nextOutputProfileId,
+        },
+        exportOptions: {
+          ...current.exportOptions,
+          outputProfileId: nextOutputProfileId,
+          embedOutputProfile: nextColorManagement.embedOutputProfile,
+        },
+        dirty: true,
+      };
+    });
+
+    if (options.outputProfileId !== undefined || options.embedOutputProfile !== undefined) {
+      savePreferences({
+        ...prefsSnapshotRef.current,
+        exportOptions: {
+          ...prefsSnapshotRef.current.exportOptions,
+          ...(options.outputProfileId !== undefined ? { outputProfileId: options.outputProfileId } : {}),
+          ...(options.embedOutputProfile !== undefined ? { embedOutputProfile: options.embedOutputProfile } : {}),
         },
       });
     }
@@ -1458,6 +1553,7 @@ export default function App() {
       },
       previewLevels: [],
       settings: structuredClone(initialProfile.defaultSettings),
+      colorManagement: DEFAULT_COLOR_MANAGEMENT,
       profileId: initialProfile.id,
       exportOptions: {
         ...DEFAULT_EXPORT_OPTIONS,
@@ -1539,6 +1635,8 @@ export default function App() {
               width: rawResult.width,
               height: rawResult.height,
             },
+            declaredColorProfileName: rawResult.color_space,
+            declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
           });
         } catch (rawError) {
           const message = formatError(rawError);
@@ -1610,6 +1708,16 @@ export default function App() {
         },
         previewLevels: decoded.previewLevels,
         settings: initialSettings,
+        colorManagement: createDocumentColorManagement(decoded.metadata, {
+          ...DEFAULT_EXPORT_OPTIONS,
+          ...(savedPrefs?.exportOptions ? {
+            format: savedPrefs.exportOptions.format,
+            quality: savedPrefs.exportOptions.quality,
+            embedMetadata: savedPrefs.exportOptions.embedMetadata,
+            outputProfileId: savedPrefs.exportOptions.outputProfileId,
+            embedOutputProfile: savedPrefs.exportOptions.embedOutputProfile,
+          } : {}),
+        }),
         rawImportProfile,
         profileId: rawImportProfile?.id ?? initialProfile.id,
         exportOptions: {
@@ -1618,7 +1726,8 @@ export default function App() {
             format: savedPrefs.exportOptions.format,
             quality: savedPrefs.exportOptions.quality,
             embedMetadata: savedPrefs.exportOptions.embedMetadata,
-            iccEmbedMode: savedPrefs.exportOptions.iccEmbedMode,
+            outputProfileId: savedPrefs.exportOptions.outputProfileId,
+            embedOutputProfile: savedPrefs.exportOptions.embedOutputProfile,
           } : {}),
           filenameBase: sanitizeFilenameBase(file.name),
         },
@@ -1634,6 +1743,14 @@ export default function App() {
         historyStack: [structuredClone(nextDocument.settings)],
         historyIndex: 0,
       }));
+
+      if (decoded.metadata.unsupportedColorProfileName) {
+        setTransientNotice({
+          message: `Unsupported source profile "${decoded.metadata.unsupportedColorProfileName}". DarkSlide is using sRGB until you override it.`,
+        });
+      } else {
+        setTransientNotice(null);
+      }
       addRecentFile({
         name: file.name,
         path: isDesktopShell() ? (nativePath ?? null) : null,
@@ -1762,10 +1879,12 @@ export default function App() {
     entries: BatchJobEntry[];
     sharedSettings: ConversionSettings;
     sharedProfile: FilmProfile;
+    sharedColorManagement: ColorManagementSettings;
   }) => {
     setContactSheetEntries(payload.entries);
     setContactSheetSharedSettings(payload.sharedSettings);
     setContactSheetSharedProfile(payload.sharedProfile);
+    setContactSheetSharedColorManagement(payload.sharedColorManagement);
     setShowContactSheetModal(true);
   }, []);
 
@@ -2015,10 +2134,13 @@ export default function App() {
 
     setDocumentState((current) => current ? { ...current, status: 'exporting' } : current);
     try {
+      const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
       const result = await worker.export({
         documentId: documentState.id,
         settings: documentState.settings,
         isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+        inputProfileId,
+        outputProfileId: documentState.exportOptions.outputProfileId,
         options: documentState.exportOptions,
         sourceExif: documentState.source.exif,
         maskTuning: activeProfile.maskTuning,
@@ -2062,9 +2184,12 @@ export default function App() {
 
     if (isPickingFilmBase) {
       try {
+        const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
         const sample = await workerClientRef.current.sampleFilmBase({
           documentId: documentState.id,
           settings: displaySettings,
+          inputProfileId,
+          outputProfileId: documentState.colorManagement.outputProfileId,
           targetMaxDimension,
           x,
           y,
@@ -2089,9 +2214,12 @@ export default function App() {
 
     if (activePointPicker) {
       try {
+        const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
         const sample = await workerClientRef.current.sampleFilmBase({
           documentId: documentState.id,
           settings: displaySettings,
+          inputProfileId,
+          outputProfileId: documentState.colorManagement.outputProfileId,
           targetMaxDimension,
           x,
           y,
@@ -2237,11 +2365,14 @@ export default function App() {
               <Sidebar
                 settings={documentState?.settings ?? fallbackProfile.defaultSettings}
                 exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
+                colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
+                sourceMetadata={documentState?.source ?? null}
                 cropImageWidth={cropImageSize.width}
                 cropImageHeight={cropImageSize.height}
                 onLevelInteractionChange={setIsAdjustingLevel}
                 onSettingsChange={handleSettingsChange}
                 onExportOptionsChange={handleExportOptionsChange}
+                onColorManagementChange={handleColorManagementChange}
                 onInteractionStart={handleInteractionStart}
                 onInteractionEnd={handleInteractionEnd}
                 activeProfile={documentState ? activeProfile : null}
@@ -2654,6 +2785,9 @@ export default function App() {
         renderBackendDiagnostics={renderBackendDiagnostics}
         onToggleGPURendering={handleGPURenderingChange}
         onToggleUltraSmoothDrag={handleUltraSmoothDragChange}
+        colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
+        sourceMetadata={documentState?.source ?? null}
+        onColorManagementChange={handleColorManagementChange}
       />
       <BatchModal
         isOpen={showBatchModal}
@@ -2665,6 +2799,7 @@ export default function App() {
         workerClient={workerClientRef.current}
         currentSettings={documentState?.settings ?? null}
         currentProfile={documentState ? activeProfile : null}
+        currentColorManagement={documentState?.colorManagement ?? null}
         customProfiles={customPresets}
         openTabs={tabs}
       />
@@ -2674,6 +2809,7 @@ export default function App() {
         entries={contactSheetEntries}
         sharedSettings={contactSheetSharedSettings}
         sharedProfile={contactSheetSharedProfile}
+        sharedColorManagement={contactSheetSharedColorManagement}
         workerClient={workerClientRef.current}
       />
     </div>

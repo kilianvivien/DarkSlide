@@ -2,10 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, X } from 'lucide-react';
 import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
-import { ConversionSettings, FilmProfile } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile } from '../types';
 import { saveExportBlob } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { BatchJobEntry } from '../utils/batchProcessor';
+import { getColorProfileDescription } from '../utils/colorProfiles';
 
 interface ContactSheetModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface ContactSheetModalProps {
   entries: BatchJobEntry[];
   sharedSettings: ConversionSettings | null;
   sharedProfile: FilmProfile | null;
+  sharedColorManagement: ColorManagementSettings | null;
   workerClient: ImageWorkerClient | null;
 }
 
@@ -59,6 +61,7 @@ export function ContactSheetModal({
   entries,
   sharedSettings,
   sharedProfile,
+  sharedColorManagement,
   workerClient,
 }: ContactSheetModalProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>(entries.map((entry) => entry.id));
@@ -71,8 +74,9 @@ export function ContactSheetModal({
   const [format, setFormat] = useState<'image/jpeg' | 'image/png'>('image/jpeg');
   const [quality, setQuality] = useState(0.92);
   const [filenameBase, setFilenameBase] = useState('contact_sheet');
-  const [iccEmbedMode, setIccEmbedMode] = useState<'srgb' | 'none'>(DEFAULT_EXPORT_OPTIONS.iccEmbedMode);
   const [embedMetadata, setEmbedMetadata] = useState(DEFAULT_EXPORT_OPTIONS.embedMetadata);
+  const [outputProfileId, setOutputProfileId] = useState<ColorProfileId>(DEFAULT_EXPORT_OPTIONS.outputProfileId);
+  const [embedOutputProfile, setEmbedOutputProfile] = useState(DEFAULT_EXPORT_OPTIONS.embedOutputProfile);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,7 +92,9 @@ export function ContactSheetModal({
 
     setSelectedIds(entries.map((entry) => entry.id));
     setColumns(Math.min(4, Math.max(1, Math.ceil(Math.sqrt(Math.max(entries.length, 1))))));
-  }, [entries, isOpen]);
+    setOutputProfileId(sharedColorManagement?.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId);
+    setEmbedOutputProfile(sharedColorManagement?.embedOutputProfile ?? DEFAULT_EXPORT_OPTIONS.embedOutputProfile);
+  }, [entries, isOpen, sharedColorManagement?.embedOutputProfile, sharedColorManagement?.outputProfileId]);
 
   const handleGenerate = async () => {
     if (!workerClient || selectedEntries.length === 0) {
@@ -96,7 +102,7 @@ export function ContactSheetModal({
       return;
     }
 
-    if (!sharedSettings || !sharedProfile) {
+    if (!sharedSettings || !sharedProfile || !sharedColorManagement) {
       setError('Choose a batch settings source before generating the sheet.');
       return;
     }
@@ -156,10 +162,17 @@ export function ContactSheetModal({
           quality,
           filenameBase,
           embedMetadata,
-          iccEmbedMode,
+          outputProfileId,
+          embedOutputProfile,
         },
         settingsPerCell: cells.map(() => structuredClone(sharedSettings)),
         profilePerCell: cells.map(() => structuredClone(sharedProfile)),
+        colorManagementPerCell: cells.map(() => structuredClone(sharedColorManagement ?? {
+          inputMode: 'auto',
+          inputProfileId: 'srgb',
+          outputProfileId,
+          embedOutputProfile,
+        })),
       });
 
       await saveExportBlob(result.blob, result.filename, format);
@@ -429,25 +442,28 @@ export function ContactSheetModal({
                         Embed metadata
                       </CheckOption>
                       <div className="space-y-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Color Profile</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Output Profile</p>
                         <div className="flex gap-4">
-                          {(['srgb', 'none'] as const).map((mode) => (
-                            <label key={mode} className="flex cursor-pointer items-center gap-2.5 text-sm">
+                          {(['srgb', 'display-p3', 'adobe-rgb'] as const).map((profileId) => (
+                            <label key={profileId} className="flex cursor-pointer items-center gap-2.5 text-sm">
                               <input
                                 type="radio"
                                 className="sr-only"
-                                checked={iccEmbedMode === mode}
-                                onChange={() => setIccEmbedMode(mode)}
+                                checked={outputProfileId === profileId}
+                                onChange={() => setOutputProfileId(profileId)}
                               />
                               <span className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full border transition-colors ${
-                                iccEmbedMode === mode ? 'border-zinc-100' : 'border-zinc-600'
+                                outputProfileId === profileId ? 'border-zinc-100' : 'border-zinc-600'
                               }`}>
-                                {iccEmbedMode === mode && <span className="h-[5px] w-[5px] rounded-full bg-zinc-100" />}
+                                {outputProfileId === profileId && <span className="h-[5px] w-[5px] rounded-full bg-zinc-100" />}
                               </span>
-                              <span className="text-zinc-300">{mode === 'srgb' ? 'sRGB' : 'None'}</span>
+                              <span className="text-zinc-300">{getColorProfileDescription(profileId)}</span>
                             </label>
                           ))}
                         </div>
+                        <CheckOption checked={embedOutputProfile} onChange={setEmbedOutputProfile}>
+                          Embed ICC profile
+                        </CheckOption>
                       </div>
                     </section>
 

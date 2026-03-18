@@ -1,4 +1,5 @@
 import {
+  ColorProfileId,
   ColorMatrix,
   ConversionSettings,
   MaskTuning,
@@ -12,7 +13,7 @@ import {
 } from '../imagePipeline';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
-const PROCESSING_UNIFORM_BYTES = 48 * 4;
+const PROCESSING_UNIFORM_BYTES = 60 * 4;
 const CURVE_LUT_BYTES = 1024 * 4;
 const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
@@ -462,6 +463,8 @@ export class WebGPUPipeline {
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
+    inputProfileId: ColorProfileId = 'srgb',
+    outputProfileId: ColorProfileId = 'srgb',
   ) {
     this.assertUsable();
 
@@ -513,6 +516,8 @@ export class WebGPUPipeline {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      inputProfileId,
+      outputProfileId,
     );
     const processingUniformsHash = hashFloat32Array(processingUniforms);
     if (processingUniformsHash !== this.lastProcessingUniformsHash) {
@@ -641,6 +646,8 @@ export class WebGPUPipeline {
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
+    inputProfileId: ColorProfileId = 'srgb',
+    outputProfileId: ColorProfileId = 'srgb',
   ) {
     return this.processImageData(
       imageData,
@@ -650,6 +657,8 @@ export class WebGPUPipeline {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      inputProfileId,
+      outputProfileId,
     );
   }
 
@@ -661,6 +670,8 @@ export class WebGPUPipeline {
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
+    inputProfileId: ColorProfileId = 'srgb',
+    outputProfileId: ColorProfileId = 'srgb',
   ) {
     const processed = await this.processImageData(
       tile.imageData,
@@ -670,6 +681,8 @@ export class WebGPUPipeline {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      inputProfileId,
+      outputProfileId,
     );
     return copyTrimmedTile(
       processed.data,

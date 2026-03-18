@@ -2,6 +2,7 @@
 
 import UTIF from 'utif';
 import {
+  ColorProfileId,
   ContactSheetRequest,
   ContactSheetResult,
   CancelTileJobRequest,
@@ -39,7 +40,8 @@ import {
 } from './imagePipeline';
 import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
-import { extractExifMetadata } from './imageMetadata';
+import { getColorProfileIdFromName, identifyIccProfile, convertImageDataColorProfile } from './colorProfiles';
+import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata';
 import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
@@ -165,6 +167,7 @@ function decodeTiff(buffer: ArrayBuffer) {
   return {
     canvas,
     orientation: decoded.orientation,
+    iccProfile: decoded.iccProfile,
   };
 }
 
@@ -308,6 +311,14 @@ function getStoredDocument(documentId: string) {
     throw new Error('The image document is no longer available.');
   }
   return document;
+}
+
+function resolveStoredInputProfileId(document: StoredDocument, inputMode: 'auto' | 'override', inputProfileId: ColorProfileId) {
+  if (inputMode === 'override') {
+    return inputProfileId;
+  }
+
+  return document.metadata.decoderColorProfileId ?? document.metadata.embeddedColorProfileId ?? 'srgb';
 }
 
 function getHalo(settings: ConversionSettings, comparisonMode: 'processed' | 'original') {
@@ -511,16 +522,27 @@ async function handleDecode(payload: DecodeRequest) {
   const isTiff = extension === '.tif' || extension === '.tiff' || payload.mime === 'image/tiff';
   let decodedCanvas: OffscreenCanvas;
   let exif: SourceMetadata['exif'];
+  let embeddedColorProfileName: string | null = null;
+  let embeddedColorProfileId: ColorProfileId | null = null;
+  let unsupportedColorProfileName: string | null = null;
 
   try {
     if (isTiff) {
       const decodedTiff = decodeTiff(payload.buffer);
       decodedCanvas = decodedTiff.canvas;
       exif = decodedTiff.orientation ? { orientation: decodedTiff.orientation } : undefined;
+      const identified = identifyIccProfile(decodedTiff.iccProfile);
+      embeddedColorProfileName = identified.profileName;
+      embeddedColorProfileId = identified.profileId;
+      unsupportedColorProfileName = identified.profileId ? null : (decodedTiff.iccProfile ? 'Embedded ICC profile' : null);
     } else {
       decodedCanvas = await decodeRasterBlob(payload.buffer, payload.mime);
       const isJpeg = extension === '.jpg' || extension === '.jpeg' || payload.mime === 'image/jpeg';
       exif = isJpeg ? extractExifMetadata(payload.buffer) : undefined;
+      const extractedProfile = extractRasterColorProfile(payload.buffer, payload.mime, extension);
+      embeddedColorProfileName = extractedProfile.profileName;
+      embeddedColorProfileId = extractedProfile.profileId;
+      unsupportedColorProfileName = extractedProfile.unsupportedProfileName;
     }
   } catch (error) {
     if (error instanceof TiffDecodeError) {
@@ -532,6 +554,10 @@ async function handleDecode(payload: DecodeRequest) {
   assertSupportedDimensions(decodedCanvas.width, decodedCanvas.height);
 
   const previewStore = buildPreviewLevels(decodedCanvas);
+  const decoderColorProfileId = payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName);
+  const declaredUnsupportedColorProfileName = payload.declaredColorProfileName && !decoderColorProfileId
+    ? payload.declaredColorProfileName
+    : null;
   const metadata: SourceMetadata = {
     id: payload.documentId,
     name: payload.fileName,
@@ -541,6 +567,11 @@ async function handleDecode(payload: DecodeRequest) {
     width: decodedCanvas.width,
     height: decodedCanvas.height,
     ...(exif ? { exif } : {}),
+    ...(embeddedColorProfileName ? { embeddedColorProfileName } : {}),
+    ...(embeddedColorProfileId ? { embeddedColorProfileId } : {}),
+    ...(payload.declaredColorProfileName ? { decoderColorProfileName: payload.declaredColorProfileName } : {}),
+    ...(decoderColorProfileId ? { decoderColorProfileId } : {}),
+    ...((unsupportedColorProfileName ?? declaredUnsupportedColorProfileName) ? { unsupportedColorProfileName: unsupportedColorProfileName ?? declaredUnsupportedColorProfileName } : {}),
   };
 
   documents.set(payload.documentId, {
@@ -672,6 +703,8 @@ function handleRender(payload: RenderRequest) {
       payload.maskTuning,
       payload.colorMatrix,
       payload.tonalCharacter,
+      payload.inputProfileId ?? 'srgb',
+      payload.outputProfileId ?? 'srgb',
     );
 
   if (!payload.skipProcessing) {
@@ -696,6 +729,9 @@ function handleSampleFilmBase(payload: SampleRequest) {
   const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
   const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not sample film base.');
+  const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
+  convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
+  ctx.putImageData(imageData, 0, 0);
 
   const sampleX = clamp(Math.round(payload.x * (transformed.width - 1)), 0, Math.max(transformed.width - 1, 0));
   const sampleY = clamp(Math.round(payload.y * (transformed.height - 1)), 0, Math.max(transformed.height - 1, 0));
@@ -753,6 +789,8 @@ async function handleExport(payload: ExportRequest) {
     payload.maskTuning,
     payload.colorMatrix,
     payload.tonalCharacter,
+    payload.inputProfileId ?? 'srgb',
+    payload.outputProfileId ?? 'srgb',
   );
   ctx.putImageData(imageData, 0, 0);
 
@@ -791,6 +829,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
     const settings = payload.settingsPerCell[index];
     const profile = payload.profilePerCell[index];
     const document = getStoredDocument(cell.documentId);
+    const colorManagement = payload.colorManagementPerCell[index];
     const level = selectPreviewLevel(
       document.previews.map((preview) => preview.level),
       payload.cellMaxDimension,
@@ -811,6 +850,8 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       profile.maskTuning,
       profile.colorMatrix,
       profile.tonalCharacter,
+      resolveStoredInputProfileId(document, colorManagement?.inputMode ?? 'auto', colorManagement?.inputProfileId ?? 'srgb'),
+      payload.exportOptions.outputProfileId,
     );
 
     const col = index % columns;

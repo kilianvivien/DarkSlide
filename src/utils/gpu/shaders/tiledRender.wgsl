@@ -59,9 +59,24 @@ struct Uniforms {
   _pad11: f32,
 
   hasColorMatrix: f32,
+  inputTransferMode: f32,
+  outputTransferMode: f32,
   _pad12: f32,
+
+  profileMatrix0: f32,
+  profileMatrix1: f32,
+  profileMatrix2: f32,
   _pad13: f32,
+
+  profileMatrix3: f32,
+  profileMatrix4: f32,
+  profileMatrix5: f32,
   _pad14: f32,
+
+  profileMatrix6: f32,
+  profileMatrix7: f32,
+  profileMatrix8: f32,
+  _pad15: f32,
 };
 
 struct BlurParams {
@@ -97,6 +112,46 @@ fn fullscreenVertex(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 fn clampF(value: f32, minValue: f32, maxValue: f32) -> f32 {
   return max(minValue, min(maxValue, value));
+}
+
+fn decodeTransfer(value: f32, mode: f32) -> f32 {
+  let normalized = clampF(value, 0.0, 1.0);
+  if (mode > 0.5) {
+    return pow(normalized, 2.19921875);
+  }
+  if (normalized <= 0.04045) {
+    return normalized / 12.92;
+  }
+  return pow((normalized + 0.055) / 1.055, 2.4);
+}
+
+fn encodeTransfer(value: f32, mode: f32) -> f32 {
+  let normalized = clampF(value, 0.0, 1.0);
+  if (mode > 0.5) {
+    return pow(normalized, 1.0 / 2.19921875);
+  }
+  if (normalized <= 0.0031308) {
+    return normalized * 12.92;
+  }
+  return 1.055 * pow(normalized, 1.0 / 2.4) - 0.055;
+}
+
+fn convertInputToOutput(r: f32, g: f32, b: f32, uniforms: Uniforms) -> vec3<f32> {
+  let linear = vec3<f32>(
+    decodeTransfer(r, uniforms.inputTransferMode),
+    decodeTransfer(g, uniforms.inputTransferMode),
+    decodeTransfer(b, uniforms.inputTransferMode),
+  );
+  let transformed = vec3<f32>(
+    uniforms.profileMatrix0 * linear.x + uniforms.profileMatrix1 * linear.y + uniforms.profileMatrix2 * linear.z,
+    uniforms.profileMatrix3 * linear.x + uniforms.profileMatrix4 * linear.y + uniforms.profileMatrix5 * linear.z,
+    uniforms.profileMatrix6 * linear.x + uniforms.profileMatrix7 * linear.y + uniforms.profileMatrix8 * linear.z,
+  );
+  return vec3<f32>(
+    encodeTransfer(transformed.x, uniforms.outputTransferMode),
+    encodeTransfer(transformed.y, uniforms.outputTransferMode),
+    encodeTransfer(transformed.z, uniforms.outputTransferMode),
+  );
 }
 
 fn applyWhiteBlackPoint(value: f32, blackPoint: f32, whitePoint: f32) -> f32 {
@@ -177,9 +232,10 @@ fn lookupCurve(channel: u32, value: f32) -> f32 {
 fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let coord = textureCoord(position);
   let source = textureLoad(inputTexture, coord, 0);
-  var r = source.x;
-  var g = source.y;
-  var b = source.z;
+  let converted = convertInputToOutput(source.x, source.y, source.z, uniforms);
+  var r = converted.x;
+  var g = converted.y;
+  var b = converted.z;
 
   if (uniforms.processMode > 0.5) {
     r = 1.0 - r;

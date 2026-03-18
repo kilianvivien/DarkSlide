@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check } from 'lucide-react';
-import { RenderBackendDiagnostics } from '../types';
+import { ColorManagementSettings, ColorProfileId, RenderBackendDiagnostics, SourceMetadata } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
+import { getColorProfileDescription } from '../utils/colorProfiles';
+
+const COLOR_PROFILE_IDS: ColorProfileId[] = ['srgb', 'display-p3', 'adobe-rgb'];
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -13,6 +16,9 @@ interface SettingsModalProps {
   renderBackendDiagnostics: RenderBackendDiagnostics;
   onToggleGPURendering: (enabled: boolean) => void;
   onToggleUltraSmoothDrag: (enabled: boolean) => void;
+  colorManagement: ColorManagementSettings;
+  sourceMetadata: SourceMetadata | null;
+  onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
 }
 
 type DiagnosticCardItem = {
@@ -152,9 +158,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   renderBackendDiagnostics,
   onToggleGPURendering,
   onToggleUltraSmoothDrag,
+  colorManagement,
+  sourceMetadata,
+  onColorManagementChange,
 }) => {
-  const [tab, setTab] = useState<'general' | 'shortcuts' | 'diagnostics'>('general');
+  const [tab, setTab] = useState<'general' | 'color' | 'shortcuts' | 'diagnostics'>('general');
   const [copied, setCopied] = useState(false);
+
+  const autoInputLabel = (() => {
+    if (sourceMetadata?.decoderColorProfileId) return getColorProfileDescription(sourceMetadata.decoderColorProfileId);
+    if (sourceMetadata?.embeddedColorProfileId) return getColorProfileDescription(sourceMetadata.embeddedColorProfileId);
+    return 'sRGB';
+  })();
+
+  const colorManagementHelper = (() => {
+    if (sourceMetadata?.unsupportedColorProfileName) {
+      return `Unsupported source profile "${sourceMetadata.unsupportedColorProfileName}". Auto is using sRGB.`;
+    }
+    if (sourceMetadata?.decoderColorProfileName) return `Using decoder-reported color space: ${autoInputLabel}`;
+    if (sourceMetadata?.embeddedColorProfileName && sourceMetadata.embeddedColorProfileId) {
+      return `Using embedded profile: ${autoInputLabel}`;
+    }
+    return `No source profile detected. Auto is using ${autoInputLabel}.`;
+  })();
 
   // Close on Escape
   useEffect(() => {
@@ -213,7 +239,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               {/* Tab bar */}
               <div className="flex gap-4 px-6 pt-4 border-b border-zinc-800 shrink-0">
-                {(['general', 'shortcuts', 'diagnostics'] as const).map((t) => (
+                {(['general', 'color', 'shortcuts', 'diagnostics'] as const).map((t) => (
                   <button
                     key={t}
                     onClick={() => setTab(t)}
@@ -304,6 +330,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             }`}
                           />
                         </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {tab === 'color' && (
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
+                      <div>
+                        <h3 className="text-sm font-semibold text-zinc-100">Input Profile</h3>
+                        <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                          Tells DarkSlide how to interpret the color values in your source file before any conversion is applied.
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <select
+                          value={colorManagement.inputMode}
+                          onChange={(e) => onColorManagementChange({ inputMode: e.target.value as ColorManagementSettings['inputMode'] })}
+                          className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-zinc-600"
+                        >
+                          <option value="auto">Auto ({autoInputLabel})</option>
+                          <option value="override">Manual Override</option>
+                        </select>
+                        <select
+                          value={colorManagement.inputProfileId}
+                          onChange={(e) => onColorManagementChange({ inputMode: 'override', inputProfileId: e.target.value as ColorProfileId })}
+                          disabled={colorManagement.inputMode === 'auto'}
+                          className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-zinc-600 disabled:opacity-40"
+                        >
+                          {COLOR_PROFILE_IDS.map((id) => (
+                            <option key={id} value={id}>{getColorProfileDescription(id)}</option>
+                          ))}
+                        </select>
+                        <p className={`text-[11px] leading-relaxed ${sourceMetadata?.unsupportedColorProfileName ? 'text-amber-300' : 'text-zinc-500'}`}>
+                          {colorManagementHelper}
+                        </p>
                       </div>
                     </div>
                   </div>

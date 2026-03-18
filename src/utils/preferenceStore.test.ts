@@ -3,9 +3,16 @@ import { DEFAULT_EXPORT_OPTIONS } from '../constants';
 import { loadPreferences, savePreferences, UserPreferences } from './preferenceStore';
 
 const VALID_PREFS: UserPreferences = {
-  version: 1,
+  version: 2,
   lastProfileId: 'portra-400',
-  exportOptions: { format: 'image/png', quality: 0.85, filenameBase: 'test', embedMetadata: false, iccEmbedMode: 'none' },
+  exportOptions: {
+    format: 'image/png',
+    quality: 0.85,
+    filenameBase: 'test',
+    embedMetadata: false,
+    outputProfileId: 'display-p3',
+    embedOutputProfile: false,
+  },
   sidebarTab: 'export',
   cropTab: 'Social',
   isLeftPaneOpen: false,
@@ -33,7 +40,7 @@ describe('loadPreferences', () => {
   });
 
   it('returns null for wrong version', () => {
-    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({ version: 2, lastProfileId: 'x' }));
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({ version: 3, lastProfileId: 'x' }));
     expect(loadPreferences()).toBeNull();
   });
 
@@ -104,7 +111,8 @@ describe('loadPreferences', () => {
     expect(loadPreferences()).toMatchObject({
       exportOptions: expect.objectContaining({
         embedMetadata: true,
-        iccEmbedMode: 'srgb',
+        outputProfileId: 'srgb',
+        embedOutputProfile: true,
       }),
     });
   });
@@ -116,7 +124,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     const loaded = loadPreferences();
 
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(1);
+    expect(loaded!.version).toBe(2);
     expect(loaded!.lastProfileId).toBe('portra-400');
     expect(loaded!.sidebarTab).toBe('export');
     expect(loaded!.cropTab).toBe('Social');
@@ -127,7 +135,8 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.exportOptions.format).toBe('image/png');
     expect(loaded!.exportOptions.quality).toBe(0.85);
     expect(loaded!.exportOptions.embedMetadata).toBe(false);
-    expect(loaded!.exportOptions.iccEmbedMode).toBe('none');
+    expect(loaded!.exportOptions.outputProfileId).toBe('display-p3');
+    expect(loaded!.exportOptions.embedOutputProfile).toBe(false);
   });
 
   it('overwrites previous preferences on save', () => {

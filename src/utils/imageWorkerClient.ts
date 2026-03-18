@@ -1,4 +1,5 @@
 import {
+  ColorProfileId,
   ContactSheetRequest,
   ContactSheetResult,
   CancelTileJobRequest,
@@ -28,6 +29,7 @@ import {
 import { appendDiagnostic } from './diagnostics';
 import { accumulateHistogram, buildEmptyHistogram, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
+import { convertImageDataColorProfile, getPreferredPreviewDisplayProfile } from './colorProfiles';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
 import { finalizeExportBlob } from './imageMetadata';
 
@@ -607,6 +609,8 @@ export class ImageWorkerClient {
     settings: ConversionSettings,
     isColor: boolean,
     comparisonMode: 'processed' | 'original',
+    inputProfileId: ColorProfileId,
+    outputProfileId: ColorProfileId,
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
@@ -631,7 +635,7 @@ export class ImageWorkerClient {
       });
 
       const tileImage = useGPU && this.gpuPipeline
-        ? await this.gpuPipeline.processTile(rawTile, settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter)
+        ? await this.gpuPipeline.processTile(rawTile, settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter, inputProfileId, outputProfileId)
         : trimTileImageData(rawTile);
 
       blitTile(imageData.data, prepared.width, tile.x, tile.y, tileImage);
@@ -651,6 +655,8 @@ export class ImageWorkerClient {
     isColor: boolean,
     comparisonMode: 'processed' | 'original',
     histogramMode: HistogramMode,
+    inputProfileId: ColorProfileId,
+    outputProfileId: ColorProfileId,
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
@@ -673,8 +679,14 @@ export class ImageWorkerClient {
         maskTuning,
         colorMatrix,
         tonalCharacter,
+        inputProfileId,
+        outputProfileId,
       )
       : trimTileImageData(rawPreview);
+
+    if (comparisonMode !== 'processed') {
+      convertImageDataColorProfile(imageData, inputProfileId, outputProfileId);
+    }
 
     let histogram: HistogramData;
     if (
@@ -808,7 +820,10 @@ export class ImageWorkerClient {
 
   async render(payload: RenderRequest) {
     await this.ensureDocumentLoaded(payload.documentId);
-    return this.renderInternal(payload, true);
+    const result = await this.renderInternal(payload, true);
+    const displayProfileId = getPreferredPreviewDisplayProfile();
+    convertImageDataColorProfile(result.imageData, payload.outputProfileId ?? 'srgb', displayProfileId);
+    return result;
   }
 
   private async renderInternal(payload: RenderRequest, allowRecovery: boolean) {
@@ -924,6 +939,8 @@ export class ImageWorkerClient {
         payload.isColor,
         payload.comparisonMode,
         payload.histogramMode ?? 'full',
+        payload.inputProfileId ?? 'srgb',
+        payload.outputProfileId ?? 'srgb',
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
@@ -1134,6 +1151,8 @@ export class ImageWorkerClient {
         payload.settings,
         payload.isColor,
         'processed',
+        payload.inputProfileId ?? 'srgb',
+        payload.outputProfileId ?? 'srgb',
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,

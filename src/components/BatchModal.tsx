@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
-import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES } from '../constants';
-import { ConversionSettings, DocumentTab, ExportOptions, FilmProfile } from '../types';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES } from '../constants';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile } from '../types';
 import { openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
 import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
+import { getColorProfileDescription } from '../utils/colorProfiles';
 
 type SettingsSourceMode = 'current' | 'builtin' | 'custom';
 
@@ -16,10 +17,12 @@ interface BatchModalProps {
     entries: BatchJobEntry[];
     sharedSettings: ConversionSettings;
     sharedProfile: FilmProfile;
+    sharedColorManagement: ColorManagementSettings;
   }) => void;
   workerClient: ImageWorkerClient | null;
   currentSettings: ConversionSettings | null;
   currentProfile: FilmProfile | null;
+  currentColorManagement: ColorManagementSettings | null;
   customProfiles: FilmProfile[];
   openTabs: DocumentTab[];
 }
@@ -87,6 +90,7 @@ export function BatchModal({
   workerClient,
   currentSettings,
   currentProfile,
+  currentColorManagement,
   customProfiles,
   openTabs,
 }: BatchModalProps) {
@@ -98,6 +102,7 @@ export function BatchModal({
     ...DEFAULT_EXPORT_OPTIONS,
     filenameBase: '{original}_darkslide',
   });
+  const [colorManagement, setColorManagement] = useState<ColorManagementSettings>(currentColorManagement ?? DEFAULT_COLOR_MANAGEMENT);
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +128,8 @@ export function BatchModal({
     }
 
     setSettingsSource(currentSettings && currentProfile ? 'current' : 'builtin');
-  }, [currentProfile, currentSettings, isOpen]);
+    setColorManagement(currentColorManagement ?? DEFAULT_COLOR_MANAGEMENT);
+  }, [currentColorManagement, currentProfile, currentSettings, isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -145,6 +151,7 @@ export function BatchModal({
         id: tab.id,
         kind: 'open-tab' as const,
         documentId: tab.id,
+        sourceMetadata: tab.document.source,
         filename: tab.document.source.name,
         size: tab.document.source.size,
         status: existingEntry?.status ?? 'pending',
@@ -156,6 +163,14 @@ export function BatchModal({
       return [...nextOpenEntries, ...fileEntries];
     });
   }, [isOpen, openTabsSignature]);
+
+  useEffect(() => {
+    if (exportOptions.format !== 'image/webp' || exportOptions.outputProfileId === 'srgb') {
+      return;
+    }
+
+    setExportOptions((current) => ({ ...current, outputProfileId: 'srgb' }));
+  }, [exportOptions.format, exportOptions.outputProfileId]);
 
   if (!isOpen) {
     return (
@@ -241,6 +256,11 @@ export function BatchModal({
         runnableEntries,
         structuredClone(sharedSettings),
         sharedProfile,
+        {
+          ...colorManagement,
+          outputProfileId: exportOptions.outputProfileId,
+          embedOutputProfile: exportOptions.embedOutputProfile,
+        },
         exportOptions,
         outputPath,
         cancelTokenRef.current,
@@ -324,6 +344,11 @@ export function BatchModal({
                         entries,
                         sharedSettings: structuredClone(sharedSettings),
                         sharedProfile,
+                        sharedColorManagement: {
+                          ...colorManagement,
+                          outputProfileId: exportOptions.outputProfileId,
+                          embedOutputProfile: exportOptions.embedOutputProfile,
+                        },
                       });
                     }}
                     disabled={!canOpenContactSheet || isRunning}
@@ -484,7 +509,11 @@ export function BatchModal({
                           <button
                             key={format}
                             type="button"
-                            onClick={() => setExportOptions((current) => ({ ...current, format }))}
+                            onClick={() => setExportOptions((current) => ({
+                              ...current,
+                              format,
+                              ...(format === 'image/webp' ? { outputProfileId: 'srgb' as const } : {}),
+                            }))}
                             className={`rounded-lg border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors ${
                               exportOptions.format === format
                                 ? 'border-zinc-100 bg-zinc-100 text-zinc-950'
@@ -527,21 +556,55 @@ export function BatchModal({
                         Embed metadata
                       </CheckOption>
                       <div className="space-y-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Color Profile</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Input Profile</p>
+                        <select
+                          value={colorManagement.inputMode}
+                          onChange={(event) => setColorManagement((current) => ({ ...current, inputMode: event.target.value as ColorManagementSettings['inputMode'] }))}
+                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                        >
+                          <option value="auto">Auto</option>
+                          <option value="override">Manual Override</option>
+                        </select>
+                        <select
+                          value={colorManagement.inputProfileId}
+                          onChange={(event) => setColorManagement((current) => ({
+                            ...current,
+                            inputMode: 'override',
+                            inputProfileId: event.target.value as ColorProfileId,
+                          }))}
+                          disabled={colorManagement.inputMode === 'auto'}
+                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none disabled:opacity-50"
+                        >
+                          {(['srgb', 'display-p3', 'adobe-rgb'] as ColorProfileId[]).map((profileId) => (
+                            <option key={profileId} value={profileId}>{getColorProfileDescription(profileId)}</option>
+                          ))}
+                        </select>
+                        <p className="text-[11px] text-zinc-500">Auto uses each file&apos;s embedded or decoder-reported profile.</p>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Output Profile</p>
                         <div className="space-y-2">
-                          <RadioOption
-                            checked={exportOptions.iccEmbedMode === 'srgb'}
-                            onChange={() => setExportOptions((current) => ({ ...current, iccEmbedMode: 'srgb' }))}
-                          >
-                            sRGB
-                          </RadioOption>
-                          <RadioOption
-                            checked={exportOptions.iccEmbedMode === 'none'}
-                            onChange={() => setExportOptions((current) => ({ ...current, iccEmbedMode: 'none' }))}
-                          >
-                            None
-                          </RadioOption>
+                          {(['srgb', 'display-p3', 'adobe-rgb'] as ColorProfileId[]).map((profileId) => (
+                            <React.Fragment key={profileId}>
+                              <RadioOption
+                                disabled={exportOptions.format === 'image/webp' && profileId !== 'srgb'}
+                                checked={exportOptions.outputProfileId === profileId}
+                                onChange={() => setExportOptions((current) => ({ ...current, outputProfileId: profileId }))}
+                              >
+                                {getColorProfileDescription(profileId)}
+                              </RadioOption>
+                            </React.Fragment>
+                          ))}
                         </div>
+                        <CheckOption
+                          checked={exportOptions.embedOutputProfile}
+                          onChange={(checked) => setExportOptions((current) => ({ ...current, embedOutputProfile: checked }))}
+                        >
+                          Embed ICC profile
+                        </CheckOption>
+                        {exportOptions.format === 'image/webp' && (
+                          <p className="text-[11px] text-zinc-500">WebP export is limited to sRGB for now.</p>
+                        )}
                       </div>
                     </section>
 
