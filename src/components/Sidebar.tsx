@@ -6,7 +6,6 @@ import {
   Circle,
   Download,
   Eraser,
-  ExternalLink,
   Focus,
   Info,
   Pipette,
@@ -22,7 +21,6 @@ import { Histogram } from './Histogram';
 import { Slider } from './Slider';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
-import { isDesktopShell } from '../utils/fileBridge';
 
 const ADJUST_PANE_INITIAL = { opacity: 0, x: -10 };
 const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0 };
@@ -143,7 +141,6 @@ interface SidebarProps {
   activePointPicker: 'black' | 'white' | 'grey' | null;
   onSetPointPicker: (mode: 'black' | 'white' | 'grey' | null) => void;
   onOpenSettings: () => void;
-  onOpenInEditor: () => void;
 }
 
 export const Sidebar = memo(function Sidebar({
@@ -174,7 +171,6 @@ export const Sidebar = memo(function Sidebar({
   activePointPicker,
   onSetPointPicker,
   onOpenSettings,
-  onOpenInEditor,
   onOpenBatchExport,
   contentScrollTop = 0,
   onContentScrollTopChange,
@@ -712,17 +708,6 @@ export const Sidebar = memo(function Sidebar({
                     Batch Export…
                   </button>
 
-                  {isDesktopShell() && (
-                    <button
-                      type="button"
-                      onClick={onOpenInEditor}
-                      disabled={isExporting}
-                      className="w-full flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm font-medium text-zinc-200 transition-all hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <ExternalLink size={15} />
-                      Open in Editor…
-                    </button>
-                  )}
                 </div>
               </motion.div>
             )}

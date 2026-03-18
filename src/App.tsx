@@ -17,6 +17,7 @@ import {
   X,
   SplitSquareVertical,
   Crop,
+  ExternalLink,
 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { PresetsPane } from './components/PresetsPane';
@@ -32,7 +33,7 @@ import { useViewportZoom } from './hooks/useViewportZoom';
 import { ZoomBar } from './components/ZoomBar';
 import { MagnifierLoupe } from './components/MagnifierLoupe';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
-import { isDesktopShell, openImageFile, saveExportBlob, openInExternalEditor, chooseApplicationPath } from './utils/fileBridge';
+import { isDesktopShell, openImageFile, saveExportBlob, openInExternalEditor, chooseApplicationPath, confirmDiscard } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
@@ -1401,7 +1402,7 @@ export default function App() {
       return;
     }
 
-    if (tabToClose.document.dirty && !window.confirm('Discard unsaved changes?')) {
+    if (tabToClose.document.dirty && !(await confirmDiscard())) {
       return;
     }
 
@@ -2459,7 +2460,6 @@ export default function App() {
                 activePointPicker={activePointPicker}
                 onSetPointPicker={setActivePointPicker}
                 onOpenSettings={handleOpenSettingsModal}
-                onOpenInEditor={handleOpenInEditorClick}
               />
             </motion.div>
           )}
@@ -2530,6 +2530,16 @@ export default function App() {
                 >
                   <Crop size={18} />
                 </button>
+                {isDesktopShell() && (
+                  <button
+                    onClick={handleOpenInEditorClick}
+                    disabled={Boolean(isExporting)}
+                    className="p-2 rounded-lg transition-all text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                    data-tip="Open in External Editor"
+                  >
+                    <ExternalLink size={18} />
+                  </button>
+                )}
                 <div className="w-px h-4 bg-zinc-800 mx-1" />
                 <button
                   onClick={handleDownload}

@@ -353,6 +353,22 @@ export async function chooseApplicationPath(): Promise<{ path: string; name: str
   return { path: selected, name };
 }
 
+export async function confirmDiscard(): Promise<boolean> {
+  const message = 'Discard unsaved changes?';
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'DarkSlide',
+      kind: 'warning',
+      okLabel: 'OK',
+      cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
+}
+
 export async function confirmDeletePreset(name: string): Promise<boolean> {
   const message = `Delete preset "${name}"?`;
 
