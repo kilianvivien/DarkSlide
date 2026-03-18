@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const coreState = vi.hoisted(() => ({
   isTauri: vi.fn(() => false),
+  invoke: vi.fn(),
 }));
 
 const dialogState = vi.hoisted(() => ({
@@ -18,8 +19,13 @@ const fsState = vi.hoisted(() => ({
   writeTextFile: vi.fn(),
 }));
 
+const pathState = vi.hoisted(() => ({
+  downloadDir: vi.fn(),
+}));
+
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: coreState.isTauri,
+  invoke: coreState.invoke,
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -36,7 +42,11 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeTextFile: fsState.writeTextFile,
 }));
 
-import { confirmDeletePreset, isDesktopShell, openDirectory, openImageFile, openPresetFile, saveExportBlob, savePresetFile, saveToDirectory } from './fileBridge';
+vi.mock('@tauri-apps/api/path', () => ({
+  downloadDir: pathState.downloadDir,
+}));
+
+import { confirmDeletePreset, isDesktopShell, openDirectory, openImageFile, openInExternalEditor, openPresetFile, saveExportBlob, savePresetFile, saveToDirectory } from './fileBridge';
 
 describe('fileBridge', () => {
   beforeEach(() => {
@@ -49,6 +59,8 @@ describe('fileBridge', () => {
     fsState.writeFile.mockReset();
     fsState.readTextFile.mockReset();
     fsState.writeTextFile.mockReset();
+    pathState.downloadDir.mockReset();
+    coreState.invoke.mockReset();
   });
 
   afterEach(() => {
@@ -160,13 +172,14 @@ describe('fileBridge', () => {
     vi.stubGlobal('showDirectoryPicker', showDirectoryPicker);
 
     await openDirectory();
-    await saveToDirectory(new Blob(['hello'], { type: 'image/png' }), 'scan.png', '[browser-dir] DarkSlide Exports');
+    const savedPath = await saveToDirectory(new Blob(['hello'], { type: 'image/png' }), 'scan.png', '[browser-dir] DarkSlide Exports');
 
     expect(showDirectoryPicker).toHaveBeenCalledTimes(1);
     expect(getFileHandle).toHaveBeenCalledWith('scan.png');
     expect(getFileHandle).toHaveBeenCalledWith('scan.png', { create: true });
     expect(write).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
+    expect(savedPath).toBe('[browser-dir] DarkSlide Exports/scan.png');
   });
 
   it('opens preset files through the desktop dialog', async () => {
@@ -180,6 +193,101 @@ describe('fileBridge', () => {
     expect(result).toEqual({
       content: '{"darkslideVersion":"1.0.0"}',
       fileName: 'preset.darkslide',
+    });
+  });
+
+  it('uses Downloads when no custom open-in-editor destination is configured', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    pathState.downloadDir.mockResolvedValue('/Users/tester/Downloads');
+    coreState.invoke
+      .mockResolvedValueOnce({ savedPath: '/Users/tester/Downloads/scan.jpg' })
+      .mockResolvedValueOnce(undefined);
+
+    const result = await openInExternalEditor(
+      new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
+      'scan.jpg',
+      null,
+      null,
+    );
+
+    expect(result).toEqual({
+      savedPath: '/Users/tester/Downloads/scan.jpg',
+      destinationDirectory: '/Users/tester/Downloads',
+    });
+    expect(coreState.invoke).toHaveBeenNthCalledWith(1, 'save_blob_to_directory', {
+      bytes: [1, 2, 3],
+      filename: 'scan.jpg',
+      destinationDirectory: '/Users/tester/Downloads',
+    });
+    expect(coreState.invoke).toHaveBeenNthCalledWith(2, 'open_saved_file_in_editor', {
+      path: '/Users/tester/Downloads/scan.jpg',
+      editorPath: null,
+    });
+  });
+
+  it('uses the configured destination folder and editor for open in editor', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    coreState.invoke
+      .mockResolvedValueOnce({ savedPath: '/Users/tester/Pictures/DarkSlide/scan.jpg' })
+      .mockResolvedValueOnce(undefined);
+
+    const result = await openInExternalEditor(
+      new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
+      'scan.jpg',
+      '/Applications/Pixelmator Pro.app',
+      '/Users/tester/Pictures/DarkSlide',
+    );
+
+    expect(result).toEqual({
+      savedPath: '/Users/tester/Pictures/DarkSlide/scan.jpg',
+      destinationDirectory: '/Users/tester/Pictures/DarkSlide',
+    });
+    expect(coreState.invoke).toHaveBeenNthCalledWith(1, 'save_blob_to_directory', {
+      bytes: [1, 2, 3],
+      filename: 'scan.jpg',
+      destinationDirectory: '/Users/tester/Pictures/DarkSlide',
+    });
+    expect(coreState.invoke).toHaveBeenNthCalledWith(2, 'open_saved_file_in_editor', {
+      path: '/Users/tester/Pictures/DarkSlide/scan.jpg',
+      editorPath: '/Applications/Pixelmator Pro.app',
+    });
+  });
+
+  it('returns the native saved path when saving to a directory on desktop', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    coreState.invoke.mockResolvedValue({ savedPath: '/Users/tester/Downloads/scan-2.jpg' });
+
+    const savedPath = await saveToDirectory(
+      new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
+      'scan.jpg',
+      '/Users/tester/Downloads',
+    );
+
+    expect(savedPath).toBe('/Users/tester/Downloads/scan-2.jpg');
+    expect(coreState.invoke).toHaveBeenCalledWith('save_blob_to_directory', {
+      bytes: [1, 2, 3],
+      filename: 'scan.jpg',
+      destinationDirectory: '/Users/tester/Downloads',
+    });
+  });
+
+  it('preserves the invoke failure reason and saved path when opening fails', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    pathState.downloadDir.mockResolvedValue('/Users/tester/Downloads');
+    coreState.invoke
+      .mockResolvedValueOnce({ savedPath: '/Users/tester/Downloads/scan.jpg' })
+      .mockRejectedValueOnce(new Error('Application could not be opened.'));
+
+    await expect(openInExternalEditor(
+      new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
+      'scan.jpg',
+      '/Applications/Pixelmator Pro.app',
+      null,
+    )).rejects.toMatchObject({
+      message: 'Failed to save and open exported file at /Users/tester/Downloads/scan.jpg with editor /Applications/Pixelmator Pro.app: Application could not be opened.',
+      savedPath: '/Users/tester/Downloads/scan.jpg',
+      destinationDirectory: '/Users/tester/Downloads',
+      editorPath: '/Applications/Pixelmator Pro.app',
     });
   });
 

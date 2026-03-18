@@ -33,7 +33,7 @@ import { useViewportZoom } from './hooks/useViewportZoom';
 import { ZoomBar } from './components/ZoomBar';
 import { MagnifierLoupe } from './components/MagnifierLoupe';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
-import { isDesktopShell, openImageFile, saveExportBlob, openInExternalEditor, chooseApplicationPath, confirmDiscard } from './utils/fileBridge';
+import { isDesktopShell, openImageFile, openDirectory, saveExportBlob, openInExternalEditor, chooseApplicationPath, confirmDiscard } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
@@ -77,10 +77,39 @@ function createDocumentColorManagement(
   };
 }
 
-function formatError(error: unknown) {
+function formatError(error: unknown, options?: { preservePrefix?: boolean }) {
   const message = error instanceof Error ? error.message : String(error);
+  if (options?.preservePrefix) {
+    return message || 'Unknown error.';
+  }
   const readable = message.includes(': ') ? message.split(': ').slice(1).join(': ') : message;
   return readable || 'Unknown error.';
+}
+
+function getOpenInEditorErrorContext(error: unknown): Record<string, string | null> | null {
+  if (!error || typeof error !== 'object') {
+    return null;
+  }
+
+  const details = error as {
+    savedPath?: unknown;
+    destinationDirectory?: unknown;
+    editorPath?: unknown;
+  };
+
+  const savedPath = typeof details.savedPath === 'string' ? details.savedPath : null;
+  const destinationDirectory = typeof details.destinationDirectory === 'string' ? details.destinationDirectory : null;
+  const editorPath = typeof details.editorPath === 'string' ? details.editorPath : null;
+
+  if (!savedPath && !destinationDirectory && !editorPath) {
+    return null;
+  }
+
+  return {
+    savedPath,
+    destinationDirectory,
+    editorPath,
+  };
 }
 
 function getErrorCode(error: unknown) {
@@ -260,6 +289,7 @@ export default function App() {
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
   const [externalEditorPath, setExternalEditorPath] = useState<string | null>(() => initialPreferences?.externalEditorPath ?? null);
   const [externalEditorName, setExternalEditorName] = useState<string | null>(() => initialPreferences?.externalEditorName ?? null);
+  const [openInEditorOutputPath, setOpenInEditorOutputPath] = useState<string | null>(() => initialPreferences?.openInEditorOutputPath ?? null);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
   const [transientNotice, setTransientNotice] = useState<TransientNoticeState | null>(null);
@@ -381,7 +411,7 @@ export default function App() {
 
   // Snapshot of the latest preference-relevant state, updated on every render so handlers can always read fresh values
   const prefsSnapshotRef = useRef<UserPreferences>({
-    version: 2,
+    version: 3,
     lastProfileId: fallbackProfile.id,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     sidebarTab: 'adjust',
@@ -392,9 +422,10 @@ export default function App() {
     ultraSmoothDrag: initialPreferences?.ultraSmoothDrag ?? false,
     externalEditorPath: initialPreferences?.externalEditorPath ?? null,
     externalEditorName: initialPreferences?.externalEditorName ?? null,
+    openInEditorOutputPath: initialPreferences?.openInEditorOutputPath ?? null,
   });
   prefsSnapshotRef.current = {
-    version: 2,
+    version: 3,
     lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
     exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
     sidebarTab,
@@ -405,6 +436,7 @@ export default function App() {
     ultraSmoothDrag: ultraSmoothDragEnabled,
     externalEditorPath,
     externalEditorName,
+    openInEditorOutputPath,
   };
   const activeProfile = documentState
     ? profilesById.get(documentState.profileId) ?? fallbackProfile
@@ -2206,15 +2238,36 @@ export default function App() {
 
       const editorPath = prefsSnapshotRef.current.externalEditorPath;
       const editorName = prefsSnapshotRef.current.externalEditorName;
-      const openResult = await openInExternalEditor(result.blob, result.filename, editorPath);
-      if (openResult === 'opened') {
-        showTransientNotice(`Opened in ${editorName || 'external editor'}`);
-      }
+      const outputDirectoryPath = prefsSnapshotRef.current.openInEditorOutputPath;
+      const openResult = await openInExternalEditor(result.blob, result.filename, editorPath, outputDirectoryPath);
+      appendDiagnostic({
+        level: 'info',
+        code: 'OPEN_IN_EDITOR_SUCCESS',
+        message: openResult.savedPath,
+        context: {
+          destinationDirectory: openResult.destinationDirectory,
+          documentId: documentState.id,
+          editorPath,
+        },
+      });
+      showTransientNotice(`Saved to ${openResult.savedPath} and opened in ${editorName || 'default app'}`);
       setDocumentState((current) => current ? { ...current, status: 'ready' } : current);
     } catch (err) {
-      const message = formatError(err);
+      const message = formatError(err, { preservePrefix: true });
+      const openInEditorContext = getOpenInEditorErrorContext(err);
+      appendDiagnostic({
+        level: 'error',
+        code: 'OPEN_IN_EDITOR_FAILED',
+        message,
+        context: {
+          documentId: documentState.id,
+          destinationDirectory: openInEditorContext?.destinationDirectory ?? prefsSnapshotRef.current.openInEditorOutputPath,
+          editorPath: openInEditorContext?.editorPath ?? prefsSnapshotRef.current.externalEditorPath,
+          savedPath: openInEditorContext?.savedPath ?? null,
+        },
+      });
       setError(`Open in editor failed. ${message}`);
-      setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'EXPORT_FAILED' } : current);
+      setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'OPEN_IN_EDITOR_FAILED' } : current);
     }
   }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, showTransientNotice]);
   handleOpenInEditorRef.current = handleOpenInEditor;
@@ -2236,6 +2289,26 @@ export default function App() {
     setExternalEditorPath(null);
     setExternalEditorName(null);
     savePreferences({ ...prefsSnapshotRef.current, externalEditorPath: null, externalEditorName: null });
+  }, []);
+
+  const handleChooseOpenInEditorOutputPath = useCallback(async () => {
+    try {
+      const selected = await openDirectory();
+      if (!selected) {
+        return;
+      }
+
+      setOpenInEditorOutputPath(selected);
+      savePreferences({ ...prefsSnapshotRef.current, openInEditorOutputPath: selected });
+    } catch (pathError) {
+      const message = formatError(pathError, { preservePrefix: true });
+      setError(`Could not choose an Open in Editor folder. ${message}`);
+    }
+  }, []);
+
+  const handleUseDownloadsForOpenInEditor = useCallback(() => {
+    setOpenInEditorOutputPath(null);
+    savePreferences({ ...prefsSnapshotRef.current, openInEditorOutputPath: null });
   }, []);
 
   const handleCanvasClick = useCallback(async (event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -2867,8 +2940,11 @@ export default function App() {
         onColorManagementChange={handleColorManagementChange}
         externalEditorPath={externalEditorPath}
         externalEditorName={externalEditorName}
+        openInEditorOutputPath={openInEditorOutputPath}
         onChooseExternalEditor={handleChooseExternalEditor}
         onClearExternalEditor={handleClearExternalEditor}
+        onChooseOpenInEditorOutputPath={() => void handleChooseOpenInEditorOutputPath()}
+        onUseDownloadsForOpenInEditor={handleUseDownloadsForOpenInEditor}
       />
       <BatchModal
         isOpen={showBatchModal}

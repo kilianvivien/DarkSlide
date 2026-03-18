@@ -61,6 +61,9 @@ const fileBridgeState = vi.hoisted(() => ({
   openImageFileByPath: vi.fn(),
   openMultipleImageFiles: vi.fn(),
   openDirectory: vi.fn(),
+  openInExternalEditor: vi.fn(),
+  chooseApplicationPath: vi.fn(),
+  confirmDiscard: vi.fn(),
   saveToDirectory: vi.fn(),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
 }));
@@ -232,6 +235,9 @@ vi.mock('./utils/fileBridge', () => ({
   openImageFileByPath: fileBridgeState.openImageFileByPath,
   openMultipleImageFiles: fileBridgeState.openMultipleImageFiles,
   openDirectory: fileBridgeState.openDirectory,
+  openInExternalEditor: fileBridgeState.openInExternalEditor,
+  chooseApplicationPath: fileBridgeState.chooseApplicationPath,
+  confirmDiscard: fileBridgeState.confirmDiscard,
   saveToDirectory: fileBridgeState.saveToDirectory,
   saveExportBlob: fileBridgeState.saveExportBlob,
 }));
@@ -335,9 +341,17 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.openImageFileByPath.mockReset();
     fileBridgeState.openMultipleImageFiles.mockReset();
     fileBridgeState.openDirectory.mockReset();
+    fileBridgeState.openInExternalEditor.mockReset();
+    fileBridgeState.chooseApplicationPath.mockReset();
+    fileBridgeState.confirmDiscard.mockReset();
     fileBridgeState.saveToDirectory.mockReset();
     fileBridgeState.saveExportBlob.mockReset();
     fileBridgeState.saveExportBlob.mockResolvedValue('saved');
+    fileBridgeState.openInExternalEditor.mockResolvedValue({
+      savedPath: '/Users/tester/Downloads/scan.jpg',
+      destinationDirectory: '/Users/tester/Downloads',
+    });
+    fileBridgeState.confirmDiscard.mockResolvedValue(true);
 
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),
@@ -468,6 +482,51 @@ describe('App import and preview pipeline', () => {
 
     const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;
     expect(diagnostics.some((entry) => entry.code === 'RAW_DECODED' && entry.message.includes('scan.dng'))).toBe(true);
+  });
+
+  it('saves then opens the exported file for desktop open-in-editor', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('scan.tiff', 'image/tiff'),
+      path: '/Users/tester/Desktop/scan.tiff',
+      size: 12_345,
+    });
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.export.mockResolvedValue({
+      blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
+      filename: 'scan.jpg',
+    });
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-tip="Open in External Editor"]') as Element);
+    });
+    await flushMicrotasks();
+
+    expect(workerState.export).toHaveBeenCalledTimes(1);
+    expect(fileBridgeState.openInExternalEditor).toHaveBeenCalledWith(
+      expect.any(Blob),
+      'scan.jpg',
+      null,
+      null,
+    );
+    expect(screen.getByText(/Saved to \/Users\/tester\/Downloads\/scan\.jpg and opened in default app/)).toBeInTheDocument();
+
+    const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;
+    expect(diagnostics.some((entry) => entry.code === 'OPEN_IN_EDITOR_SUCCESS' && entry.message === '/Users/tester/Downloads/scan.jpg')).toBe(true);
   });
 
   it('auto-applies EXIF orientation for raster imports exactly once', async () => {

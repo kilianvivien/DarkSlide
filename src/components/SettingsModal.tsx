@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Copy, Check, ExternalLink } from 'lucide-react';
+import { X, Copy, Check, ExternalLink, FolderOpen } from 'lucide-react';
 import { ColorManagementSettings, ColorProfileId, RenderBackendDiagnostics, SourceMetadata } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
@@ -21,8 +21,11 @@ interface SettingsModalProps {
   onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
   externalEditorPath: string | null;
   externalEditorName: string | null;
+  openInEditorOutputPath: string | null;
   onChooseExternalEditor: () => void;
   onClearExternalEditor: () => void;
+  onChooseOpenInEditorOutputPath: () => void;
+  onUseDownloadsForOpenInEditor: () => void;
 }
 
 type DiagnosticCardItem = {
@@ -168,8 +171,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onColorManagementChange,
   externalEditorPath,
   externalEditorName,
+  openInEditorOutputPath,
   onChooseExternalEditor,
   onClearExternalEditor,
+  onChooseOpenInEditorOutputPath,
+  onUseDownloadsForOpenInEditor,
 }) => {
   const [tab, setTab] = useState<'general' | 'color' | 'shortcuts' | 'diagnostics'>('general');
   const [copied, setCopied] = useState(false);
@@ -342,6 +348,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         {externalEditorPath
                           ? externalEditorPath
                           : 'If none is set, the file opens with your system default.'}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-zinc-100">Open in Editor Save Location</h3>
+                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                            Files are saved here before they are opened in your editor.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={onChooseOpenInEditorOutputPath}
+                          className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900 transition-all"
+                        >
+                          <FolderOpen size={14} className="text-zinc-500" />
+                          Choose Folder…
+                        </button>
+                        <button
+                          onClick={onUseDownloadsForOpenInEditor}
+                          className={`rounded-xl border px-3 py-2 text-sm transition-all ${
+                            openInEditorOutputPath
+                              ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
+                              : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                          }`}
+                        >
+                          Use Downloads
+                        </button>
+                      </div>
+                      <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
+                        {openInEditorOutputPath ?? 'Downloads'}
                       </p>
                     </div>
 

@@ -1,4 +1,4 @@
-import { isTauri } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { RAW_EXTENSIONS, SUPPORTED_EXTENSIONS } from '../constants';
 import type { ExportFormat } from '../types';
 import { getFileExtension } from './imagePipeline';
@@ -41,14 +41,6 @@ function getFileName(path: string) {
   return path.split(/[\\/]/).pop() ?? 'darkslide-import';
 }
 
-function joinPath(directory: string, fileName: string) {
-  if (directory.endsWith('/') || directory.endsWith('\\')) {
-    return `${directory}${fileName}`;
-  }
-
-  return `${directory}${directory.includes('\\') ? '\\' : '/'}${fileName}`;
-}
-
 function triggerBrowserDownload(blob: Blob, filename: string) {
   const url = trackCreateObjectURL(blob);
   const link = document.createElement('a');
@@ -66,6 +58,15 @@ export interface NativeOpenFileResult {
   file: File;
   path: string;
   size: number;
+}
+
+export interface OpenInExternalEditorResult {
+  savedPath: string;
+  destinationDirectory: string;
+}
+
+interface SaveBlobToDirectoryResult {
+  savedPath: string;
 }
 
 async function openDesktopFile(path: string): Promise<NativeOpenFileResult> {
@@ -199,29 +200,15 @@ export async function openDirectory(): Promise<string | null> {
   return typeof selected === 'string' ? selected : null;
 }
 
-export async function saveToDirectory(blob: Blob, filename: string, dirPath: string): Promise<void> {
+export async function saveToDirectory(blob: Blob, filename: string, dirPath: string): Promise<string> {
   if (isDesktopShell()) {
-    const { writeFile, stat } = await import('@tauri-apps/plugin-fs');
     const bytes = new Uint8Array(await blob.arrayBuffer());
-    const extensionIndex = filename.lastIndexOf('.');
-    const baseName = extensionIndex >= 0 ? filename.slice(0, extensionIndex) : filename;
-    const extension = extensionIndex >= 0 ? filename.slice(extensionIndex) : '';
-
-    let attempt = 0;
-    while (attempt < 1000) {
-      const candidateName = attempt === 0 ? filename : `${baseName}-${attempt + 1}${extension}`;
-      const candidatePath = joinPath(dirPath, candidateName);
-
-      try {
-        await stat(candidatePath);
-        attempt += 1;
-      } catch {
-        await writeFile(candidatePath, bytes);
-        return;
-      }
-    }
-
-    throw new Error('Could not determine a unique filename for the batch export.');
+    const result = await invoke<SaveBlobToDirectoryResult>('save_blob_to_directory', {
+      bytes: Array.from(bytes),
+      filename,
+      destinationDirectory: dirPath,
+    });
+    return result.savedPath;
   }
 
   const picker = (window as Window & {
@@ -247,7 +234,7 @@ export async function saveToDirectory(blob: Blob, filename: string, dirPath: str
         const writable = await handle.createWritable();
         await writable.write(blob);
         await writable.close();
-        return;
+        return `${BROWSER_DIRECTORY_PREFIX}${directory.name}/${candidateName}`;
       }
     }
 
@@ -255,6 +242,7 @@ export async function saveToDirectory(blob: Blob, filename: string, dirPath: str
   }
 
   triggerBrowserDownload(blob, filename);
+  return filename;
 }
 
 export async function savePresetFile(json: string, filename: string): Promise<'saved' | 'cancelled'> {
@@ -313,27 +301,35 @@ export async function openInExternalEditor(
   blob: Blob,
   filename: string,
   editorPath: string | null,
-): Promise<'opened' | 'error'> {
-  if (!isDesktopShell()) return 'error';
-
-  const [{ writeFile }, { tempDir }, { openPath }] = await Promise.all([
-    import('@tauri-apps/plugin-fs'),
-    import('@tauri-apps/api/path'),
-    import('@tauri-apps/plugin-opener'),
-  ]);
-
-  const dir = await tempDir();
-  const tempPath = `${dir}${filename}`;
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  await writeFile(tempPath, bytes);
-
-  if (editorPath) {
-    await openPath(tempPath, editorPath);
-  } else {
-    await openPath(tempPath);
+  outputDirectoryPath: string | null,
+): Promise<OpenInExternalEditorResult> {
+  if (!isDesktopShell()) {
+    throw new Error('Open in Editor requires the desktop app.');
   }
 
-  return 'opened';
+  const { downloadDir } = await import('@tauri-apps/api/path');
+  const destinationDirectory = outputDirectoryPath ?? await downloadDir();
+  let savedPath: string | null = null;
+
+  try {
+    savedPath = await saveToDirectory(blob, filename, destinationDirectory);
+    await invoke('open_saved_file_in_editor', { path: savedPath, editorPath });
+    return {
+      savedPath,
+      destinationDirectory,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const wrappedError = new Error(
+      `Failed to save and open exported file${savedPath ? ` at ${savedPath}` : ''}${editorPath ? ` with editor ${editorPath}` : ''}: ${reason}`,
+    );
+    Object.assign(wrappedError, {
+      savedPath,
+      destinationDirectory,
+      editorPath,
+    });
+    throw wrappedError;
+  }
 }
 
 export async function chooseApplicationPath(): Promise<{ path: string; name: string } | null> {

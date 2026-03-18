@@ -3,7 +3,7 @@ import { DEFAULT_EXPORT_OPTIONS } from '../constants';
 import { loadPreferences, savePreferences, UserPreferences } from './preferenceStore';
 
 const VALID_PREFS: UserPreferences = {
-  version: 2,
+  version: 3,
   lastProfileId: 'portra-400',
   exportOptions: {
     format: 'image/png',
@@ -21,6 +21,7 @@ const VALID_PREFS: UserPreferences = {
   ultraSmoothDrag: true,
   externalEditorPath: null,
   externalEditorName: null,
+  openInEditorOutputPath: null,
 };
 
 beforeEach(() => {
@@ -42,7 +43,7 @@ describe('loadPreferences', () => {
   });
 
   it('returns null for wrong version', () => {
-    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({ version: 3, lastProfileId: 'x' }));
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({ version: 4, lastProfileId: 'x' }));
     expect(loadPreferences()).toBeNull();
   });
 
@@ -126,7 +127,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     const loaded = loadPreferences();
 
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(2);
+    expect(loaded!.version).toBe(3);
     expect(loaded!.lastProfileId).toBe('portra-400');
     expect(loaded!.sidebarTab).toBe('export');
     expect(loaded!.cropTab).toBe('Social');
@@ -139,6 +140,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.exportOptions.embedMetadata).toBe(false);
     expect(loaded!.exportOptions.outputProfileId).toBe('display-p3');
     expect(loaded!.exportOptions.embedOutputProfile).toBe(false);
+    expect(loaded!.openInEditorOutputPath).toBeNull();
   });
 
   it('overwrites previous preferences on save', () => {
@@ -148,5 +150,17 @@ describe('savePreferences + loadPreferences round-trip', () => {
 
     expect(loaded!.lastProfileId).toBe('ektar-100');
     expect(loaded!.sidebarTab).toBe('curves');
+  });
+
+  it('migrates version 2 preferences to version 3 with Downloads mode', () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      ...VALID_PREFS,
+      version: 2,
+    }));
+
+    expect(loadPreferences()).toMatchObject({
+      version: 3,
+      openInEditorOutputPath: null,
+    });
   });
 });
