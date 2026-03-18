@@ -22,9 +22,11 @@ import { Sidebar } from './components/Sidebar';
 import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
-import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, SUPPORTED_EXTENSIONS } from './constants';
-import { ColorMatrix, ConversionSettings, CropTab, DecodedImage, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, TonalCharacter, WorkspaceDocument } from './types';
-import { useHistory } from './hooks/useHistory';
+import { DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, MAX_OPEN_TABS, SUPPORTED_EXTENSIONS } from './constants';
+import { BatchModal } from './components/BatchModal';
+import { ContactSheetModal } from './components/ContactSheetModal';
+import { TabBar } from './components/TabBar';
+import { ColorMatrix, ConversionSettings, CropTab, DecodedImage, DocumentTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, TonalCharacter, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useViewportZoom } from './hooks/useViewportZoom';
 import { ZoomBar } from './components/ZoomBar';
@@ -37,6 +39,7 @@ import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
 import { buildRawInitialSettings, createRawImportProfile, estimateFilmBaseSample, getFilmBaseCorrectionSettings, isRawExtension, rotationFromExifOrientation } from './utils/rawImport';
+import { BatchJobEntry } from './utils/batchProcessor';
 
 interface RawDecodeResult {
   width: number;
@@ -174,10 +177,25 @@ type TransientNoticeState = {
   message: string;
 };
 
+const HISTORY_LIMIT = 50;
+
+function createDocumentTab(document: WorkspaceDocument): DocumentTab {
+  return {
+    id: document.id,
+    document,
+    historyStack: [structuredClone(document.settings)],
+    historyIndex: 0,
+    zoom: 'fit',
+    pan: { x: 0.5, y: 0.5 },
+    sidebarScrollTop: 0,
+  };
+}
+
 export default function App() {
   const initialPreferences = useMemo(() => loadPreferences(), []);
   const usesNativeFileDialogs = isDesktopShell();
-  const [documentState, setDocumentState] = useState<WorkspaceDocument | null>(null);
+  const [tabs, setTabs] = useState<DocumentTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isLeftPaneOpen, setIsLeftPaneOpen] = useState(true);
@@ -198,6 +216,11 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'export'>('adjust');
   const [cropTab, setCropTab] = useState<CropTab>(() => initialPreferences?.cropTab ?? 'Film');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [showContactSheetModal, setShowContactSheetModal] = useState(false);
+  const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
+  const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
+  const [contactSheetSharedProfile, setContactSheetSharedProfile] = useState<FilmProfile | null>(null);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
@@ -244,7 +267,7 @@ export default function App() {
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const workerClientRef = useRef<ImageWorkerClient | null>(null);
-  const renderRevisionRef = useRef(0);
+  const tabsRef = useRef<DocumentTab[]>([]);
   const importSessionRef = useRef(0);
   const activeDocumentIdRef = useRef<string | null>(null);
   const activeRenderRequestRef = useRef<{ documentId: string; revision: number } | null>(null);
@@ -260,6 +283,8 @@ export default function App() {
   const handleResetRef = useRef<(() => void) | null>(null);
   const handleCopyDebugInfoRef = useRef<(() => Promise<void>) | null>(null);
   const transientNoticeTimeoutRef = useRef<number | null>(null);
+  const previousActiveTabIdRef = useRef<string | null>(null);
+  const interactionSnapshotRef = useRef<ConversionSettings | null>(null);
   const tauriWindowRef = useRef<{
     startDragging: () => Promise<void>;
     scaleFactor: () => Promise<number>;
@@ -280,7 +305,28 @@ export default function App() {
 
   const { customPresets, savePreset, importPreset, deletePreset } = useCustomPresets();
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
+  const documentState = useMemo(
+    () => tabs.find((tab) => tab.id === activeTabId)?.document ?? null,
+    [activeTabId, tabs],
+  );
+  const activeTab = useMemo(
+    () => tabs.find((tab) => tab.id === activeTabId) ?? null,
+    [activeTabId, tabs],
+  );
+  tabsRef.current = tabs;
   const persistedProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
+  const profilesById = useMemo(() => {
+    const map = new Map<string, FilmProfile>();
+    [...FILM_PROFILES, ...customPresets].forEach((profile) => {
+      map.set(profile.id, profile);
+    });
+    tabs.forEach((tab) => {
+      if (tab.document.rawImportProfile) {
+        map.set(tab.document.rawImportProfile.id, tab.document.rawImportProfile);
+      }
+    });
+    return map;
+  }, [customPresets, tabs]);
   const builtinProfiles = useMemo(() => (
     documentState?.rawImportProfile
       ? [documentState.rawImportProfile, ...FILM_PROFILES]
@@ -316,7 +362,7 @@ export default function App() {
     ultraSmoothDrag: ultraSmoothDragEnabled,
   };
   const activeProfile = documentState
-    ? allProfiles.find((profile) => profile.id === documentState.profileId) ?? fallbackProfile
+    ? profilesById.get(documentState.profileId) ?? fallbackProfile
     : fallbackProfile;
   const savePresetTags = useMemo(() => (
     documentState
@@ -352,7 +398,7 @@ export default function App() {
   const displayAngle = displaySettings ? displaySettings.rotation + displaySettings.levelAngle : 0;
   const {
     zoom, pan,
-    zoomToFit, zoomTo100, zoomIn, zoomOut, setZoomLevel,
+    zoomToFit, zoomTo100, zoomIn, zoomOut, setZoomLevel, setPan,
     handleWheel: handleZoomWheel,
     startPan, updatePan, endPan,
   } = useViewportZoom();
@@ -428,7 +474,94 @@ export default function App() {
   const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
   const showMagnifier = Boolean((isPickingFilmBase || activePointPicker) && documentState?.status === 'ready');
 
-  const { push, undo, redo, canUndo, canRedo, reset: resetHistory, beginInteraction, commitInteraction } = useHistory<ConversionSettings>(fallbackProfile.defaultSettings);
+  const canUndo = (activeTab?.historyIndex ?? 0) > 0;
+  const canRedo = activeTab ? activeTab.historyIndex < activeTab.historyStack.length - 1 : false;
+
+  const updateActiveDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
+    setTabs((previous) => previous.map((tab) => (
+      tab.id === activeTabId
+        ? { ...tab, document: updater(tab.document) }
+        : tab
+    )));
+  }, [activeTabId]);
+
+  const setDocumentState = useCallback((nextState: WorkspaceDocument | null | ((current: WorkspaceDocument | null) => WorkspaceDocument | null)) => {
+    if (!activeTabId) {
+      return;
+    }
+
+    setTabs((previous) => previous.map((tab) => {
+      if (tab.id !== activeTabId) {
+        return tab;
+      }
+
+      const resolved = typeof nextState === 'function'
+        ? nextState(tab.document)
+        : nextState;
+
+      return resolved ? { ...tab, document: resolved } : tab;
+    }));
+  }, [activeTabId]);
+
+  const updateTabById = useCallback((tabId: string, updater: (tab: DocumentTab) => DocumentTab) => {
+    setTabs((previous) => previous.map((tab) => tab.id === tabId ? updater(tab) : tab));
+  }, []);
+
+  const pushHistoryEntry = useCallback((nextState: ConversionSettings) => {
+    if (!activeTabId) {
+      return;
+    }
+
+    setTabs((previous) => previous.map((tab) => {
+      if (tab.id !== activeTabId) {
+        return tab;
+      }
+
+      const baseHistory = tab.historyStack.slice(0, tab.historyIndex + 1);
+      const lastEntry = baseHistory[baseHistory.length - 1];
+      if (JSON.stringify(lastEntry) === JSON.stringify(nextState)) {
+        return tab;
+      }
+
+      const nextHistory = [...baseHistory, structuredClone(nextState)].slice(-HISTORY_LIMIT);
+      return {
+        ...tab,
+        historyStack: nextHistory,
+        historyIndex: nextHistory.length - 1,
+      };
+    }));
+  }, [activeTabId]);
+
+  const resetHistory = useCallback((nextState: ConversionSettings) => {
+    if (!activeTabId) {
+      return;
+    }
+
+    interactionSnapshotRef.current = null;
+    updateTabById(activeTabId, (tab) => ({
+      ...tab,
+      historyStack: [structuredClone(nextState)],
+      historyIndex: 0,
+    }));
+  }, [activeTabId, updateTabById]);
+
+  const beginInteraction = useCallback(() => {
+    if (documentState) {
+      interactionSnapshotRef.current = structuredClone(documentState.settings);
+    }
+  }, [documentState]);
+
+  const commitInteraction = useCallback((currentState: ConversionSettings) => {
+    const snapshot = interactionSnapshotRef.current;
+    interactionSnapshotRef.current = null;
+    if (!snapshot) {
+      return;
+    }
+    if (JSON.stringify(snapshot) === JSON.stringify(currentState)) {
+      return;
+    }
+    pushHistoryEntry(currentState);
+  }, [pushHistoryEntry]);
 
   const isInteractingRef = useRef(false);
 
@@ -481,6 +614,18 @@ export default function App() {
       commitInteraction(documentState.settings);
     }
   }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
+
+  useEffect(() => {
+    if (!activeTabId) {
+      return;
+    }
+
+    updateTabById(activeTabId, (tab) => (
+      tab.zoom === zoom && tab.pan.x === pan.x && tab.pan.y === pan.y
+        ? tab
+        : { ...tab, zoom, pan }
+    ));
+  }, [activeTabId, pan, updateTabById, zoom]);
 
   useEffect(() => {
     workerClientRef.current = new ImageWorkerClient({
@@ -581,10 +726,10 @@ export default function App() {
     if (!documentState) return;
     if (isInteractingRef.current) return;
     const timer = window.setTimeout(() => {
-      push(documentState.settings);
+      pushHistoryEntry(documentState.settings);
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [documentState?.settings, push]);
+  }, [documentState?.settings, pushHistoryEntry]);
 
   const setPreviewVisibility = useCallback((next: boolean) => {
     hasVisiblePreviewRef.current = next;
@@ -711,8 +856,7 @@ export default function App() {
     const worker = workerClientRef.current;
     if (!worker) return;
 
-    const revision = renderRevisionRef.current + 1;
-    renderRevisionRef.current = revision;
+    const revision = (tabsRef.current.find((tab) => tab.id === documentId)?.document.renderRevision ?? 0) + 1;
     activeRenderRequestRef.current = { documentId, revision };
 
     const shouldLogInteractiveDraftDiagnostics = !(previewMode === 'draft' && interactionQuality !== null);
@@ -751,8 +895,7 @@ export default function App() {
 
       const isLatestResult = activeDocumentIdRef.current === result.documentId
         && activeRenderRequestRef.current?.documentId === result.documentId
-        && activeRenderRequestRef.current?.revision === result.revision
-        && result.revision === renderRevisionRef.current;
+        && activeRenderRequestRef.current?.revision === result.revision;
 
       if (!isLatestResult) {
         if (shouldLogInteractiveDraftDiagnostics) {
@@ -833,7 +976,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, setPreviewVisibility]);
+  }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, setDocumentState, setPreviewVisibility]);
 
   const drainPreviewRenderQueue = useCallback(async () => {
     if (previewRenderInFlightRef.current) {
@@ -971,7 +1114,7 @@ export default function App() {
 
   const updateDocument = useCallback((updater: (current: WorkspaceDocument) => WorkspaceDocument) => {
     setDocumentState((current) => (current ? updater(current) : current));
-  }, []);
+  }, [setDocumentState]);
 
   const handleSettingsChange = useCallback((newSettings: Partial<ConversionSettings>) => {
     updateDocument((current) => ({
@@ -1024,15 +1167,23 @@ export default function App() {
   }, [handleSettingsChange]);
 
   const handleExportOptionsChange = useCallback((options: Partial<WorkspaceDocument['exportOptions']>) => {
-    updateDocument((current) => ({
-      ...current,
-      exportOptions: {
-        ...current.exportOptions,
-        ...options,
-      },
-      dirty: true,
-    }));
-    if (options.format !== undefined || options.quality !== undefined || options.embedMetadata !== undefined) {
+    if (documentState) {
+      updateDocument((current) => ({
+        ...current,
+        exportOptions: {
+          ...current.exportOptions,
+          ...options,
+        },
+        dirty: true,
+      }));
+    }
+
+    if (
+      options.format !== undefined
+      || options.quality !== undefined
+      || options.embedMetadata !== undefined
+      || options.iccEmbedMode !== undefined
+    ) {
       savePreferences({
         ...prefsSnapshotRef.current,
         exportOptions: {
@@ -1040,10 +1191,11 @@ export default function App() {
           ...(options.format !== undefined ? { format: options.format } : {}),
           ...(options.quality !== undefined ? { quality: options.quality } : {}),
           ...(options.embedMetadata !== undefined ? { embedMetadata: options.embedMetadata } : {}),
+          ...(options.iccEmbedMode !== undefined ? { iccEmbedMode: options.iccEmbedMode } : {}),
         },
       });
     }
-  }, [updateDocument]);
+  }, [documentState, updateDocument]);
 
   const disposeDocument = useCallback(async (documentId: string | null | undefined) => {
     if (!documentId || !workerClientRef.current) return;
@@ -1064,10 +1216,72 @@ export default function App() {
     setCanvasSize({ width: 0, height: 0 });
   }, []);
 
-  const handleCloseImage = useCallback(async () => {
-    const documentId = activeDocumentIdRef.current;
+  useEffect(() => {
+    const previousTabId = previousActiveTabIdRef.current;
+    previousActiveTabIdRef.current = activeTabId;
+    activeDocumentIdRef.current = activeTabId;
+
+    if (previousTabId === activeTabId) {
+      return;
+    }
+
+    if (previousTabId) {
+      void workerClientRef.current?.cancelActivePreviewRender(previousTabId);
+    }
+
+    activeRenderRequestRef.current = null;
+    pendingPreviewRef.current = null;
+    queuedPreviewRenderRef.current = null;
+    pendingInteractivePreviewRef.current = null;
+    previewRenderInFlightRef.current = false;
+    cancelPendingPreviewRetry();
+    cancelScheduledInteractivePreview();
+    interactionJustEndedRef.current = false;
+    setPreviewVisibility(false);
+    setRenderedPreviewAngle(0);
+    setIsAdjustingCrop(false);
+    setIsCropOverlayVisible(false);
+    setIsPickingFilmBase(false);
+    setActivePointPicker(null);
+    clearCanvas();
+
+    const incomingTab = tabsRef.current.find((tab) => tab.id === activeTabId);
+    if (!incomingTab) {
+      zoomToFit();
+      return;
+    }
+
+    setZoomLevel(incomingTab.zoom);
+    setPan(incomingTab.pan);
+  }, [
+    activeTabId,
+    cancelPendingPreviewRetry,
+    cancelScheduledInteractivePreview,
+    clearCanvas,
+    setPan,
+    setPreviewVisibility,
+    setZoomLevel,
+    zoomToFit,
+  ]);
+
+  const handleCloseImage = useCallback(async (requestedTabId?: string | null) => {
+    const documentId = requestedTabId ?? activeTabId;
+    if (!documentId) {
+      return;
+    }
+
+    const currentTabs = tabsRef.current;
+    const tabIndex = currentTabs.findIndex((tab) => tab.id === documentId);
+    const tabToClose = tabIndex >= 0 ? currentTabs[tabIndex] : null;
+    if (!tabToClose) {
+      return;
+    }
+
+    if (tabToClose.document.dirty && !window.confirm('Discard unsaved changes?')) {
+      return;
+    }
+
     importSessionRef.current += 1;
-    activeDocumentIdRef.current = null;
     activeRenderRequestRef.current = null;
     pendingPreviewRef.current = null;
     queuedPreviewRenderRef.current = null;
@@ -1077,23 +1291,25 @@ export default function App() {
     cancelScheduledInteractivePreview();
     interactionJustEndedRef.current = false;
     setIsAdjustingCrop(false);
-    renderRevisionRef.current = 0;
     setPreviewVisibility(false);
     setIsAdjustingLevel(false);
     setIsInteractingWithPreviewControls(false);
     setRenderedPreviewAngle(0);
-    if (documentId) {
-      void workerClientRef.current?.cancelActivePreviewRender(documentId);
-    }
+    void workerClientRef.current?.cancelActivePreviewRender(documentId);
+
+    const remainingTabs = currentTabs.filter((tab) => tab.id !== documentId);
+    const nextActiveTab = activeTabId === documentId
+      ? (remainingTabs[tabIndex] ?? remainingTabs[tabIndex - 1] ?? null)
+      : remainingTabs.find((tab) => tab.id === activeTabId) ?? null;
+
+    setTabs(remainingTabs);
+    setActiveTabId(nextActiveTab?.id ?? null);
     await disposeDocument(documentId);
-    setDocumentState(null);
     setError(null);
     setBlockingOverlay(null);
     setComparisonMode('processed');
     setIsPickingFilmBase(false);
     setIsCropOverlayVisible(false);
-    zoomToFit();
-    clearCanvas();
     appendDiagnostic({
       level: 'info',
       code: 'IMAGE_CLOSED',
@@ -1102,9 +1318,13 @@ export default function App() {
         documentId,
       },
     });
-    resetHistory(fallbackProfile.defaultSettings);
+    if (remainingTabs.length === 0) {
+      activeDocumentIdRef.current = null;
+      zoomToFit();
+      clearCanvas();
+    }
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [cancelPendingPreviewRetry, cancelScheduledInteractivePreview, clearCanvas, disposeDocument, fallbackProfile.defaultSettings, resetHistory, setPreviewVisibility, zoomToFit]);
+  }, [activeTabId, cancelPendingPreviewRetry, cancelScheduledInteractivePreview, clearCanvas, disposeDocument, setPreviewVisibility, zoomToFit]);
 
   const importFile = useCallback(async (file: File, nativePath?: string | null, nativeFileSize?: number) => {
     const worker = workerClientRef.current;
@@ -1154,7 +1374,6 @@ export default function App() {
     setRenderedPreviewAngle(0);
     setPreviewVisibility(false);
     clearCanvas();
-    renderRevisionRef.current = 0;
     activeRenderRequestRef.current = null;
     pendingPreviewRef.current = null;
     queuedPreviewRenderRef.current = null;
@@ -1165,13 +1384,20 @@ export default function App() {
     interactionJustEndedRef.current = false;
     setIsAdjustingCrop(false);
 
+    const currentTabs = tabsRef.current;
+    if (currentTabs.length >= MAX_OPEN_TABS) {
+      const evictedTab = currentTabs.find((tab) => !tab.document.dirty) ?? null;
+      if (!evictedTab) {
+        setError(`You already have ${MAX_OPEN_TABS} tabs open. Close a dirty tab before importing another image.`);
+        return;
+      }
+
+      setTabs((previous) => previous.filter((tab) => tab.id !== evictedTab.id));
+      void disposeDocument(evictedTab.id);
+    }
+
     const importSession = importSessionRef.current + 1;
     importSessionRef.current = importSession;
-    const previousDocumentId = activeDocumentIdRef.current;
-    if (previousDocumentId) {
-      void workerClientRef.current?.cancelActivePreviewRender(previousDocumentId);
-    }
-    await disposeDocument(previousDocumentId);
 
     const documentId = crypto.randomUUID();
     const savedPrefs = loadPreferences();
@@ -1228,7 +1454,8 @@ export default function App() {
         title: 'Import underway',
         detail: 'Loading the image and preparing preview levels.',
       });
-      setDocumentState(loadingDocument);
+      setTabs((previous) => [...previous, createDocumentTab(loadingDocument)]);
+      setActiveTabId(documentId);
     });
     if (rawImport) {
       await waitForNextPaint();
@@ -1369,6 +1596,7 @@ export default function App() {
             format: savedPrefs.exportOptions.format,
             quality: savedPrefs.exportOptions.quality,
             embedMetadata: savedPrefs.exportOptions.embedMetadata,
+            iccEmbedMode: savedPrefs.exportOptions.iccEmbedMode,
           } : {}),
           filenameBase: sanitizeFilenameBase(file.name),
         },
@@ -1378,8 +1606,12 @@ export default function App() {
         dirty: false,
       };
 
-      setDocumentState(nextDocument);
-      resetHistory(nextDocument.settings);
+      updateTabById(documentId, (tab) => ({
+        ...tab,
+        document: nextDocument,
+        historyStack: [structuredClone(nextDocument.settings)],
+        historyIndex: 0,
+      }));
       addRecentFile({
         name: file.name,
         path: isDesktopShell() ? (nativePath ?? null) : null,
@@ -1415,12 +1647,15 @@ export default function App() {
         },
       });
       setError(errorCode === 'OUT_OF_MEMORY' ? message : `Import failed. ${message}`);
-      setDocumentState(null);
+      setTabs((previous) => previous.filter((tab) => tab.id !== documentId));
+      if (activeTabId === documentId) {
+        setActiveTabId(tabsRef.current.find((tab) => tab.id !== documentId)?.id ?? null);
+      }
       setPreviewVisibility(false);
       clearCanvas();
       setBlockingOverlay(null);
     }
-  }, [cancelPendingPreviewRetry, cancelScheduledInteractivePreview, clearCanvas, disposeDocument, fallbackProfile, resetHistory, setPreviewVisibility]);
+  }, [activeTabId, cancelPendingPreviewRetry, cancelScheduledInteractivePreview, clearCanvas, disposeDocument, fallbackProfile, setPreviewVisibility, updateTabById]);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1460,16 +1695,57 @@ export default function App() {
   }, [importFile, usesNativeFileDialogs]);
 
   const handleUndo = useCallback(() => {
-    const previousState = undo();
-    if (!previousState) return;
-    updateDocument((current) => ({ ...current, settings: structuredClone(previousState), dirty: true }));
-  }, [undo, updateDocument]);
+    if (!activeTabId) return;
+
+    let previousState: ConversionSettings | null = null;
+    setTabs((previous) => previous.map((tab) => {
+      if (tab.id !== activeTabId || tab.historyIndex <= 0) {
+        return tab;
+      }
+
+      const nextIndex = tab.historyIndex - 1;
+      previousState = structuredClone(tab.historyStack[nextIndex] ?? null);
+      return {
+        ...tab,
+        historyIndex: nextIndex,
+        document: previousState ? { ...tab.document, settings: previousState, dirty: true } : tab.document,
+      };
+    }));
+  }, [activeTabId]);
 
   const handleRedo = useCallback(() => {
-    const nextState = redo();
-    if (!nextState) return;
-    updateDocument((current) => ({ ...current, settings: structuredClone(nextState), dirty: true }));
-  }, [redo, updateDocument]);
+    if (!activeTabId) return;
+
+    let nextState: ConversionSettings | null = null;
+    setTabs((previous) => previous.map((tab) => {
+      if (tab.id !== activeTabId || tab.historyIndex >= tab.historyStack.length - 1) {
+        return tab;
+      }
+
+      const nextIndex = tab.historyIndex + 1;
+      nextState = structuredClone(tab.historyStack[nextIndex] ?? null);
+      return {
+        ...tab,
+        historyIndex: nextIndex,
+        document: nextState ? { ...tab.document, settings: nextState, dirty: true } : tab.document,
+      };
+    }));
+  }, [activeTabId]);
+
+  const handleOpenBatchExport = useCallback(() => {
+    setShowBatchModal(true);
+  }, []);
+
+  const handleOpenContactSheet = useCallback((payload: {
+    entries: BatchJobEntry[];
+    sharedSettings: ConversionSettings;
+    sharedProfile: FilmProfile;
+  }) => {
+    setContactSheetEntries(payload.entries);
+    setContactSheetSharedSettings(payload.sharedSettings);
+    setContactSheetSharedProfile(payload.sharedProfile);
+    setShowContactSheetModal(true);
+  }, []);
 
   const handleToggleComparison = useCallback(() => {
     setComparisonMode((current) => current === 'processed' ? 'original' : 'processed');
@@ -1545,9 +1821,27 @@ export default function App() {
         zoomOut();
       }
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e' && documentState) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e') {
         event.preventDefault();
-        void handleDownloadRef.current?.();
+        if (event.shiftKey) {
+          setShowBatchModal(true);
+        } else if (documentState) {
+          void handleDownloadRef.current?.();
+        }
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && (event.key === '[' || event.key === '{') && tabs.length > 1) {
+        event.preventDefault();
+        const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+        const nextIndex = currentIndex <= 0 ? tabs.length - 1 : currentIndex - 1;
+        setActiveTabId(tabs[nextIndex]?.id ?? activeTabId);
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && (event.key === ']' || event.key === '}') && tabs.length > 1) {
+        event.preventDefault();
+        const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+        const nextIndex = currentIndex >= tabs.length - 1 ? 0 : currentIndex + 1;
+        setActiveTabId(tabs[nextIndex]?.id ?? activeTabId);
       }
 
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
@@ -1573,7 +1867,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [documentState, handleCloseImage, handleOpenImage, handleRedo, handleUndo, zoomToFit, zoomTo100, zoomIn, zoomOut]);
+  }, [activeTabId, documentState, handleCloseImage, handleOpenImage, handleRedo, handleUndo, tabs, zoomToFit, zoomTo100, zoomIn, zoomOut]);
 
   useEffect(() => {
     if (!usesNativeFileDialogs) return;
@@ -1587,6 +1881,7 @@ export default function App() {
           switch (event.payload) {
             case 'open': void handleOpenImage(); break;
             case 'export': void handleDownloadRef.current?.(); break;
+            case 'batch-export': setShowBatchModal(true); break;
             case 'close-image': void handleCloseImage(); break;
             case 'reset-adjustments': handleResetRef.current?.(); break;
             case 'copy-debug-info': void handleCopyDebugInfoRef.current?.(); break;
@@ -1683,13 +1978,13 @@ export default function App() {
   const handleReset = useCallback(() => {
     if (!documentState) return;
     // Push current state before resetting so Cmd+Z can restore it.
-    push(documentState.settings);
+    pushHistoryEntry(documentState.settings);
     updateDocument((current) => ({
       ...current,
       settings: structuredClone(activeProfile.defaultSettings),
       dirty: false,
     }));
-  }, [activeProfile.defaultSettings, documentState, push, updateDocument]);
+  }, [activeProfile.defaultSettings, documentState, pushHistoryEntry, updateDocument]);
   handleResetRef.current = handleReset;
 
   const handleDownload = useCallback(async () => {
@@ -1701,7 +1996,7 @@ export default function App() {
       const result = await worker.export({
         documentId: documentState.id,
         settings: documentState.settings,
-        isColor: activeProfile.type === 'color',
+        isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
         options: documentState.exportOptions,
         sourceExif: documentState.source.exif,
         maskTuning: activeProfile.maskTuning,
@@ -1850,6 +2145,37 @@ export default function App() {
     await importFile(file, getNativePathFromFile(file));
   }, [importFile]);
 
+  const handleSelectTab = useCallback((tabId: string) => {
+    setActiveTabId(tabId);
+  }, []);
+
+  const handleReorderTabs = useCallback((sourceId: string, targetId: string) => {
+    setTabs((previous) => {
+      const sourceIndex = previous.findIndex((tab) => tab.id === sourceId);
+      const targetIndex = previous.findIndex((tab) => tab.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+        return previous;
+      }
+
+      const next = [...previous];
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  }, []);
+
+  const handleSidebarScrollTopChange = useCallback((scrollTop: number) => {
+    if (!activeTabId) {
+      return;
+    }
+
+    updateTabById(activeTabId, (tab) => (
+      Math.abs(tab.sidebarScrollTop - scrollTop) < 1
+        ? tab
+        : { ...tab, sidebarScrollTop: scrollTop }
+    ));
+  }, [activeTabId, updateTabById]);
+
   const handleTitleBarMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!usesNativeFileDialogs || event.button !== 0) return;
 
@@ -1901,7 +2227,10 @@ export default function App() {
                 isPickingFilmBase={isPickingFilmBase}
                 onTogglePicker={handleToggleFilmBasePicker}
                 onExport={handleExportClick}
+                onOpenBatchExport={handleOpenBatchExport}
                 isExporting={isExporting}
+                contentScrollTop={activeTab?.sidebarScrollTop ?? 0}
+                onContentScrollTopChange={handleSidebarScrollTopChange}
                 activeTab={sidebarTab}
                 onTabChange={handleSidebarTabChange}
                 cropTab={cropTab}
@@ -2017,6 +2346,17 @@ export default function App() {
             </button>
           </div>
         </header>
+
+        {tabs.length > 0 && (
+          <TabBar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={handleSelectTab}
+            onCloseTab={(tabId) => void handleCloseImage(tabId)}
+            onCreateTab={() => void handleOpenImage()}
+            onReorderTabs={handleReorderTabs}
+          />
+        )}
 
         <div
           ref={viewportRef}
@@ -2276,6 +2616,27 @@ export default function App() {
         renderBackendDiagnostics={renderBackendDiagnostics}
         onToggleGPURendering={handleGPURenderingChange}
         onToggleUltraSmoothDrag={handleUltraSmoothDragChange}
+      />
+      <BatchModal
+        isOpen={showBatchModal}
+        onClose={() => setShowBatchModal(false)}
+        onOpenContactSheet={(payload) => {
+          setShowBatchModal(false);
+          handleOpenContactSheet(payload);
+        }}
+        workerClient={workerClientRef.current}
+        currentSettings={documentState?.settings ?? null}
+        currentProfile={documentState ? activeProfile : null}
+        customProfiles={customPresets}
+        openTabs={tabs}
+      />
+      <ContactSheetModal
+        isOpen={showContactSheetModal}
+        onClose={() => setShowContactSheetModal(false)}
+        entries={contactSheetEntries}
+        sharedSettings={contactSheetSharedSettings}
+        sharedProfile={contactSheetSharedProfile}
+        workerClient={workerClientRef.current}
       />
     </div>
   );

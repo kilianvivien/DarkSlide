@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useMemo } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Activity,
@@ -121,7 +121,10 @@ interface SidebarProps {
   isPickingFilmBase: boolean;
   onTogglePicker: () => void;
   onExport: () => void;
+  onOpenBatchExport: () => void;
   isExporting: boolean;
+  contentScrollTop?: number;
+  onContentScrollTopChange?: (scrollTop: number) => void;
   activeTab: 'adjust' | 'curves' | 'crop' | 'export';
   onTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'export') => void;
   cropTab: CropTab;
@@ -158,11 +161,26 @@ export const Sidebar = memo(function Sidebar({
   activePointPicker,
   onSetPointPicker,
   onOpenSettings,
-}: SidebarProps) {
+  onOpenBatchExport,
+  contentScrollTop = 0,
+  onContentScrollTopChange,
+  }: SidebarProps) {
   const isColor = activeProfile?.type === 'color';
+  const contentRef = useRef<HTMLDivElement>(null);
   const filmBaseInstruction = isPickingFilmBase
     ? 'Click an unexposed film-base area…'
     : 'Sample Film Base';
+
+  useEffect(() => {
+    const element = contentRef.current;
+    if (!element) {
+      return;
+    }
+
+    if (Math.abs(element.scrollTop - contentScrollTop) > 1) {
+      element.scrollTop = contentScrollTop;
+    }
+  }, [contentScrollTop]);
 
   const scalarSliderHandlers = useMemo(() => {
     const entries = SCALAR_SLIDER_KEYS.map((key) => [
@@ -297,6 +315,10 @@ export const Sidebar = memo(function Sidebar({
     onExportOptionsChange({ embedMetadata: event.target.checked });
   }, [onExportOptionsChange]);
 
+  const handleIccEmbedModeChange = useCallback((iccEmbedMode: ExportOptions['iccEmbedMode']) => {
+    onExportOptionsChange({ iccEmbedMode });
+  }, [onExportOptionsChange]);
+
   const handlePointPickerToggle = useCallback((mode: 'black' | 'white' | 'grey') => {
     onSetPointPicker(activePointPicker === mode ? null : mode);
   }, [activePointPicker, onSetPointPicker]);
@@ -324,7 +346,11 @@ export const Sidebar = memo(function Sidebar({
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      <div
+        ref={contentRef}
+        className="flex-1 overflow-y-auto custom-scrollbar"
+        onScroll={(event) => onContentScrollTopChange?.(event.currentTarget.scrollTop)}
+      >
         <div className="p-6 space-y-8">
           <AnimatePresence mode="wait">
             {activeTab === 'adjust' ? (
@@ -604,26 +630,58 @@ export const Sidebar = memo(function Sidebar({
                       />
                       Embed metadata
                     </label>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Color Profile</label>
+                      <label className="flex items-center gap-2 text-xs text-zinc-400">
+                        <input
+                          type="radio"
+                          checked={exportOptions.iccEmbedMode === 'srgb'}
+                          onChange={() => handleIccEmbedModeChange('srgb')}
+                          className="rounded border-zinc-600 bg-zinc-800"
+                        />
+                        sRGB
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-zinc-400">
+                        <input
+                          type="radio"
+                          checked={exportOptions.iccEmbedMode === 'none'}
+                          onChange={() => handleIccEmbedModeChange('none')}
+                          className="rounded border-zinc-600 bg-zinc-800"
+                        />
+                        None
+                      </label>
+                    </div>
                   </div>
                 </section>
 
-                <button
-                  onClick={onExport}
-                  disabled={isExporting}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-950 rounded-xl text-sm font-semibold hover:bg-white transition-all shadow-lg shadow-black/20 disabled:opacity-50"
-                >
-                  {isExporting ? (
-                    <>
-                      <Download size={16} className="animate-bounce" />
-                      Exporting…
-                    </>
-                  ) : (
-                    <>
-                      <Download size={16} />
-                      Export Image
-                    </>
-                  )}
-                </button>
+                <div className="space-y-3">
+                  <button
+                    onClick={onExport}
+                    disabled={isExporting}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-950 rounded-xl text-sm font-semibold hover:bg-white transition-all shadow-lg shadow-black/20 disabled:opacity-50"
+                  >
+                    {isExporting ? (
+                      <>
+                        <Download size={16} className="animate-bounce" />
+                        Exporting…
+                      </>
+                    ) : (
+                      <>
+                        <Download size={16} />
+                        Export Image
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onOpenBatchExport}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm font-medium text-zinc-200 transition-all hover:bg-zinc-800"
+                  >
+                    Batch Export…
+                  </button>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>

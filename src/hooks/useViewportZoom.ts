@@ -92,6 +92,7 @@ export function useViewportZoom() {
   return {
     zoom,
     pan,
+    setPan,
     isPanning,
     zoomToFit,
     zoomTo100,

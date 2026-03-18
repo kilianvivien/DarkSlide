@@ -59,6 +59,9 @@ const fileBridgeState = vi.hoisted(() => ({
   isDesktopShell: vi.fn(() => false),
   openImageFile: vi.fn(),
   openImageFileByPath: vi.fn(),
+  openMultipleImageFiles: vi.fn(),
+  openDirectory: vi.fn(),
+  saveToDirectory: vi.fn(),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
 }));
 
@@ -168,6 +171,18 @@ vi.mock('./components/CropOverlay', () => ({
   CropOverlay: () => <div data-testid="crop-overlay" />,
 }));
 
+vi.mock('./components/TabBar', () => ({
+  TabBar: () => <div data-testid="tab-bar" />,
+}));
+
+vi.mock('./components/BatchModal', () => ({
+  BatchModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="batch-modal" /> : null),
+}));
+
+vi.mock('./components/ContactSheetModal', () => ({
+  ContactSheetModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="contact-sheet-modal" /> : null),
+}));
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: coreState.invoke,
 }));
@@ -193,6 +208,8 @@ vi.mock('./utils/imageWorkerClient', () => ({
 
     export = workerState.export;
 
+    contactSheet = vi.fn();
+
     sampleFilmBase = workerState.sampleFilmBase;
 
     disposeDocument = workerState.disposeDocument;
@@ -213,6 +230,9 @@ vi.mock('./utils/fileBridge', () => ({
   isDesktopShell: fileBridgeState.isDesktopShell,
   openImageFile: fileBridgeState.openImageFile,
   openImageFileByPath: fileBridgeState.openImageFileByPath,
+  openMultipleImageFiles: fileBridgeState.openMultipleImageFiles,
+  openDirectory: fileBridgeState.openDirectory,
+  saveToDirectory: fileBridgeState.saveToDirectory,
   saveExportBlob: fileBridgeState.saveExportBlob,
 }));
 
@@ -313,6 +333,9 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     fileBridgeState.openImageFile.mockReset();
     fileBridgeState.openImageFileByPath.mockReset();
+    fileBridgeState.openMultipleImageFiles.mockReset();
+    fileBridgeState.openDirectory.mockReset();
+    fileBridgeState.saveToDirectory.mockReset();
     fileBridgeState.saveExportBlob.mockReset();
     fileBridgeState.saveExportBlob.mockResolvedValue('saved');
 

@@ -36,7 +36,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeTextFile: fsState.writeTextFile,
 }));
 
-import { confirmDeletePreset, isDesktopShell, openImageFile, openPresetFile, saveExportBlob, savePresetFile } from './fileBridge';
+import { confirmDeletePreset, isDesktopShell, openDirectory, openImageFile, openPresetFile, saveExportBlob, savePresetFile, saveToDirectory } from './fileBridge';
 
 describe('fileBridge', () => {
   beforeEach(() => {
@@ -135,6 +135,38 @@ describe('fileBridge', () => {
     );
     expect(second).toBe('cancelled');
     expect(fsState.writeFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a browser directory picker when available', async () => {
+    const showDirectoryPicker = vi.fn().mockResolvedValue({ name: 'DarkSlide Exports' });
+    vi.stubGlobal('showDirectoryPicker', showDirectoryPicker);
+
+    await expect(openDirectory()).resolves.toBe('[browser-dir] DarkSlide Exports');
+    expect(showDirectoryPicker).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses the selected browser directory handle for batch saves', async () => {
+    const write = vi.fn();
+    const close = vi.fn();
+    const createWritable = vi.fn().mockResolvedValue({ write, close });
+    const getFileHandle = vi.fn()
+      .mockRejectedValueOnce(new Error('missing'))
+      .mockResolvedValueOnce({ createWritable });
+    const directoryHandle = {
+      name: 'DarkSlide Exports',
+      getFileHandle,
+    };
+    const showDirectoryPicker = vi.fn().mockResolvedValue(directoryHandle);
+    vi.stubGlobal('showDirectoryPicker', showDirectoryPicker);
+
+    await openDirectory();
+    await saveToDirectory(new Blob(['hello'], { type: 'image/png' }), 'scan.png', '[browser-dir] DarkSlide Exports');
+
+    expect(showDirectoryPicker).toHaveBeenCalledTimes(1);
+    expect(getFileHandle).toHaveBeenCalledWith('scan.png');
+    expect(getFileHandle).toHaveBeenCalledWith('scan.png', { create: true });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('opens preset files through the desktop dialog', async () => {

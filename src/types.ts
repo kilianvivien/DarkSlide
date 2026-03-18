@@ -1,3 +1,5 @@
+import type { ZoomLevel } from './hooks/useViewportZoom';
+
 export type FilmType = 'color' | 'bw';
 export type CropTab = 'Film' | 'Print' | 'Social' | 'Digital';
 export type ScannerType = 'flatbed' | 'camera' | 'dedicated' | 'smartphone';
@@ -107,6 +109,7 @@ export interface ExportOptions {
   quality: number;
   filenameBase: string;
   embedMetadata: boolean;
+  iccEmbedMode: 'srgb' | 'none';
 }
 
 export interface FilmProfile {
@@ -175,6 +178,16 @@ export interface WorkspaceDocument {
   errorCode?: string;
 }
 
+export interface DocumentTab {
+  id: string;
+  document: WorkspaceDocument;
+  historyStack: ConversionSettings[];
+  historyIndex: number;
+  zoom: ZoomLevel;
+  pan: { x: number; y: number };
+  sidebarScrollTop: number;
+}
+
 export interface DecodeRequest {
   documentId: string;
   buffer: ArrayBuffer;
@@ -226,6 +239,38 @@ export interface ExportResult {
   blob: Blob;
   filename: string;
 }
+
+export interface ContactSheetCell {
+  documentId: string;
+  label: string;
+}
+
+export interface ContactSheetRequest {
+  cells: ContactSheetCell[];
+  columns: number;
+  cellMaxDimension: number;
+  margin: number;
+  backgroundColor: [number, number, number];
+  showCaptions: boolean;
+  captionFontSize: number;
+  exportOptions: ExportOptions;
+  settingsPerCell: ConversionSettings[];
+  profilePerCell: FilmProfile[];
+}
+
+export interface ContactSheetResult {
+  blob: Blob;
+  width: number;
+  height: number;
+  filename: string;
+}
+
+export type BatchProgressEvent =
+  | { type: 'start'; entryId: string }
+  | { type: 'progress'; entryId: string; progress: number }
+  | { type: 'done'; entryId: string }
+  | { type: 'error'; entryId: string; message: string }
+  | { type: 'complete' };
 
 export interface RawExportResult {
   imageData: ImageData;

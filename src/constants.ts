@@ -20,6 +20,7 @@ export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   quality: 0.92,
   filenameBase: 'darkslide-converted',
   embedMetadata: true,
+  iccEmbedMode: 'srgb',
 };
 
 export function createDefaultSettings(overrides: Partial<ConversionSettings> = {}): ConversionSettings {
@@ -58,6 +59,7 @@ export const RAW_EXTENSIONS = ['.dng', '.cr3', '.nef', '.arw', '.raf', '.rw2'] a
 export const MAX_IMAGE_PIXELS = 120_000_000;
 export const MAX_IMAGE_DIMENSION = 18_000;
 export const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024;
+export const MAX_OPEN_TABS = 8;
 export const PREVIEW_LEVELS = [512, 1024, 2048];
 export const DIAGNOSTICS_LIMIT = 100;
 export const DARKSLIDE_PRESET_FILE_VERSION = '1.0.0';

@@ -18,10 +18,16 @@ export interface UserPreferences {
 function isValidPreferences(value: unknown): value is UserPreferences {
   if (!value || typeof value !== 'object') return false;
   const prefs = value as Partial<UserPreferences>;
+  const exportOptions = prefs.exportOptions as Partial<ExportOptions> | undefined;
   return (
     prefs.version === 1 &&
     typeof prefs.lastProfileId === 'string' &&
-    prefs.exportOptions !== undefined &&
+    exportOptions !== undefined &&
+    typeof exportOptions.format === 'string' &&
+    typeof exportOptions.quality === 'number' &&
+    typeof exportOptions.filenameBase === 'string' &&
+    (exportOptions.embedMetadata === undefined || typeof exportOptions.embedMetadata === 'boolean') &&
+    (exportOptions.iccEmbedMode === undefined || exportOptions.iccEmbedMode === 'srgb' || exportOptions.iccEmbedMode === 'none') &&
     typeof prefs.sidebarTab === 'string' &&
     (prefs.cropTab === undefined || ['Film', 'Print', 'Social', 'Digital'].includes(prefs.cropTab)) &&
     typeof prefs.isLeftPaneOpen === 'boolean' &&

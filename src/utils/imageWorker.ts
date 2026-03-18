@@ -2,6 +2,8 @@
 
 import UTIF from 'utif';
 import {
+  ContactSheetRequest,
+  ContactSheetResult,
   CancelTileJobRequest,
   ConversionSettings,
   DecodeRequest,
@@ -50,13 +52,14 @@ type WorkerRequest =
   | { id: string; type: 'cancel-job'; payload: CancelTileJobRequest }
   | { id: string; type: 'sample-film-base'; payload: SampleRequest }
   | { id: string; type: 'export'; payload: ExportRequest }
+  | { id: string; type: 'contact-sheet'; payload: ContactSheetRequest }
   | { id: string; type: 'diagnostics'; payload: Record<string, never> }
   | { id: string; type: 'dispose'; payload: { documentId: string } };
 
 type WorkerError = { code: string; message: string };
 
 type WorkerResponse =
-  | { id: string; ok: true; payload: DecodedImage | RenderResult | PreparedTileJobResult | ReadTileResult | ExportResult | RawExportResult | FilmBaseSample | WorkerMemoryDiagnostics | { disposed: true } | { cancelled: true } }
+  | { id: string; ok: true; payload: DecodedImage | RenderResult | PreparedTileJobResult | ReadTileResult | ExportResult | RawExportResult | ContactSheetResult | FilmBaseSample | WorkerMemoryDiagnostics | { disposed: true } | { cancelled: true } }
   | { id: string; ok: false; error: WorkerError };
 
 interface StoredPreview {
@@ -764,6 +767,93 @@ async function handleExport(payload: ExportRequest) {
   } satisfies ExportResult;
 }
 
+async function handleContactSheet(payload: ContactSheetRequest) {
+  const columns = clamp(Math.round(payload.columns), 1, 8);
+  const rows = Math.max(1, Math.ceil(payload.cells.length / columns));
+  const captionHeight = payload.showCaptions ? payload.captionFontSize + 8 : 0;
+  const totalWidth = columns * payload.cellMaxDimension + (columns + 1) * payload.margin;
+  const totalHeight = rows * (payload.cellMaxDimension + captionHeight) + (rows + 1) * payload.margin;
+  const canvas = new OffscreenCanvas(totalWidth, totalHeight);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Could not create contact sheet canvas.');
+  }
+
+  context.fillStyle = `rgb(${payload.backgroundColor[0]} ${payload.backgroundColor[1]} ${payload.backgroundColor[2]})`;
+  context.fillRect(0, 0, totalWidth, totalHeight);
+  context.textAlign = 'center';
+  context.textBaseline = 'top';
+  context.font = `${payload.captionFontSize}px monospace`;
+  context.fillStyle = payload.backgroundColor[0] + payload.backgroundColor[1] + payload.backgroundColor[2] > 382 ? '#111111' : '#f4f4f5';
+
+  for (let index = 0; index < payload.cells.length; index += 1) {
+    const cell = payload.cells[index];
+    const settings = payload.settingsPerCell[index];
+    const profile = payload.profilePerCell[index];
+    const document = getStoredDocument(cell.documentId);
+    const level = selectPreviewLevel(
+      document.previews.map((preview) => preview.level),
+      payload.cellMaxDimension,
+    );
+    const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
+    const transformed = renderTransformedCanvas(preview.canvas, settings);
+    const sourceContext = transformed.canvas.getContext('2d', { willReadFrequently: true });
+    if (!sourceContext) {
+      throw new Error('Could not render contact sheet cell.');
+    }
+
+    const imageData = sourceContext.getImageData(0, 0, transformed.width, transformed.height);
+    processImageData(
+      imageData,
+      settings,
+      profile.type === 'color' && !settings.blackAndWhite.enabled,
+      'processed',
+      profile.maskTuning,
+      profile.colorMatrix,
+      profile.tonalCharacter,
+    );
+
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const cellX = payload.margin + col * (payload.cellMaxDimension + payload.margin);
+    const cellY = payload.margin + row * (payload.cellMaxDimension + captionHeight + payload.margin);
+    const scale = Math.min(payload.cellMaxDimension / imageData.width, payload.cellMaxDimension / imageData.height, 1);
+    const drawWidth = Math.max(1, Math.round(imageData.width * scale));
+    const drawHeight = Math.max(1, Math.round(imageData.height * scale));
+    const drawX = cellX + Math.round((payload.cellMaxDimension - drawWidth) / 2);
+    const drawY = cellY + Math.round((payload.cellMaxDimension - drawHeight) / 2);
+
+    const cellCanvas = new OffscreenCanvas(imageData.width, imageData.height);
+    const cellContext = cellCanvas.getContext('2d', { willReadFrequently: true });
+    if (!cellContext) {
+      throw new Error('Could not compose contact sheet cell.');
+    }
+    cellContext.putImageData(imageData, 0, 0);
+    context.drawImage(cellCanvas, drawX, drawY, drawWidth, drawHeight);
+
+    if (payload.showCaptions) {
+      context.fillText(
+        cell.label,
+        cellX + payload.cellMaxDimension / 2,
+        cellY + payload.cellMaxDimension + 8,
+        payload.cellMaxDimension,
+      );
+    }
+  }
+
+  const blob = await canvas.convertToBlob({
+    type: payload.exportOptions.format,
+    quality: payload.exportOptions.format === 'image/png' ? undefined : payload.exportOptions.quality,
+  });
+
+  return {
+    blob,
+    width: totalWidth,
+    height: totalHeight,
+    filename: `${sanitizeFilenameBase(payload.exportOptions.filenameBase)}.${getExtensionFromFormat(payload.exportOptions.format)}`,
+  } satisfies ContactSheetResult;
+}
+
 self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
   pruneCancelledJobs();
@@ -806,6 +896,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
     if (request.type === 'export') {
       reply({ id: request.id, ok: true, payload: await handleExport(request.payload) });
+      return;
+    }
+
+    if (request.type === 'contact-sheet') {
+      reply({ id: request.id, ok: true, payload: await handleContactSheet(request.payload) });
       return;
     }
 

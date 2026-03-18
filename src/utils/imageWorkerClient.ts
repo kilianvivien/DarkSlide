@@ -1,4 +1,6 @@
 import {
+  ContactSheetRequest,
+  ContactSheetResult,
   CancelTileJobRequest,
   ConversionSettings,
   DecodeRequest,
@@ -37,6 +39,7 @@ type WorkerRequest =
   | { id: string; type: 'cancel-job'; payload: CancelTileJobRequest }
   | { id: string; type: 'sample-film-base'; payload: SampleRequest }
   | { id: string; type: 'export'; payload: ExportRequest }
+  | { id: string; type: 'contact-sheet'; payload: ContactSheetRequest }
   | { id: string; type: 'diagnostics'; payload: Record<string, never> }
   | { id: string; type: 'dispose'; payload: { documentId: string } };
 
@@ -52,6 +55,7 @@ type WorkerResponse =
       | PreparedTileJobResult
       | ReadTileResult
       | ExportResult
+      | ContactSheetResult
       | FilmBaseSample
       | WorkerMemoryDiagnostics
       | { disposed: true }
@@ -247,7 +251,7 @@ export class ImageWorkerClient {
 
   private lastExportJob: RenderJobDiagnosticsSnapshot | null = null;
 
-  private activePreviewJobId: string | null = null;
+  private activePreviewJobIds = new Map<string, string>();
 
   private lastDraftHistogram: HistogramData | null = null;
 
@@ -579,7 +583,11 @@ export class ImageWorkerClient {
   }
 
   async cancelActivePreviewRender(documentId: string) {
-    await this.cancelTileJob(documentId, this.activePreviewJobId, true);
+    const jobId = this.activePreviewJobIds.get(documentId) ?? null;
+    await this.cancelTileJob(documentId, jobId, true);
+    if (jobId) {
+      this.activePreviewJobIds.delete(documentId);
+    }
   }
 
   private createJobId(documentId: string, revision: number | string, sourceKind: TileSourceKind) {
@@ -804,10 +812,11 @@ export class ImageWorkerClient {
   }
 
   private async renderInternal(payload: RenderRequest, allowRecovery: boolean) {
-    await this.cancelTileJob(payload.documentId, this.activePreviewJobId, true);
+    const activePreviewJobId = this.activePreviewJobIds.get(payload.documentId) ?? null;
+    await this.cancelTileJob(payload.documentId, activePreviewJobId, true);
 
     const jobId = this.createJobId(payload.documentId, payload.revision, 'preview');
-    this.activePreviewJobId = jobId;
+    this.activePreviewJobIds.set(payload.documentId, jobId);
 
     if (payload.comparisonMode === 'processed') {
       if (!this.canAttemptGPU()) {
@@ -830,8 +839,8 @@ export class ImageWorkerClient {
           null,
         );
         this.emitBackendDiagnosticsChange();
-        if (this.activePreviewJobId === jobId) {
-          this.activePreviewJobId = null;
+        if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
+          this.activePreviewJobIds.delete(payload.documentId);
         }
         return this.requestWithDocumentRecovery(
           payload.documentId,
@@ -861,8 +870,8 @@ export class ImageWorkerClient {
           null,
         );
         this.emitBackendDiagnosticsChange();
-        if (this.activePreviewJobId === jobId) {
-          this.activePreviewJobId = null;
+        if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
+          this.activePreviewJobIds.delete(payload.documentId);
         }
         appendDiagnostic({
           level: 'info',
@@ -920,8 +929,8 @@ export class ImageWorkerClient {
         payload.tonalCharacter,
       );
       await this.cancelTileJob(payload.documentId, jobId);
-      if (this.activePreviewJobId === jobId) {
-        this.activePreviewJobId = null;
+      if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
+        this.activePreviewJobIds.delete(payload.documentId);
       }
 
       const jobDurationMs = Math.round(performance.now() - startedAt);
@@ -992,8 +1001,8 @@ export class ImageWorkerClient {
       } satisfies RenderResult;
     } catch (error) {
       await this.cancelTileJob(payload.documentId, jobId);
-      if (this.activePreviewJobId === jobId) {
-        this.activePreviewJobId = null;
+      if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
+        this.activePreviewJobIds.delete(payload.documentId);
       }
 
       const message = error instanceof Error ? error.message : String(error);
@@ -1038,8 +1047,8 @@ export class ImageWorkerClient {
           sourceKind: 'preview',
         },
       });
-      if (this.activePreviewJobId === jobId) {
-        this.activePreviewJobId = null;
+      if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
+        this.activePreviewJobIds.delete(payload.documentId);
       }
       return this.requestWithDocumentRecovery(
         payload.documentId,
@@ -1061,12 +1070,12 @@ export class ImageWorkerClient {
   async export(payload: ExportRequest) {
     await this.ensureDocumentLoaded(payload.documentId);
     const result = await this.exportInternal(payload, true);
-    return finalizeExportBlob(
-      result,
-      payload.options.format,
-      payload.options.embedMetadata,
-      payload.sourceExif,
-    );
+    return finalizeExportBlob(result, payload.options, payload.sourceExif);
+  }
+
+  async contactSheet(payload: ContactSheetRequest) {
+    const result = await this.request<ContactSheetResult>('contact-sheet', payload);
+    return finalizeExportBlob(result, payload.exportOptions);
   }
 
   private async exportInternal(payload: ExportRequest, allowRecovery: boolean) {
@@ -1240,6 +1249,7 @@ export class ImageWorkerClient {
   disposeDocument(documentId: string) {
     this.decodeCache.delete(documentId);
     this.documentRecovery.delete(documentId);
+    this.activePreviewJobIds.delete(documentId);
     return this.request<{ disposed: true }>('dispose', { documentId });
   }
 

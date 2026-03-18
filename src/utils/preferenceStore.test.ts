@@ -5,7 +5,7 @@ import { loadPreferences, savePreferences, UserPreferences } from './preferenceS
 const VALID_PREFS: UserPreferences = {
   version: 1,
   lastProfileId: 'portra-400',
-  exportOptions: { format: 'image/png', quality: 0.85, filenameBase: 'test', embedMetadata: false },
+  exportOptions: { format: 'image/png', quality: 0.85, filenameBase: 'test', embedMetadata: false, iccEmbedMode: 'none' },
   sidebarTab: 'export',
   cropTab: 'Social',
   isLeftPaneOpen: false,
@@ -104,6 +104,7 @@ describe('loadPreferences', () => {
     expect(loadPreferences()).toMatchObject({
       exportOptions: expect.objectContaining({
         embedMetadata: true,
+        iccEmbedMode: 'srgb',
       }),
     });
   });
@@ -126,6 +127,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.exportOptions.format).toBe('image/png');
     expect(loaded!.exportOptions.quality).toBe(0.85);
     expect(loaded!.exportOptions.embedMetadata).toBe(false);
+    expect(loaded!.exportOptions.iccEmbedMode).toBe('none');
   });
 
   it('overwrites previous preferences on save', () => {

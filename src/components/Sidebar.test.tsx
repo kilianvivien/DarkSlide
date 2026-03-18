@@ -51,6 +51,7 @@ describe('Sidebar', () => {
           quality: 0.92,
           filenameBase: 'test',
           embedMetadata: true,
+          iccEmbedMode: 'srgb',
         }}
         cropImageWidth={4032}
         cropImageHeight={6048}
@@ -62,7 +63,10 @@ describe('Sidebar', () => {
         isPickingFilmBase={false}
         onTogglePicker={vi.fn()}
         onExport={vi.fn()}
+        onOpenBatchExport={vi.fn()}
+        onOpenContactSheet={vi.fn()}
         isExporting={false}
+        canOpenContactSheet={false}
         activeTab="adjust"
         onTabChange={vi.fn()}
         cropTab="Film"
@@ -98,6 +102,7 @@ describe('Sidebar', () => {
           quality: 0.92,
           filenameBase: 'test',
           embedMetadata: true,
+          iccEmbedMode: 'srgb',
         }}
         cropImageWidth={4032}
         cropImageHeight={6048}
@@ -109,7 +114,10 @@ describe('Sidebar', () => {
         isPickingFilmBase={false}
         onTogglePicker={vi.fn()}
         onExport={vi.fn()}
+        onOpenBatchExport={vi.fn()}
+        onOpenContactSheet={vi.fn()}
         isExporting={false}
+        canOpenContactSheet={false}
         activeTab="adjust"
         onTabChange={vi.fn()}
         cropTab="Film"

@@ -28,6 +28,10 @@ const PRESET_FILTER = {
   extensions: ['darkslide'],
 };
 
+const BROWSER_DIRECTORY_PREFIX = '[browser-dir] ';
+
+let selectedBrowserDirectoryHandle: FileSystemDirectoryHandle | null = null;
+
 function getMimeTypeForFile(fileName: string) {
   const extension = getFileExtension(fileName) as typeof SUPPORTED_EXTENSIONS[number];
   return MIME_BY_EXTENSION[extension] ?? 'application/octet-stream';
@@ -35,6 +39,23 @@ function getMimeTypeForFile(fileName: string) {
 
 function getFileName(path: string) {
   return path.split(/[\\/]/).pop() ?? 'darkslide-import';
+}
+
+function joinPath(directory: string, fileName: string) {
+  if (directory.endsWith('/') || directory.endsWith('\\')) {
+    return `${directory}${fileName}`;
+  }
+
+  return `${directory}${directory.includes('\\') ? '\\' : '/'}${fileName}`;
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const url = trackCreateObjectURL(blob);
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = url;
+  link.click();
+  window.setTimeout(() => trackRevokeObjectURL(url), 1000);
 }
 
 export function isDesktopShell() {
@@ -97,6 +118,31 @@ export async function openImageFile(): Promise<NativeOpenFileResult | null> {
   return openDesktopFile(selected);
 }
 
+export async function openMultipleImageFiles(): Promise<NativeOpenFileResult[]> {
+  if (!isDesktopShell()) {
+    return [];
+  }
+
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const selected = await open({
+    title: 'Open Scans',
+    directory: false,
+    multiple: true,
+    filters: [
+      {
+        name: 'Supported Images',
+        extensions: SUPPORTED_DIALOG_EXTENSIONS,
+      },
+    ],
+  });
+
+  if (!selected || !Array.isArray(selected)) {
+    return [];
+  }
+
+  return Promise.all(selected.map((path) => openDesktopFile(path)));
+}
+
 export async function openImageFileByPath(path: string): Promise<NativeOpenFileResult | null> {
   if (!isDesktopShell()) return null;
   return openDesktopFile(path);
@@ -124,13 +170,91 @@ export async function saveExportBlob(blob: Blob, filename: string, format: Expor
     return 'saved' as const;
   }
 
-  const url = trackCreateObjectURL(blob);
-  const link = document.createElement('a');
-  link.download = filename;
-  link.href = url;
-  link.click();
-  window.setTimeout(() => trackRevokeObjectURL(url), 1000);
+  triggerBrowserDownload(blob, filename);
   return 'saved' as const;
+}
+
+export async function openDirectory(): Promise<string | null> {
+  if (!isDesktopShell()) {
+    const picker = (window as Window & {
+      showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
+    }).showDirectoryPicker;
+
+    if (!picker) {
+      return null;
+    }
+
+    const directory = await picker();
+    selectedBrowserDirectoryHandle = directory;
+    return `${BROWSER_DIRECTORY_PREFIX}${directory.name}`;
+  }
+
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const selected = await open({
+    title: 'Choose Output Folder',
+    directory: true,
+    multiple: false,
+  });
+
+  return typeof selected === 'string' ? selected : null;
+}
+
+export async function saveToDirectory(blob: Blob, filename: string, dirPath: string): Promise<void> {
+  if (isDesktopShell()) {
+    const { writeFile, stat } = await import('@tauri-apps/plugin-fs');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const extensionIndex = filename.lastIndexOf('.');
+    const baseName = extensionIndex >= 0 ? filename.slice(0, extensionIndex) : filename;
+    const extension = extensionIndex >= 0 ? filename.slice(extensionIndex) : '';
+
+    let attempt = 0;
+    while (attempt < 1000) {
+      const candidateName = attempt === 0 ? filename : `${baseName}-${attempt + 1}${extension}`;
+      const candidatePath = joinPath(dirPath, candidateName);
+
+      try {
+        await stat(candidatePath);
+        attempt += 1;
+      } catch {
+        await writeFile(candidatePath, bytes);
+        return;
+      }
+    }
+
+    throw new Error('Could not determine a unique filename for the batch export.');
+  }
+
+  const picker = (window as Window & {
+    showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
+  }).showDirectoryPicker;
+  const directory = selectedBrowserDirectoryHandle
+    ?? (picker ? await picker() : null);
+
+  if (directory) {
+    selectedBrowserDirectoryHandle = directory;
+    const extensionIndex = filename.lastIndexOf('.');
+    const baseName = extensionIndex >= 0 ? filename.slice(0, extensionIndex) : filename;
+    const extension = extensionIndex >= 0 ? filename.slice(extensionIndex) : '';
+
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+      const candidateName = attempt === 0 ? filename : `${baseName}-${attempt + 1}${extension}`;
+
+      try {
+        await directory.getFileHandle(candidateName);
+        continue;
+      } catch {
+        const handle = await directory.getFileHandle(candidateName, { create: true });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      }
+    }
+
+    throw new Error('Could not determine a unique filename for the batch export.');
+  }
+
+  triggerBrowserDownload(blob, filename);
 }
 
 export async function savePresetFile(json: string, filename: string): Promise<'saved' | 'cancelled'> {
@@ -154,12 +278,7 @@ export async function savePresetFile(json: string, filename: string): Promise<'s
     return 'saved';
   }
 
-  const url = trackCreateObjectURL(new Blob([json], { type: 'application/json' }));
-  const link = document.createElement('a');
-  link.download = filename;
-  link.href = url;
-  link.click();
-  window.setTimeout(() => trackRevokeObjectURL(url), 1000);
+  triggerBrowserDownload(new Blob([json], { type: 'application/json' }), filename);
   return 'saved';
 }
 

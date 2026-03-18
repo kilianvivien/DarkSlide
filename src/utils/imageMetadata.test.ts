@@ -50,8 +50,13 @@ describe('image metadata helpers', () => {
         blob: new Blob([base64ToUint8Array(JPEG_BASE64)], { type: 'image/jpeg' }),
         filename: 'scan.jpg',
       },
-      'image/jpeg',
-      true,
+      {
+        format: 'image/jpeg',
+        quality: 0.92,
+        filenameBase: 'scan',
+        embedMetadata: true,
+        iccEmbedMode: 'none',
+      },
       extracted,
     );
 
@@ -70,8 +75,13 @@ describe('image metadata helpers', () => {
         blob: sourceBlob,
         filename: 'scan.jpg',
       },
-      'image/jpeg',
-      false,
+      {
+        format: 'image/jpeg',
+        quality: 0.92,
+        filenameBase: 'scan',
+        embedMetadata: false,
+        iccEmbedMode: 'none',
+      },
       {
         orientation: 6,
       },

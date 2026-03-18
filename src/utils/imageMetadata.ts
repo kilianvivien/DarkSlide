@@ -1,5 +1,7 @@
 import piexif from 'piexifjs';
-import { ExifMetadata, ExportFormat, ExportResult } from '../types';
+import { ExifMetadata, ExportOptions, ExportResult } from '../types';
+import { embedIccInBlob } from './iccEmbed';
+import { SRGB_ICC_PROFILE } from './srgbIccProfile';
 
 const PNG_SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const PNG_TEXT_TYPE = 'tEXt';
@@ -184,33 +186,35 @@ export async function injectPngTextChunk(blob: Blob, key: string, value: string)
 
 export async function finalizeExportBlob(
   result: ExportResult,
-  format: ExportFormat,
-  embedMetadata: boolean,
+  options: ExportOptions,
   sourceExif?: ExifMetadata,
 ): Promise<ExportResult> {
-  if (!embedMetadata) {
-    return result;
+  let blob = result.blob;
+
+  if (options.embedMetadata) {
+    try {
+      if (options.format === 'image/jpeg') {
+        blob = await injectExifIntoJpeg(blob, sourceExif);
+      } else if (options.format === 'image/png') {
+        blob = await injectPngTextChunk(blob, 'Software', DARKSLIDE_SOFTWARE_TAG);
+      }
+    } catch {
+      blob = result.blob;
+    }
   }
 
-  try {
-    if (format === 'image/jpeg') {
-      return {
-        ...result,
-        blob: await injectExifIntoJpeg(result.blob, sourceExif),
-      };
+  if (options.iccEmbedMode === 'srgb') {
+    try {
+      blob = await embedIccInBlob(blob, SRGB_ICC_PROFILE, options.format);
+    } catch {
+      blob = options.embedMetadata ? blob : result.blob;
     }
-
-    if (format === 'image/png') {
-      return {
-        ...result,
-        blob: await injectPngTextChunk(result.blob, 'Software', DARKSLIDE_SOFTWARE_TAG),
-      };
-    }
-  } catch {
-    return result;
   }
 
-  return result;
+  return {
+    ...result,
+    blob,
+  };
 }
 
 export const __testExports = {
