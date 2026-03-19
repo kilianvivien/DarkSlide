@@ -7,3 +7,9 @@ coverage/
 .env*
 !.env.example
 Resources/
+
+# Internal planning and agent docs — kept locally, not published to GitHub
+plan.md
+plan-next.md
+CLAUDE.md
+AGENTS.md
