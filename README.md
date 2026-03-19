@@ -16,6 +16,17 @@
 - **Cross-Platform**: Native desktop app via **Tauri** (native file dialogs, RAW support, external editor integration) with full parity as a browser-based web app.
 - **Pro-Level UI Tools**: Multi-level zoom, pan viewport, histogram, split-view before/after toggle, non-destructive crop with film-format ratio presets, and persistent preferences.
 
+## ⚠️ macOS Installation Note
+
+Pre-built macOS binaries are currently **not notarized**. macOS will block the app from opening by default. To run it:
+
+1. Download and move the app to your Applications folder.
+2. Try to open it — macOS will show a security warning and refuse.
+3. Go to **System Settings → Privacy & Security**, scroll down, and click **"Open Anyway"** next to the DarkSlide entry.
+4. Confirm in the follow-up dialog. The app will open normally from that point on.
+
+> This only needs to be done once. Notarization is planned for a future release.
+
 ## 🚀 Getting Started
 
 ### Prerequisites
