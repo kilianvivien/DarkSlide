@@ -95,9 +95,6 @@ DarkSlide is continuously evolving. Here's where things stand:
 - 🔜 **Phase 14:** Smart scanning features.
 - 🔜 **Phase 15:** Conversion quality & minilab emulation.
 - 🔜 **Phase 16:** Scanning workflow & productivity.
-
-*See `plan.md` and `plan-next.md` for full details.*
-
 ## 🙏 Acknowledgements
 
 DarkSlide is built on top of some amazing open-source projects:
