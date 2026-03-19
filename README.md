@@ -7,12 +7,13 @@
 
 ## ✨ Features
 
-- **Blazing Fast Conversion**: Optimized Worker-backed imaging pipeline with **WebGPU acceleration** for real-time blurs, noise reduction, and main conversion loops.
+- **Blazing Fast Conversion**: Worker-backed imaging pipeline with **WebGPU acceleration** for real-time blurs, noise reduction, and the main per-pixel conversion loop.
 - **Precision Editing**: Float32 pipeline processes edits in normalized float space and quantizes only on final write-back — professional-grade color accuracy throughout.
 - **RAW Import** *(desktop only)*: Native DNG, CR3, NEF, ARW, RAF, and RW2 decoding via the Tauri desktop app. Camera white-balance metadata pre-seeds the temperature/tint sliders; the browser build degrades gracefully with a clear "requires desktop app" notice.
 - **Black & White Conversion**: Dedicated B&W layer with per-channel luminance-mix controls, layered on top of the full color pipeline for maximum tonal flexibility.
 - **Film Profiles & Presets**: Ships with a broad mix of color and B&W stocks. Non-destructive undo/redo, auto-balance curves, highlight protection, sharpening, noise reduction, and importable/exportable `.darkslide` preset files.
-- **Cross-Platform**: Native desktop app via **Tauri** (native file dialogs, RAW support) with full parity as a browser-based web app.
+- **Pro Workflow**: Multi-document tabs for working across a roll, batch export, and contact sheet generation. Open the current file directly in an external editor (Photoshop, Affinity Photo, etc.) from the toolbar.
+- **Cross-Platform**: Native desktop app via **Tauri** (native file dialogs, RAW support, external editor integration) with full parity as a browser-based web app.
 - **Pro-Level UI Tools**: Multi-level zoom, pan viewport, histogram, split-view before/after toggle, non-destructive crop with film-format ratio presets, and persistent preferences.
 
 ## 🚀 Getting Started
@@ -69,13 +70,22 @@ npm run tauri:dev
 
 ## 🗺 Roadmap
 
-DarkSlide is continuously evolving. Some of the major phases include:
+DarkSlide is continuously evolving. Here's where things stand:
 
-- ✅ **Phases 0–9:** Baseline stabilization, Worker-backed imaging, better conversion quality, Tauri shell, editing/UI polish, Float32 color negative science, **WebGPU** acceleration, RAW import pipeline (DNG/CR3/NEF/ARW/RAF/RW2), B&W conversion layer, film-format crop ratios, and importable/exportable preset files.
-- 🔜 **Phase 10 (Render Performance):** Incremental render diffing, tile-based GPU dispatch, and progressive preview updates for large files.
-- 🔜 **Phase 11 (Pro Workflow):** Multi-document tabs for rolls of film, batch processing queue, and comprehensive ICC Color Management (P3 Retina XDR priority on macOS).
+- ✅ **Phases 0–2:** Baseline stabilization, Worker-backed imaging pipeline, and better conversion quality.
+- ✅ **Phase 3:** Tauri desktop shell with native file dialogs and browser fallback.
+- ✅ **Phases 4–6:** Editing polish (zoom/pan, film profiles, per-slider undo, sharpen/noise), UI polish, and beta product finish (persistent preferences, recent files, automated tests).
+- ✅ **Phase 7:** Float32 color negative science — per-profile color matrices, tonal-character metadata, and synthetic ΔE validation.
+- ✅ **Phase 8:** WebGPU-accelerated rendering (GPU blur, main conversion loop, histogram reduction, CPU fallback).
+- ✅ **Phase 9:** RAW import (Tauri desktop), film-format crop ratios, and importable/exportable `.darkslide` preset files.
+- ✅ **Phases 10–11:** Render performance (memoised components, reduced re-renders) and worker/memory hardening (split caches, bounded eviction).
+- ✅ **Phase 12:** Pro workflow — multi-document tabs, batch export, contact sheet export, Open in External Editor, and Display P3 ICC profile recognition on import.
+- 🔜 **Phase 13:** Architecture health — App.tsx decomposition, worker protocol type safety, error boundaries, and accessibility baseline.
+- 🔜 **Phase 14:** Smart scanning features.
+- 🔜 **Phase 15:** Conversion quality & minilab emulation.
+- 🔜 **Phase 16:** Scanning workflow & productivity.
 
-*See the `plan.md` file for full details on DarkSlide's roadmap and design specifics.*
+*See `plan.md` and `plan-next.md` for full details.*
 
 ## 🙏 Acknowledgements
 
