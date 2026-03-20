@@ -9,6 +9,8 @@ use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, Predefined
 use tauri::Emitter;
 use tauri::Manager;
 
+const GITHUB_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
+
 #[derive(Serialize)]
 struct RawDecodeResult {
     width: u32,
@@ -168,6 +170,13 @@ fn build_open_saved_file_command(path: &str, editor_path: Option<&str>) -> Comma
 }
 
 #[cfg(target_os = "macos")]
+fn build_open_url_command(url: &str) -> Command {
+    let mut command = Command::new("/usr/bin/open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "macos")]
 fn run_open_saved_file_command(mut command: Command) -> Result<(), String> {
     let output = command
         .output()
@@ -185,6 +194,60 @@ fn run_open_saved_file_command(mut command: Command) -> Result<(), String> {
         stdout
     } else {
         format!("open failed with status {}", output.status)
+    };
+
+    Err(detail)
+}
+
+#[cfg(target_os = "macos")]
+fn open_url_in_browser(url: &str) -> Result<(), String> {
+    let command = build_open_url_command(url);
+    run_open_saved_file_command(command)
+}
+
+#[cfg(target_os = "windows")]
+fn open_url_in_browser(url: &str) -> Result<(), String> {
+    let output = Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .output()
+        .map_err(|error| format!("Failed to launch browser: {error}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("browser launch failed with status {}", output.status)
+    };
+
+    Err(detail)
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn open_url_in_browser(url: &str) -> Result<(), String> {
+    let output = Command::new("xdg-open")
+        .arg(url)
+        .output()
+        .map_err(|error| format!("Failed to launch browser: {error}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("browser launch failed with status {}", output.status)
     };
 
     Err(detail)
@@ -241,6 +304,8 @@ pub fn run() {
                 .build(app)?;
             let copy_debug_info_help_item =
                 MenuItemBuilder::with_id("copy-debug-info", "Copy Debug Info").build(app)?;
+            let github_repo_help_item =
+                MenuItemBuilder::with_id("open-github-repo", "GitHub Repository").build(app)?;
             let toggle_compare_item = MenuItemBuilder::with_id("toggle-comparison", "Toggle Before/After")
                 .accelerator("CmdOrCtrl+/")
                 .build(app)?;
@@ -311,6 +376,8 @@ pub fn run() {
                 .build()?;
 
             let help_menu = SubmenuBuilder::new(app, "Help")
+                .item(&github_repo_help_item)
+                .separator()
                 .item(&copy_debug_info_help_item)
                 .build()?;
 
@@ -349,6 +416,13 @@ pub fn run() {
             app.set_menu(menu)?;
 
             app.on_menu_event(move |app_handle, event| {
+                if event.id().0.as_str() == "open-github-repo" {
+                    if let Err(error) = open_url_in_browser(GITHUB_REPOSITORY_URL) {
+                        eprintln!("failed to open GitHub repository URL: {error}");
+                    }
+                    return;
+                }
+
                 if let Some(window) = app_handle.get_webview_window("main") {
                     let _ = window.emit("menu-action", event.id().0.as_str());
                 }
@@ -417,7 +491,7 @@ mod tests {
 
 #[cfg(all(test, target_os = "macos"))]
 mod macos_tests {
-    use super::{build_open_saved_file_command, run_open_saved_file_command};
+    use super::{build_open_saved_file_command, build_open_url_command, run_open_saved_file_command};
     use std::process::Command;
 
     #[test]
@@ -452,6 +526,18 @@ mod macos_tests {
                 "/Users/tester/Downloads/scan.jpg",
             ],
         );
+    }
+
+    #[test]
+    fn builds_open_command_for_repository_url() {
+        let command = build_open_url_command("https://github.com/kilianvivien/DarkSlide");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(command.get_program().to_string_lossy(), "/usr/bin/open");
+        assert_eq!(args, vec!["https://github.com/kilianvivien/DarkSlide"]);
     }
 
     #[test]
