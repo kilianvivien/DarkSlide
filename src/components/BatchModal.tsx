@@ -367,7 +367,7 @@ export function BatchModal({
               <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-4">
                 <div>
                   <h2 className="text-base font-semibold text-zinc-100">Batch Export</h2>
-                  <p className="mt-0.5 text-xs text-zinc-500">Process multiple scans sequentially with one shared export recipe.</p>
+                  <p className="mt-0.5 text-xs text-zinc-500">Process multiple scans sequentially with one shared export recipe. RAW files supported on desktop.</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -436,7 +436,7 @@ export function BatchModal({
                     <div className="space-y-2">
                       {entries.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 p-8 text-center text-xs text-zinc-600">
-                          Add TIFF, JPEG, PNG, or WebP files, or drop them here.
+                          Add TIFF, JPEG, PNG, or WebP files, or drop them here. RAW supported on desktop.
                         </div>
                       ) : entries.map((entry) => (
                         <div key={entry.id} className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3.5">
