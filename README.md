@@ -11,8 +11,8 @@
 - **Precision Editing**: Float32 pipeline processes edits in normalized float space and quantizes only on final write-back — professional-grade color accuracy throughout.
 - **RAW Import** *(desktop only)*: Native DNG, CR3, NEF, ARW, RAF, and RW2 decoding via the Tauri desktop app. Camera white-balance metadata pre-seeds the temperature/tint sliders; the browser build degrades gracefully with a clear "requires desktop app" notice.
 - **Black & White Conversion**: Dedicated B&W layer with per-channel luminance-mix controls, layered on top of the full color pipeline for maximum tonal flexibility.
-- **Film Profiles & Presets**: Ships with a broad mix of color and B&W stocks. Non-destructive undo/redo, auto-balance curves, highlight protection, sharpening, noise reduction, and importable/exportable `.darkslide` preset files.
-- **Pro Workflow**: Multi-document tabs for working across a roll, batch export, and contact sheet generation. Open the current file directly in an external editor (Photoshop, Affinity Photo, etc.) from the toolbar.
+- **Film Profiles & Presets**: Ships with a broad mix of color and B&W stocks. Non-destructive undo/redo, auto-balance curves, highlight protection, sharpening, noise reduction, and importable/exportable `.darkslide` preset files. Searchable preset pane for quick access by name.
+- **Pro Workflow**: Multi-document tabs for working across a roll, batch export (with per-batch preset transforms), and contact sheet generation (RAW-aware). Open the current file directly in an external editor (Photoshop, Affinity Photo, etc.) from the toolbar. Export completion is confirmed with a toast notification.
 - **Cross-Platform**: Native desktop app via **Tauri** (native file dialogs, RAW support, external editor integration) with full parity as a browser-based web app.
 - **Pro-Level UI Tools**: Multi-level zoom, pan viewport, histogram, split-view before/after toggle, non-destructive crop with film-format ratio presets, and persistent preferences.
 
@@ -91,6 +91,7 @@ DarkSlide is continuously evolving. Here's where things stand:
 - ✅ **Phase 9:** RAW import (Tauri desktop), film-format crop ratios, and importable/exportable `.darkslide` preset files.
 - ✅ **Phases 10–11:** Render performance (memoised components, reduced re-renders) and worker/memory hardening (split caches, bounded eviction).
 - ✅ **Phase 12:** Pro workflow — multi-document tabs, batch export, contact sheet export, Open in External Editor, and Display P3 ICC profile recognition on import.
+- ✅ **v0.3.0 polish:** Preset search, export toast notifications, per-batch preset transforms, RAW-aware contact sheets, and recent files capped at five entries.
 - 🔜 **Phase 13:** Architecture health — App.tsx decomposition, worker protocol type safety, error boundaries, and accessibility baseline.
 - 🔜 **Phase 14:** Smart scanning features.
 - 🔜 **Phase 15:** Conversion quality & minilab emulation.
