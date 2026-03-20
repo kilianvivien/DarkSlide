@@ -37,6 +37,28 @@ describe('loadRecentFiles', () => {
     expect(loaded).toHaveLength(1);
     expect(loaded[0].name).toBe('good.tif');
   });
+
+  it('limits loaded entries to the latest 5', () => {
+    localStorage.setItem('darkslide_recent_files_v1', JSON.stringify({
+      version: 1,
+      entries: Array.from({ length: 7 }, (_, index) => ({
+        name: `file-${index}.tif`,
+        path: null,
+        size: 1000,
+        timestamp: 1000 - index,
+      })),
+    }));
+
+    const loaded = loadRecentFiles();
+    expect(loaded).toHaveLength(5);
+    expect(loaded.map((entry) => entry.name)).toEqual([
+      'file-0.tif',
+      'file-1.tif',
+      'file-2.tif',
+      'file-3.tif',
+      'file-4.tif',
+    ]);
+  });
 });
 
 describe('addRecentFile', () => {
@@ -82,11 +104,11 @@ describe('addRecentFile', () => {
     expect(loadRecentFiles()).toHaveLength(2);
   });
 
-  it('caps at 10 entries', () => {
+  it('caps at 5 entries', () => {
     for (let i = 0; i < 15; i++) {
       addRecentFile({ name: `file-${i}.tif`, path: null, size: 1000 });
     }
-    expect(loadRecentFiles()).toHaveLength(10);
+    expect(loadRecentFiles()).toHaveLength(5);
   });
 
   it('keeps the most recent entry when deduplicating', () => {

@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'darkslide_recent_files_v1';
-const MAX_ENTRIES = 10;
+const MAX_ENTRIES = 5;
 
 export interface RecentFileEntry {
   name: string;
@@ -26,10 +26,12 @@ export function loadRecentFiles(): RecentFileEntry[] {
   try {
     const parsed = JSON.parse(raw);
     if (!isValidStore(parsed)) return [];
-    return parsed.entries.filter(
-      (entry): entry is RecentFileEntry =>
-        Boolean(entry?.name && typeof entry.size === 'number' && typeof entry.timestamp === 'number'),
-    );
+    return parsed.entries
+      .filter(
+        (entry): entry is RecentFileEntry =>
+          Boolean(entry?.name && typeof entry.size === 'number' && typeof entry.timestamp === 'number'),
+      )
+      .slice(0, MAX_ENTRIES);
   } catch {
     return [];
   }
