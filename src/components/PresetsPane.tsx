@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Check, Download, Film, Layers, Plus, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
+import { Check, Download, Film, Layers, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES } from '../constants';
 import { confirmDeletePreset, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { validateDarkslideFile } from '../utils/presetStore';
@@ -96,6 +96,9 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   const [presetTab, setPresetTab] = useState<'builtin' | 'custom'>('builtin');
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [importConflict, setImportConflict] = useState<ImportConflictState | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const genericProfiles = useMemo(
     () => builtinProfiles.filter(isGenericProfile),
@@ -113,6 +116,36 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   const activeTags = (saveTags?.length ? saveTags : [activeProfile?.type ?? 'color'])
     .map(formatTag)
     .filter((value): value is string => Boolean(value));
+
+  const searchNormalized = searchQuery.trim().toLowerCase();
+
+  const matchesSearch = (profile: FilmProfile) => {
+    if (!searchNormalized) return true;
+    const haystack = [
+      profile.name,
+      profile.filmStock,
+      profile.type,
+      formatScannerType(profile.scannerType),
+      ...(profile.tags?.map(formatTag) ?? []),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(searchNormalized);
+  };
+
+  const filteredGenericProfiles = useMemo(
+    () => (isSearching ? genericProfiles.filter(matchesSearch) : genericProfiles),
+    [genericProfiles, searchNormalized, isSearching],
+  );
+  const filteredStockProfiles = useMemo(
+    () => (isSearching ? stockProfiles.filter(matchesSearch) : stockProfiles),
+    [stockProfiles, searchNormalized, isSearching],
+  );
+  const filteredCustomPresets = useMemo(
+    () => (isSearching ? customPresets.filter(matchesSearch) : customPresets),
+    [customPresets, searchNormalized, isSearching],
+  );
 
   const resetSaveForm = () => {
     setNewPresetName('');
@@ -262,24 +295,43 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         }}
       />
 
-      <div className="px-6 pt-6 pb-0 border-b border-zinc-800 shrink-0">
+      <div className={`px-6 pt-6 ${isSearching ? 'pb-4' : 'pb-0'} border-b border-zinc-800 shrink-0`}>
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] flex items-center gap-2">
             <Layers size={12} /> Film Profiles
           </h2>
-          <button
-            onClick={() => {
-              setImportConflict(null);
-              setPresetTab('custom');
-              setIsSaving(true);
-            }}
-            aria-label="Save current preset"
-            disabled={!canSavePreset}
-            className="p-1.5 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-lg transition-all disabled:cursor-default disabled:text-zinc-700 disabled:hover:bg-transparent"
-            data-tip="Save Current Settings as Preset"
-          >
-            <Plus size={14} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setImportConflict(null);
+                setPresetTab('custom');
+                setIsSaving(true);
+              }}
+              aria-label="Save current preset"
+              disabled={!canSavePreset}
+              className="p-1.5 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-lg transition-all disabled:cursor-default disabled:text-zinc-700 disabled:hover:bg-transparent"
+              data-tip="Save Current Settings as Preset"
+            >
+              <Plus size={14} />
+            </button>
+            <button
+              onClick={() => {
+                const next = !isSearching;
+                setIsSearching(next);
+                if (!next) setSearchQuery('');
+                else setTimeout(() => searchInputRef.current?.focus(), 0);
+              }}
+              aria-label="Search presets"
+              className={`p-1.5 rounded-lg transition-all ${
+                isSearching
+                  ? 'text-zinc-100 bg-zinc-800'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+              }`}
+              data-tip="Search Presets"
+            >
+              <Search size={14} />
+            </button>
+          </div>
         </div>
         <div className="flex gap-4">
           {(['builtin', 'custom'] as const).map((tab) => (
@@ -294,6 +346,40 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
             </button>
           ))}
         </div>
+
+        {isSearching && (
+          <div className="mt-3 mb-1 relative">
+            <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  setIsSearching(false);
+                  setSearchQuery('');
+                }
+              }}
+              placeholder="Search presets..."
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 pl-8 pr-8 py-2 text-sm text-zinc-200 outline-none transition-colors focus:border-zinc-500 placeholder:text-zinc-600"
+              autoFocus
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  searchInputRef.current?.focus();
+                }}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-zinc-500 hover:text-zinc-200 transition-colors"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
@@ -449,16 +535,18 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
               </button>
             </div>
 
-            {customPresets.length === 0 ? (
+            {filteredCustomPresets.length === 0 && !isSearching && customPresets.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center gap-3">
                 <Layers size={24} className="text-zinc-700" />
                 <p className="text-[11px] text-zinc-600 leading-relaxed max-w-[180px]">
                   No custom presets yet. Save one from the current edit or import a `.darkslide` file.
                 </p>
               </div>
+            ) : filteredCustomPresets.length === 0 ? (
+              <p className="text-center text-[11px] text-zinc-600 py-6">No matching presets</p>
             ) : (
               <div className="space-y-2">
-                {customPresets.map((stock) => {
+                {filteredCustomPresets.map((stock) => {
                   const tagLabels = (stock.tags?.length ? stock.tags : [stock.type])
                     .map(formatTag)
                     .filter((value): value is string => Boolean(value));
@@ -517,59 +605,67 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
           </div>
         ) : (
           <>
-            <div className="space-y-3">
-              <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
-                <SlidersHorizontal size={10} /> Generic
-              </h3>
-              <div className="space-y-2">
-                {genericProfiles.map((stock) => (
-                  <button
-                    key={stock.id}
-                    onClick={() => onStockChange(stock)}
-                    className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
-                      activeStockId === stock.id
-                        ? 'bg-zinc-100 text-zinc-950 shadow-lg'
-                        : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
-                    }`}
-                  >
-                    <SlidersHorizontal size={14} className="shrink-0 text-zinc-600" />
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-medium">{stock.name}</span>
-                      <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
-                        {stock.type === 'color' ? 'Color Negative' : 'Black & White'}
-                      </span>
-                    </div>
-                  </button>
-                ))}
+            {filteredGenericProfiles.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
+                  <SlidersHorizontal size={10} /> Generic
+                </h3>
+                <div className="space-y-2">
+                  {filteredGenericProfiles.map((stock) => (
+                    <button
+                      key={stock.id}
+                      onClick={() => onStockChange(stock)}
+                      className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
+                        activeStockId === stock.id
+                          ? 'bg-zinc-100 text-zinc-950 shadow-lg'
+                          : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                      }`}
+                    >
+                      <SlidersHorizontal size={14} className="shrink-0 text-zinc-600" />
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-medium">{stock.name}</span>
+                        <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
+                          {stock.type === 'color' ? 'Color Negative' : 'Black & White'}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
-            <div className="space-y-3">
-              <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
-                <Film size={10} /> Film Stocks
-              </h3>
-              <div className="space-y-2">
-                {stockProfiles.map((stock) => (
-                  <button
-                    key={stock.id}
-                    onClick={() => onStockChange(stock)}
-                    className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
-                      activeStockId === stock.id
-                        ? 'bg-zinc-100 text-zinc-950 shadow-lg'
-                        : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
-                    }`}
-                  >
-                    <Film size={14} className="shrink-0 text-zinc-600" />
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-medium">{stock.name}</span>
-                      <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
-                        {stock.type === 'color' ? 'Color Negative' : 'Black & White'}
-                      </span>
-                    </div>
-                  </button>
-                ))}
+            {filteredStockProfiles.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
+                  <Film size={10} /> Film Stocks
+                </h3>
+                <div className="space-y-2">
+                  {filteredStockProfiles.map((stock) => (
+                    <button
+                      key={stock.id}
+                      onClick={() => onStockChange(stock)}
+                      className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
+                        activeStockId === stock.id
+                          ? 'bg-zinc-100 text-zinc-950 shadow-lg'
+                          : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                      }`}
+                    >
+                      <Film size={14} className="shrink-0 text-zinc-600" />
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-medium">{stock.name}</span>
+                        <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
+                          {stock.type === 'color' ? 'Color Negative' : 'Black & White'}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
+
+            {isSearching && filteredGenericProfiles.length === 0 && filteredStockProfiles.length === 0 && (
+              <p className="text-center text-[11px] text-zinc-600 py-6">No matching presets</p>
+            )}
           </>
         )}
       </div>
