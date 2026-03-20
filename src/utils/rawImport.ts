@@ -1,7 +1,24 @@
 import { RAW_EXTENSIONS } from '../constants';
-import { ConversionSettings, FilmBaseSample, FilmProfile } from '../types';
+import { getColorProfileIdFromName } from './colorProfiles';
+import { ConversionSettings, DecodeRequest, FilmBaseSample, FilmProfile } from '../types';
 
 export const RAW_IMPORT_PROFILE_ID = 'raw-import-result';
+
+export interface RawDecodeResult {
+  width: number;
+  height: number;
+  data: ArrayLike<number>;
+  color_space: string;
+  white_balance?: [number, number, number] | null;
+  orientation?: number | null;
+}
+
+export interface DesktopRawDecodeForWorkerOptions {
+  documentId: string;
+  fileName: string;
+  path: string;
+  size: number;
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -25,6 +42,58 @@ export function rotationFromExifOrientation(orientation: number | null | undefin
     default:
       return 0;
   }
+}
+
+export function rgbToRgba(rgb: ArrayLike<number>, width: number, height: number) {
+  const expectedLength = width * height * 3;
+  if (rgb.length !== expectedLength) {
+    throw new Error(`RAW decode returned ${rgb.length} RGB bytes for a ${width}x${height} image.`);
+  }
+
+  const rgba = new Uint8Array(width * height * 4);
+  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < rgb.length; sourceIndex += 3, targetIndex += 4) {
+    rgba[targetIndex] = rgb[sourceIndex] ?? 0;
+    rgba[targetIndex + 1] = rgb[sourceIndex + 1] ?? 0;
+    rgba[targetIndex + 2] = rgb[sourceIndex + 2] ?? 0;
+    rgba[targetIndex + 3] = 255;
+  }
+  return rgba;
+}
+
+export function createWorkerDecodeRequestFromRaw(
+  documentId: string,
+  fileName: string,
+  size: number,
+  rawResult: RawDecodeResult,
+): DecodeRequest {
+  return {
+    documentId,
+    buffer: rgbToRgba(rawResult.data, rawResult.width, rawResult.height).buffer,
+    fileName,
+    mime: 'image/x-raw-rgba',
+    size,
+    rawDimensions: {
+      width: rawResult.width,
+      height: rawResult.height,
+    },
+    declaredColorProfileName: rawResult.color_space,
+    declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
+  };
+}
+
+export async function decodeDesktopRawForWorker(options: DesktopRawDecodeForWorkerOptions) {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const rawResult = await invoke<RawDecodeResult>('decode_raw', { path: options.path });
+
+  return {
+    rawResult,
+    decodeRequest: createWorkerDecodeRequestFromRaw(
+      options.documentId,
+      options.fileName,
+      options.size,
+      rawResult,
+    ),
+  };
 }
 
 export function estimateFilmBaseSample(rgb: ArrayLike<number>, width: number, height: number): FilmBaseSample | null {

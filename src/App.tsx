@@ -39,18 +39,9 @@ import { addRecentFile } from './utils/recentFilesStore';
 import { RecentFilesList } from './components/RecentFilesList';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase } from './utils/imagePipeline';
-import { getColorProfileDescription, getColorProfileIdFromName, supportsDisplayP3Canvas } from './utils/colorProfiles';
-import { buildRawInitialSettings, createRawImportProfile, estimateFilmBaseSample, getFilmBaseCorrectionSettings, isRawExtension, rotationFromExifOrientation } from './utils/rawImport';
+import { getColorProfileDescription, supportsDisplayP3Canvas } from './utils/colorProfiles';
+import { buildRawInitialSettings, createRawImportProfile, decodeDesktopRawForWorker, estimateFilmBaseSample, getFilmBaseCorrectionSettings, isRawExtension, rotationFromExifOrientation } from './utils/rawImport';
 import { BatchJobEntry } from './utils/batchProcessor';
-
-interface RawDecodeResult {
-  width: number;
-  height: number;
-  data: ArrayLike<number>;
-  color_space: string;
-  white_balance?: [number, number, number] | null;
-  orientation?: number | null;
-}
 
 function resolveAutoInputProfileId(source: Pick<SourceMetadata, 'decoderColorProfileId' | 'embeddedColorProfileId'>): ColorProfileId {
   return source.decoderColorProfileId ?? source.embeddedColorProfileId ?? 'srgb';
@@ -199,22 +190,6 @@ function waitForNextPaint() {
       });
     });
   });
-}
-
-function rgbToRgba(rgb: ArrayLike<number>, width: number, height: number) {
-  const expectedLength = width * height * 3;
-  if (rgb.length !== expectedLength) {
-    throw new Error(`RAW decode returned ${rgb.length} RGB bytes for a ${width}x${height} image.`);
-  }
-
-  const rgba = new Uint8Array(width * height * 4);
-  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < rgb.length; sourceIndex += 3, targetIndex += 4) {
-    rgba[targetIndex] = rgb[sourceIndex] ?? 0;
-    rgba[targetIndex + 1] = rgb[sourceIndex + 1] ?? 0;
-    rgba[targetIndex + 2] = rgb[sourceIndex + 2] ?? 0;
-    rgba[targetIndex + 3] = 255;
-  }
-  return rgba;
 }
 
 type QueuedPreviewRender = {
@@ -1626,8 +1601,12 @@ export default function App() {
 
       if (rawImport) {
         try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          const rawResult = await invoke<RawDecodeResult>('decode_raw', { path: nativePath });
+          const { rawResult, decodeRequest } = await decodeDesktopRawForWorker({
+            documentId,
+            fileName: file.name,
+            path: nativePath,
+            size: sourceFileSize,
+          });
           const estimatedFilmBase = estimateFilmBaseSample(rawResult.data, rawResult.width, rawResult.height);
           initialSettings = buildRawInitialSettings(
             initialProfile.defaultSettings,
@@ -1637,7 +1616,6 @@ export default function App() {
             rawResult.orientation,
           );
           rawImportProfile = createRawImportProfile(initialProfile, initialSettings);
-          const rgba = rgbToRgba(rawResult.data, rawResult.width, rawResult.height);
 
           if (estimatedFilmBase) {
             appendDiagnostic({
@@ -1665,19 +1643,7 @@ export default function App() {
             },
           });
 
-          decoded = await worker.decode({
-            documentId,
-            buffer: rgba.buffer,
-            fileName: file.name,
-            mime: 'image/x-raw-rgba',
-            size: sourceFileSize,
-            rawDimensions: {
-              width: rawResult.width,
-              height: rawResult.height,
-            },
-            declaredColorProfileName: rawResult.color_space,
-            declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
-          });
+          decoded = await worker.decode(decodeRequest);
         } catch (rawError) {
           const message = formatError(rawError);
           appendDiagnostic({

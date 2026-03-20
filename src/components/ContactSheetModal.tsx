@@ -3,10 +3,12 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, X } from 'lucide-react';
 import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile } from '../types';
-import { saveExportBlob } from '../utils/fileBridge';
+import { isDesktopShell, saveExportBlob } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { BatchJobEntry } from '../utils/batchProcessor';
 import { getColorProfileDescription } from '../utils/colorProfiles';
+import { getFileExtension } from '../utils/imagePipeline';
+import { decodeDesktopRawForWorker, isRawExtension } from '../utils/rawImport';
 
 interface ContactSheetModalProps {
   isOpen: boolean;
@@ -128,19 +130,37 @@ export function ContactSheetModal({
           throw new Error(`Missing file for "${entry.filename}".`);
         }
 
-        if (entry.size > MAX_FILE_SIZE_BYTES) {
+        const extension = getFileExtension(entry.filename);
+        const isRaw = isRawExtension(extension);
+
+        if (!isRaw && entry.size > MAX_FILE_SIZE_BYTES) {
           throw new Error(`"${entry.filename}" exceeds the supported file size limit.`);
         }
 
         const tempDocumentId = `contact-sheet-${entry.id}`;
-        const buffer = await entry.file.arrayBuffer();
-        await workerClient.decode({
-          documentId: tempDocumentId,
-          buffer,
-          fileName: entry.filename,
-          mime: entry.file.type || 'application/octet-stream',
-          size: entry.file.size,
-        });
+
+        if (isRaw) {
+          if (!isDesktopShell() || !entry.nativePath) {
+            throw new Error(`RAW files require the desktop app. Missing native path for "${entry.filename}".`);
+          }
+
+          const { decodeRequest } = await decodeDesktopRawForWorker({
+            documentId: tempDocumentId,
+            fileName: entry.filename,
+            path: entry.nativePath,
+            size: entry.size,
+          });
+          await workerClient.decode(decodeRequest);
+        } else {
+          const buffer = await entry.file.arrayBuffer();
+          await workerClient.decode({
+            documentId: tempDocumentId,
+            buffer,
+            fileName: entry.filename,
+            mime: entry.file.type || 'application/octet-stream',
+            size: entry.file.size,
+          });
+        }
 
         tempDocumentIds.push(tempDocumentId);
         cells.push({

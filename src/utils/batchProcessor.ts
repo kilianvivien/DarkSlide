@@ -1,8 +1,7 @@
 import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, ExportOptions, FilmProfile, SourceMetadata } from '../types';
 import { ImageWorkerClient } from './imageWorkerClient';
 import { getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
-import { isRawExtension } from './rawImport';
-import { getColorProfileIdFromName } from './colorProfiles';
+import { decodeDesktopRawForWorker, isRawExtension } from './rawImport';
 import { isDesktopShell, saveExportBlob, saveToDirectory } from './fileBridge';
 
 export interface BatchJobEntry {
@@ -37,31 +36,6 @@ async function saveBatchExport(blob: Blob, filename: string, format: ExportOptio
   }
 
   return saveExportBlob(blob, filename, format);
-}
-
-interface RawDecodeResult {
-  width: number;
-  height: number;
-  data: ArrayLike<number>;
-  color_space: string;
-  white_balance?: [number, number, number] | null;
-  orientation?: number | null;
-}
-
-function rgbToRgba(rgb: ArrayLike<number>, width: number, height: number) {
-  const expectedLength = width * height * 3;
-  if (rgb.length !== expectedLength) {
-    throw new Error(`RAW decode returned ${rgb.length} RGB bytes for a ${width}×${height} image.`);
-  }
-
-  const rgba = new Uint8Array(width * height * 4);
-  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < rgb.length; sourceIndex += 3, targetIndex += 4) {
-    rgba[targetIndex] = rgb[sourceIndex] ?? 0;
-    rgba[targetIndex + 1] = rgb[sourceIndex + 1] ?? 0;
-    rgba[targetIndex + 2] = rgb[sourceIndex + 2] ?? 0;
-    rgba[targetIndex + 3] = 255;
-  }
-  return rgba;
 }
 
 function resolveBatchInputProfileId(sourceMetadata: SourceMetadata | undefined, colorManagement: ColorManagementSettings): ColorProfileId {
@@ -104,24 +78,15 @@ export async function* runBatch(
             throw new Error(`RAW files require the desktop app. Missing native path for "${entry.filename}".`);
           }
 
-          const { invoke } = await import('@tauri-apps/api/core');
-          const rawResult = await invoke<RawDecodeResult>('decode_raw', { path: entry.nativePath });
+          const { decodeRequest } = await decodeDesktopRawForWorker({
+            documentId,
+            fileName: entry.filename,
+            path: entry.nativePath,
+            size: entry.size,
+          });
           yield { type: 'progress', entryId: entry.id, progress: 0.25 };
 
-          const rgba = rgbToRgba(rawResult.data, rawResult.width, rawResult.height);
-          const decoded = await workerClient.decode({
-            documentId,
-            buffer: rgba.buffer,
-            fileName: entry.filename,
-            mime: 'image/x-raw-rgba',
-            size: entry.size,
-            rawDimensions: {
-              width: rawResult.width,
-              height: rawResult.height,
-            },
-            declaredColorProfileName: rawResult.color_space,
-            declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
-          });
+          const decoded = await workerClient.decode(decodeRequest);
           sourceMetadata = decoded.metadata;
         } else {
           if (!entry.file) {

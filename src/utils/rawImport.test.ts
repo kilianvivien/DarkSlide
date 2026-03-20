@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
-import { buildRawInitialSettings, createRawImportProfile, estimateFilmBaseSample, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, RAW_IMPORT_PROFILE_ID, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, RAW_IMPORT_PROFILE_ID, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 
 function createRawRgb(width: number, height: number, border: [number, number, number], center: [number, number, number]) {
   const data = new Uint8Array(width * height * 3);
@@ -94,5 +94,37 @@ describe('rawImport', () => {
     expect(getFilmBaseExposure({ r: 168, g: 151, b: 134 })).toBe(
       Math.round(50 * Math.log2((245 / 255) / ((255 - 151) / 255))),
     );
+  });
+
+  it('builds a worker decode request from RAW decoder output', () => {
+    const rawResult = {
+      width: 2,
+      height: 1,
+      data: new Uint8Array([10, 20, 30, 40, 50, 60]),
+      color_space: 'Adobe RGB (1998)',
+    };
+
+    const request = createWorkerDecodeRequestFromRaw('doc-1', 'scan.nef', 1234, rawResult);
+
+    expect(request).toMatchObject({
+      documentId: 'doc-1',
+      fileName: 'scan.nef',
+      mime: 'image/x-raw-rgba',
+      size: 1234,
+      rawDimensions: {
+        width: 2,
+        height: 1,
+      },
+      declaredColorProfileName: 'Adobe RGB (1998)',
+      declaredColorProfileId: 'adobe-rgb',
+    });
+    expect(Array.from(new Uint8Array(request.buffer))).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
+  });
+
+  it('expands RGB RAW pixels to RGBA for the worker', () => {
+    expect(Array.from(rgbToRgba(new Uint8Array([1, 2, 3, 4, 5, 6]), 2, 1))).toEqual([
+      1, 2, 3, 255,
+      4, 5, 6, 255,
+    ]);
   });
 });
