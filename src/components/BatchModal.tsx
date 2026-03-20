@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, NotificationSettings } from '../types';
-import { openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
+import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
 import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getColorProfileDescription } from '../utils/colorProfiles';
@@ -113,6 +113,7 @@ export function BatchModal({
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cancelTokenRef = useRef({ cancelled: false });
+  const desktopShell = isDesktopShell();
 
   const selectedBuiltinProfile = useMemo(
     () => FILM_PROFILES.find((profile) => profile.id === selectedProfileId) ?? FILM_PROFILES[0],
@@ -225,9 +226,25 @@ export function BatchModal({
       const selected = await openDirectory();
       if (selected) {
         setOutputPath(selected);
+        setError(null);
       }
     } catch (folderError) {
       setError(folderError instanceof Error ? folderError.message : String(folderError));
+    }
+  };
+
+  const handleUseDownloads = async () => {
+    try {
+      const selected = await getDesktopDownloadsDirectory();
+      if (!selected) {
+        setError('Could not determine the desktop Downloads folder.');
+        return;
+      }
+
+      setOutputPath(selected);
+      setError(null);
+    } catch (downloadsError) {
+      setError(downloadsError instanceof Error ? downloadsError.message : String(downloadsError));
     }
   };
 
@@ -258,6 +275,23 @@ export function BatchModal({
       return;
     }
 
+    let resolvedOutputPath = outputPath;
+    if (desktopShell && !resolvedOutputPath) {
+      try {
+        const selected = await openDirectory();
+        if (!selected) {
+          setError('Choose an output folder or use Downloads before starting the batch.');
+          return;
+        }
+
+        resolvedOutputPath = selected;
+        setOutputPath(selected);
+      } catch (folderError) {
+        setError(folderError instanceof Error ? folderError.message : String(folderError));
+        return;
+      }
+    }
+
     cancelTokenRef.current = { cancelled: false };
     setIsRunning(true);
     setError(null);
@@ -285,7 +319,7 @@ export function BatchModal({
           embedOutputProfile: exportOptions.embedOutputProfile,
         },
         exportOptions,
-        outputPath,
+        resolvedOutputPath,
         cancelTokenRef.current,
       )) {
         if (event.type === 'done') {
@@ -667,19 +701,35 @@ export function BatchModal({
                     <div className="border-t border-zinc-800/80" />
 
                     <section className="space-y-3">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Output Folder</h3>
-                        <button
-                          type="button"
-                          onClick={() => void handleChooseFolder()}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200"
-                        >
-                          <FolderOpen size={12} />
-                          Choose Folder
-                        </button>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleChooseFolder()}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200"
+                          >
+                            <FolderOpen size={12} />
+                            Choose Folder
+                          </button>
+                          {desktopShell && (
+                            <button
+                              type="button"
+                              onClick={() => void handleUseDownloads()}
+                              className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200"
+                            >
+                              Use Downloads
+                            </button>
+                          )}
+                        </div>
                       </div>
+                      <p className="text-[11px] leading-relaxed text-zinc-500">
+                        {desktopShell
+                          ? 'Desktop batch export needs a destination before processing starts. Choose a folder or use Downloads.'
+                          : 'Choose a folder to save directly there, or leave it empty to use your browser download flow.'}
+                      </p>
                       <p className="rounded-lg border border-zinc-800/60 bg-zinc-900/30 px-3 py-2 text-xs text-zinc-500">
-                        {outputPath ?? 'Browser download flow will be used if no folder is chosen.'}
+                        {outputPath ?? (desktopShell ? 'No destination selected.' : 'Browser download flow will be used if no folder is chosen.')}
                       </p>
                     </section>
 

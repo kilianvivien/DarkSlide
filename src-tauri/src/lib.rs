@@ -5,7 +5,7 @@ use std::process::Command;
 use rawler::analyze::{analyze_metadata, AnalyzerData};
 use rawler::imgop::develop::{ProcessingStep, RawDevelop};
 use serde::Serialize;
-use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
 use tauri::Manager;
 
@@ -316,7 +316,14 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             let app_menu = SubmenuBuilder::new(app, "DarkSlide")
-                .about(None)
+                .about(Some(
+                    AboutMetadataBuilder::new()
+                        .version(Some(env!("CARGO_PKG_VERSION")))
+                        .short_version(Some(env!("CARGO_PKG_VERSION")))
+                        .license(Some(env!("CARGO_PKG_LICENSE")))
+                        .credits(Some("MIT Licence"))
+                        .build(),
+                ))
                 .separator()
                 .item(&settings_item)
                 .separator()

@@ -46,7 +46,7 @@ vi.mock('@tauri-apps/api/path', () => ({
   downloadDir: pathState.downloadDir,
 }));
 
-import { confirmDeletePreset, isDesktopShell, openDirectory, openImageFile, openInExternalEditor, openPresetFile, saveExportBlob, savePresetFile, saveToDirectory } from './fileBridge';
+import { confirmDeletePreset, getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFile, openInExternalEditor, openPresetFile, saveExportBlob, savePresetFile, saveToDirectory } from './fileBridge';
 
 describe('fileBridge', () => {
   beforeEach(() => {
@@ -155,6 +155,19 @@ describe('fileBridge', () => {
 
     await expect(openDirectory()).resolves.toBe('[browser-dir] DarkSlide Exports');
     expect(showDirectoryPicker).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null for the desktop Downloads directory outside Tauri', async () => {
+    await expect(getDesktopDownloadsDirectory()).resolves.toBeNull();
+    expect(pathState.downloadDir).not.toHaveBeenCalled();
+  });
+
+  it('returns the desktop Downloads directory in Tauri', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    pathState.downloadDir.mockResolvedValue('/Users/tester/Downloads');
+
+    await expect(getDesktopDownloadsDirectory()).resolves.toBe('/Users/tester/Downloads');
+    expect(pathState.downloadDir).toHaveBeenCalledTimes(1);
   });
 
   it('reuses the selected browser directory handle for batch saves', async () => {

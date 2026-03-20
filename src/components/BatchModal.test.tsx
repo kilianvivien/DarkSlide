@@ -7,6 +7,8 @@ import type { DocumentTab, FilmProfile, WorkspaceDocument } from '../types';
 import type { ImageWorkerClient } from '../utils/imageWorkerClient';
 
 const fileBridgeState = vi.hoisted(() => ({
+  getDesktopDownloadsDirectory: vi.fn(),
+  isDesktopShell: vi.fn(() => false),
   openDirectory: vi.fn(),
   openMultipleImageFiles: vi.fn(),
 }));
@@ -38,6 +40,8 @@ vi.mock('motion/react', async () => {
 });
 
 vi.mock('../utils/fileBridge', () => ({
+  getDesktopDownloadsDirectory: fileBridgeState.getDesktopDownloadsDirectory,
+  isDesktopShell: fileBridgeState.isDesktopShell,
   openDirectory: fileBridgeState.openDirectory,
   openMultipleImageFiles: fileBridgeState.openMultipleImageFiles,
 }));
@@ -125,11 +129,14 @@ function renderModal({
 
 describe('BatchModal', () => {
   beforeEach(() => {
+    fileBridgeState.getDesktopDownloadsDirectory.mockReset();
+    fileBridgeState.isDesktopShell.mockReset();
     fileBridgeState.openDirectory.mockReset();
     fileBridgeState.openMultipleImageFiles.mockReset();
     runBatchState.runBatch.mockReset();
     exportNotificationState.notifyExportFinished.mockReset();
     exportNotificationState.primeExportNotificationsPermission.mockReset();
+    fileBridgeState.isDesktopShell.mockReturnValue(false);
     exportNotificationState.notifyExportFinished.mockResolvedValue(undefined);
     exportNotificationState.primeExportNotificationsPermission.mockResolvedValue(undefined);
     runBatchState.runBatch.mockImplementation(async function* () {
@@ -275,6 +282,87 @@ describe('BatchModal', () => {
         },
       }),
     }));
+  });
+
+  it('prompts for a desktop destination when starting without one selected', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openDirectory.mockResolvedValue('/Users/tester/Pictures/DarkSlide');
+
+    renderModal({ customProfiles: [] });
+    await screen.findByText('open-scan.tiff');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+
+    await waitFor(() => {
+      expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
+    });
+
+    expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
+    expect(runBatchState.runBatch.mock.calls[0]?.[6]).toBe('/Users/tester/Pictures/DarkSlide');
+  });
+
+  it('keeps the batch stopped when the desktop destination prompt is cancelled', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openDirectory.mockResolvedValue(null);
+
+    renderModal({ customProfiles: [] });
+    await screen.findByText('open-scan.tiff');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+
+    await waitFor(() => {
+      expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
+    });
+
+    expect(runBatchState.runBatch).not.toHaveBeenCalled();
+    expect(screen.getByText('Choose an output folder or use Downloads before starting the batch.')).toBeInTheDocument();
+  });
+
+  it('uses the desktop Downloads destination when selected explicitly', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.getDesktopDownloadsDirectory.mockResolvedValue('/Users/tester/Downloads');
+
+    renderModal({ customProfiles: [] });
+    await screen.findByText('open-scan.tiff');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use Downloads' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('/Users/tester/Downloads')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+
+    await waitFor(() => {
+      expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
+    });
+
+    expect(fileBridgeState.getDesktopDownloadsDirectory).toHaveBeenCalledTimes(1);
+    expect(fileBridgeState.openDirectory).not.toHaveBeenCalled();
+    expect(runBatchState.runBatch.mock.calls[0]?.[6]).toBe('/Users/tester/Downloads');
+  });
+
+  it('does not re-prompt when a desktop destination is already selected', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openDirectory.mockResolvedValue('/Users/tester/Exports');
+
+    renderModal({ customProfiles: [] });
+    await screen.findByText('open-scan.tiff');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Folder' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('/Users/tester/Exports')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+
+    await waitFor(() => {
+      expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
+    });
+
+    expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
+    expect(runBatchState.runBatch.mock.calls[0]?.[6]).toBe('/Users/tester/Exports');
   });
 
   it('sends one completion notification when the batch succeeds', async () => {

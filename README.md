@@ -91,7 +91,7 @@ DarkSlide is continuously evolving. Here's where things stand:
 - ✅ **Phase 9:** RAW import (Tauri desktop), film-format crop ratios, and importable/exportable `.darkslide` preset files.
 - ✅ **Phases 10–11:** Render performance (memoised components, reduced re-renders) and worker/memory hardening (split caches, bounded eviction).
 - ✅ **Phase 12:** Pro workflow — multi-document tabs, batch export, contact sheet export, Open in External Editor, and Display P3 ICC profile recognition on import.
-- ✅ **v0.3.0 polish:** Preset search, export toast notifications, per-batch preset transforms, RAW-aware contact sheets, and recent files capped at five entries.
+- ✅ **v0.3.1 polish:** Preset search, export toast notifications, per-batch preset transforms, RAW-aware contact sheets, and recent files capped at five entries.
 - 🔜 **Phase 13:** Architecture health — App.tsx decomposition, worker protocol type safety, error boundaries, and accessibility baseline.
 - 🔜 **Phase 14:** Smart scanning features.
 - 🔜 **Phase 15:** Conversion quality & minilab emulation.

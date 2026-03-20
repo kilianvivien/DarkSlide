@@ -200,6 +200,15 @@ export async function openDirectory(): Promise<string | null> {
   return typeof selected === 'string' ? selected : null;
 }
 
+export async function getDesktopDownloadsDirectory(): Promise<string | null> {
+  if (!isDesktopShell()) {
+    return null;
+  }
+
+  const { downloadDir } = await import('@tauri-apps/api/path');
+  return downloadDir();
+}
+
 export async function saveToDirectory(blob: Blob, filename: string, dirPath: string): Promise<string> {
   if (isDesktopShell()) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -307,8 +316,10 @@ export async function openInExternalEditor(
     throw new Error('Open in Editor requires the desktop app.');
   }
 
-  const { downloadDir } = await import('@tauri-apps/api/path');
-  const destinationDirectory = outputDirectoryPath ?? await downloadDir();
+  const destinationDirectory = outputDirectoryPath ?? await getDesktopDownloadsDirectory();
+  if (!destinationDirectory) {
+    throw new Error('Could not determine the desktop Downloads directory.');
+  }
   let savedPath: string | null = null;
 
   try {
