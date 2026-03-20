@@ -23,11 +23,11 @@ import { Sidebar } from './components/Sidebar';
 import { PresetsPane } from './components/PresetsPane';
 import { CropOverlay } from './components/CropOverlay';
 import { SettingsModal } from './components/SettingsModal';
-import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, MAX_OPEN_TABS, SUPPORTED_EXTENSIONS } from './constants';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, MAX_OPEN_TABS, SUPPORTED_EXTENSIONS } from './constants';
 import { BatchModal } from './components/BatchModal';
 import { ContactSheetModal } from './components/ContactSheetModal';
 import { TabBar } from './components/TabBar';
-import { ColorManagementSettings, ColorMatrix, ColorProfileId, ConversionSettings, CropTab, DecodedImage, DocumentTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, RenderBackendDiagnostics, ScannerType, SourceMetadata, TonalCharacter, WorkspaceDocument } from './types';
+import { ColorManagementSettings, ColorMatrix, ColorProfileId, ConversionSettings, CropTab, DecodedImage, DocumentTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, ScannerType, SourceMetadata, TonalCharacter, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useViewportZoom } from './hooks/useViewportZoom';
 import { ZoomBar } from './components/ZoomBar';
@@ -42,6 +42,7 @@ import { clamp, getFileExtension, getTransformedDimensions, sanitizeFilenameBase
 import { getColorProfileDescription, supportsDisplayP3Canvas } from './utils/colorProfiles';
 import { buildRawInitialSettings, createRawImportProfile, decodeDesktopRawForWorker, estimateFilmBaseSample, getFilmBaseCorrectionSettings, isRawExtension, rotationFromExifOrientation } from './utils/rawImport';
 import { BatchJobEntry } from './utils/batchProcessor';
+import { notifyExportFinished, primeExportNotificationsPermission } from './utils/exportNotifications';
 
 function resolveAutoInputProfileId(source: Pick<SourceMetadata, 'decoderColorProfileId' | 'embeddedColorProfileId'>): ColorProfileId {
   return source.decoderColorProfileId ?? source.embeddedColorProfileId ?? 'srgb';
@@ -262,6 +263,7 @@ export default function App() {
   const [contactSheetSharedColorManagement, setContactSheetSharedColorManagement] = useState<ColorManagementSettings | null>(null);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => initialPreferences?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS);
   const [externalEditorPath, setExternalEditorPath] = useState<string | null>(() => initialPreferences?.externalEditorPath ?? null);
   const [externalEditorName, setExternalEditorName] = useState<string | null>(() => initialPreferences?.externalEditorName ?? null);
   const [openInEditorOutputPath, setOpenInEditorOutputPath] = useState<string | null>(() => initialPreferences?.openInEditorOutputPath ?? null);
@@ -386,9 +388,10 @@ export default function App() {
 
   // Snapshot of the latest preference-relevant state, updated on every render so handlers can always read fresh values
   const prefsSnapshotRef = useRef<UserPreferences>({
-    version: 3,
+    version: 4,
     lastProfileId: fallbackProfile.id,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
+    notificationSettings: initialPreferences?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: 'adjust',
     cropTab: initialPreferences?.cropTab ?? 'Film',
     isLeftPaneOpen: true,
@@ -400,9 +403,10 @@ export default function App() {
     openInEditorOutputPath: initialPreferences?.openInEditorOutputPath ?? null,
   });
   prefsSnapshotRef.current = {
-    version: 3,
+    version: 4,
     lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
     exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
+    notificationSettings,
     sidebarTab,
     cropTab,
     isLeftPaneOpen,
@@ -1313,6 +1317,14 @@ export default function App() {
     }
   }, [documentState, updateDocument]);
 
+  const handleNotificationSettingsChange = useCallback((options: Partial<NotificationSettings>) => {
+    setNotificationSettings((current) => {
+      const next = { ...current, ...options };
+      savePreferences({ ...prefsSnapshotRef.current, notificationSettings: next });
+      return next;
+    });
+  }, []);
+
   const disposeDocument = useCallback(async (documentId: string | null | undefined) => {
     if (!documentId || !workerClientRef.current) return;
     try {
@@ -2145,6 +2157,9 @@ export default function App() {
 
     setDocumentState((current) => current ? { ...current, status: 'exporting' } : current);
     try {
+      if (notificationSettings.enabled && notificationSettings.exportComplete) {
+        await primeExportNotificationsPermission();
+      }
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
       const result = await worker.export({
         documentId: documentState.id,
@@ -2162,6 +2177,12 @@ export default function App() {
       const saveResult = await saveExportBlob(result.blob, result.filename, documentState.exportOptions.format);
       if (saveResult === 'saved') {
         appendDiagnostic({ level: 'info', code: 'EXPORT_SUCCESS', message: result.filename, context: { format: documentState.exportOptions.format } });
+        if (notificationSettings.enabled && notificationSettings.exportComplete) {
+          await notifyExportFinished({
+            kind: 'export',
+            filename: result.filename,
+          });
+        }
       } else {
         appendDiagnostic({ level: 'info', code: 'EXPORT_CANCELLED', message: result.filename, context: { format: documentState.exportOptions.format } });
       }
@@ -2174,7 +2195,7 @@ export default function App() {
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'EXPORT_FAILED' } : current);
       void refreshRenderBackendDiagnostics();
     }
-  }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, refreshRenderBackendDiagnostics]);
+  }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics]);
 
   handleDownloadRef.current = handleDownload;
 
@@ -2901,6 +2922,8 @@ export default function App() {
         renderBackendDiagnostics={renderBackendDiagnostics}
         onToggleGPURendering={handleGPURenderingChange}
         onToggleUltraSmoothDrag={handleUltraSmoothDragChange}
+        notificationSettings={notificationSettings}
+        onNotificationSettingsChange={handleNotificationSettingsChange}
         colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
         sourceMetadata={documentState?.source ?? null}
         onColorManagementChange={handleColorManagementChange}
@@ -2923,6 +2946,7 @@ export default function App() {
         currentSettings={documentState?.settings ?? null}
         currentProfile={documentState ? activeProfile : null}
         currentColorManagement={documentState?.colorManagement ?? null}
+        notificationSettings={notificationSettings}
         customProfiles={customPresets}
         openTabs={tabs}
       />
@@ -2933,6 +2957,7 @@ export default function App() {
         sharedSettings={contactSheetSharedSettings}
         sharedProfile={contactSheetSharedProfile}
         sharedColorManagement={contactSheetSharedColorManagement}
+        notificationSettings={notificationSettings}
         workerClient={workerClientRef.current}
       />
     </div>

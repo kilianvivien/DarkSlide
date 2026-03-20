@@ -2,13 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, X } from 'lucide-react';
 import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile, NotificationSettings } from '../types';
 import { isDesktopShell, saveExportBlob } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { BatchJobEntry } from '../utils/batchProcessor';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { getFileExtension } from '../utils/imagePipeline';
 import { decodeDesktopRawForWorker, isRawExtension } from '../utils/rawImport';
+import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 
 interface ContactSheetModalProps {
   isOpen: boolean;
@@ -17,6 +18,7 @@ interface ContactSheetModalProps {
   sharedSettings: ConversionSettings | null;
   sharedProfile: FilmProfile | null;
   sharedColorManagement: ColorManagementSettings | null;
+  notificationSettings: NotificationSettings;
   workerClient: ImageWorkerClient | null;
 }
 
@@ -64,6 +66,7 @@ export function ContactSheetModal({
   sharedSettings,
   sharedProfile,
   sharedColorManagement,
+  notificationSettings,
   workerClient,
 }: ContactSheetModalProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>(entries.map((entry) => entry.id));
@@ -115,6 +118,9 @@ export function ContactSheetModal({
     setError(null);
 
     try {
+      if (notificationSettings.enabled && notificationSettings.contactSheetComplete) {
+        await primeExportNotificationsPermission();
+      }
       const cells: Array<{ documentId: string; label: string }> = [];
 
       for (const entry of selectedEntries) {
@@ -195,8 +201,16 @@ export function ContactSheetModal({
         })),
       });
 
-      await saveExportBlob(result.blob, result.filename, format);
-      onClose();
+      const saveResult = await saveExportBlob(result.blob, result.filename, format);
+      if (saveResult === 'saved') {
+        if (notificationSettings.enabled && notificationSettings.contactSheetComplete) {
+          await notifyExportFinished({
+            kind: 'contact-sheet',
+            filename: result.filename,
+          });
+        }
+        onClose();
+      }
     } catch (generateError) {
       setError(generateError instanceof Error ? generateError.message : String(generateError));
     } finally {

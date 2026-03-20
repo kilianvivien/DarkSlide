@@ -68,6 +68,11 @@ const fileBridgeState = vi.hoisted(() => ({
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
 }));
 
+const exportNotificationState = vi.hoisted(() => ({
+  notifyExportFinished: vi.fn(),
+  primeExportNotificationsPermission: vi.fn(),
+}));
+
 vi.mock('motion/react', async () => {
   const ReactModule = await import('react');
 
@@ -242,6 +247,11 @@ vi.mock('./utils/fileBridge', () => ({
   saveExportBlob: fileBridgeState.saveExportBlob,
 }));
 
+vi.mock('./utils/exportNotifications', () => ({
+  notifyExportFinished: exportNotificationState.notifyExportFinished,
+  primeExportNotificationsPermission: exportNotificationState.primeExportNotificationsPermission,
+}));
+
 import App from './App';
 
 function deferred<T>(): Deferred<T> {
@@ -347,6 +357,10 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.saveToDirectory.mockReset();
     fileBridgeState.saveExportBlob.mockReset();
     fileBridgeState.saveExportBlob.mockResolvedValue('saved');
+    exportNotificationState.notifyExportFinished.mockReset();
+    exportNotificationState.primeExportNotificationsPermission.mockReset();
+    exportNotificationState.notifyExportFinished.mockResolvedValue(undefined);
+    exportNotificationState.primeExportNotificationsPermission.mockResolvedValue(undefined);
     fileBridgeState.openInExternalEditor.mockResolvedValue({
       savedPath: '/Users/tester/Downloads/scan.jpg',
       destinationDirectory: '/Users/tester/Downloads',
@@ -1125,8 +1139,44 @@ describe('App import and preview pipeline', () => {
       'export-cancel.jpg',
       'image/jpeg',
     );
+    expect(exportNotificationState.notifyExportFinished).not.toHaveBeenCalled();
     expect(screen.getByText('Export')).toBeInTheDocument();
     expect(screen.queryByText(/Export failed/i)).not.toBeInTheDocument();
+  });
+
+  it('notifies after a successful export save completes', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({ file: createFile('notify.tiff', 'image/tiff'), path: '/Users/tester/notify.tiff' });
+    workerState.decode.mockResolvedValue(createDecodedImage(512, 512));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 80)
+    ));
+    workerState.export.mockResolvedValue({
+      blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
+      filename: 'notify.jpg',
+    });
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Import'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Export'));
+    });
+    await flushMicrotasks();
+
+    expect(exportNotificationState.primeExportNotificationsPermission).toHaveBeenCalledTimes(1);
+    expect(exportNotificationState.notifyExportFinished).toHaveBeenCalledWith({
+      kind: 'export',
+      filename: 'notify.jpg',
+    });
   });
 
   it('passes an edited export filename to the worker export request', async () => {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_COLOR_MANAGEMENT, FILM_PROFILES, MAX_FILE_SIZE_BYTES, createDefaultSettings } from '../constants';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, createDefaultSettings } from '../constants';
 import { ContactSheetModal } from './ContactSheetModal';
 import type { ImageWorkerClient } from '../utils/imageWorkerClient';
 
@@ -12,6 +12,11 @@ const coreState = vi.hoisted(() => ({
 const fileBridgeState = vi.hoisted(() => ({
   isDesktopShell: vi.fn(() => false),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
+}));
+
+const exportNotificationState = vi.hoisted(() => ({
+  notifyExportFinished: vi.fn(),
+  primeExportNotificationsPermission: vi.fn(),
 }));
 
 vi.mock('motion/react', async () => {
@@ -38,6 +43,11 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('../utils/fileBridge', () => ({
   isDesktopShell: fileBridgeState.isDesktopShell,
   saveExportBlob: fileBridgeState.saveExportBlob,
+}));
+
+vi.mock('../utils/exportNotifications', () => ({
+  notifyExportFinished: exportNotificationState.notifyExportFinished,
+  primeExportNotificationsPermission: exportNotificationState.primeExportNotificationsPermission,
 }));
 
 function createFile(name: string, type: string) {
@@ -100,6 +110,7 @@ function renderModal({
       sharedSettings={createDefaultSettings()}
       sharedProfile={FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0]}
       sharedColorManagement={DEFAULT_COLOR_MANAGEMENT}
+      notificationSettings={DEFAULT_NOTIFICATION_SETTINGS}
       workerClient={workerClient as unknown as ImageWorkerClient}
     />,
   );
@@ -114,6 +125,10 @@ describe('ContactSheetModal', () => {
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     fileBridgeState.saveExportBlob.mockReset();
     fileBridgeState.saveExportBlob.mockResolvedValue('saved');
+    exportNotificationState.notifyExportFinished.mockReset();
+    exportNotificationState.primeExportNotificationsPermission.mockReset();
+    exportNotificationState.notifyExportFinished.mockResolvedValue(undefined);
+    exportNotificationState.primeExportNotificationsPermission.mockResolvedValue(undefined);
   });
 
   it('decodes RAW queued files via the desktop path before generating the sheet', async () => {
@@ -159,6 +174,10 @@ describe('ContactSheetModal', () => {
     }));
     expect(workerClient.contactSheet).toHaveBeenCalledTimes(1);
     expect(fileBridgeState.saveExportBlob).toHaveBeenCalledWith(expect.any(Blob), 'contact_sheet.jpg', 'image/jpeg');
+    expect(exportNotificationState.notifyExportFinished).toHaveBeenCalledWith({
+      kind: 'contact-sheet',
+      filename: 'contact_sheet.jpg',
+    });
     expect(workerClient.disposeDocument).toHaveBeenCalledWith('contact-sheet-raw-entry');
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -242,5 +261,29 @@ describe('ContactSheetModal', () => {
       size: 4,
     }));
     expect(workerClient.contactSheet).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not notify when the contact sheet save is cancelled', async () => {
+    fileBridgeState.saveExportBlob.mockResolvedValue('cancelled');
+    const { file } = createFile('scan.png', 'image/png');
+    const { onClose } = renderModal({
+      entries: [{
+        id: 'png-entry',
+        kind: 'file',
+        file,
+        filename: 'scan.png',
+        size: 4,
+        status: 'pending',
+      }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Sheet' }));
+
+    await waitFor(() => {
+      expect(fileBridgeState.saveExportBlob).toHaveBeenCalledTimes(1);
+    });
+
+    expect(exportNotificationState.notifyExportFinished).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

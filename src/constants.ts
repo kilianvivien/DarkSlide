@@ -1,4 +1,4 @@
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, TonalCharacter } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, NotificationSettings, TonalCharacter } from './types';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -29,6 +29,13 @@ export const DEFAULT_COLOR_MANAGEMENT: ColorManagementSettings = {
   inputProfileId: 'srgb',
   outputProfileId: DEFAULT_EXPORT_OPTIONS.outputProfileId,
   embedOutputProfile: DEFAULT_EXPORT_OPTIONS.embedOutputProfile,
+};
+
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  enabled: true,
+  exportComplete: true,
+  batchComplete: true,
+  contactSheetComplete: true,
 };
 
 export function createDefaultSettings(overrides: Partial<ConversionSettings> = {}): ConversionSettings {

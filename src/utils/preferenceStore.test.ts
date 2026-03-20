@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_EXPORT_OPTIONS } from '../constants';
+import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
 import { loadPreferences, savePreferences, UserPreferences } from './preferenceStore';
 
 const VALID_PREFS: UserPreferences = {
-  version: 3,
+  version: 4,
+  notificationSettings: {
+    enabled: false,
+    exportComplete: true,
+    batchComplete: false,
+    contactSheetComplete: true,
+  },
   lastProfileId: 'portra-400',
   exportOptions: {
     format: 'image/png',
@@ -43,7 +49,7 @@ describe('loadPreferences', () => {
   });
 
   it('returns null for wrong version', () => {
-    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({ version: 4, lastProfileId: 'x' }));
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({ version: 5, lastProfileId: 'x' }));
     expect(loadPreferences()).toBeNull();
   });
 
@@ -57,6 +63,7 @@ describe('loadPreferences', () => {
       version: 1,
       lastProfileId: 'x',
       exportOptions: DEFAULT_EXPORT_OPTIONS,
+      notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
       sidebarTab: 'adjust',
       isLeftPaneOpen: 'yes',  // wrong type
       isRightPaneOpen: true,
@@ -117,6 +124,7 @@ describe('loadPreferences', () => {
         outputProfileId: 'srgb',
         embedOutputProfile: true,
       }),
+      notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     });
   });
 });
@@ -127,7 +135,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     const loaded = loadPreferences();
 
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(3);
+    expect(loaded!.version).toBe(4);
     expect(loaded!.lastProfileId).toBe('portra-400');
     expect(loaded!.sidebarTab).toBe('export');
     expect(loaded!.cropTab).toBe('Social');
@@ -135,6 +143,12 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.isRightPaneOpen).toBe(true);
     expect(loaded!.gpuRendering).toBe(false);
     expect(loaded!.ultraSmoothDrag).toBe(true);
+    expect(loaded!.notificationSettings).toEqual({
+      enabled: false,
+      exportComplete: true,
+      batchComplete: false,
+      contactSheetComplete: true,
+    });
     expect(loaded!.exportOptions.format).toBe('image/png');
     expect(loaded!.exportOptions.quality).toBe(0.85);
     expect(loaded!.exportOptions.embedMetadata).toBe(false);
@@ -152,15 +166,29 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.sidebarTab).toBe('curves');
   });
 
-  it('migrates version 2 preferences to version 3 with Downloads mode', () => {
+  it('migrates version 2 preferences to version 4 with Downloads mode', () => {
     localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
       ...VALID_PREFS,
       version: 2,
     }));
 
     expect(loadPreferences()).toMatchObject({
-      version: 3,
+      version: 4,
       openInEditorOutputPath: null,
+      notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+    });
+  });
+
+  it('migrates version 3 preferences to version 4 with default notification settings', () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      ...VALID_PREFS,
+      version: 3,
+      notificationSettings: undefined,
+    }));
+
+    expect(loadPreferences()).toMatchObject({
+      version: 4,
+      notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     });
   });
 });

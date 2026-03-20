@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, RenderBackendDiagnostics, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, NotificationSettings, RenderBackendDiagnostics, SourceMetadata } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 
@@ -16,6 +16,8 @@ interface SettingsModalProps {
   renderBackendDiagnostics: RenderBackendDiagnostics;
   onToggleGPURendering: (enabled: boolean) => void;
   onToggleUltraSmoothDrag: (enabled: boolean) => void;
+  notificationSettings: NotificationSettings;
+  onNotificationSettingsChange: (options: Partial<NotificationSettings>) => void;
   colorManagement: ColorManagementSettings;
   sourceMetadata: SourceMetadata | null;
   onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
@@ -166,6 +168,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   renderBackendDiagnostics,
   onToggleGPURendering,
   onToggleUltraSmoothDrag,
+  notificationSettings,
+  onNotificationSettingsChange,
   colorManagement,
   sourceMetadata,
   onColorManagementChange,
@@ -177,7 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChooseOpenInEditorOutputPath,
   onUseDownloadsForOpenInEditor,
 }) => {
-  const [tab, setTab] = useState<'general' | 'color' | 'shortcuts' | 'diagnostics'>('general');
+  const [tab, setTab] = useState<'general' | 'notifications' | 'color' | 'shortcuts' | 'diagnostics'>('general');
   const [copied, setCopied] = useState(false);
 
   const autoInputLabel = (() => {
@@ -254,7 +258,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               {/* Tab bar */}
               <div className="flex gap-4 px-6 pt-4 border-b border-zinc-800 shrink-0">
-                {(['general', 'color', 'shortcuts', 'diagnostics'] as const).map((t) => (
+                {(['general', 'notifications', 'color', 'shortcuts', 'diagnostics'] as const).map((t) => (
                   <button
                     key={t}
                     onClick={() => setTab(t)}
@@ -449,6 +453,87 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </p>
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {tab === 'notifications' && (
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-zinc-100">Export Notifications</h3>
+                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                            Show a completion notification when exports finish. Desktop builds use OS notifications; browser builds use the web notification API when available.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-label="Notifications Enabled"
+                          aria-checked={notificationSettings.enabled}
+                          onClick={() => onNotificationSettingsChange({ enabled: !notificationSettings.enabled })}
+                          className={`relative shrink-0 overflow-hidden h-7 w-12 rounded-full border transition-all ${
+                            notificationSettings.enabled
+                              ? 'border-emerald-400/70 bg-emerald-500/25'
+                              : 'border-zinc-700 bg-zinc-950'
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-0.5 h-[22px] w-[22px] rounded-full bg-zinc-100 transition-all ${
+                              notificationSettings.enabled ? 'left-[22px]' : 'left-0.5'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
+
+                    {[
+                      {
+                        key: 'exportComplete' as const,
+                        label: 'Single Exports',
+                        description: 'Notify after a normal export is saved.',
+                      },
+                      {
+                        key: 'batchComplete' as const,
+                        label: 'Batch Exports',
+                        description: 'Notify once when a batch run finishes.',
+                      },
+                      {
+                        key: 'contactSheetComplete' as const,
+                        label: 'Contact Sheets',
+                        description: 'Notify after a contact sheet is saved.',
+                      },
+                    ].map((item) => (
+                      <div key={item.key} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <h3 className="text-sm font-semibold text-zinc-100">{item.label}</h3>
+                            <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                              {item.description}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-label={item.label}
+                            aria-checked={notificationSettings[item.key]}
+                            disabled={!notificationSettings.enabled}
+                            onClick={() => onNotificationSettingsChange({ [item.key]: !notificationSettings[item.key] } as Partial<NotificationSettings>)}
+                            className={`relative shrink-0 overflow-hidden h-7 w-12 rounded-full border transition-all disabled:opacity-40 ${
+                              notificationSettings[item.key]
+                                ? 'border-emerald-400/70 bg-emerald-500/25'
+                                : 'border-zinc-700 bg-zinc-950'
+                            }`}
+                          >
+                            <span
+                              className={`absolute top-0.5 h-[22px] w-[22px] rounded-full bg-zinc-100 transition-all ${
+                                notificationSettings[item.key] ? 'left-[22px]' : 'left-0.5'
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
 

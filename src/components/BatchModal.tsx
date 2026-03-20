@@ -2,11 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, NotificationSettings } from '../types';
 import { openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
 import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getColorProfileDescription } from '../utils/colorProfiles';
+import { customProfileHasEmbeddedCropOrRotation, getBatchEffectiveSettings } from '../utils/batchSettings';
+import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 
 type SettingsSourceMode = 'current' | 'builtin' | 'custom';
 
@@ -23,6 +25,7 @@ interface BatchModalProps {
   currentSettings: ConversionSettings | null;
   currentProfile: FilmProfile | null;
   currentColorManagement: ColorManagementSettings | null;
+  notificationSettings: NotificationSettings;
   customProfiles: FilmProfile[];
   openTabs: DocumentTab[];
 }
@@ -91,6 +94,7 @@ export function BatchModal({
   currentSettings,
   currentProfile,
   currentColorManagement,
+  notificationSettings,
   customProfiles,
   openTabs,
 }: BatchModalProps) {
@@ -98,6 +102,7 @@ export function BatchModal({
   const [settingsSource, setSettingsSource] = useState<SettingsSourceMode>(currentSettings && currentProfile ? 'current' : 'builtin');
   const [selectedProfileId, setSelectedProfileId] = useState(FILM_PROFILES[0]?.id ?? 'generic-color');
   const [selectedCustomProfileId, setSelectedCustomProfileId] = useState(customProfiles[0]?.id ?? '');
+  const [ignorePresetCropAndRotation, setIgnorePresetCropAndRotation] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
     ...DEFAULT_EXPORT_OPTIONS,
     filenameBase: '{original}_darkslide',
@@ -129,6 +134,7 @@ export function BatchModal({
 
     setSettingsSource(currentSettings && currentProfile ? 'current' : 'builtin');
     setColorManagement(currentColorManagement ?? DEFAULT_COLOR_MANAGEMENT);
+    setIgnorePresetCropAndRotation(false);
   }, [currentColorManagement, currentProfile, currentSettings, isOpen]);
 
   useEffect(() => {
@@ -230,7 +236,14 @@ export function BatchModal({
     : (settingsSource === 'builtin' ? selectedBuiltinProfile : selectedCustomProfile);
   const sharedSettings = settingsSource === 'current'
     ? currentSettings
-    : sharedProfile?.defaultSettings ?? null;
+    : (sharedProfile
+      ? getBatchEffectiveSettings(
+        sharedProfile.defaultSettings,
+        settingsSource === 'custom' && ignorePresetCropAndRotation,
+      )
+      : null);
+  const selectedCustomProfileHasEmbeddedTransforms = settingsSource === 'custom'
+    && customProfileHasEmbeddedCropOrRotation(selectedCustomProfile);
   const canOpenContactSheet = entries.length > 0 && Boolean(sharedSettings && sharedProfile);
 
   const handleStart = async () => {
@@ -248,6 +261,9 @@ export function BatchModal({
     cancelTokenRef.current = { cancelled: false };
     setIsRunning(true);
     setError(null);
+    if (notificationSettings.enabled && notificationSettings.batchComplete) {
+      await primeExportNotificationsPermission();
+    }
     setEntries((current) => current.map((entry) => ({
       ...entry,
       status: entry.errorMessage ? 'error' : 'pending',
@@ -255,6 +271,9 @@ export function BatchModal({
     })));
 
     try {
+      let successCount = 0;
+      let failureCount = 0;
+
       for await (const event of runBatch(
         workerClient,
         runnableEntries,
@@ -269,6 +288,21 @@ export function BatchModal({
         outputPath,
         cancelTokenRef.current,
       )) {
+        if (event.type === 'done') {
+          successCount += 1;
+        } else if (event.type === 'error') {
+          failureCount += 1;
+        } else if (event.type === 'complete') {
+          if (notificationSettings.enabled && notificationSettings.batchComplete) {
+            await notifyExportFinished({
+              kind: 'batch',
+              successCount,
+              failureCount,
+              cancelled: cancelTokenRef.current.cancelled,
+            });
+          }
+        }
+
         setEntries((current) => current.map((entry) => {
           if ('entryId' in event && entry.id !== event.entryId) {
             return entry;
@@ -491,15 +525,33 @@ export function BatchModal({
                           Use custom profile
                         </RadioOption>
                         {settingsSource === 'custom' && (
-                          <select
-                            value={selectedCustomProfileId}
-                            onChange={(event) => setSelectedCustomProfileId(event.target.value)}
-                            className="ml-[27px] w-[calc(100%-27px)] rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
-                          >
-                            {customProfiles.map((profile) => (
-                              <option key={profile.id} value={profile.id}>{profile.name}</option>
-                            ))}
-                          </select>
+                          <div className="ml-[27px] space-y-3">
+                            <select
+                              value={selectedCustomProfileId}
+                              onChange={(event) => setSelectedCustomProfileId(event.target.value)}
+                              className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                            >
+                              {customProfiles.map((profile) => (
+                                <option key={profile.id} value={profile.id}>{profile.name}</option>
+                              ))}
+                            </select>
+                            {selectedCustomProfileHasEmbeddedTransforms && (
+                              <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3.5 py-3">
+                                <p className="text-xs font-medium text-amber-200">This custom preset includes crop or rotation.</p>
+                                <p className="mt-1 text-[11px] leading-5 text-amber-100/80">
+                                  Batch export and contact sheets will reuse those embedded transforms unless you ignore them here.
+                                </p>
+                                <div className="mt-3">
+                                  <CheckOption
+                                    checked={ignorePresetCropAndRotation}
+                                    onChange={setIgnorePresetCropAndRotation}
+                                  >
+                                    Ignore preset crop and rotation
+                                  </CheckOption>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     </section>

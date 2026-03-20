@@ -112,6 +112,13 @@ export interface ColorManagementSettings {
   embedOutputProfile: boolean;
 }
 
+export interface NotificationSettings {
+  enabled: boolean;
+  exportComplete: boolean;
+  batchComplete: boolean;
+  contactSheetComplete: boolean;
+}
+
 export interface ExportOptions {
   format: ExportFormat;
   quality: number;

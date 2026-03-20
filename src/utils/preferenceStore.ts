@@ -1,12 +1,13 @@
-import { DEFAULT_EXPORT_OPTIONS } from '../constants';
-import { CropTab, ExportOptions } from '../types';
+import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
+import { CropTab, ExportOptions, NotificationSettings } from '../types';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
 
 export interface UserPreferences {
-  version: 3;
+  version: 4;
   lastProfileId: string;
   exportOptions: ExportOptions;
+  notificationSettings: NotificationSettings;
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'export';
   cropTab?: CropTab;
   isLeftPaneOpen: boolean;
@@ -23,7 +24,9 @@ function isValidPreferences(value: unknown): value is UserPreferences {
   const prefs = value as Partial<UserPreferences>;
   const exportOptions = prefs.exportOptions as Partial<ExportOptions> | undefined;
   return (
-    prefs.version === 3 &&
+    prefs.version === 4 &&
+    typeof prefs.notificationSettings === 'object' &&
+    prefs.notificationSettings !== null &&
     typeof prefs.lastProfileId === 'string' &&
     exportOptions !== undefined &&
     typeof exportOptions.format === 'string' &&
@@ -40,7 +43,11 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     (prefs.ultraSmoothDrag === undefined || typeof prefs.ultraSmoothDrag === 'boolean') &&
     (prefs.externalEditorPath === undefined || prefs.externalEditorPath === null || typeof prefs.externalEditorPath === 'string') &&
     (prefs.externalEditorName === undefined || prefs.externalEditorName === null || typeof prefs.externalEditorName === 'string') &&
-    (prefs.openInEditorOutputPath === undefined || prefs.openInEditorOutputPath === null || typeof prefs.openInEditorOutputPath === 'string')
+    (prefs.openInEditorOutputPath === undefined || prefs.openInEditorOutputPath === null || typeof prefs.openInEditorOutputPath === 'string') &&
+    (prefs.notificationSettings.enabled === undefined || typeof prefs.notificationSettings.enabled === 'boolean') &&
+    (prefs.notificationSettings.exportComplete === undefined || typeof prefs.notificationSettings.exportComplete === 'boolean') &&
+    (prefs.notificationSettings.batchComplete === undefined || typeof prefs.notificationSettings.batchComplete === 'boolean') &&
+    (prefs.notificationSettings.contactSheetComplete === undefined || typeof prefs.notificationSettings.contactSheetComplete === 'boolean')
   );
 }
 
@@ -66,7 +73,7 @@ function isLegacyPreferences(value: unknown): value is {
   return prefs.version === 1 && typeof prefs.exportOptions === 'object' && prefs.exportOptions !== null;
 }
 
-function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'openInEditorOutputPath'> & { version: 2 } {
+function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'openInEditorOutputPath' | 'notificationSettings'> & { version: 2 } {
   if (!value || typeof value !== 'object') return false;
   const prefs = value as Partial<{
     version: number;
@@ -95,6 +102,16 @@ function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, '
   );
 }
 
+function isVersion3Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'notificationSettings'> & { version: 3 } {
+  if (!value || typeof value !== 'object') return false;
+  const prefs = value as Partial<Omit<UserPreferences, 'version' | 'notificationSettings'> & { version: 3 }>;
+  return prefs.version === 3
+    && typeof prefs.lastProfileId === 'string'
+    && typeof prefs.sidebarTab === 'string'
+    && typeof prefs.isLeftPaneOpen === 'boolean'
+    && typeof prefs.isRightPaneOpen === 'boolean';
+}
+
 function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPreferences | null {
   if (!isLegacyPreferences(legacy)) {
     return null;
@@ -117,7 +134,7 @@ function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPr
   }
 
   return {
-    version: 3,
+    version: 4,
     lastProfileId: legacy.lastProfileId,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
@@ -128,6 +145,7 @@ function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPr
       outputProfileId: 'srgb',
       embedOutputProfile: legacy.exportOptions.iccEmbedMode !== 'none',
     },
+    notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: legacy.sidebarTab,
     cropTab: legacy.cropTab ?? 'Film',
     isLeftPaneOpen: legacy.isLeftPaneOpen,
@@ -146,12 +164,13 @@ function migrateVersion2Preferences(legacy: ReturnType<typeof JSON.parse>): User
   }
 
   return {
-    version: 3,
+    version: 4,
     lastProfileId: legacy.lastProfileId,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
       ...legacy.exportOptions,
     },
+    notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: legacy.sidebarTab,
     cropTab: legacy.cropTab ?? 'Film',
     isLeftPaneOpen: legacy.isLeftPaneOpen,
@@ -161,6 +180,31 @@ function migrateVersion2Preferences(legacy: ReturnType<typeof JSON.parse>): User
     externalEditorPath: legacy.externalEditorPath ?? null,
     externalEditorName: legacy.externalEditorName ?? null,
     openInEditorOutputPath: null,
+  };
+}
+
+function migrateVersion3Preferences(legacy: ReturnType<typeof JSON.parse>): UserPreferences | null {
+  if (!isVersion3Preferences(legacy)) {
+    return null;
+  }
+
+  return {
+    version: 4,
+    lastProfileId: legacy.lastProfileId,
+    exportOptions: {
+      ...DEFAULT_EXPORT_OPTIONS,
+      ...legacy.exportOptions,
+    },
+    notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+    sidebarTab: legacy.sidebarTab,
+    cropTab: legacy.cropTab ?? 'Film',
+    isLeftPaneOpen: legacy.isLeftPaneOpen,
+    isRightPaneOpen: legacy.isRightPaneOpen,
+    gpuRendering: legacy.gpuRendering ?? true,
+    ultraSmoothDrag: legacy.ultraSmoothDrag ?? false,
+    externalEditorPath: legacy.externalEditorPath ?? null,
+    externalEditorName: legacy.externalEditorName ?? null,
+    openInEditorOutputPath: legacy.openInEditorOutputPath ?? null,
   };
 }
 
@@ -176,12 +220,20 @@ export function loadPreferences(): UserPreferences | null {
     if (isVersion2Preferences(parsed)) {
       return migrateVersion2Preferences(parsed);
     }
+    if (isVersion3Preferences(parsed)) {
+      return migrateVersion3Preferences(parsed);
+    }
     if (!isValidPreferences(parsed)) return null;
     return {
       ...parsed,
+      version: 4,
       exportOptions: {
         ...DEFAULT_EXPORT_OPTIONS,
         ...parsed.exportOptions,
+      },
+      notificationSettings: {
+        ...DEFAULT_NOTIFICATION_SETTINGS,
+        ...parsed.notificationSettings,
       },
       cropTab: parsed.cropTab ?? 'Film',
       gpuRendering: parsed.gpuRendering ?? true,
