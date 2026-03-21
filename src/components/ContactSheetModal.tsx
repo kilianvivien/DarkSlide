@@ -105,6 +105,9 @@ export function ContactSheetModal({
     const tempDocumentIds: string[] = [];
 
     const generate = async () => {
+      await new Promise((r) => setTimeout(r, 350));
+      if (token.cancelled) return;
+
       for (const entry of entries) {
         if (token.cancelled) break;
 

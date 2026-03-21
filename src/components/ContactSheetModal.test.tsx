@@ -40,6 +40,25 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: coreState.invoke,
 }));
 
+vi.mock('../utils/rawImport', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/rawImport')>();
+  return {
+    ...actual,
+    decodeDesktopRawForWorker: async (options: { documentId: string; fileName: string; path: string; size: number }) => {
+      const rawResult = await coreState.invoke('decode_raw', { path: options.path });
+      return {
+        rawResult,
+        decodeRequest: actual.createWorkerDecodeRequestFromRaw(
+          options.documentId,
+          options.fileName,
+          options.size,
+          rawResult,
+        ),
+      };
+    },
+  };
+});
+
 vi.mock('../utils/fileBridge', () => ({
   isDesktopShell: fileBridgeState.isDesktopShell,
   saveExportBlob: fileBridgeState.saveExportBlob,

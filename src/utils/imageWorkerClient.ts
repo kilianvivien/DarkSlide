@@ -1273,7 +1273,7 @@ export class ImageWorkerClient {
 
   disposeDocument(documentId: string) {
     const cached = this.decodeCache.get(documentId);
-    if (cached?.evictionTimeout !== null) {
+    if (cached?.evictionTimeout != null) {
       window.clearTimeout(cached.evictionTimeout);
     }
     this.decodeCache.delete(documentId);
