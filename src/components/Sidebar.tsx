@@ -384,6 +384,7 @@ export const Sidebar = memo(function Sidebar({
                     <Pipette size={12} /> Film Base
                     <button
                       data-tip="Sample an unexposed area of the negative to neutralize the film base using color balance."
+                      aria-label="Film base sampling help"
                       className="ml-1 text-zinc-700 hover:text-zinc-500 transition-colors"
                       tabIndex={-1}
                     >
@@ -528,6 +529,7 @@ export const Sidebar = memo(function Sidebar({
                     {histogramData && (
                       <button
                         data-tip="Auto-balance: stretch levels to histogram data range, correct color balance"
+                        aria-label="Auto balance from histogram"
                         onClick={handleAutoBalance}
                         className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 text-[10px] font-semibold uppercase tracking-widest transition-all"
                       >
@@ -541,6 +543,7 @@ export const Sidebar = memo(function Sidebar({
                       <button
                         key={mode}
                         data-tip={`Set ${label} Point — click a pixel on the image`}
+                        aria-label={`Set ${label} point`}
                         onClick={() => handlePointPickerToggle(mode)}
                         className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border text-[11px] font-medium transition-all ${
                           activePointPicker === mode
@@ -722,6 +725,7 @@ export const Sidebar = memo(function Sidebar({
         <button
           onClick={onOpenSettings}
           data-tip="Settings (⌘,)"
+          aria-label="Open settings"
           className="p-1.5 text-zinc-700 hover:text-zinc-400 hover:bg-zinc-800 rounded-lg transition-all"
         >
           <Settings size={16} />

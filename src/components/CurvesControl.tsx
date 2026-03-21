@@ -1,5 +1,6 @@
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { CurvePoint, Curves } from '../types';
+import { clamp } from '../utils/math';
 
 interface CurvesControlProps {
   curves: Curves;
@@ -16,10 +17,6 @@ const CHANNEL_COLORS: Record<Channel, string> = {
   green: '#22c55e',
   blue: '#3b82f6',
 };
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function buildPath(channelPoints: CurvePoint[], size: number) {
   return channelPoints.reduce((acc, point, index) => {

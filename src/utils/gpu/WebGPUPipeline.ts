@@ -9,8 +9,8 @@ import {
 import {
   buildCurveLutBuffer,
   buildProcessingUniforms,
-  clamp,
 } from '../imagePipeline';
+import { clamp } from '../math';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
 const PROCESSING_UNIFORM_BYTES = 60 * 4;

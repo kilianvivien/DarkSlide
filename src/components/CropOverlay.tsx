@@ -1,6 +1,7 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { CropSettings } from '../types';
 import { getNormalizedAspectRatio } from '../utils/imagePipeline';
+import { clamp } from '../utils/math';
 
 interface CropOverlayProps {
   crop: CropSettings;
@@ -18,10 +19,6 @@ interface DragState {
   startX: number;
   startY: number;
   origin: CropSettings;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }
 
 export const CropOverlay = memo(function CropOverlay({

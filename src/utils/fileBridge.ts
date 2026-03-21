@@ -54,6 +54,22 @@ export function isDesktopShell() {
   return isTauri();
 }
 
+export function registerBeforeUnloadGuard(hasUnsavedChanges: () => boolean) {
+  const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+    if (!hasUnsavedChanges()) {
+      return;
+    }
+
+    event.preventDefault();
+    event.returnValue = '';
+  };
+
+  window.addEventListener('beforeunload', handleBeforeUnload);
+  return () => {
+    window.removeEventListener('beforeunload', handleBeforeUnload);
+  };
+}
+
 export interface NativeOpenFileResult {
   file: File;
   path: string;

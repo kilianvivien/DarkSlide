@@ -3,9 +3,9 @@
 import UTIF from 'utif';
 import {
   ColorProfileId,
+  CancelTileJobRequest,
   ContactSheetRequest,
   ContactSheetResult,
-  CancelTileJobRequest,
   ConversionSettings,
   DecodeRequest,
   DecodedImage,
@@ -27,7 +27,6 @@ import {
 } from '../types';
 import {
   assertSupportedDimensions,
-  clamp,
   buildEmptyHistogram,
   getExtensionFromFormat,
   getFileExtension,
@@ -35,6 +34,7 @@ import {
   getTransformedDimensions,
   normalizeCrop,
   processImageData,
+  releaseScratchBuffers,
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
@@ -45,24 +45,13 @@ import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata'
 import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
-
-type WorkerRequest =
-  | { id: string; type: 'decode'; payload: DecodeRequest }
-  | { id: string; type: 'render'; payload: RenderRequest }
-  | { id: string; type: 'prepare-tile-job'; payload: PrepareTileJobRequest }
-  | { id: string; type: 'read-tile'; payload: ReadTileRequest }
-  | { id: string; type: 'cancel-job'; payload: CancelTileJobRequest }
-  | { id: string; type: 'sample-film-base'; payload: SampleRequest }
-  | { id: string; type: 'export'; payload: ExportRequest }
-  | { id: string; type: 'contact-sheet'; payload: ContactSheetRequest }
-  | { id: string; type: 'diagnostics'; payload: Record<string, never> }
-  | { id: string; type: 'dispose'; payload: { documentId: string } };
-
-type WorkerError = { code: string; message: string };
-
-type WorkerResponse =
-  | { id: string; ok: true; payload: DecodedImage | RenderResult | PreparedTileJobResult | ReadTileResult | ExportResult | RawExportResult | ContactSheetResult | FilmBaseSample | WorkerMemoryDiagnostics | { disposed: true } | { cancelled: true } }
-  | { id: string; ok: false; error: WorkerError };
+import { clamp } from './math';
+import {
+  WorkerError,
+  WorkerMessage,
+  WorkerResponse,
+  WorkerSuccessPayload,
+} from './workerProtocol';
 
 interface StoredPreview {
   level: PreviewLevel;
@@ -75,6 +64,7 @@ interface StoredDocument {
   previews: StoredPreview[];
   rotationCache: Map<string, OffscreenCanvas>;
   cropCache: Map<string, StoredTileJob>;
+  lastAccessedAt: number;
 }
 
 interface StoredTileJob {
@@ -95,8 +85,26 @@ let outputCanvas: OffscreenCanvas | null = null;
 const TILE_SIZE = 1024;
 const CANCELLED_JOB_TTL_MS = 2_000;
 
-function reply(response: WorkerResponse) {
-  self.postMessage(response);
+function reply(
+  request: WorkerMessage,
+  payload: WorkerSuccessPayload,
+  transfer: Transferable[] = [],
+) {
+  self.postMessage({
+    id: request.id,
+    epoch: request.epoch,
+    ok: true,
+    payload,
+  } satisfies WorkerResponse, transfer);
+}
+
+function replyError(request: WorkerMessage, error: WorkerError) {
+  self.postMessage({
+    id: request.id,
+    epoch: request.epoch,
+    ok: false,
+    error,
+  } satisfies WorkerResponse);
 }
 
 function createError(code: string, message: string): WorkerError {
@@ -182,8 +190,10 @@ function buildPreviewCanvas(source: OffscreenCanvas, maxDimension: number) {
   return canvas;
 }
 
-function buildPreviewLevels(sourceCanvas: OffscreenCanvas): StoredPreview[] {
+function buildPreviewLevels(sourceCanvas: OffscreenCanvas, displayScaleFactor = 1): StoredPreview[] {
+  const shouldInclude4096 = displayScaleFactor > 1 || Math.max(sourceCanvas.width, sourceCanvas.height) > 4096;
   const previews = PREVIEW_LEVELS
+    .filter((maxDimension) => maxDimension < 4096 || shouldInclude4096)
     .map((maxDimension) => {
       const canvas = buildPreviewCanvas(sourceCanvas, maxDimension);
       return {
@@ -310,6 +320,7 @@ function getStoredDocument(documentId: string) {
   if (!document) {
     throw new Error('The image document is no longer available.');
   }
+  document.lastAccessedAt = Date.now();
   return document;
 }
 
@@ -459,9 +470,85 @@ function handleDispose(documentId: string) {
       releaseCanvas(outputCanvas);
       outputCanvas = null;
     }
+    releaseScratchBuffers();
   }
 
   return { disposed: true } as const;
+}
+
+function evictDocumentPreviews(documentId: string) {
+  const document = documents.get(documentId);
+  if (!document) {
+    return false;
+  }
+
+  Array.from(tileJobs.entries())
+    .filter(([, job]) => job.documentId === documentId)
+    .forEach(([jobId]) => clearTileJob(jobId));
+
+  for (const preview of document.previews) {
+    if (preview.canvas !== document.sourceCanvas) {
+      releaseCanvas(preview.canvas);
+    }
+  }
+
+  document.previews = [{
+    level: {
+      id: 'preview-source',
+      width: document.sourceCanvas.width,
+      height: document.sourceCanvas.height,
+      maxDimension: Math.max(document.sourceCanvas.width, document.sourceCanvas.height),
+    },
+    canvas: document.sourceCanvas,
+  }];
+
+  for (const canvas of document.rotationCache.values()) {
+    releaseCanvasIfUnreferenced(canvas);
+  }
+  document.rotationCache.clear();
+
+  for (const job of document.cropCache.values()) {
+    releaseCanvasIfUnreferenced(job.transformedCanvas);
+  }
+  document.cropCache.clear();
+
+  return true;
+}
+
+function handleEvictPreviews(payload: { documentId?: string | null; preserveDocumentId?: string | null; maxResidentDocuments?: number | null }) {
+  if (payload.documentId) {
+    evictDocumentPreviews(payload.documentId);
+    return { evicted: true } as const;
+  }
+
+  if (payload.maxResidentDocuments === null || payload.maxResidentDocuments === undefined) {
+    return { evicted: true } as const;
+  }
+
+  const keepLimit = Math.max(1, payload.maxResidentDocuments);
+  const preserveDocumentId = payload.preserveDocumentId ?? null;
+  const sortedDocuments = Array.from(documents.entries())
+    .sort(([, left], [, right]) => right.lastAccessedAt - left.lastAccessedAt);
+
+  const keepIds = new Set<string>();
+  if (preserveDocumentId && documents.has(preserveDocumentId)) {
+    keepIds.add(preserveDocumentId);
+  }
+
+  for (const [documentId] of sortedDocuments) {
+    if (keepIds.size >= keepLimit) {
+      break;
+    }
+    keepIds.add(documentId);
+  }
+
+  for (const [documentId] of sortedDocuments) {
+    if (!keepIds.has(documentId)) {
+      evictDocumentPreviews(documentId);
+    }
+  }
+
+  return { evicted: true } as const;
 }
 
 async function handleDecode(payload: DecodeRequest) {
@@ -482,7 +569,7 @@ async function handleDecode(payload: DecodeRequest) {
 
     assertSupportedDimensions(canvas.width, canvas.height);
 
-    const previewStore = buildPreviewLevels(canvas);
+    const previewStore = buildPreviewLevels(canvas, payload.displayScaleFactor);
     const metadata: SourceMetadata = {
       id: payload.documentId,
       name: payload.fileName,
@@ -499,6 +586,7 @@ async function handleDecode(payload: DecodeRequest) {
       previews: previewStore,
       rotationCache: new Map(),
       cropCache: new Map(),
+      lastAccessedAt: Date.now(),
     });
 
     return {
@@ -553,7 +641,7 @@ async function handleDecode(payload: DecodeRequest) {
 
   assertSupportedDimensions(decodedCanvas.width, decodedCanvas.height);
 
-  const previewStore = buildPreviewLevels(decodedCanvas);
+  const previewStore = buildPreviewLevels(decodedCanvas, payload.displayScaleFactor);
   const decoderColorProfileId = payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName);
   const declaredUnsupportedColorProfileName = payload.declaredColorProfileName && !decoderColorProfileId
     ? payload.declaredColorProfileName
@@ -580,6 +668,7 @@ async function handleDecode(payload: DecodeRequest) {
     previews: previewStore,
     rotationCache: new Map(),
     cropCache: new Map(),
+    lastAccessedAt: Date.now(),
   });
 
   return {
@@ -895,73 +984,63 @@ async function handleContactSheet(payload: ContactSheetRequest) {
   } satisfies ContactSheetResult;
 }
 
-self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const request = event.data;
   pruneCancelledJobs();
 
   try {
-    if (request.type === 'dispose') {
-      reply({ id: request.id, ok: true, payload: handleDispose(request.payload.documentId) });
-      return;
-    }
-
-    if (request.type === 'decode') {
-      reply({ id: request.id, ok: true, payload: await handleDecode(request.payload) });
-      return;
-    }
-
-    if (request.type === 'render') {
-      reply({ id: request.id, ok: true, payload: handleRender(request.payload) });
-      return;
-    }
-
-    if (request.type === 'prepare-tile-job') {
-      reply({ id: request.id, ok: true, payload: handlePrepareTileJob(request.payload) });
-      return;
-    }
-
-    if (request.type === 'read-tile') {
-      reply({ id: request.id, ok: true, payload: handleReadTile(request.payload) });
-      return;
-    }
-
-    if (request.type === 'cancel-job') {
-      reply({ id: request.id, ok: true, payload: handleCancelJob(request.payload) });
-      return;
-    }
-
-    if (request.type === 'sample-film-base') {
-      reply({ id: request.id, ok: true, payload: handleSampleFilmBase(request.payload) });
-      return;
-    }
-
-    if (request.type === 'export') {
-      reply({ id: request.id, ok: true, payload: await handleExport(request.payload) });
-      return;
-    }
-
-    if (request.type === 'contact-sheet') {
-      reply({ id: request.id, ok: true, payload: await handleContactSheet(request.payload) });
-      return;
-    }
-
-    if (request.type === 'diagnostics') {
-      reply({ id: request.id, ok: true, payload: handleDiagnostics() });
-      return;
+    switch (request.type) {
+      case 'dispose':
+        reply(request, handleDispose(request.payload.documentId));
+        return;
+      case 'decode':
+        reply(request, await handleDecode(request.payload));
+        return;
+      case 'render': {
+        const result = handleRender(request.payload);
+        reply(request, result, [result.imageData.data.buffer]);
+        return;
+      }
+      case 'prepare-tile-job':
+        reply(request, handlePrepareTileJob(request.payload));
+        return;
+      case 'read-tile': {
+        const result = handleReadTile(request.payload);
+        reply(request, result, [result.imageData.data.buffer]);
+        return;
+      }
+      case 'cancel-job':
+        reply(request, handleCancelJob(request.payload));
+        return;
+      case 'sample-film-base':
+        reply(request, handleSampleFilmBase(request.payload));
+        return;
+      case 'export':
+        reply(request, await handleExport(request.payload));
+        return;
+      case 'contact-sheet':
+        reply(request, await handleContactSheet(request.payload));
+        return;
+      case 'diagnostics':
+        reply(request, handleDiagnostics());
+        return;
+      case 'evict-previews':
+        reply(request, handleEvictPreviews(request.payload));
+        return;
+      default: {
+        const exhaustiveCheck: never = request;
+        throw createError('WORKER_UNKNOWN_REQUEST', `Unsupported worker request: ${String(exhaustiveCheck)}`);
+      }
     }
   } catch (error) {
     const failure = error as Partial<WorkerError> & { message?: string };
     const isOOM = error instanceof RangeError
       || Boolean(failure.message && /invalid array length|out of memory|allocation failed/i.test(failure.message));
-    reply({
-      id: request.id,
-      ok: false,
-      error: createError(
-        isOOM ? 'OUT_OF_MEMORY' : (failure.code ?? 'WORKER_ERROR'),
-        isOOM
-          ? 'Image too large for available memory. Try closing other tabs or using a smaller scan resolution.'
-          : (failure.message ?? String(error)),
-      ),
-    });
+    replyError(request, createError(
+      isOOM ? 'OUT_OF_MEMORY' : (failure.code ?? 'WORKER_ERROR'),
+      isOOM
+        ? 'Image too large for available memory. Try closing other tabs or using a smaller scan resolution.'
+        : (failure.message ?? String(error)),
+    ));
   }
 };

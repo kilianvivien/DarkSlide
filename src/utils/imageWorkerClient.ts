@@ -32,38 +32,7 @@ import { getBlobUrlDiagnostics } from './blobUrlTracker';
 import { convertImageDataColorProfile, getPreferredPreviewDisplayProfile } from './colorProfiles';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
 import { finalizeExportBlob } from './imageMetadata';
-
-type WorkerRequest =
-  | { id: string; type: 'decode'; payload: DecodeRequest }
-  | { id: string; type: 'render'; payload: RenderRequest }
-  | { id: string; type: 'prepare-tile-job'; payload: PrepareTileJobRequest }
-  | { id: string; type: 'read-tile'; payload: ReadTileRequest }
-  | { id: string; type: 'cancel-job'; payload: CancelTileJobRequest }
-  | { id: string; type: 'sample-film-base'; payload: SampleRequest }
-  | { id: string; type: 'export'; payload: ExportRequest }
-  | { id: string; type: 'contact-sheet'; payload: ContactSheetRequest }
-  | { id: string; type: 'diagnostics'; payload: Record<string, never> }
-  | { id: string; type: 'dispose'; payload: { documentId: string } };
-
-type WorkerError = { code: string; message: string };
-
-type WorkerResponse =
-  | {
-    id: string;
-    ok: true;
-    payload:
-      | DecodedImage
-      | RenderResult
-      | PreparedTileJobResult
-      | ReadTileResult
-      | ExportResult
-      | ContactSheetResult
-      | FilmBaseSample
-      | WorkerMemoryDiagnostics
-      | { disposed: true }
-      | { cancelled: true };
-  }
-  | { id: string; ok: false; error: WorkerError };
+import { WorkerMessage, WorkerRequest, WorkerResponse } from './workerProtocol';
 
 type ImageWorkerClientOptions = {
   gpuEnabled?: boolean;
@@ -79,9 +48,11 @@ type PendingResolver = {
 type CachedDecodeRequest = {
   payload: DecodeRequest;
   workerEpoch: number;
+  evictionTimeout: number | null;
 };
 
 const MISSING_DOCUMENT_MESSAGE = 'The image document is no longer available.';
+const DECODE_CACHE_TTL_MS = 60_000;
 
 function trimTileImageData(tile: ReadTileResult) {
   const { imageData, haloLeft, haloTop, haloRight, haloBottom } = tile;
@@ -275,6 +246,9 @@ export class ImageWorkerClient {
 
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       const response = event.data;
+      if (response.epoch !== undefined && response.epoch !== this.workerEpoch) {
+        return;
+      }
       const entry = this.pending.get(response.id);
       if (!entry) return;
       this.pending.delete(response.id);
@@ -317,7 +291,11 @@ export class ImageWorkerClient {
     }
   }
 
-  private request<T>(type: WorkerRequest['type'], payload: WorkerRequest['payload']) {
+  private request<T>(
+    type: WorkerRequest['type'],
+    payload: WorkerRequest['payload'],
+    transfer: Transferable[] = [],
+  ) {
     if (!this.worker) {
       return Promise.reject<T>(new FatalImageWorkerError('The image worker is unavailable.'));
     }
@@ -325,8 +303,31 @@ export class ImageWorkerClient {
     const id = `${type}-${crypto.randomUUID()}`;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.worker?.postMessage({ id, type, payload } as WorkerRequest);
+      this.worker?.postMessage({
+        id,
+        epoch: this.workerEpoch,
+        type,
+        payload,
+      } as WorkerMessage, transfer);
     });
+  }
+
+  private scheduleDecodeCacheEviction(documentId: string) {
+    const cached = this.decodeCache.get(documentId);
+    if (!cached) {
+      return;
+    }
+
+    if (cached.evictionTimeout !== null) {
+      window.clearTimeout(cached.evictionTimeout);
+    }
+
+    cached.evictionTimeout = window.setTimeout(() => {
+      const current = this.decodeCache.get(documentId);
+      if (current?.workerEpoch === cached.workerEpoch) {
+        this.decodeCache.delete(documentId);
+      }
+    }, DECODE_CACHE_TTL_MS);
   }
 
   private cloneDecodeRequest(payload: DecodeRequest): DecodeRequest {
@@ -359,7 +360,9 @@ export class ImageWorkerClient {
         this.decodeCache.set(documentId, {
           payload: cached.payload,
           workerEpoch: this.workerEpoch,
+          evictionTimeout: null,
         });
+        this.scheduleDecodeCacheEviction(documentId);
       })
       .finally(() => {
         this.documentRecovery.delete(documentId);
@@ -810,11 +813,14 @@ export class ImageWorkerClient {
   }
 
   async decode(payload: DecodeRequest) {
-    const decoded = await this.request<DecodedImage>('decode', payload);
+    const cachedPayload = this.cloneDecodeRequest(payload);
+    const decoded = await this.request<DecodedImage>('decode', payload, [payload.buffer]);
     this.decodeCache.set(payload.documentId, {
-      payload: this.cloneDecodeRequest(payload),
+      payload: cachedPayload,
       workerEpoch: this.workerEpoch,
+      evictionTimeout: null,
     });
+    this.scheduleDecodeCacheEviction(payload.documentId);
     return decoded;
   }
 
@@ -1266,10 +1272,25 @@ export class ImageWorkerClient {
   }
 
   disposeDocument(documentId: string) {
+    const cached = this.decodeCache.get(documentId);
+    if (cached?.evictionTimeout !== null) {
+      window.clearTimeout(cached.evictionTimeout);
+    }
     this.decodeCache.delete(documentId);
     this.documentRecovery.delete(documentId);
     this.activePreviewJobIds.delete(documentId);
     return this.request<{ disposed: true }>('dispose', { documentId });
+  }
+
+  evictPreviews(documentId: string) {
+    return this.request<{ evicted: true }>('evict-previews', { documentId });
+  }
+
+  trimResidentDocuments(maxResidentDocuments: number | null, preserveDocumentId?: string | null) {
+    return this.request<{ evicted: true }>('evict-previews', {
+      maxResidentDocuments,
+      preserveDocumentId: preserveDocumentId ?? null,
+    });
   }
 
   terminate() {

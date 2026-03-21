@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { clamp } from '../utils/math';
 
 interface MagnifierLoupeProps {
   sourceCanvas: HTMLCanvasElement | null;
@@ -12,10 +13,6 @@ interface LoupeState {
   left: number;
   top: number;
   rgb: [number, number, number];
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }
 
 export function MagnifierLoupe({ sourceCanvas, containerRef, magnification, size }: MagnifierLoupeProps) {

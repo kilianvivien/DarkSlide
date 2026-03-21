@@ -126,6 +126,9 @@ export async function* runBatch(
 
       const outputFilename = applyNamingTemplate(entry.filename, exportOptions.filenameBase, index + 1, exportOptions.format);
       await saveBatchExport(result.blob, outputFilename, exportOptions.format, outputPath);
+      await workerClient.evictPreviews(documentId).catch(() => {
+        // Ignore cache eviction failures after a successful export.
+      });
       yield { type: 'done', entryId: entry.id };
     } catch (error) {
       yield {

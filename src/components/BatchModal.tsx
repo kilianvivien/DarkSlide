@@ -9,6 +9,7 @@ import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { customProfileHasEmbeddedCropOrRotation, getBatchEffectiveSettings } from '../utils/batchSettings';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 type SettingsSourceMode = 'current' | 'builtin' | 'custom';
 
@@ -112,8 +113,11 @@ export function BatchModal({
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
   const cancelTokenRef = useRef({ cancelled: false });
   const desktopShell = isDesktopShell();
+
+  useFocusTrap(modalRef, isOpen);
 
   const selectedBuiltinProfile = useMemo(
     () => FILM_PROFILES.find((profile) => profile.id === selectedProfileId) ?? FILM_PROFILES[0],
@@ -386,6 +390,7 @@ export function BatchModal({
             className="fixed inset-0 z-50 flex items-stretch justify-center p-6 pointer-events-none"
           >
             <div
+              ref={modalRef}
               className="pointer-events-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-2xl shadow-black/60"
               onClick={(event) => event.stopPropagation()}
               onDragOver={(event) => event.preventDefault()}
@@ -430,7 +435,7 @@ export function BatchModal({
                     <LayoutGrid size={13} />
                     Contact Sheet…
                   </button>
-                  <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
+                  <button type="button" onClick={onClose} aria-label="Close batch export" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
                     <X size={16} />
                   </button>
                 </div>

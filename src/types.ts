@@ -184,6 +184,15 @@ export interface DecodedImage {
   previewLevels: PreviewLevel[];
 }
 
+export interface RawDecodeResult {
+  width: number;
+  height: number;
+  data: ArrayLike<number>;
+  color_space: string;
+  white_balance?: [number, number, number] | null;
+  orientation?: number | null;
+}
+
 export interface WorkspaceDocument {
   id: string;
   source: SourceMetadata;
@@ -216,6 +225,7 @@ export interface DecodeRequest {
   fileName: string;
   mime: string;
   size: number;
+  displayScaleFactor?: number;
   rawDimensions?: { width: number; height: number };
   declaredColorProfileName?: string | null;
   declaredColorProfileId?: ColorProfileId | null;

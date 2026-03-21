@@ -66,6 +66,7 @@ const fileBridgeState = vi.hoisted(() => ({
   confirmDiscard: vi.fn(),
   saveToDirectory: vi.fn(),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
+  registerBeforeUnloadGuard: vi.fn(() => vi.fn()),
 }));
 
 const exportNotificationState = vi.hoisted(() => ({
@@ -222,6 +223,10 @@ vi.mock('./utils/imageWorkerClient', () => ({
 
     disposeDocument = workerState.disposeDocument;
 
+    evictPreviews = vi.fn(async () => ({ evicted: true }));
+
+    trimResidentDocuments = vi.fn(async () => ({ evicted: true }));
+
     setGPUEnabled = workerState.setGPUEnabled;
 
     getGPUDiagnostics = workerState.getGPUDiagnostics;
@@ -245,6 +250,7 @@ vi.mock('./utils/fileBridge', () => ({
   confirmDiscard: fileBridgeState.confirmDiscard,
   saveToDirectory: fileBridgeState.saveToDirectory,
   saveExportBlob: fileBridgeState.saveExportBlob,
+  registerBeforeUnloadGuard: fileBridgeState.registerBeforeUnloadGuard,
 }));
 
 vi.mock('./utils/exportNotifications', () => ({

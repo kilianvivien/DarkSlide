@@ -1,4 +1,4 @@
-import React, { memo, useCallback } from 'react';
+import React, { memo, useCallback, useId } from 'react';
 
 interface SliderProps {
   label: string;
@@ -25,6 +25,8 @@ export const Slider = memo(function Slider({
   onInteractionStart,
   onInteractionEnd,
 }: SliderProps) {
+  const inputId = useId();
+
   const handleChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     onChange(parseFloat(event.target.value));
   }, [onChange]);
@@ -32,10 +34,11 @@ export const Slider = memo(function Slider({
   return (
     <div className="flex flex-col gap-1.5 mb-4">
       <div className="flex justify-between items-center px-1">
-        <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">{label}</label>
+        <label htmlFor={inputId} className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">{label}</label>
         <span className="text-[11px] font-mono text-zinc-500">{valueLabel ?? `${value}${unit}`}</span>
       </div>
       <input
+        id={inputId}
         type="range"
         min={min}
         max={max}

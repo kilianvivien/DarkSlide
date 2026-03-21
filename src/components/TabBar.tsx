@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { motion } from 'motion/react';
 import { Plus, X } from 'lucide-react';
 import { DocumentTab } from '../types';
 
@@ -37,20 +36,10 @@ export function TabBar({
           const isActive = tab.id === activeTabId;
 
           return (
-            <motion.div
+            <div
               key={tab.id}
-              layout
-              transition={{ type: 'spring', stiffness: 360, damping: 30, mass: 0.8 }}
               className="relative shrink-0"
             >
-              {isActive && (
-                <motion.div
-                  layoutId="active-tab-pill"
-                  className="absolute inset-0 rounded-lg bg-zinc-800/80 ring-1 ring-inset ring-zinc-700/60"
-                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                />
-              )}
-
               <div
                 draggable
                 onDragStart={() => setDraggedTabId(tab.id)}
@@ -62,9 +51,9 @@ export function TabBar({
                   }
                   setDraggedTabId(null);
                 }}
-                className={`group relative z-10 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors duration-150 ${
+                className={`group relative z-10 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-[background-color,color,border-color,box-shadow] duration-100 ${
                   isActive
-                    ? 'text-zinc-100'
+                    ? 'bg-zinc-800/80 text-zinc-100 ring-1 ring-inset ring-zinc-700/60'
                     : 'text-zinc-500 hover:bg-zinc-900/70 hover:text-zinc-300'
                 }`}
               >
@@ -89,7 +78,7 @@ export function TabBar({
                   <X size={11} />
                 </button>
               </div>
-            </motion.div>
+            </div>
           );
         })}
       </div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { clamp } from '../utils/math';
 
 interface TooltipState {
   content: string;
@@ -10,10 +11,6 @@ interface TooltipPosition {
   left: number;
   top: number;
   below: boolean;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }
 
 /**

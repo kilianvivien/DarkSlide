@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, X } from 'lucide-react';
 import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
@@ -10,6 +10,7 @@ import { getColorProfileDescription } from '../utils/colorProfiles';
 import { getFileExtension } from '../utils/imagePipeline';
 import { decodeDesktopRawForWorker, isRawExtension } from '../utils/rawImport';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 interface ContactSheetModalProps {
   isOpen: boolean;
@@ -69,6 +70,7 @@ export function ContactSheetModal({
   notificationSettings,
   workerClient,
 }: ContactSheetModalProps) {
+  const modalRef = useRef<HTMLDivElement>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>(entries.map((entry) => entry.id));
   const [columns, setColumns] = useState(Math.min(4, Math.max(1, Math.ceil(Math.sqrt(Math.max(entries.length, 1))))));
   const [cellMaxDimension, setCellMaxDimension] = useState(512);
@@ -84,6 +86,8 @@ export function ContactSheetModal({
   const [embedOutputProfile, setEmbedOutputProfile] = useState(DEFAULT_EXPORT_OPTIONS.embedOutputProfile);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useFocusTrap(modalRef, isOpen);
 
   const selectedEntries = useMemo(
     () => entries.filter((entry) => selectedIds.includes(entry.id)),
@@ -248,6 +252,7 @@ export function ContactSheetModal({
             className="fixed inset-0 z-50 flex items-center justify-center p-6 pointer-events-none"
           >
             <div
+              ref={modalRef}
               className="pointer-events-auto flex h-full max-h-[900px] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-2xl shadow-black/60"
               onClick={(event) => event.stopPropagation()}
             >
@@ -257,7 +262,7 @@ export function ContactSheetModal({
                   <h2 className="text-base font-semibold text-zinc-100">Contact Sheet</h2>
                   <p className="mt-0.5 text-xs text-zinc-500">Build a proof sheet from the items currently queued in batch export.</p>
                 </div>
-                <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
+                <button type="button" onClick={onClose} aria-label="Close contact sheet" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
                   <X size={16} />
                 </button>
               </div>

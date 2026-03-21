@@ -1,27 +1,15 @@
 import { RAW_EXTENSIONS } from '../constants';
+import { ConversionSettings, DecodeRequest, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
 import { getColorProfileIdFromName } from './colorProfiles';
-import { ConversionSettings, DecodeRequest, FilmBaseSample, FilmProfile } from '../types';
+import { clamp } from './math';
 
 export const RAW_IMPORT_PROFILE_ID = 'raw-import-result';
-
-export interface RawDecodeResult {
-  width: number;
-  height: number;
-  data: ArrayLike<number>;
-  color_space: string;
-  white_balance?: [number, number, number] | null;
-  orientation?: number | null;
-}
 
 export interface DesktopRawDecodeForWorkerOptions {
   documentId: string;
   fileName: string;
   path: string;
   size: number;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }
 
 export function isRawExtension(extension: string) {

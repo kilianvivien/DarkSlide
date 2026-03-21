@@ -13,14 +13,14 @@ import {
 } from '../types';
 import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
 import { convertRgbBetweenProfiles, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
+import { clamp } from './math';
 
 const LUMA_R = 0.299;
 const LUMA_G = 0.587;
 const LUMA_B = 0.114;
-
-export function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
+let scratchUint8: Uint8ClampedArray | null = null;
+let scratchFloat32: Float32Array | null = null;
+let scratchSize = 0;
 
 export function getExtensionFromFormat(format: ExportFormat) {
   switch (format) {
@@ -458,15 +458,33 @@ function gaussianBlur1D(
   }
 }
 
+function getScratchBuffers(needed: number) {
+  if (scratchSize < needed || !scratchUint8 || !scratchFloat32) {
+    scratchUint8 = new Uint8ClampedArray(needed);
+    scratchFloat32 = new Float32Array(needed);
+    scratchSize = needed;
+  }
+
+  return {
+    scratchUint8,
+    scratchFloat32,
+  };
+}
+
 function separableGaussianBlur(data: Uint8ClampedArray, width: number, height: number, radius: number): Float32Array {
   const len = width * height * 4;
-  const temp = new Uint8ClampedArray(len);
-  const hPass = new Float32Array(len);
+  const { scratchUint8: temp, scratchFloat32: hPass } = getScratchBuffers(len);
   gaussianBlur1D(data, hPass, width, height, true, radius);
   for (let i = 0; i < len; i++) temp[i] = clamp(Math.round(hPass[i]), 0, 255);
   const result = new Float32Array(len);
   gaussianBlur1D(temp, result, width, height, false, radius);
   return result;
+}
+
+export function releaseScratchBuffers() {
+  scratchUint8 = null;
+  scratchFloat32 = null;
+  scratchSize = 0;
 }
 
 function applyNoiseReduction(imageData: ImageData, strength: number): void {

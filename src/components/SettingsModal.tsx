@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen } from 'lucide-react';
 import { ColorManagementSettings, ColorProfileId, NotificationSettings, RenderBackendDiagnostics, SourceMetadata } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+import { MAX_RESIDENT_DOC_OPTIONS, MaxResidentDocs } from '../utils/residentDocsStore';
 
 const COLOR_PROFILE_IDS: ColorProfileId[] = ['srgb', 'display-p3', 'adobe-rgb'];
 
@@ -16,6 +18,8 @@ interface SettingsModalProps {
   renderBackendDiagnostics: RenderBackendDiagnostics;
   onToggleGPURendering: (enabled: boolean) => void;
   onToggleUltraSmoothDrag: (enabled: boolean) => void;
+  maxResidentDocs: MaxResidentDocs;
+  onMaxResidentDocsChange: (value: MaxResidentDocs) => void;
   notificationSettings: NotificationSettings;
   onNotificationSettingsChange: (options: Partial<NotificationSettings>) => void;
   colorManagement: ColorManagementSettings;
@@ -168,6 +172,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   renderBackendDiagnostics,
   onToggleGPURendering,
   onToggleUltraSmoothDrag,
+  maxResidentDocs,
+  onMaxResidentDocsChange,
   notificationSettings,
   onNotificationSettingsChange,
   colorManagement,
@@ -183,6 +189,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [tab, setTab] = useState<'general' | 'notifications' | 'color' | 'shortcuts' | 'diagnostics'>('general');
   const [copied, setCopied] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useFocusTrap(modalRef, isOpen);
 
   const autoInputLabel = (() => {
     if (sourceMetadata?.decoderColorProfileId) return getColorProfileDescription(sourceMetadata.decoderColorProfileId);
@@ -242,6 +251,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"
           >
             <div
+              ref={modalRef}
               className="pointer-events-auto w-[min(680px,calc(100vw-2rem))] max-h-[80vh] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/60 flex flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
@@ -250,6 +260,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <h2 className="text-sm font-semibold text-zinc-100 tracking-tight">Settings</h2>
                 <button
                   onClick={onClose}
+                  aria-label="Close settings"
                   className="p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg transition-all"
                 >
                   <X size={16} />
@@ -416,6 +427,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           />
                         </button>
                       </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="text-sm font-semibold text-zinc-100">Resident Worker Documents</h3>
+                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                            Limits how many documents keep their preview pyramids and geometry caches warm in worker memory. Lower values free memory sooner when you switch tabs.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {[...MAX_RESIDENT_DOC_OPTIONS, null].map((value) => {
+                          const isActive = value === maxResidentDocs;
+                          const label = value === null ? 'Unlimited' : String(value);
+
+                          return (
+                            <button
+                              key={label}
+                              type="button"
+                              aria-pressed={isActive}
+                              onClick={() => onMaxResidentDocsChange(value)}
+                              className={`rounded-xl border px-3 py-2 text-sm transition-all ${
+                                isActive
+                                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                  : 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
+                        Current limit: {maxResidentDocs === null ? 'Unlimited' : `${maxResidentDocs} resident docs`}
+                      </p>
                     </div>
                   </div>
                 )}
