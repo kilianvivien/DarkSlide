@@ -51,12 +51,21 @@ import {
   WorkspaceDocument,
 } from '../types';
 import { MaxResidentDocs } from '../utils/residentDocsStore';
+import { computePanTranslate } from '../hooks/useViewportZoom';
 
 type AppShellProps = {
   usesNativeFileDialogs: boolean;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   displayCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   viewportRef: React.RefObject<HTMLDivElement | null>;
+  panTransformRef: React.RefObject<HTMLDivElement | null>;
+  panGeometryRef: React.MutableRefObject<{
+    imageWidth: number;
+    imageHeight: number;
+    viewportWidth: number;
+    viewportHeight: number;
+    effectiveZoom: number;
+  } | null>;
   workerClient: ImageWorkerClient | null;
   documentState: WorkspaceDocument | null;
   activeTab: DocumentTab | null;
@@ -172,7 +181,7 @@ type AppShellProps = {
   onCanvasClick: (event: React.MouseEvent<HTMLCanvasElement>) => Promise<void>;
   onHandleZoomWheel: (deltaY: number, normX: number, normY: number) => void;
   onStartPan: (clientX: number, clientY: number) => void;
-  onUpdatePan: (clientX: number, clientY: number, viewportWidth: number, viewportHeight: number, zoomLevel: number) => void;
+  onUpdatePan: (clientX: number, clientY: number, imageWidth: number, imageHeight: number, viewportWidth: number, viewportHeight: number, effectiveZoom: number) => void;
   onEndPan: () => void;
   onCropInteractionStart: () => void;
   onCropInteractionEnd: () => void;
@@ -191,6 +200,8 @@ export function AppShell({
   fileInputRef,
   displayCanvasRef,
   viewportRef,
+  panTransformRef,
+  panGeometryRef,
   workerClient,
   documentState,
   activeTab,
@@ -568,6 +579,8 @@ export function AppShell({
                         onUpdatePan(
                           event.clientX,
                           event.clientY,
+                          logicalPreviewSize.width,
+                          logicalPreviewSize.height,
                           viewportRef.current.clientWidth,
                           viewportRef.current.clientHeight,
                           effectiveZoom,
@@ -616,11 +629,25 @@ export function AppShell({
                       </AnimatePresence>
 
                       <div
+                        ref={panTransformRef}
                         className="absolute inset-0 flex items-center justify-center will-change-transform"
-                        style={{
-                          transform: `scale(${effectiveZoom}) translate(${(0.5 - pan.x) * 100}%, ${(0.5 - pan.y) * 100}%)`,
-                          transformOrigin: 'center center',
-                        }}
+                        style={(() => {
+                          const vw = viewportRef.current?.clientWidth ?? 1;
+                          const vh = viewportRef.current?.clientHeight ?? 1;
+                          // Keep geometry ref in sync for direct DOM updates during drag
+                          panGeometryRef.current = {
+                            imageWidth: logicalPreviewSize.width,
+                            imageHeight: logicalPreviewSize.height,
+                            viewportWidth: vw,
+                            viewportHeight: vh,
+                            effectiveZoom,
+                          };
+                          const t = computePanTranslate(pan, logicalPreviewSize.width, logicalPreviewSize.height, vw, vh, effectiveZoom);
+                          return {
+                            transform: `translate3d(${t.x}px, ${t.y}px, 0) scale(${effectiveZoom})`,
+                            transformOrigin: 'center center',
+                          };
+                        })()}
                       >
                         <div
                           className="relative inline-block will-change-transform"

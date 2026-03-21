@@ -57,6 +57,7 @@ export default function App() {
   const [isCropOverlayVisible, setIsCropOverlayVisible] = useState(false);
   const [isAdjustingLevel, setIsAdjustingLevel] = useState(false);
   const [isInteractingWithPreviewControls, setIsInteractingWithPreviewControls] = useState(false);
+  const [isZooming, setIsZooming] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [targetMaxDimension, setTargetMaxDimension] = useState(1024);
   const [hasVisiblePreview, setHasVisiblePreview] = useState(false);
@@ -131,6 +132,7 @@ export default function App() {
   const interactivePreviewFrameRef = useRef<number | null>(null);
   const pendingInteractivePreviewRef = useRef<QueuedPreviewRender | null>(null);
   const interactionJustEndedRef = useRef(false);
+  const zoomIdleTimeoutRef = useRef<number | null>(null);
   const tabSwitchDraftRef = useRef<string | null>(null);
   const transientNoticeTimeoutRef = useRef<number | null>(null);
   const tabSwitchOverlayTimeoutRef = useRef<number | null>(null);
@@ -249,10 +251,40 @@ export default function App() {
   const displayAngle = displaySettings ? displaySettings.rotation + displaySettings.levelAngle : 0;
   const {
     zoom, pan,
-    zoomToFit, zoomTo100, zoomIn, zoomOut, setZoomLevel, setPan,
-    handleWheel: handleZoomWheel,
+    zoomToFit, zoomTo100, zoomIn, zoomOut, setZoomLevel,
+    setPan: setRawPan,
+    livePanRef, panTransformRef, panGeometryRef,
+    handleWheel: handleZoomWheelRaw,
     startPan, updatePan, endPan,
   } = useViewportZoom();
+
+  // Wrap setPan to always sync the live ref (used by tab switching, etc.)
+  const setPan = useCallback((value: React.SetStateAction<{ x: number; y: number }>) => {
+    setRawPan((prev) => {
+      const next = typeof value === 'function' ? value(prev) : value;
+      livePanRef.current = next;
+      return next;
+    });
+  }, [livePanRef, setRawPan]);
+
+  const isZoomingRef = useRef(false);
+  const handleZoomWheel = useCallback((deltaY: number, normX: number, normY: number) => {
+    if (!isZoomingRef.current) {
+      isZoomingRef.current = true;
+      interactionJustEndedRef.current = false;
+      setIsZooming(true);
+    }
+    handleZoomWheelRaw(deltaY, normX, normY);
+    if (zoomIdleTimeoutRef.current !== null) {
+      window.clearTimeout(zoomIdleTimeoutRef.current);
+    }
+    zoomIdleTimeoutRef.current = window.setTimeout(() => {
+      isZoomingRef.current = false;
+      interactionJustEndedRef.current = true;
+      setIsZooming(false);
+      zoomIdleTimeoutRef.current = null;
+    }, 200);
+  }, [handleZoomWheelRaw]);
 
   const fitScale = useMemo(() => {
     if (!documentState || !displaySettings) return 1;
@@ -309,7 +341,7 @@ export default function App() {
     const effectiveTarget = Math.ceil((targetMaxDimension * z) / Math.max(fitScale, 0.0001));
     return Math.min(sourceMax, Math.max(targetMaxDimension, effectiveTarget));
   }, [documentState, fitScale, targetMaxDimension, zoom]);
-  const isDraftPreview = comparisonMode === 'processed' && (isAdjustingLevel || isInteractingWithPreviewControls || isAdjustingCrop);
+  const isDraftPreview = comparisonMode === 'processed' && (isAdjustingLevel || isInteractingWithPreviewControls || isAdjustingCrop || isZooming);
   const renderTargetDimension = useMemo(() => {
     if (!isDraftPreview) {
       return fullRenderTargetDimension;
@@ -319,12 +351,12 @@ export default function App() {
       return Math.min(fullRenderTargetDimension, 1024);
     }
 
-    if (isInteractingWithPreviewControls && comparisonMode === 'processed') {
+    if ((isInteractingWithPreviewControls || isZooming) && comparisonMode === 'processed') {
       return Math.min(fullRenderTargetDimension, ultraSmoothDragEnabled ? 512 : 1024);
     }
 
     return Math.min(fullRenderTargetDimension, 1024);
-  }, [comparisonMode, fullRenderTargetDimension, isAdjustingCrop, isDraftPreview, isInteractingWithPreviewControls, ultraSmoothDragEnabled]);
+  }, [comparisonMode, fullRenderTargetDimension, isAdjustingCrop, isDraftPreview, isInteractingWithPreviewControls, isZooming, ultraSmoothDragEnabled]);
   const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
   const showMagnifier = Boolean((isPickingFilmBase || activePointPicker) && documentState?.status === 'ready');
 
@@ -804,7 +836,7 @@ export default function App() {
         isAdjustingCrop
           ? 'balanced'
           : (
-            isInteractingWithPreviewControls
+            (isInteractingWithPreviewControls || isZooming)
               ? (ultraSmoothDragEnabled ? 'ultra-smooth' : 'balanced')
               : null
           )
@@ -855,7 +887,13 @@ export default function App() {
       return;
     }
 
-    if (isInteractingWithPreviewControls || isAdjustingCrop) {
+    if (isInteractingWithPreviewControls || isAdjustingCrop || isZooming) {
+      // When ultra-smooth zoom is enabled, skip worker renders entirely during zoom —
+      // only the CSS transform changes, so re-rendering pixels is pure waste.
+      // A settled render fires automatically when the zoom gesture ends.
+      if (isZooming && !isInteractingWithPreviewControls && !isAdjustingCrop && ultraSmoothDragEnabled) {
+        return;
+      }
       if (pendingInteractivePreviewRef.current) {
         workerClientRef.current?.noteCoalescedPreviewRequest();
       }
@@ -897,6 +935,7 @@ export default function App() {
     isDraftPreview,
     isAdjustingCrop,
     isInteractingWithPreviewControls,
+    isZooming,
     renderTargetDimension,
     ultraSmoothDragEnabled,
   ]);
@@ -1096,6 +1135,8 @@ export default function App() {
       fileInputRef={fileInputRef}
       displayCanvasRef={displayCanvasRef}
       viewportRef={viewportRef}
+      panTransformRef={panTransformRef}
+      panGeometryRef={panGeometryRef}
       workerClient={workerClientRef.current}
       documentState={documentState}
       activeTab={activeTab}
