@@ -92,10 +92,11 @@ DarkSlide is continuously evolving. Here's where things stand:
 - ✅ **Phases 10–11:** Render performance (memoised components, reduced re-renders) and worker/memory hardening (split caches, bounded eviction).
 - ✅ **Phase 12:** Pro workflow — multi-document tabs, batch export, contact sheet export, Open in External Editor, and Display P3 ICC profile recognition on import.
 - ✅ **v0.3.1 polish:** Preset search, export toast notifications, per-batch preset transforms, RAW-aware contact sheets, and recent files capped at five entries.
-- 🔜 **Phase 13:** Architecture health — App.tsx decomposition, worker protocol type safety, error boundaries, and accessibility baseline.
+- ✅ **Phase 13 / v0.4.0:** Architecture health — App.tsx decomposition into focused hooks, worker protocol type safety, error boundaries, and accessibility baseline. Settings modal redesign (sidebar nav, Export tab). Batch & Contact Sheet modal polish. Smooth zoom/pan with GPU-accelerated transforms, draft render path, render-target hysteresis, and deferred renders during pan.
 - 🔜 **Phase 14:** Smart scanning features.
 - 🔜 **Phase 15:** Conversion quality & minilab emulation.
 - 🔜 **Phase 16:** Scanning workflow & productivity.
+
 ## 🙏 Acknowledgements
 
 DarkSlide is built on top of some amazing open-source projects:
