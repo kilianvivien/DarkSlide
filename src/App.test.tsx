@@ -898,7 +898,7 @@ describe('App import and preview pipeline', () => {
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('switch', { name: 'Ultra Smooth Drag' }));
+      fireEvent.click(screen.getByRole('switch', { name: 'Smoother Dragging' }));
     });
 
     expect(JSON.parse(localStorage.getItem('darkslide_preferences_v1') ?? '{}')).toMatchObject({

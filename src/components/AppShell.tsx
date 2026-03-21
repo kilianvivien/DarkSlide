@@ -795,6 +795,8 @@ export function AppShell({
           colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
           sourceMetadata={documentState?.source ?? null}
           onColorManagementChange={onColorManagementChange}
+          exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
+          onExportOptionsChange={onExportOptionsChange}
           externalEditorPath={externalEditorPath}
           externalEditorName={externalEditorName}
           openInEditorOutputPath={openInEditorOutputPath}

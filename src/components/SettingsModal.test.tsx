@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
 import { SettingsModal } from './SettingsModal';
 
 vi.mock('motion/react', async () => {
@@ -73,6 +73,8 @@ describe('SettingsModal', () => {
         colorManagement={DEFAULT_COLOR_MANAGEMENT}
         sourceMetadata={null}
         onColorManagementChange={vi.fn()}
+        exportOptions={DEFAULT_EXPORT_OPTIONS}
+        onExportOptionsChange={vi.fn()}
         externalEditorPath={null}
         externalEditorName={null}
         openInEditorOutputPath={null}
@@ -138,6 +140,8 @@ describe('SettingsModal', () => {
         colorManagement={DEFAULT_COLOR_MANAGEMENT}
         sourceMetadata={null}
         onColorManagementChange={vi.fn()}
+        exportOptions={DEFAULT_EXPORT_OPTIONS}
+        onExportOptionsChange={vi.fn()}
         externalEditorPath={null}
         externalEditorName={null}
         openInEditorOutputPath={null}
@@ -148,10 +152,10 @@ describe('SettingsModal', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'notifications' }));
-    expect(screen.getByText('Export Notifications')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+    expect(screen.getByRole('switch', { name: 'Notifications Enabled' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Batch Exports' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Batch exports' }));
     expect(onNotificationSettingsChange).toHaveBeenCalledWith({ batchComplete: false });
   });
 });
