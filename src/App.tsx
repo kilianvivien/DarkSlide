@@ -923,7 +923,10 @@ export default function App() {
     }
   }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, setDocumentState, setPreviewVisibility]);
 
-  const { enqueueRender: enqueuePreviewRender, cancelPending: cancelPendingPreviewRender } = useRenderQueue<QueuedPreviewRender>({
+  const {
+    enqueueRender: enqueuePreviewRender,
+    cancelPending: cancelPendingPreviewRender,
+  } = useRenderQueue<QueuedPreviewRender>({
     render: async (next) => {
       await executePreviewRender(
         next.documentId,
@@ -946,6 +949,21 @@ export default function App() {
       workerClientRef.current?.noteCoalescedPreviewRequest();
     },
   });
+
+  const handlePanStart = useCallback((clientX: number, clientY: number) => {
+    interactionJustEndedRef.current = false;
+    cancelScheduledInteractivePreview();
+    cancelPendingPreviewRender();
+    if (activeDocumentIdRef.current) {
+      void workerClientRef.current?.cancelActivePreviewRender(activeDocumentIdRef.current);
+    }
+    startPan(clientX, clientY);
+  }, [cancelPendingPreviewRender, cancelScheduledInteractivePreview, startPan]);
+
+  const handlePanEnd = useCallback(() => {
+    endPan();
+    interactionJustEndedRef.current = true;
+  }, [endPan]);
 
   useEffect(() => {
     if (!documentState || !displaySettings || documentState.previewLevels.length === 0) return;
@@ -1013,6 +1031,11 @@ export default function App() {
       return;
     }
 
+    if (isPanDragging) {
+      cancelScheduledInteractivePreview();
+      return;
+    }
+
     if (isInteractingWithPreviewControls || isAdjustingCrop || isZooming) {
       if (isZooming && !isInteractingWithPreviewControls && !isAdjustingCrop) {
         return;
@@ -1058,6 +1081,7 @@ export default function App() {
     isDraftPreview,
     isAdjustingCrop,
     isInteractingWithPreviewControls,
+    isPanDragging,
     isZooming,
     renderTargetDimension,
     ultraSmoothDragEnabled,
@@ -1249,6 +1273,9 @@ export default function App() {
   });
 
   const showBlockingOverlay = Boolean(blockingOverlay);
+  const isRenderIndicatorVisible = Boolean(
+    !isDraftPreview && !isPanDragging && documentState?.status === 'processing',
+  );
   const overlayContent = blockingOverlay;
   const isExporting = documentState?.status === 'exporting';
 
@@ -1292,6 +1319,7 @@ export default function App() {
       showMagnifier={showMagnifier}
       isCropOverlayVisible={isCropOverlayVisible}
       showBlockingOverlay={showBlockingOverlay}
+      isRenderIndicatorVisible={isRenderIndicatorVisible}
       overlayContent={overlayContent}
       error={error}
       transientNotice={transientNotice}
@@ -1369,9 +1397,9 @@ export default function App() {
       onUseDownloadsForOpenInEditor={handleUseDownloadsForOpenInEditor}
       onCanvasClick={handleCanvasClick}
       onHandleZoomWheel={handleZoomWheel}
-      onStartPan={startPan}
+      onStartPan={handlePanStart}
       onUpdatePan={updatePan}
-      onEndPan={endPan}
+      onEndPan={handlePanEnd}
       onCropInteractionStart={handleCropInteractionStart}
       onCropInteractionEnd={handleCropInteractionEnd}
       onCropOverlayChange={handleCropOverlayChange}

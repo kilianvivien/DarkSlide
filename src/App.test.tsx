@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_FILE_SIZE_BYTES } from './constants';
 
@@ -28,6 +28,7 @@ const workerState = vi.hoisted(() => ({
   export: vi.fn(),
   sampleFilmBase: vi.fn(),
   disposeDocument: vi.fn(async () => ({ disposed: true })),
+  cancelActivePreviewRender: vi.fn(async () => undefined),
   setGPUEnabled: vi.fn(),
   getGPUDiagnostics: vi.fn(async () => ({
     gpuAvailable: false,
@@ -246,7 +247,7 @@ vi.mock('./utils/imageWorkerClient', () => ({
 
     noteCoalescedPreviewRequest = vi.fn();
 
-    cancelActivePreviewRender = vi.fn(async () => undefined);
+    cancelActivePreviewRender = workerState.cancelActivePreviewRender;
 
     terminate = vi.fn();
   },
@@ -362,6 +363,7 @@ describe('App import and preview pipeline', () => {
     workerState.export.mockReset();
     workerState.sampleFilmBase.mockReset();
     workerState.disposeDocument.mockClear();
+    workerState.cancelActivePreviewRender.mockReset();
     workerState.setGPUEnabled.mockReset();
     workerState.getGPUDiagnostics.mockClear();
     workerState.constructorOptions = [];
@@ -1003,6 +1005,71 @@ describe('App import and preview pipeline', () => {
       histogramMode: 'full',
     });
     expect((workerState.render.mock.calls[1]?.[0]?.targetMaxDimension as number)).toBeGreaterThan(initialTargetDimension);
+  });
+
+  it('shows a rendering indicator for heavier settled preview renders', async () => {
+    const settledRender = deferred<ReturnType<typeof createRenderResult>>();
+    workerState.decode.mockResolvedValue(createDecodedImage(5000, 3000));
+    workerState.render.mockImplementation((payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+    }) => {
+      if (payload.revision === 2) {
+        return settledRender.promise;
+      }
+
+      return Promise.resolve(
+        createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension),
+      );
+    });
+
+    render(<App />);
+    await uploadFile(createFile('render-indicator.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const canvas = document.querySelector('canvas');
+    expect(canvas).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.wheel(canvas as HTMLCanvasElement, {
+        deltaY: -100,
+        clientX: 100,
+        clientY: 50,
+      });
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(screen.getByText('Rendering...')).toBeInTheDocument();
+
+    await act(async () => {
+      const secondPayload = workerState.render.mock.calls[1]?.[0] as {
+        documentId: string;
+        revision: number;
+        targetMaxDimension: number;
+      };
+      settledRender.resolve(createRenderResult(
+        secondPayload.documentId,
+        secondPayload.revision,
+        secondPayload.targetMaxDimension,
+        secondPayload.targetMaxDimension,
+      ));
+    });
+    await flushMicrotasks();
+    expect(screen.queryByText('Rendering...')).not.toBeInTheDocument();
   });
 
   it('does not redraw a closed document when an in-flight render finishes late', async () => {

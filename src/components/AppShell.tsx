@@ -92,6 +92,7 @@ type AppShellProps = {
   showMagnifier: boolean;
   isCropOverlayVisible: boolean;
   showBlockingOverlay: boolean;
+  isRenderIndicatorVisible: boolean;
   overlayContent: BlockingOverlayState | null;
   error: string | null;
   transientNotice: TransientNoticeState | null;
@@ -228,6 +229,7 @@ export function AppShell({
   showMagnifier,
   isCropOverlayVisible,
   showBlockingOverlay,
+  isRenderIndicatorVisible,
   overlayContent,
   error,
   transientNotice,
@@ -726,6 +728,20 @@ export function AppShell({
                       </div>
 
                       <div className="flex flex-wrap items-center justify-end gap-3">
+                        <AnimatePresence initial={false}>
+                          {isRenderIndicatorVisible && (
+                            <motion.div
+                              key="render-indicator"
+                              initial={{ opacity: 0, y: 4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: 4 }}
+                              transition={{ duration: 0.14, ease: 'easeOut' }}
+                              className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-[10px] font-mono uppercase tracking-[0.2em] text-zinc-500 shadow-xl backdrop-blur-md"
+                            >
+                              Rendering...
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                         <button
                           onClick={() => void onCloseImage()}
                           aria-label="Close image"
