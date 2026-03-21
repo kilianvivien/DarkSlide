@@ -6,9 +6,21 @@ function clampZoom(z: number): number {
 
 export type ZoomLevel = number | 'fit';
 
+export interface PanGeometry {
+  imageWidth: number;
+  imageHeight: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  fitScale: number;
+}
+
 export interface ViewportZoomState {
   zoom: ZoomLevel;
   pan: { x: number; y: number };
+}
+
+export function resolveEffectiveZoom(zoom: ZoomLevel, fitScale: number) {
+  return zoom === 'fit' ? fitScale : zoom;
 }
 
 /**
@@ -38,71 +50,77 @@ export function useViewportZoom() {
   const [pan, setPan] = useState({ x: 0.5, y: 0.5 });
   const panStartRef = useRef<{ clientX: number; clientY: number; startPan: { x: number; y: number } } | null>(null);
 
+  const liveZoomRef = useRef<ZoomLevel>('fit');
   // Ref-based live pan for direct DOM updates during drag (bypasses React re-renders)
   const livePanRef = useRef({ x: 0.5, y: 0.5 });
   const panTransformRef = useRef<HTMLDivElement | null>(null);
-  const panGeometryRef = useRef<{
-    imageWidth: number;
-    imageHeight: number;
-    viewportWidth: number;
-    viewportHeight: number;
-    effectiveZoom: number;
-  } | null>(null);
+  const panGeometryRef = useRef<PanGeometry | null>(null);
+
+  const applyViewportTransform = useCallback((nextPan: { x: number; y: number }, nextZoom: ZoomLevel = liveZoomRef.current) => {
+    livePanRef.current = nextPan;
+    liveZoomRef.current = nextZoom;
+
+    const el = panTransformRef.current;
+    const geo = panGeometryRef.current;
+    if (!el || !geo) return;
+
+    const effectiveZoom = resolveEffectiveZoom(nextZoom, geo.fitScale);
+    const t = computePanTranslate(nextPan, geo.imageWidth, geo.imageHeight, geo.viewportWidth, geo.viewportHeight, effectiveZoom);
+    el.style.transform = `translate3d(${t.x}px, ${t.y}px, 0) scale(${effectiveZoom})`;
+  }, []);
+
+  const setCommittedZoom = useCallback((nextZoom: ZoomLevel) => {
+    liveZoomRef.current = nextZoom;
+    setZoom(nextZoom);
+    applyViewportTransform(livePanRef.current, nextZoom);
+  }, [applyViewportTransform]);
 
   const zoomToFit = useCallback(() => {
+    liveZoomRef.current = 'fit';
+    livePanRef.current = { x: 0.5, y: 0.5 };
     setZoom('fit');
     setPan({ x: 0.5, y: 0.5 });
-    livePanRef.current = { x: 0.5, y: 0.5 };
-  }, []);
+    applyViewportTransform({ x: 0.5, y: 0.5 }, 'fit');
+  }, [applyViewportTransform]);
 
   const zoomTo100 = useCallback(() => {
-    setZoom(1);
-  }, []);
+    setCommittedZoom(1);
+  }, [setCommittedZoom]);
 
   const zoomIn = useCallback(() => {
-    setZoom((prev) => {
-      const current = prev === 'fit' ? 1 : prev;
-      return clampZoom(current * 1.25);
-    });
-  }, []);
+    const current = liveZoomRef.current === 'fit' ? 1 : liveZoomRef.current;
+    setCommittedZoom(clampZoom(current * 1.25));
+  }, [setCommittedZoom]);
 
   const zoomOut = useCallback(() => {
-    setZoom((prev) => {
-      const current = prev === 'fit' ? 1 : prev;
-      const next = clampZoom(current * 0.8);
-      return next;
-    });
-  }, []);
+    const current = liveZoomRef.current === 'fit' ? 1 : liveZoomRef.current;
+    setCommittedZoom(clampZoom(current * 0.8));
+  }, [setCommittedZoom]);
 
   const setZoomLevel = useCallback((level: ZoomLevel) => {
     if (level === 'fit') {
       zoomToFit();
     } else {
-      setZoom(clampZoom(level));
+      setCommittedZoom(clampZoom(level));
     }
-  }, [zoomToFit]);
+  }, [setCommittedZoom, zoomToFit]);
 
   const handleWheel = useCallback((
     deltaY: number,
     cursorNormX: number,
     cursorNormY: number,
   ) => {
-    setZoom((prev) => {
-      const current = prev === 'fit' ? 1 : prev;
-      const factor = deltaY < 0 ? 1.1 : 0.9;
-      const next = clampZoom(current * factor);
-      return next;
-    });
-    setPan((prev) => {
-      const blend = 0.1;
-      const next = {
-        x: prev.x + (cursorNormX - prev.x) * blend,
-        y: prev.y + (cursorNormY - prev.y) * blend,
-      };
-      livePanRef.current = next;
-      return next;
-    });
-  }, []);
+    const current = liveZoomRef.current === 'fit' ? 1 : liveZoomRef.current;
+    const factor = deltaY < 0 ? 1.1 : 0.9;
+    const nextZoom = clampZoom(current * factor);
+    const currentPan = livePanRef.current;
+    const blend = 0.1;
+    const nextPan = {
+      x: currentPan.x + (cursorNormX - currentPan.x) * blend,
+      y: currentPan.y + (cursorNormY - currentPan.y) * blend,
+    };
+    applyViewportTransform(nextPan, nextZoom);
+  }, [applyViewportTransform]);
 
   const startPan = useCallback((clientX: number, clientY: number) => {
     const currentPan = livePanRef.current;
@@ -111,13 +129,8 @@ export function useViewportZoom() {
 
   // Direct DOM update during drag — no React re-render
   const applyPanTransform = useCallback((nextPan: { x: number; y: number }) => {
-    livePanRef.current = nextPan;
-    const el = panTransformRef.current;
-    const geo = panGeometryRef.current;
-    if (!el || !geo) return;
-    const t = computePanTranslate(nextPan, geo.imageWidth, geo.imageHeight, geo.viewportWidth, geo.viewportHeight, geo.effectiveZoom);
-    el.style.transform = `translate3d(${t.x}px, ${t.y}px, 0) scale(${geo.effectiveZoom})`;
-  }, []);
+    applyViewportTransform(nextPan);
+  }, [applyViewportTransform]);
 
   const updatePan = useCallback((
     clientX: number,
@@ -132,7 +145,7 @@ export function useViewportZoom() {
     if (!start) return;
 
     // Store geometry for direct DOM updates
-    panGeometryRef.current = { imageWidth, imageHeight, viewportWidth, viewportHeight, effectiveZoom };
+    panGeometryRef.current = { imageWidth, imageHeight, viewportWidth, viewportHeight, fitScale: effectiveZoom };
 
     const pannableX = Math.max(1, imageWidth * effectiveZoom - viewportWidth);
     const pannableY = Math.max(1, imageHeight * effectiveZoom - viewportHeight);
@@ -152,12 +165,18 @@ export function useViewportZoom() {
     setPan(finalPan);
   }, []);
 
+  const commitZoom = useCallback(() => {
+    setZoom(liveZoomRef.current);
+    setPan(livePanRef.current);
+  }, []);
+
   const isPanning = panStartRef.current !== null;
 
   return {
     zoom,
     pan,
     setPan,
+    liveZoomRef,
     livePanRef,
     panTransformRef,
     panGeometryRef,
@@ -171,5 +190,6 @@ export function useViewportZoom() {
     startPan,
     updatePan,
     endPan,
+    commitZoom,
   };
 }

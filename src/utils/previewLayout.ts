@@ -1,8 +1,15 @@
-import { CropSettings } from '../types';
+import { CropSettings, PreviewLevel } from '../types';
+import { selectPreviewLevel } from './imagePipeline';
 
 const CROP_TOLERANCE = 0.0001;
+const PREVIEW_LEVEL_HYSTERESIS = 0.1;
 
 export const CROP_OVERLAY_HANDLE_SAFE_PADDING = 56;
+
+export interface RenderTargetSelectionState {
+  previewLevelId: string;
+  targetDimension: number;
+}
 
 interface ComputeViewportFitScaleOptions {
   viewportWidth: number;
@@ -37,4 +44,52 @@ export function isFullFrameFreeCrop(crop: CropSettings) {
     && Math.abs(crop.y) <= CROP_TOLERANCE
     && Math.abs(1 - crop.width) <= CROP_TOLERANCE
     && Math.abs(1 - crop.height) <= CROP_TOLERANCE;
+}
+
+export function resolveRenderTargetSelection(
+  levels: PreviewLevel[],
+  targetDimension: number,
+  previous: RenderTargetSelectionState | null,
+  interactionJustEnded: boolean,
+) {
+  const ordered = [...levels].sort((left, right) => left.maxDimension - right.maxDimension);
+  const selected = selectPreviewLevel(ordered, targetDimension);
+
+  if (interactionJustEnded || !previous) {
+    return {
+      previewLevelId: selected.id,
+      targetDimension,
+    } satisfies RenderTargetSelectionState;
+  }
+
+  const previousIndex = ordered.findIndex((level) => level.id === previous.previewLevelId);
+  const selectedIndex = ordered.findIndex((level) => level.id === selected.id);
+
+  if (previousIndex < 0 || selectedIndex < 0) {
+    return {
+      previewLevelId: selected.id,
+      targetDimension,
+    } satisfies RenderTargetSelectionState;
+  }
+
+  if (previousIndex === selectedIndex) {
+    return previous;
+  }
+
+  if (selectedIndex > previousIndex) {
+    const thresholdLevel = ordered[selectedIndex - 1];
+    if (targetDimension < thresholdLevel.maxDimension * (1 + PREVIEW_LEVEL_HYSTERESIS)) {
+      return previous;
+    }
+  } else {
+    const thresholdLevel = ordered[selectedIndex];
+    if (targetDimension > thresholdLevel.maxDimension * (1 - PREVIEW_LEVEL_HYSTERESIS)) {
+      return previous;
+    }
+  }
+
+  return {
+    previewLevelId: selected.id,
+    targetDimension,
+  } satisfies RenderTargetSelectionState;
 }

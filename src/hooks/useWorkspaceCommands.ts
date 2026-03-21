@@ -68,7 +68,12 @@ type UseWorkspaceCommandsOptions = {
   workerClientRef: MutableRefObject<ImageWorkerClient | null>;
   activeDocumentIdRef: MutableRefObject<string | null>;
   activeRenderRequestRef: MutableRefObject<{ documentId: string; revision: number } | null>;
-  pendingPreviewRef: MutableRefObject<{ documentId: string; angle: number; imageData: ImageData } | null>;
+  pendingPreviewRef: MutableRefObject<{
+    documentId: string;
+    angle: number;
+    imageData: ImageData;
+    imageBitmap: ImageBitmap | null;
+  } | null>;
   interactionJustEndedRef: MutableRefObject<boolean>;
   tabSwitchDraftRef: MutableRefObject<string | null>;
   previousActiveTabIdRef: MutableRefObject<string | null>;
@@ -261,6 +266,7 @@ export function useWorkspaceCommands({
     setPreviewVisibility(false);
     clearCanvas();
     activeRenderRequestRef.current = null;
+    pendingPreviewRef.current?.imageBitmap?.close();
     pendingPreviewRef.current = null;
     cancelPendingPreviewRetry();
     cancelScheduledInteractivePreview();
@@ -478,6 +484,7 @@ export function useWorkspaceCommands({
     }
 
     activeRenderRequestRef.current = null;
+    pendingPreviewRef.current?.imageBitmap?.close();
     pendingPreviewRef.current = null;
     cancelPendingPreviewRetry();
     cancelScheduledInteractivePreview();
@@ -547,6 +554,7 @@ export function useWorkspaceCommands({
 
     importSessionRef.current += 1;
     activeRenderRequestRef.current = null;
+    pendingPreviewRef.current?.imageBitmap?.close();
     pendingPreviewRef.current = null;
     cancelPendingPreviewRetry();
     cancelScheduledInteractivePreview();

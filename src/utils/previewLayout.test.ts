@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeViewportFitScale, isFullFrameFreeCrop } from './previewLayout';
+import { computeViewportFitScale, isFullFrameFreeCrop, resolveRenderTargetSelection } from './previewLayout';
 
 describe('computeViewportFitScale', () => {
   it('reserves overlay padding so crop handles stay inside the viewport', () => {
@@ -50,5 +50,49 @@ describe('isFullFrameFreeCrop', () => {
       height: 1,
       aspectRatio: null,
     })).toBe(false);
+  });
+});
+
+describe('resolveRenderTargetSelection', () => {
+  const previewLevels = [
+    { id: 'preview-1024', width: 1024, height: 768, maxDimension: 1024 },
+    { id: 'preview-2048', width: 2048, height: 1536, maxDimension: 2048 },
+    { id: 'preview-4096', width: 4096, height: 3072, maxDimension: 4096 },
+  ];
+
+  it('holds the previous level until the zoom meaningfully crosses the next boundary', () => {
+    expect(resolveRenderTargetSelection(
+      previewLevels,
+      1100,
+      { previewLevelId: 'preview-1024', targetDimension: 1024 },
+      false,
+    )).toEqual({
+      previewLevelId: 'preview-1024',
+      targetDimension: 1024,
+    });
+  });
+
+  it('allows the level to change once the hysteresis margin is exceeded', () => {
+    expect(resolveRenderTargetSelection(
+      previewLevels,
+      1200,
+      { previewLevelId: 'preview-1024', targetDimension: 1024 },
+      false,
+    )).toEqual({
+      previewLevelId: 'preview-2048',
+      targetDimension: 1200,
+    });
+  });
+
+  it('commits the live target when the interaction ends even within the same level', () => {
+    expect(resolveRenderTargetSelection(
+      previewLevels,
+      1500,
+      { previewLevelId: 'preview-2048', targetDimension: 1300 },
+      true,
+    )).toEqual({
+      previewLevelId: 'preview-2048',
+      targetDimension: 1500,
+    });
   });
 });

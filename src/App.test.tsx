@@ -9,6 +9,19 @@ type Deferred<T> = {
   reject: (reason?: unknown) => void;
 };
 
+class MockImageBitmap {
+  width: number;
+
+  height: number;
+
+  constructor(width: number, height: number) {
+    this.width = width;
+    this.height = height;
+  }
+
+  close() {}
+}
+
 const workerState = vi.hoisted(() => ({
   decode: vi.fn(),
   render: vi.fn(),
@@ -367,6 +380,9 @@ describe('App import and preview pipeline', () => {
     exportNotificationState.primeExportNotificationsPermission.mockReset();
     exportNotificationState.notifyExportFinished.mockResolvedValue(undefined);
     exportNotificationState.primeExportNotificationsPermission.mockResolvedValue(undefined);
+    vi.stubGlobal('createImageBitmap', vi.fn(async (source: ImageData | { width: number; height: number }) => (
+      new MockImageBitmap(source.width, source.height)
+    )));
     fileBridgeState.openInExternalEditor.mockResolvedValue({
       savedPath: '/Users/tester/Downloads/scan.jpg',
       destinationDirectory: '/Users/tester/Downloads',
@@ -375,6 +391,7 @@ describe('App import and preview pipeline', () => {
 
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),
+      drawImage: vi.fn(),
       putImageData: vi.fn(),
     }) as unknown as CanvasRenderingContext2D);
     vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -711,10 +728,11 @@ describe('App import and preview pipeline', () => {
   });
 
   it('queues only the latest preview render while another render is in flight', async () => {
-    const putImageData = vi.fn();
+    const drawImage = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),
-      putImageData,
+      drawImage,
+      putImageData: vi.fn(),
     }) as unknown as CanvasRenderingContext2D);
 
     const firstRender = deferred<ReturnType<typeof createRenderResult>>();
@@ -755,8 +773,8 @@ describe('App import and preview pipeline', () => {
     secondRender.resolve(createRenderResult(secondPayload.documentId, secondPayload.revision, 77, 55));
     await flushMicrotasks();
 
-    expect(putImageData).toHaveBeenCalledTimes(2);
-    expect((putImageData.mock.calls.at(-1)?.[0] as ImageData).width).toBe(77);
+    expect(drawImage).toHaveBeenCalledTimes(2);
+    expect((drawImage.mock.calls.at(-1)?.[0] as { width: number }).width).toBe(77);
     expect(document.querySelector('[data-tip="Showing Original — click to return"]')).toBeTruthy();
   });
 
@@ -936,11 +954,63 @@ describe('App import and preview pipeline', () => {
     });
   });
 
+  it('attaches wheel zoom after an image loads and commits a settled zoom render', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(5000, 3000));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+    }) => createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension));
+
+    render(<App />);
+    await uploadFile(createFile('wheel-zoom.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+    const initialTargetDimension = workerState.render.mock.calls[0]?.[0]?.targetMaxDimension as number;
+
+    const canvas = document.querySelector('canvas');
+    expect(canvas).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.wheel(canvas as HTMLCanvasElement, {
+        deltaY: -100,
+        clientX: 100,
+        clientY: 50,
+      });
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(2);
+    expect(workerState.render.mock.calls[1]?.[0]).toMatchObject({
+      previewMode: 'settled',
+      interactionQuality: null,
+      histogramMode: 'full',
+    });
+    expect((workerState.render.mock.calls[1]?.[0]?.targetMaxDimension as number)).toBeGreaterThan(initialTargetDimension);
+  });
+
   it('does not redraw a closed document when an in-flight render finishes late', async () => {
-    const putImageData = vi.fn();
+    const drawImage = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),
-      putImageData,
+      drawImage,
+      putImageData: vi.fn(),
     }) as unknown as CanvasRenderingContext2D);
 
     const renderRequest = deferred<ReturnType<typeof createRenderResult>>();
@@ -966,14 +1036,15 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(screen.getByText('Drop your negatives here')).toBeInTheDocument();
-    expect(putImageData).not.toHaveBeenCalled();
+    expect(drawImage).not.toHaveBeenCalled();
   });
 
   it('rebuilds preview image data when the worker-cloned dimensions are zero', async () => {
-    const putImageData = vi.fn();
+    const drawImage = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),
-      putImageData,
+      drawImage,
+      putImageData: vi.fn(),
     }) as unknown as CanvasRenderingContext2D);
 
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
@@ -1004,13 +1075,13 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(putImageData).toHaveBeenCalledTimes(1);
-    expect((putImageData.mock.calls[0]?.[0] as ImageData).width).toBe(80);
-    expect((putImageData.mock.calls[0]?.[0] as ImageData).height).toBe(60);
+    expect(drawImage).toHaveBeenCalledTimes(1);
+    expect((drawImage.mock.calls[0]?.[0] as { width: number }).width).toBe(80);
+    expect((drawImage.mock.calls[0]?.[0] as { height: number }).height).toBe(60);
   });
 
   it('falls back to a plain 2d context when WebKit rejects willReadFrequently', async () => {
-    const putImageData = vi.fn();
+    const drawImage = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((contextId, options) => {
       if (contextId !== '2d') {
         return null;
@@ -1022,7 +1093,8 @@ describe('App import and preview pipeline', () => {
 
       return {
         clearRect: vi.fn(),
-        putImageData,
+        drawImage,
+        putImageData: vi.fn(),
       } as unknown as CanvasRenderingContext2D;
     });
 
@@ -1039,13 +1111,13 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(putImageData).toHaveBeenCalledTimes(1);
-    expect((putImageData.mock.calls[0]?.[0] as ImageData).width).toBe(80);
-    expect((putImageData.mock.calls[0]?.[0] as ImageData).height).toBe(60);
+    expect(drawImage).toHaveBeenCalledTimes(1);
+    expect((drawImage.mock.calls[0]?.[0] as { width: number }).width).toBe(80);
+    expect((drawImage.mock.calls[0]?.[0] as { height: number }).height).toBe(60);
   });
 
   it('retries preview drawing when the first canvas context acquisition misses', async () => {
-    const putImageData = vi.fn();
+    const drawImage = vi.fn();
     let getContextAttempts = 0;
 
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((contextId) => {
@@ -1060,7 +1132,8 @@ describe('App import and preview pipeline', () => {
 
       return {
         clearRect: vi.fn(),
-        putImageData,
+        drawImage,
+        putImageData: vi.fn(),
       } as unknown as CanvasRenderingContext2D;
     });
 
@@ -1081,9 +1154,9 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(putImageData).toHaveBeenCalledTimes(1);
-    expect((putImageData.mock.calls[0]?.[0] as ImageData).width).toBe(80);
-    expect((putImageData.mock.calls[0]?.[0] as ImageData).height).toBe(60);
+    expect(drawImage).toHaveBeenCalledTimes(1);
+    expect((drawImage.mock.calls[0]?.[0] as { width: number }).width).toBe(80);
+    expect((drawImage.mock.calls[0]?.[0] as { height: number }).height).toBe(60);
   });
 
   it('opens files through the native dialog when running in the desktop shell', async () => {

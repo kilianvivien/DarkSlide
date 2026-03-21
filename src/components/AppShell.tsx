@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -51,7 +51,7 @@ import {
   WorkspaceDocument,
 } from '../types';
 import { MaxResidentDocs } from '../utils/residentDocsStore';
-import { computePanTranslate } from '../hooks/useViewportZoom';
+import { computePanTranslate, PanGeometry } from '../hooks/useViewportZoom';
 
 type AppShellProps = {
   usesNativeFileDialogs: boolean;
@@ -59,13 +59,7 @@ type AppShellProps = {
   displayCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   viewportRef: React.RefObject<HTMLDivElement | null>;
   panTransformRef: React.RefObject<HTMLDivElement | null>;
-  panGeometryRef: React.MutableRefObject<{
-    imageWidth: number;
-    imageHeight: number;
-    viewportWidth: number;
-    viewportHeight: number;
-    effectiveZoom: number;
-  } | null>;
+  panGeometryRef: React.MutableRefObject<PanGeometry | null>;
   workerClient: ImageWorkerClient | null;
   documentState: WorkspaceDocument | null;
   activeTab: DocumentTab | null;
@@ -325,6 +319,56 @@ export function AppShell({
   zoomOut,
   setZoomLevel,
 }: AppShellProps) {
+  const previewContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = previewContainerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = element.getBoundingClientRect();
+      const normX = (event.clientX - rect.left) / rect.width;
+      const normY = (event.clientY - rect.top) / rect.height;
+      onHandleZoomWheel(event.deltaY, normX, normY);
+    };
+
+    element.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      element.removeEventListener('wheel', handleWheel);
+    };
+  }, [documentState, onHandleZoomWheel]);
+
+  useLayoutEffect(() => {
+    panGeometryRef.current = {
+      imageWidth: logicalPreviewSize.width,
+      imageHeight: logicalPreviewSize.height,
+      viewportWidth: viewportRef.current?.clientWidth ?? 1,
+      viewportHeight: viewportRef.current?.clientHeight ?? 1,
+      fitScale,
+    };
+  }, [fitScale, logicalPreviewSize.height, logicalPreviewSize.width, panGeometryRef, viewportRef]);
+
+  const panTransformStyle = useMemo(() => {
+    const viewportWidth = viewportRef.current?.clientWidth ?? 1;
+    const viewportHeight = viewportRef.current?.clientHeight ?? 1;
+    const translate = computePanTranslate(
+      pan,
+      logicalPreviewSize.width,
+      logicalPreviewSize.height,
+      viewportWidth,
+      viewportHeight,
+      effectiveZoom,
+    );
+
+    return {
+      transform: `translate3d(${translate.x}px, ${translate.y}px, 0) scale(${effectiveZoom})`,
+      transformOrigin: 'center center',
+    };
+  }, [effectiveZoom, logicalPreviewSize.height, logicalPreviewSize.width, pan, viewportRef]);
+
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-zinc-950 font-sans text-zinc-100">
       {usesNativeFileDialogs && (
@@ -558,14 +602,8 @@ export function AppShell({
                     className="relative flex h-full w-full flex-col items-center justify-center gap-2"
                   >
                     <div
+                      ref={previewContainerRef}
                       className="relative w-full flex-1 overflow-hidden border border-zinc-800 bg-black"
-                      onWheel={(event) => {
-                        event.preventDefault();
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        const normX = (event.clientX - rect.left) / rect.width;
-                        const normY = (event.clientY - rect.top) / rect.height;
-                        onHandleZoomWheel(event.deltaY, normX, normY);
-                      }}
                       onMouseDown={(event) => {
                         const canPan = (zoom !== 'fit' || isSpaceHeld) && !isPickingFilmBase && !activePointPicker && !isCropOverlayVisible;
                         if (canPan && event.button === 0) {
@@ -631,23 +669,7 @@ export function AppShell({
                       <div
                         ref={panTransformRef}
                         className="absolute inset-0 flex items-center justify-center will-change-transform"
-                        style={(() => {
-                          const vw = viewportRef.current?.clientWidth ?? 1;
-                          const vh = viewportRef.current?.clientHeight ?? 1;
-                          // Keep geometry ref in sync for direct DOM updates during drag
-                          panGeometryRef.current = {
-                            imageWidth: logicalPreviewSize.width,
-                            imageHeight: logicalPreviewSize.height,
-                            viewportWidth: vw,
-                            viewportHeight: vh,
-                            effectiveZoom,
-                          };
-                          const t = computePanTranslate(pan, logicalPreviewSize.width, logicalPreviewSize.height, vw, vh, effectiveZoom);
-                          return {
-                            transform: `translate3d(${t.x}px, ${t.y}px, 0) scale(${effectiveZoom})`,
-                            transformOrigin: 'center center',
-                          };
-                        })()}
+                        style={panTransformStyle}
                       >
                         <div
                           className="relative inline-block will-change-transform"

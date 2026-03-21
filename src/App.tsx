@@ -14,7 +14,7 @@ import { loadPreferences, savePreferences, UserPreferences } from './utils/prefe
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { getTransformedDimensions } from './utils/imagePipeline';
 import { clamp } from './utils/math';
-import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop } from './utils/previewLayout';
+import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs, saveMaxResidentDocs } from './utils/residentDocsStore';
@@ -128,12 +128,18 @@ export default function App() {
   const activeDocumentIdRef = useRef<string | null>(null);
   const activeRenderRequestRef = useRef<{ documentId: string; revision: number } | null>(null);
   const hasVisiblePreviewRef = useRef(false);
-  const pendingPreviewRef = useRef<{ documentId: string; angle: number; imageData: ImageData } | null>(null);
+  const pendingPreviewRef = useRef<{
+    documentId: string;
+    angle: number;
+    imageData: ImageData;
+    imageBitmap: ImageBitmap | null;
+  } | null>(null);
   const previewRetryFrameRef = useRef<number | null>(null);
   const interactivePreviewFrameRef = useRef<number | null>(null);
   const pendingInteractivePreviewRef = useRef<QueuedPreviewRender | null>(null);
   const interactionJustEndedRef = useRef(false);
   const zoomIdleTimeoutRef = useRef<number | null>(null);
+  const fullRenderTargetSelectionRef = useRef<{ previewLevelId: string; targetDimension: number } | null>(null);
   const tabSwitchDraftRef = useRef<string | null>(null);
   const transientNoticeTimeoutRef = useRef<number | null>(null);
   const tabSwitchOverlayTimeoutRef = useRef<number | null>(null);
@@ -258,6 +264,7 @@ export default function App() {
     livePanRef, panTransformRef, panGeometryRef,
     handleWheel: handleZoomWheelRaw,
     startPan, updatePan, endPan,
+    commitZoom,
   } = useViewportZoom();
 
   // Wrap setPan to always sync the live ref (used by tab switching, etc.)
@@ -270,23 +277,64 @@ export default function App() {
   }, [livePanRef, setRawPan]);
 
   const isZoomingRef = useRef(false);
-  const handleZoomWheel = useCallback((deltaY: number, normX: number, normY: number) => {
+  const beginZoomInteraction = useCallback(() => {
     if (!isZoomingRef.current) {
       isZoomingRef.current = true;
       interactionJustEndedRef.current = false;
       setIsZooming(true);
     }
-    handleZoomWheelRaw(deltaY, normX, normY);
+  }, []);
+
+  const finishZoomInteraction = useCallback(() => {
+    isZoomingRef.current = false;
+    commitZoom();
+    interactionJustEndedRef.current = true;
+    setIsZooming(false);
+    zoomIdleTimeoutRef.current = null;
+  }, [commitZoom]);
+
+  const scheduleZoomInteractionFinish = useCallback((delayMs: number) => {
     if (zoomIdleTimeoutRef.current !== null) {
       window.clearTimeout(zoomIdleTimeoutRef.current);
     }
     zoomIdleTimeoutRef.current = window.setTimeout(() => {
-      isZoomingRef.current = false;
-      interactionJustEndedRef.current = true;
-      setIsZooming(false);
-      zoomIdleTimeoutRef.current = null;
-    }, 200);
-  }, [handleZoomWheelRaw]);
+      finishZoomInteraction();
+    }, delayMs);
+  }, [finishZoomInteraction]);
+
+  const handleZoomWheel = useCallback((deltaY: number, normX: number, normY: number) => {
+    beginZoomInteraction();
+    handleZoomWheelRaw(deltaY, normX, normY);
+    scheduleZoomInteractionFinish(200);
+  }, [beginZoomInteraction, handleZoomWheelRaw, scheduleZoomInteractionFinish]);
+
+  const runZoomControlWithDraft = useCallback((action: () => void) => {
+    beginZoomInteraction();
+    action();
+    scheduleZoomInteractionFinish(300);
+  }, [beginZoomInteraction, scheduleZoomInteractionFinish]);
+
+  const zoomToFitWithDraft = useCallback(() => {
+    runZoomControlWithDraft(zoomToFit);
+  }, [runZoomControlWithDraft, zoomToFit]);
+
+  const zoomTo100WithDraft = useCallback(() => {
+    runZoomControlWithDraft(zoomTo100);
+  }, [runZoomControlWithDraft, zoomTo100]);
+
+  const zoomInWithDraft = useCallback(() => {
+    runZoomControlWithDraft(zoomIn);
+  }, [runZoomControlWithDraft, zoomIn]);
+
+  const zoomOutWithDraft = useCallback(() => {
+    runZoomControlWithDraft(zoomOut);
+  }, [runZoomControlWithDraft, zoomOut]);
+
+  const setZoomLevelWithDraft = useCallback((level: number | 'fit') => {
+    runZoomControlWithDraft(() => {
+      setZoomLevel(level);
+    });
+  }, [runZoomControlWithDraft, setZoomLevel]);
 
   const fitScale = useMemo(() => {
     if (!documentState || !displaySettings) return 1;
@@ -344,11 +392,24 @@ export default function App() {
   const fullRenderTargetDimension = useMemo(() => {
     const sourceMax = documentState ? Math.max(documentState.source.width, documentState.source.height) : targetMaxDimension;
     if (sourceMax <= targetMaxDimension) {
+      fullRenderTargetSelectionRef.current = null;
       return targetMaxDimension;
+    }
+    if (!documentState || documentState.previewLevels.length === 0) {
+      fullRenderTargetSelectionRef.current = null;
+      return Math.min(sourceMax, targetMaxDimension);
     }
     const z = zoom === 'fit' ? fitScale : zoom;
     const effectiveTarget = Math.ceil((targetMaxDimension * z) / Math.max(fitScale, 0.0001));
-    return Math.min(sourceMax, Math.max(targetMaxDimension, effectiveTarget));
+    const clampedTarget = Math.min(sourceMax, Math.max(targetMaxDimension, effectiveTarget));
+    const selection = resolveRenderTargetSelection(
+      documentState.previewLevels,
+      clampedTarget,
+      fullRenderTargetSelectionRef.current,
+      interactionJustEndedRef.current,
+    );
+    fullRenderTargetSelectionRef.current = selection;
+    return selection.targetDimension;
   }, [documentState, fitScale, targetMaxDimension, zoom]);
   const isDraftPreview = comparisonMode === 'processed' && (isAdjustingLevel || isInteractingWithPreviewControls || isAdjustingCrop || isZooming);
   const renderTargetDimension = useMemo(() => {
@@ -485,6 +546,11 @@ export default function App() {
       if (interactivePreviewFrameRef.current !== null) {
         window.cancelAnimationFrame(interactivePreviewFrameRef.current);
       }
+      if (zoomIdleTimeoutRef.current !== null) {
+        window.clearTimeout(zoomIdleTimeoutRef.current);
+      }
+      pendingPreviewRef.current?.imageBitmap?.close();
+      pendingPreviewRef.current = null;
       workerClientRef.current?.terminate();
       workerClientRef.current = null;
     };
@@ -595,7 +661,7 @@ export default function App() {
     setBlockingOverlay((current) => (current ? null : current));
   }, [hasVisiblePreview]);
 
-  const drawPreview = useCallback((imageData: ImageData) => {
+  const drawPreview = useCallback((imageData: ImageData, imageBitmap: ImageBitmap | null) => {
     const canvas = displayCanvasRef.current;
     if (!canvas) return false;
 
@@ -604,7 +670,13 @@ export default function App() {
     const ctx = getCanvas2dContext(canvas);
     if (!ctx) return false;
     ctx.imageSmoothingQuality = 'high';
-    ctx.putImageData(imageData, 0, 0);
+    if (imageBitmap) {
+      ctx.clearRect(0, 0, imageData.width, imageData.height);
+      ctx.drawImage(imageBitmap, 0, 0, imageData.width, imageData.height);
+      imageBitmap.close();
+    } else {
+      ctx.putImageData(imageData, 0, 0);
+    }
     setCanvasSize({ width: imageData.width, height: imageData.height });
     return true;
   }, []);
@@ -618,12 +690,19 @@ export default function App() {
 
   const flushPendingPreview = useCallback(function attemptPreviewDraw(attempt = 0) {
     const pendingPreview = pendingPreviewRef.current;
-    if (!pendingPreview || pendingPreview.documentId !== activeDocumentIdRef.current) {
+    if (!pendingPreview) {
       previewRetryFrameRef.current = null;
       return;
     }
 
-    if (drawPreview(pendingPreview.imageData)) {
+    if (pendingPreview.documentId !== activeDocumentIdRef.current) {
+      pendingPreview.imageBitmap?.close();
+      pendingPreviewRef.current = null;
+      previewRetryFrameRef.current = null;
+      return;
+    }
+
+    if (drawPreview(pendingPreview.imageData, pendingPreview.imageBitmap)) {
       pendingPreviewRef.current = null;
       setRenderedPreviewAngle(pendingPreview.angle);
       setPreviewVisibility(true);
@@ -773,10 +852,17 @@ export default function App() {
         return;
       }
 
+      const normalizedImageData = normalizePreviewImageData(result.imageData, result.width, result.height);
+      const imageBitmap = typeof createImageBitmap === 'function'
+        ? await createImageBitmap(normalizedImageData).catch(() => null)
+        : null;
+
+      pendingPreviewRef.current?.imageBitmap?.close();
       pendingPreviewRef.current = {
         documentId: result.documentId,
         angle: settings.rotation + settings.levelAngle,
-        imageData: normalizePreviewImageData(result.imageData, result.width, result.height),
+        imageData: normalizedImageData,
+        imageBitmap,
       };
       cancelPendingPreviewRetry();
       flushPendingPreview();
@@ -928,10 +1014,7 @@ export default function App() {
     }
 
     if (isInteractingWithPreviewControls || isAdjustingCrop || isZooming) {
-      // When ultra-smooth zoom is enabled, skip worker renders entirely during zoom —
-      // only the CSS transform changes, so re-rendering pixels is pure waste.
-      // A settled render fires automatically when the zoom gesture ends.
-      if (isZooming && !isInteractingWithPreviewControls && !isAdjustingCrop && ultraSmoothDragEnabled) {
+      if (isZooming && !isInteractingWithPreviewControls && !isAdjustingCrop) {
         return;
       }
       if (pendingInteractivePreviewRef.current) {
@@ -1159,10 +1242,10 @@ export default function App() {
     onToggleCropOverlay: handleToggleCropOverlay,
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleRightPane,
-    zoomToFit,
-    zoomTo100,
-    zoomIn,
-    zoomOut,
+    zoomToFit: zoomToFitWithDraft,
+    zoomTo100: zoomTo100WithDraft,
+    zoomIn: zoomInWithDraft,
+    zoomOut: zoomOutWithDraft,
   });
 
   const showBlockingOverlay = Boolean(blockingOverlay);
@@ -1294,11 +1377,11 @@ export default function App() {
       onCropOverlayChange={handleCropOverlayChange}
       onDropFile={handleDrop}
       onTitleBarMouseDown={handleTitleBarMouseDown}
-      zoomToFit={zoomToFit}
-      zoomTo100={zoomTo100}
-      zoomIn={zoomIn}
-      zoomOut={zoomOut}
-      setZoomLevel={setZoomLevel}
+      zoomToFit={zoomToFitWithDraft}
+      zoomTo100={zoomTo100WithDraft}
+      zoomIn={zoomInWithDraft}
+      zoomOut={zoomOutWithDraft}
+      setZoomLevel={setZoomLevelWithDraft}
     />
   );
 }
