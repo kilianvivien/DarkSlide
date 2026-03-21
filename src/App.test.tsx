@@ -990,7 +990,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(320);
     });
     await flushMicrotasks();
     await act(async () => {
@@ -1045,11 +1045,16 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     await act(async () => {
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(320);
     });
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      vi.advanceTimersByTime(450);
     });
     await flushMicrotasks();
 

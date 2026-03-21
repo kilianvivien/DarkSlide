@@ -20,6 +20,14 @@ import { BlockingOverlayState, createDocumentColorManagement, formatError, getCa
 import { loadMaxResidentDocs, MaxResidentDocs, saveMaxResidentDocs } from './utils/residentDocsStore';
 
 export default function App() {
+  const RENDER_INDICATOR_DELAY_MS = 450;
+  const SETTLED_RENDER_DEBOUNCE_MS = {
+    zoom: 320,
+    pan: 240,
+    control: 140,
+    crop: 180,
+    other: 0,
+  } as const;
   const initialPreferences = useMemo(() => loadPreferences(), []);
   const usesNativeFileDialogs = isDesktopShell();
   const {
@@ -82,6 +90,7 @@ export default function App() {
   const [externalEditorName, setExternalEditorName] = useState<string | null>(() => initialPreferences?.externalEditorName ?? null);
   const [openInEditorOutputPath, setOpenInEditorOutputPath] = useState<string | null>(() => initialPreferences?.openInEditorOutputPath ?? null);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
+  const [isRenderIndicatorVisible, setIsRenderIndicatorVisible] = useState(false);
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
   const [transientNotice, setTransientNotice] = useState<TransientNoticeState | null>(null);
   const [showTabSwitchOverlay, setShowTabSwitchOverlay] = useState(false);
@@ -138,7 +147,11 @@ export default function App() {
   const interactivePreviewFrameRef = useRef<number | null>(null);
   const pendingInteractivePreviewRef = useRef<QueuedPreviewRender | null>(null);
   const interactionJustEndedRef = useRef(false);
+  const lastInteractionTypeRef = useRef<'zoom' | 'pan' | 'control' | 'crop' | null>(null);
   const zoomIdleTimeoutRef = useRef<number | null>(null);
+  const renderIndicatorTimeoutRef = useRef<number | null>(null);
+  const renderIndicatorRequestRef = useRef<{ documentId: string; revision: number } | null>(null);
+  const lastCompletedSettledRenderKeyRef = useRef<string | null>(null);
   const fullRenderTargetSelectionRef = useRef<{ previewLevelId: string; targetDimension: number } | null>(null);
   const tabSwitchDraftRef = useRef<string | null>(null);
   const transientNoticeTimeoutRef = useRef<number | null>(null);
@@ -162,6 +175,50 @@ export default function App() {
       transientNoticeTimeoutRef.current = null;
     }, 4000);
   }, []);
+
+  const createPreviewRenderKey = useCallback((payload: {
+    documentId: string;
+    settings: ConversionSettings;
+    isColor: boolean;
+    comparisonMode: 'processed' | 'original';
+    targetMaxDimension: number;
+    inputProfileId: string;
+    outputProfileId: string;
+    maskTuning?: MaskTuning;
+    colorMatrix?: ColorMatrix;
+    tonalCharacter?: TonalCharacter;
+  }) => JSON.stringify(payload), []);
+
+  const clearRenderIndicator = useCallback(() => {
+    if (renderIndicatorTimeoutRef.current !== null) {
+      window.clearTimeout(renderIndicatorTimeoutRef.current);
+      renderIndicatorTimeoutRef.current = null;
+    }
+    renderIndicatorRequestRef.current = null;
+    setIsRenderIndicatorVisible(false);
+  }, []);
+
+  const scheduleRenderIndicator = useCallback((documentId: string, revision: number) => {
+    clearRenderIndicator();
+    renderIndicatorRequestRef.current = { documentId, revision };
+    renderIndicatorTimeoutRef.current = window.setTimeout(() => {
+      const activeRequest = activeRenderRequestRef.current;
+      const trackedRequest = renderIndicatorRequestRef.current;
+      if (
+        trackedRequest?.documentId === documentId
+        && trackedRequest.revision === revision
+        && activeRequest?.documentId === documentId
+        && activeRequest.revision === revision
+        && !isZoomingRef.current
+        && !isInteractingRef.current
+        && !isPanDragging
+        && !isAdjustingCrop
+      ) {
+        setIsRenderIndicatorVisible(true);
+      }
+      renderIndicatorTimeoutRef.current = null;
+    }, RENDER_INDICATOR_DELAY_MS);
+  }, [clearRenderIndicator, isAdjustingCrop, isPanDragging]);
 
   const { customPresets, savePreset, importPreset, deletePreset } = useCustomPresets();
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
@@ -278,16 +335,18 @@ export default function App() {
 
   const isZoomingRef = useRef(false);
   const beginZoomInteraction = useCallback(() => {
+    clearRenderIndicator();
     if (!isZoomingRef.current) {
       isZoomingRef.current = true;
       interactionJustEndedRef.current = false;
       setIsZooming(true);
     }
-  }, []);
+  }, [clearRenderIndicator]);
 
   const finishZoomInteraction = useCallback(() => {
     isZoomingRef.current = false;
     commitZoom();
+    lastInteractionTypeRef.current = 'zoom';
     interactionJustEndedRef.current = true;
     setIsZooming(false);
     zoomIdleTimeoutRef.current = null;
@@ -473,14 +532,16 @@ export default function App() {
   }, []);
 
   const handleInteractionStart = useCallback(() => {
+    clearRenderIndicator();
     isInteractingRef.current = true;
     interactionJustEndedRef.current = false;
     setIsInteractingWithPreviewControls(true);
     beginInteraction();
-  }, [beginInteraction]);
+  }, [beginInteraction, clearRenderIndicator]);
 
   const handleInteractionEnd = useCallback(() => {
     isInteractingRef.current = false;
+    lastInteractionTypeRef.current = 'control';
     interactionJustEndedRef.current = true;
     cancelScheduledInteractivePreview();
     setIsInteractingWithPreviewControls(false);
@@ -494,11 +555,12 @@ export default function App() {
       return;
     }
 
+    clearRenderIndicator();
     isInteractingRef.current = true;
     interactionJustEndedRef.current = false;
     setIsAdjustingCrop(true);
     beginInteraction();
-  }, [beginInteraction]);
+  }, [beginInteraction, clearRenderIndicator]);
 
   const handleCropInteractionEnd = useCallback(() => {
     if (!isInteractingRef.current) {
@@ -506,6 +568,7 @@ export default function App() {
     }
 
     isInteractingRef.current = false;
+    lastInteractionTypeRef.current = 'crop';
     interactionJustEndedRef.current = true;
     cancelScheduledInteractivePreview();
     setIsAdjustingCrop(false);
@@ -548,6 +611,9 @@ export default function App() {
       }
       if (zoomIdleTimeoutRef.current !== null) {
         window.clearTimeout(zoomIdleTimeoutRef.current);
+      }
+      if (renderIndicatorTimeoutRef.current !== null) {
+        window.clearTimeout(renderIndicatorTimeoutRef.current);
       }
       pendingPreviewRef.current?.imageBitmap?.close();
       pendingPreviewRef.current = null;
@@ -794,6 +860,19 @@ export default function App() {
       : 'srgb';
     const outputProfileId = activeTabDocument?.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     activeRenderRequestRef.current = { documentId, revision };
+    const shouldTrackHeavyRenderIndicator = previewMode === 'settled' && interactionQuality === null;
+    const renderKey = createPreviewRenderKey({
+      documentId,
+      settings,
+      isColor,
+      comparisonMode: nextComparisonMode,
+      targetMaxDimension: nextTargetMaxDimension,
+      inputProfileId,
+      outputProfileId,
+      maskTuning,
+      colorMatrix,
+      tonalCharacter,
+    });
 
     const shouldLogInteractiveDraftDiagnostics = !(previewMode === 'draft' && interactionQuality !== null);
     if (shouldLogInteractiveDraftDiagnostics) {
@@ -812,6 +891,11 @@ export default function App() {
     }
 
     setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'processing', renderRevision: revision } : current);
+    if (shouldTrackHeavyRenderIndicator) {
+      scheduleRenderIndicator(documentId, revision);
+    } else {
+      clearRenderIndicator();
+    }
 
     try {
       const result = await worker.render({
@@ -864,6 +948,7 @@ export default function App() {
         imageData: normalizedImageData,
         imageBitmap,
       };
+      clearRenderIndicator();
       cancelPendingPreviewRetry();
       flushPendingPreview();
       if (shouldLogInteractiveDraftDiagnostics) {
@@ -889,6 +974,9 @@ export default function App() {
           status: 'ready',
         };
       });
+      if (shouldTrackHeavyRenderIndicator) {
+        lastCompletedSettledRenderKeyRef.current = renderKey;
+      }
       if (shouldLogInteractiveDraftDiagnostics) {
         void refreshRenderBackendDiagnostics();
       }
@@ -903,6 +991,7 @@ export default function App() {
       }
 
       const message = formatError(renderError);
+      clearRenderIndicator();
       appendDiagnostic({
         level: 'error',
         code: 'RENDER_FAILED',
@@ -921,7 +1010,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [cancelPendingPreviewRetry, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, setDocumentState, setPreviewVisibility]);
+  }, [cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility]);
 
   const {
     enqueueRender: enqueuePreviewRender,
@@ -951,6 +1040,7 @@ export default function App() {
   });
 
   const handlePanStart = useCallback((clientX: number, clientY: number) => {
+    clearRenderIndicator();
     interactionJustEndedRef.current = false;
     cancelScheduledInteractivePreview();
     cancelPendingPreviewRender();
@@ -958,10 +1048,11 @@ export default function App() {
       void workerClientRef.current?.cancelActivePreviewRender(activeDocumentIdRef.current);
     }
     startPan(clientX, clientY);
-  }, [cancelPendingPreviewRender, cancelScheduledInteractivePreview, startPan]);
+  }, [cancelPendingPreviewRender, cancelScheduledInteractivePreview, clearRenderIndicator, startPan]);
 
   const handlePanEnd = useCallback(() => {
     endPan();
+    lastInteractionTypeRef.current = 'pan';
     interactionJustEndedRef.current = true;
   }, [endPan]);
 
@@ -1002,6 +1093,20 @@ export default function App() {
       colorMatrix: profileColorMatrix,
       tonalCharacter: profileTonalCharacter,
     } satisfies QueuedPreviewRender;
+    const queuedSettledRenderKey = previewMode === 'settled' && interactionQuality === null
+      ? createPreviewRenderKey({
+        documentId,
+        settings,
+        isColor,
+        comparisonMode,
+        targetMaxDimension: renderTargetDimension,
+        inputProfileId: getResolvedInputProfileId(documentState.source, documentState.colorManagement),
+        outputProfileId: documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId,
+        maskTuning: profileMaskTuning,
+        colorMatrix: profileColorMatrix,
+        tonalCharacter: profileTonalCharacter,
+      })
+      : null;
 
     if (tabSwitchDraftRef.current === documentId && !isDraftPreview && previewMode === 'settled') {
       tabSwitchDraftRef.current = null;
@@ -1058,8 +1163,33 @@ export default function App() {
     }
 
     cancelScheduledInteractivePreview();
-    const debounceMs = isDraftPreview ? 40 : (interactionJustEndedRef.current ? 0 : (hasVisiblePreviewRef.current ? 120 : 0));
+    if (
+      queuedSettledRenderKey
+      && hasVisiblePreviewRef.current
+      && lastCompletedSettledRenderKeyRef.current === queuedSettledRenderKey
+    ) {
+      interactionJustEndedRef.current = false;
+      lastInteractionTypeRef.current = null;
+      clearRenderIndicator();
+      return;
+    }
+
+    const justEndedInteraction = interactionJustEndedRef.current ? lastInteractionTypeRef.current : null;
+    const debounceMs = isDraftPreview
+      ? 40
+      : (
+        justEndedInteraction === 'zoom'
+          ? SETTLED_RENDER_DEBOUNCE_MS.zoom
+          : justEndedInteraction === 'pan'
+            ? SETTLED_RENDER_DEBOUNCE_MS.pan
+            : justEndedInteraction === 'control'
+              ? SETTLED_RENDER_DEBOUNCE_MS.control
+              : justEndedInteraction === 'crop'
+                ? SETTLED_RENDER_DEBOUNCE_MS.crop
+                : (hasVisiblePreviewRef.current ? 120 : SETTLED_RENDER_DEBOUNCE_MS.other)
+      );
     interactionJustEndedRef.current = false;
+    lastInteractionTypeRef.current = null;
     const timer = window.setTimeout(() => {
       enqueuePreviewRender(queuedPreview, previewMode === 'draft' ? 'draft' : 'settled');
     }, debounceMs);
@@ -1074,10 +1204,14 @@ export default function App() {
     comparisonMode,
     displaySettings,
     documentState?.id,
+    documentState?.colorManagement,
     documentState?.previewLevels.length,
+    documentState?.source,
     enqueuePreviewRender,
     executePreviewRender,
     fullRenderTargetDimension,
+    createPreviewRenderKey,
+    clearRenderIndicator,
     isDraftPreview,
     isAdjustingCrop,
     isInteractingWithPreviewControls,
@@ -1273,9 +1407,6 @@ export default function App() {
   });
 
   const showBlockingOverlay = Boolean(blockingOverlay);
-  const isRenderIndicatorVisible = Boolean(
-    !isDraftPreview && !isPanDragging && documentState?.status === 'processing',
-  );
   const overlayContent = blockingOverlay;
   const isExporting = documentState?.status === 'exporting';
 
