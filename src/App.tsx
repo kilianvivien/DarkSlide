@@ -14,6 +14,7 @@ import { loadPreferences, savePreferences, UserPreferences } from './utils/prefe
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { getTransformedDimensions } from './utils/imagePipeline';
 import { clamp } from './utils/math';
+import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs, saveMaxResidentDocs } from './utils/residentDocsStore';
@@ -137,6 +138,7 @@ export default function App() {
   const transientNoticeTimeoutRef = useRef<number | null>(null);
   const tabSwitchOverlayTimeoutRef = useRef<number | null>(null);
   const previousActiveTabIdRef = useRef<string | null>(null);
+  const lastAutoFitCropKeyRef = useRef<string | null>(null);
   const tauriWindowRef = useRef<{
     startDragging: () => Promise<void>;
     scaleFactor: () => Promise<number>;
@@ -299,13 +301,20 @@ export default function App() {
     );
     const displayWidth = Math.max(1, Math.round((rotatedSize.width * displaySettings.crop.width) / displayScaleFactor));
     const displayHeight = Math.max(1, Math.round((rotatedSize.height * displaySettings.crop.height) / displayScaleFactor));
-    return Math.min(vw / displayWidth, vh / displayHeight, 1);
+    return computeViewportFitScale({
+      viewportWidth: vw,
+      viewportHeight: vh,
+      previewWidth: displayWidth,
+      previewHeight: displayHeight,
+      overlayPadding: isCropOverlayVisible ? CROP_OVERLAY_HANDLE_SAFE_PADDING : 0,
+    });
   }, [
     displayScaleFactor,
     displaySettings,
     documentState,
     documentState?.source.height,
     documentState?.source.width,
+    isCropOverlayVisible,
   ]);
 
   const effectiveZoom = zoom === 'fit' ? fitScale : zoom;
@@ -359,6 +368,37 @@ export default function App() {
   }, [comparisonMode, fullRenderTargetDimension, isAdjustingCrop, isDraftPreview, isInteractingWithPreviewControls, isZooming, ultraSmoothDragEnabled]);
   const previewTransformAngle = isAdjustingLevel ? displayAngle - renderedPreviewAngle : 0;
   const showMagnifier = Boolean((isPickingFilmBase || activePointPicker) && documentState?.status === 'ready');
+
+  const autoFitCropKey = useMemo(() => {
+    if (!isCropOverlayVisible || !documentState || !isFullFrameFreeCrop(documentState.settings.crop)) {
+      return null;
+    }
+
+    return [
+      documentState.id,
+      documentState.settings.rotation,
+      documentState.settings.levelAngle,
+      documentState.settings.crop.x,
+      documentState.settings.crop.y,
+      documentState.settings.crop.width,
+      documentState.settings.crop.height,
+      documentState.settings.crop.aspectRatio ?? 'free',
+    ].join(':');
+  }, [documentState, isCropOverlayVisible]);
+
+  useEffect(() => {
+    if (!autoFitCropKey) {
+      lastAutoFitCropKeyRef.current = null;
+      return;
+    }
+
+    if (autoFitCropKey === lastAutoFitCropKeyRef.current) {
+      return;
+    }
+
+    lastAutoFitCropKeyRef.current = autoFitCropKey;
+    zoomToFit();
+  }, [autoFitCropKey, zoomToFit]);
 
   const isInteractingRef = useRef(false);
 
