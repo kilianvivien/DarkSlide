@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Check, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, NotificationSettings } from '../types';
 import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
@@ -111,6 +111,7 @@ export function BatchModal({
   const [colorManagement, setColorManagement] = useState<ColorManagementSettings>(currentColorManagement ?? DEFAULT_COLOR_MANAGEMENT);
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [colorMgmtExpanded, setColorMgmtExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
@@ -408,37 +409,9 @@ export function BatchModal({
                   <h2 className="text-base font-semibold text-zinc-100">Batch Export</h2>
                   <p className="mt-0.5 text-xs text-zinc-500">Process multiple scans sequentially with one shared export recipe. RAW files supported on desktop.</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!sharedSettings || !sharedProfile) {
-                        setError('Choose a settings source before opening the contact sheet.');
-                        return;
-                      }
-
-                      onOpenContactSheet({
-                        entries,
-                        sharedSettings: structuredClone(sharedSettings),
-                        sharedProfile,
-                        sharedColorManagement: {
-                          ...colorManagement,
-                          outputProfileId: exportOptions.outputProfileId,
-                          embedOutputProfile: exportOptions.embedOutputProfile,
-                        },
-                      });
-                    }}
-                    disabled={!canOpenContactSheet || isRunning}
-                    title={canOpenContactSheet ? 'Create a contact sheet from the current batch list' : 'Add batch items and choose a settings source first'}
-                    className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
-                  >
-                    <LayoutGrid size={13} />
-                    Contact Sheet…
-                  </button>
-                  <button type="button" onClick={onClose} aria-label="Close batch export" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
-                    <X size={16} />
-                  </button>
-                </div>
+                <button type="button" onClick={onClose} aria-label="Close batch export" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
+                  <X size={16} />
+                </button>
               </div>
 
               {/* Body */}
@@ -474,8 +447,14 @@ export function BatchModal({
 
                     <div className="space-y-2">
                       {entries.length === 0 ? (
-                        <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 p-8 text-center text-xs text-zinc-600">
-                          Add TIFF, JPEG, PNG, or WebP files, or drop them here. RAW supported on desktop.
+                        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-zinc-700/50 bg-zinc-900/20 p-10 text-center">
+                          <div className="rounded-full border border-zinc-800 bg-zinc-900/60 p-3">
+                            <FolderOpen size={20} className="text-zinc-600" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-zinc-500">Drop scans here</p>
+                            <p className="mt-1 text-xs text-zinc-700">TIFF, JPEG, PNG, WebP · RAW on desktop</p>
+                          </div>
                         </div>
                       ) : entries.map((entry) => (
                         <div key={entry.id} className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3.5">
@@ -531,68 +510,69 @@ export function BatchModal({
 
                     <section className="space-y-3">
                       <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Settings Source</h3>
-                      <div className="space-y-2.5">
-                        <RadioOption
-                          checked={settingsSource === 'current'}
-                          disabled={!currentSettings || !currentProfile}
-                          onChange={() => setSettingsSource('current')}
-                        >
-                          Use current document settings
-                        </RadioOption>
-                        <RadioOption
-                          checked={settingsSource === 'builtin'}
-                          onChange={() => setSettingsSource('builtin')}
-                        >
-                          Use built-in profile
-                        </RadioOption>
-                        {settingsSource === 'builtin' && (
-                          <select
-                            value={selectedProfileId}
-                            onChange={(event) => setSelectedProfileId(event.target.value)}
-                            className="ml-[27px] w-[calc(100%-27px)] rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                      <div className="grid grid-cols-3 gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-1">
+                        {([
+                          { value: 'current', label: 'Current Doc', disabled: !currentSettings || !currentProfile },
+                          { value: 'builtin', label: 'Built-in', disabled: false },
+                          { value: 'custom', label: 'Custom', disabled: customProfiles.length === 0 },
+                        ] as const).map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            disabled={opt.disabled}
+                            onClick={() => setSettingsSource(opt.value)}
+                            className={`rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+                              settingsSource === opt.value
+                                ? 'bg-zinc-100 text-zinc-950'
+                                : opt.disabled
+                                  ? 'cursor-not-allowed text-zinc-700'
+                                  : 'text-zinc-400 hover:text-zinc-200'
+                            }`}
                           >
-                            {FILM_PROFILES.map((profile) => (
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                      {settingsSource === 'builtin' && (
+                        <select
+                          value={selectedProfileId}
+                          onChange={(event) => setSelectedProfileId(event.target.value)}
+                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                        >
+                          {FILM_PROFILES.map((profile) => (
+                            <option key={profile.id} value={profile.id}>{profile.name}</option>
+                          ))}
+                        </select>
+                      )}
+                      {settingsSource === 'custom' && (
+                        <div className="space-y-3">
+                          <select
+                            value={selectedCustomProfileId}
+                            onChange={(event) => setSelectedCustomProfileId(event.target.value)}
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                          >
+                            {customProfiles.map((profile) => (
                               <option key={profile.id} value={profile.id}>{profile.name}</option>
                             ))}
                           </select>
-                        )}
-                        <RadioOption
-                          checked={settingsSource === 'custom'}
-                          disabled={customProfiles.length === 0}
-                          onChange={() => setSettingsSource('custom')}
-                        >
-                          Use custom profile
-                        </RadioOption>
-                        {settingsSource === 'custom' && (
-                          <div className="ml-[27px] space-y-3">
-                            <select
-                              value={selectedCustomProfileId}
-                              onChange={(event) => setSelectedCustomProfileId(event.target.value)}
-                              className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
-                            >
-                              {customProfiles.map((profile) => (
-                                <option key={profile.id} value={profile.id}>{profile.name}</option>
-                              ))}
-                            </select>
-                            {selectedCustomProfileHasEmbeddedTransforms && (
-                              <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3.5 py-3">
-                                <p className="text-xs font-medium text-amber-200">This custom preset includes crop or rotation.</p>
-                                <p className="mt-1 text-[11px] leading-5 text-amber-100/80">
-                                  Batch export and contact sheets will reuse those embedded transforms unless you ignore them here.
-                                </p>
-                                <div className="mt-3">
-                                  <CheckOption
-                                    checked={ignorePresetCropAndRotation}
-                                    onChange={setIgnorePresetCropAndRotation}
-                                  >
-                                    Ignore preset crop and rotation
-                                  </CheckOption>
-                                </div>
+                          {selectedCustomProfileHasEmbeddedTransforms && (
+                            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3.5 py-3">
+                              <p className="text-xs font-medium text-amber-200">This custom preset includes crop or rotation.</p>
+                              <p className="mt-1 text-[11px] leading-5 text-amber-100/80">
+                                Batch export and contact sheets will reuse those embedded transforms unless you ignore them here.
+                              </p>
+                              <div className="mt-3">
+                                <CheckOption
+                                  checked={ignorePresetCropAndRotation}
+                                  onChange={setIgnorePresetCropAndRotation}
+                                >
+                                  Ignore preset crop and rotation
+                                </CheckOption>
                               </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </section>
 
                     <div className="border-t border-zinc-800/80" />
@@ -643,6 +623,18 @@ export function BatchModal({
                           onChange={(event) => setExportOptions((current) => ({ ...current, filenameBase: event.target.value }))}
                           className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
                         />
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {['{original}', '{date}', '{index}'].map((token) => (
+                            <button
+                              key={token}
+                              type="button"
+                              onClick={() => setExportOptions((current) => ({ ...current, filenameBase: current.filenameBase + token }))}
+                              className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-0.5 font-mono text-[10px] text-zinc-500 transition-colors hover:border-zinc-700 hover:text-zinc-300"
+                            >
+                              {token}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                       <CheckOption
                         checked={exportOptions.embedMetadata}
@@ -650,55 +642,69 @@ export function BatchModal({
                       >
                         Embed metadata
                       </CheckOption>
-                      <div className="space-y-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Input Profile</p>
-                        <select
-                          value={colorManagement.inputMode}
-                          onChange={(event) => setColorManagement((current) => ({ ...current, inputMode: event.target.value as ColorManagementSettings['inputMode'] }))}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                      <div className="rounded-xl border border-zinc-800/60">
+                        <button
+                          type="button"
+                          onClick={() => setColorMgmtExpanded((v) => !v)}
+                          className="flex w-full items-center justify-between px-3.5 py-2.5 text-[10px] font-semibold uppercase tracking-widest text-zinc-600 transition-colors hover:text-zinc-400"
                         >
-                          <option value="auto">Auto</option>
-                          <option value="override">Manual Override</option>
-                        </select>
-                        <select
-                          value={colorManagement.inputProfileId}
-                          onChange={(event) => setColorManagement((current) => ({
-                            ...current,
-                            inputMode: 'override',
-                            inputProfileId: event.target.value as ColorProfileId,
-                          }))}
-                          disabled={colorManagement.inputMode === 'auto'}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none disabled:opacity-50"
-                        >
-                          {(['srgb', 'display-p3', 'adobe-rgb'] as ColorProfileId[]).map((profileId) => (
-                            <option key={profileId} value={profileId}>{getColorProfileDescription(profileId)}</option>
-                          ))}
-                        </select>
-                        <p className="text-[11px] text-zinc-500">Auto uses each file&apos;s embedded or decoder-reported profile.</p>
-                      </div>
-                      <div className="space-y-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Output Profile</p>
-                        <div className="space-y-2">
-                          {(['srgb', 'display-p3', 'adobe-rgb'] as ColorProfileId[]).map((profileId) => (
-                            <React.Fragment key={profileId}>
-                              <RadioOption
-                                disabled={exportOptions.format === 'image/webp' && profileId !== 'srgb'}
-                                checked={exportOptions.outputProfileId === profileId}
-                                onChange={() => setExportOptions((current) => ({ ...current, outputProfileId: profileId }))}
+                          <span>Color Management</span>
+                          <ChevronDown size={12} className={`transition-transform duration-150 ${colorMgmtExpanded ? 'rotate-180' : ''}`} />
+                        </button>
+                        {colorMgmtExpanded && (
+                          <div className="space-y-4 border-t border-zinc-800/60 px-3.5 pb-3.5 pt-3">
+                            <div className="space-y-2">
+                              <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Input Profile</p>
+                              <select
+                                value={colorManagement.inputMode}
+                                onChange={(event) => setColorManagement((current) => ({ ...current, inputMode: event.target.value as ColorManagementSettings['inputMode'] }))}
+                                className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
                               >
-                                {getColorProfileDescription(profileId)}
-                              </RadioOption>
-                            </React.Fragment>
-                          ))}
-                        </div>
-                        <CheckOption
-                          checked={exportOptions.embedOutputProfile}
-                          onChange={(checked) => setExportOptions((current) => ({ ...current, embedOutputProfile: checked }))}
-                        >
-                          Embed ICC profile
-                        </CheckOption>
-                        {exportOptions.format === 'image/webp' && (
-                          <p className="text-[11px] text-zinc-500">WebP export is limited to sRGB for now.</p>
+                                <option value="auto">Auto</option>
+                                <option value="override">Manual Override</option>
+                              </select>
+                              <select
+                                value={colorManagement.inputProfileId}
+                                onChange={(event) => setColorManagement((current) => ({
+                                  ...current,
+                                  inputMode: 'override',
+                                  inputProfileId: event.target.value as ColorProfileId,
+                                }))}
+                                disabled={colorManagement.inputMode === 'auto'}
+                                className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none disabled:opacity-50"
+                              >
+                                {(['srgb', 'display-p3', 'adobe-rgb'] as ColorProfileId[]).map((profileId) => (
+                                  <option key={profileId} value={profileId}>{getColorProfileDescription(profileId)}</option>
+                                ))}
+                              </select>
+                              <p className="text-[11px] text-zinc-500">Auto uses each file&apos;s embedded or decoder-reported profile.</p>
+                            </div>
+                            <div className="space-y-2">
+                              <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Output Profile</p>
+                              <div className="space-y-2">
+                                {(['srgb', 'display-p3', 'adobe-rgb'] as ColorProfileId[]).map((profileId) => (
+                                  <React.Fragment key={profileId}>
+                                    <RadioOption
+                                      disabled={exportOptions.format === 'image/webp' && profileId !== 'srgb'}
+                                      checked={exportOptions.outputProfileId === profileId}
+                                      onChange={() => setExportOptions((current) => ({ ...current, outputProfileId: profileId }))}
+                                    >
+                                      {getColorProfileDescription(profileId)}
+                                    </RadioOption>
+                                  </React.Fragment>
+                                ))}
+                              </div>
+                              <CheckOption
+                                checked={exportOptions.embedOutputProfile}
+                                onChange={(checked) => setExportOptions((current) => ({ ...current, embedOutputProfile: checked }))}
+                              >
+                                Embed ICC profile
+                              </CheckOption>
+                              {exportOptions.format === 'image/webp' && (
+                                <p className="text-[11px] text-zinc-500">WebP export is limited to sRGB for now.</p>
+                              )}
+                            </div>
+                          </div>
                         )}
                       </div>
                     </section>
@@ -746,29 +752,57 @@ export function BatchModal({
                 <div className="border-t border-zinc-800/80 px-6 py-3 text-xs text-red-400">{error}</div>
               )}
 
-              <div className="flex items-center justify-end gap-2.5 border-t border-zinc-800/80 px-6 py-4">
+              <div className="flex items-center justify-between gap-2.5 border-t border-zinc-800/80 px-6 py-4">
                 <button
                   type="button"
                   onClick={() => {
-                    if (isRunning) {
-                      cancelTokenRef.current.cancelled = true;
-                    } else {
-                      onClose();
+                    if (!sharedSettings || !sharedProfile) {
+                      setError('Choose a settings source before opening the contact sheet.');
+                      return;
                     }
+
+                    onOpenContactSheet({
+                      entries,
+                      sharedSettings: structuredClone(sharedSettings),
+                      sharedProfile,
+                      sharedColorManagement: {
+                        ...colorManagement,
+                        outputProfileId: exportOptions.outputProfileId,
+                        embedOutputProfile: exportOptions.embedOutputProfile,
+                      },
+                    });
                   }}
-                  className="rounded-lg border border-zinc-800 px-4 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
+                  disabled={!canOpenContactSheet || isRunning}
+                  title={canOpenContactSheet ? 'Create a contact sheet from the current batch list' : 'Add batch items and choose a settings source first'}
+                  className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
                 >
-                  {isRunning ? 'Cancel After Current File' : 'Close'}
+                  <LayoutGrid size={13} />
+                  Contact Sheet…
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void handleStart()}
-                  disabled={isRunning}
-                  className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-white disabled:opacity-50"
-                >
-                  <Download size={14} />
-                  {isRunning ? 'Processing…' : 'Start Batch'}
-                </button>
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isRunning) {
+                        cancelTokenRef.current.cancelled = true;
+                      } else {
+                        onClose();
+                      }
+                    }}
+                    className="rounded-lg border border-zinc-800 px-4 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
+                  >
+                    {isRunning ? 'Cancel After Current File' : 'Close'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleStart()}
+                    disabled={isRunning}
+                    className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-white disabled:opacity-50"
+                  >
+                    <Download size={14} />
+                    {isRunning ? 'Processing…' : 'Start Batch'}
+                  </button>
+                </div>
               </div>
             </div>
           </motion.div>

@@ -33,9 +33,10 @@ export const ZoomBar: React.FC<ZoomBarProps> = ({
     }`;
 
   return (
-    <div className="group flex w-[88px] justify-end overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/92 shadow-2xl backdrop-blur-md transition-[width] duration-200 ease-out hover:w-[340px] focus-within:w-[340px]">
-      <div className="flex items-center gap-1 whitespace-nowrap px-2 py-1.5">
-        <div className="flex max-w-0 items-center gap-1 overflow-hidden opacity-0 transition-all duration-200 ease-out group-hover:max-w-[260px] group-hover:opacity-100 group-focus-within:max-w-[260px] group-focus-within:opacity-100">
+    <div className="group relative flex h-[30px] w-[36px] items-center overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/92 shadow-2xl backdrop-blur-md transition-[width] duration-200 ease-out hover:w-[320px] focus-within:w-[320px]">
+      {/* Expanding buttons — slide in from the left on hover */}
+      <div className="flex max-w-0 items-center gap-1 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover:max-w-[284px] group-hover:opacity-100 group-focus-within:max-w-[284px] group-focus-within:opacity-100">
+        <div className="flex items-center gap-1 pl-1.5">
           <button onClick={onZoomOut} aria-label="Zoom out" className={btnClass(false)} data-tip="Zoom Out">
             <ZoomOut size={14} />
           </button>
@@ -56,14 +57,16 @@ export const ZoomBar: React.FC<ZoomBarProps> = ({
           </button>
           <div className="mx-1 h-4 w-px shrink-0 bg-zinc-800/80" />
         </div>
+      </div>
 
+      {/* Trigger — absolutely pinned to the right, always 36px wide and perfectly centered */}
+      <div className="absolute inset-y-0 right-0 flex w-[36px] shrink-0 items-center justify-center">
         <button
           type="button"
           aria-label="Zoom controls"
-          className="relative z-10 flex shrink-0 items-center gap-2 rounded-xl bg-zinc-900/80 px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-zinc-200 transition-colors hover:bg-zinc-800/90 group-focus-within:bg-zinc-800/90"
+          className="flex items-center justify-center rounded-xl bg-zinc-900/80 p-1.5 text-zinc-200 transition-colors hover:bg-zinc-800/90 group-focus-within:bg-zinc-800/90"
         >
           <ZoomIn size={13} />
-          <span className="min-w-[2.5rem] text-center">{displayPercent}%</span>
         </button>
       </div>
     </div>

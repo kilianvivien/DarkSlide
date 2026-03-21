@@ -86,6 +86,7 @@ export function ContactSheetModal({
   const [embedOutputProfile, setEmbedOutputProfile] = useState(DEFAULT_EXPORT_OPTIONS.embedOutputProfile);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map());
 
   useFocusTrap(modalRef, isOpen);
 
@@ -93,6 +94,102 @@ export function ContactSheetModal({
     () => entries.filter((entry) => selectedIds.includes(entry.id)),
     [entries, selectedIds],
   );
+
+  useEffect(() => {
+    if (!isOpen || !workerClient || !sharedSettings || !sharedProfile) {
+      setThumbnails(new Map());
+      return;
+    }
+
+    const token = { cancelled: false };
+    const tempDocumentIds: string[] = [];
+
+    const generate = async () => {
+      for (const entry of entries) {
+        if (token.cancelled) break;
+
+        try {
+          let documentId: string;
+
+          if (entry.kind === 'open-tab' && entry.documentId) {
+            documentId = entry.documentId;
+          } else if (entry.kind === 'file' && entry.file) {
+            const ext = getFileExtension(entry.filename);
+            const isRaw = isRawExtension(ext);
+
+            if (!isRaw && !entry.nativePath && entry.size > MAX_FILE_SIZE_BYTES) continue;
+            if (isRaw && (!isDesktopShell() || !entry.nativePath)) continue;
+
+            const tempId = `cs-thumb-${entry.id}`;
+
+            if (isRaw && entry.nativePath) {
+              const { decodeRequest } = await decodeDesktopRawForWorker({
+                documentId: tempId,
+                fileName: entry.filename,
+                path: entry.nativePath,
+                size: entry.size,
+              });
+              if (token.cancelled) break;
+              await workerClient.decode(decodeRequest);
+            } else {
+              const buffer = await entry.file.arrayBuffer();
+              if (token.cancelled) break;
+              await workerClient.decode({
+                documentId: tempId,
+                buffer,
+                fileName: entry.filename,
+                mime: entry.file.type || 'application/octet-stream',
+                size: entry.file.size,
+              });
+            }
+
+            tempDocumentIds.push(tempId);
+            documentId = tempId;
+          } else {
+            continue;
+          }
+
+          if (token.cancelled) break;
+
+          const result = await workerClient.render({
+            documentId,
+            settings: structuredClone(sharedSettings),
+            isColor: sharedProfile.type === 'color',
+            inputProfileId: sharedColorManagement?.inputMode === 'override'
+              ? sharedColorManagement.inputProfileId
+              : undefined,
+            outputProfileId: 'srgb',
+            revision: 0,
+            targetMaxDimension: 256,
+            comparisonMode: 'processed',
+          });
+
+          if (token.cancelled) break;
+
+          const canvas = document.createElement('canvas');
+          canvas.width = result.width;
+          canvas.height = result.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.putImageData(result.imageData, 0, 0);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            setThumbnails((prev) => new Map(prev).set(entry.id, dataUrl));
+          }
+        } catch {
+          // Grey placeholder shown instead.
+        }
+      }
+
+      await Promise.allSettled(tempDocumentIds.map((id) => workerClient.disposeDocument(id)));
+    };
+
+    void generate();
+
+    return () => {
+      token.cancelled = true;
+      tempDocumentIds.forEach((id) => void workerClient.disposeDocument(id));
+    };
+  }, [entries, isOpen, sharedColorManagement, sharedProfile, sharedSettings, workerClient]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -268,7 +365,7 @@ export function ContactSheetModal({
               </div>
 
               {/* Body */}
-              <div className="grid min-h-0 flex-1 lg:grid-cols-[1fr_1fr]">
+              <div className="grid min-h-0 flex-1 lg:grid-cols-[2fr_3fr]">
                 {/* Left: item list */}
                 <div className="min-h-0 overflow-y-auto border-r border-zinc-800/80 px-5 py-4">
                   <div className="mb-3 flex items-center justify-between">
@@ -325,17 +422,57 @@ export function ContactSheetModal({
                     {/* Layout */}
                     <section className="space-y-4">
                       <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Layout</h3>
+                      {/* Layout preview */}
+                      <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/20 p-3">
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: `repeat(${columns}, 1fr)`,
+                            gridAutoRows: '80px',
+                            gap: `${Math.max(2, Math.round(margin / 8))}px`,
+                          }}
+                        >
+                          {(selectedEntries.length > 0 ? selectedEntries : entries).map((entry) => {
+                            const src = thumbnails.get(entry.id);
+                            return src ? (
+                              <img
+                                key={entry.id}
+                                src={src}
+                                alt={entry.filename}
+                                className="h-full w-full rounded-[2px] object-contain"
+                              />
+                            ) : (
+                              <div
+                                key={entry.id}
+                                className="rounded-[2px] bg-zinc-700/50"
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <p className="mb-1.5 text-xs text-zinc-400">Columns</p>
-                          <input
-                            type="number"
-                            min={1}
-                            max={8}
-                            value={columns}
-                            onChange={(event) => setColumns(Number(event.target.value))}
-                            className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
-                          />
+                          <div className="flex items-center overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60">
+                            <button
+                              type="button"
+                              onClick={() => setColumns((c) => Math.max(1, c - 1))}
+                              disabled={columns <= 1}
+                              className="px-3 py-2 text-zinc-400 transition-colors hover:text-zinc-100 disabled:opacity-30"
+                            >
+                              −
+                            </button>
+                            <span className="flex-1 text-center text-sm tabular-nums text-zinc-100">{columns}</span>
+                            <button
+                              type="button"
+                              onClick={() => setColumns((c) => Math.min(8, c + 1))}
+                              disabled={columns >= 8}
+                              className="px-3 py-2 text-zinc-400 transition-colors hover:text-zinc-100 disabled:opacity-30"
+                            >
+                              +
+                            </button>
+                          </div>
                         </div>
                         <div>
                           <div className="mb-1.5 flex items-center justify-between">
@@ -390,7 +527,10 @@ export function ContactSheetModal({
                         <div className="flex-1">
                           <p className="mb-1.5 text-xs text-zinc-400">Background</p>
                           <div className="relative">
-                            <div className="h-9 w-full overflow-hidden rounded-lg border border-zinc-800">
+                            <div
+                              className="h-9 w-full overflow-hidden rounded-lg border border-zinc-800 cursor-pointer"
+                              style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect width='4' height='4' fill='%23444'/%3E%3Crect x='4' y='4' width='4' height='4' fill='%23444'/%3E%3C/svg%3E\")" }}
+                            >
                               <input
                                 type="color"
                                 value={background}
@@ -399,6 +539,7 @@ export function ContactSheetModal({
                               />
                               <div className="h-full w-full" style={{ backgroundColor: background }} />
                             </div>
+                            <p className="mt-1 text-[10px] tabular-nums text-zinc-600">{background.toUpperCase()}</p>
                           </div>
                         </div>
                         <div className="flex-1 pt-6">

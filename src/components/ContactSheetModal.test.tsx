@@ -74,6 +74,7 @@ function createWorkerClient() {
       },
       previewLevels: [],
     })),
+    render: vi.fn(async () => null),
     contactSheet: vi.fn(async () => ({
       blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }),
       filename: 'contact_sheet.jpg',
@@ -157,9 +158,10 @@ describe('ContactSheetModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate Sheet' }));
 
     await waitFor(() => {
-      expect(coreState.invoke).toHaveBeenCalledWith('decode_raw', { path: '/Users/tester/Desktop/img2016.nef' });
+      expect(workerClient.contactSheet).toHaveBeenCalledTimes(1);
     });
 
+    expect(coreState.invoke).toHaveBeenCalledWith('decode_raw', { path: '/Users/tester/Desktop/img2016.nef' });
     expect(workerClient.decode).toHaveBeenCalledWith(expect.objectContaining({
       documentId: 'contact-sheet-raw-entry',
       fileName: 'img2016.nef',

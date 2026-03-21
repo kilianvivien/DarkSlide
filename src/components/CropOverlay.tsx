@@ -193,7 +193,7 @@ export const CropOverlay = memo(function CropOverlay({
             <button
               key={handle}
               type="button"
-              className={`absolute z-10 h-10 w-10 rounded-full border-2 border-zinc-950 bg-zinc-100 shadow-lg shadow-black/40 outline-none before:absolute before:-inset-2 before:content-[''] ${positionClasses}`}
+              className={`absolute z-10 h-[92px] w-[92px] rounded-full border-2 border-zinc-950 bg-zinc-100 shadow-lg shadow-black/40 outline-none before:absolute before:-inset-2 before:content-[''] ${positionClasses}`}
               onMouseDown={beginDrag(handle)}
             />
           );

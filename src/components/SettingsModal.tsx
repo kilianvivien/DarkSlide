@@ -356,6 +356,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div>
                         <p className="text-[12px] font-semibold text-zinc-300 leading-tight">DarkSlide</p>
                         <p className="text-[10px] text-zinc-600 leading-tight mt-0.5">{APP_VERSION_LABEL} beta</p>
+                        <p className="text-[10px] text-zinc-700 leading-tight mt-0.5">MIT Licence</p>
                       </div>
                     </div>
                   </div>

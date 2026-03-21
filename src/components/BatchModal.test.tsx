@@ -159,7 +159,7 @@ describe('BatchModal', () => {
     });
 
     await screen.findByText('open-scan.tiff');
-    fireEvent.click(screen.getByText('Use custom profile'));
+    fireEvent.click(screen.getByText('Custom'));
 
     expect(screen.getByText('This custom preset includes crop or rotation.')).toBeInTheDocument();
   });
@@ -179,7 +179,7 @@ describe('BatchModal', () => {
     });
 
     await screen.findByText('open-scan.tiff');
-    fireEvent.click(screen.getByText('Use custom profile'));
+    fireEvent.click(screen.getByText('Custom'));
 
     expect(screen.getByText('This custom preset includes crop or rotation.')).toBeInTheDocument();
   });
@@ -199,7 +199,7 @@ describe('BatchModal', () => {
     await screen.findByText('open-scan.tiff');
     expect(screen.queryByText('This custom preset includes crop or rotation.')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Use custom profile'));
+    fireEvent.click(screen.getByText('Custom'));
     expect(screen.queryByText('This custom preset includes crop or rotation.')).not.toBeInTheDocument();
   });
 
@@ -226,7 +226,7 @@ describe('BatchModal', () => {
     });
 
     await screen.findByText('open-scan.tiff');
-    fireEvent.click(screen.getByText('Use custom profile'));
+    fireEvent.click(screen.getByText('Custom'));
     fireEvent.click(screen.getByText('Ignore preset crop and rotation'));
     fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
 
@@ -265,7 +265,7 @@ describe('BatchModal', () => {
     });
 
     await screen.findByText('open-scan.tiff');
-    fireEvent.click(screen.getByText('Use custom profile'));
+    fireEvent.click(screen.getByText('Custom'));
     fireEvent.click(screen.getByText('Ignore preset crop and rotation'));
     fireEvent.click(screen.getByRole('button', { name: /contact sheet/i }));
 
