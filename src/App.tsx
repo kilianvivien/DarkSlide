@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LIGHT_SOURCE_PROFILES } from './constants';
 import { AppShell } from './components/AppShell';
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
@@ -92,6 +92,7 @@ export default function App() {
   const [externalEditorPath, setExternalEditorPath] = useState<string | null>(() => initialPreferences?.externalEditorPath ?? null);
   const [externalEditorName, setExternalEditorName] = useState<string | null>(() => initialPreferences?.externalEditorName ?? null);
   const [openInEditorOutputPath, setOpenInEditorOutputPath] = useState<string | null>(() => initialPreferences?.openInEditorOutputPath ?? null);
+  const [defaultExportOptions, setDefaultExportOptions] = useState<ExportOptions>(() => initialPreferences?.exportOptions ?? DEFAULT_EXPORT_OPTIONS);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [isRenderIndicatorVisible, setIsRenderIndicatorVisible] = useState(false);
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
@@ -233,7 +234,7 @@ export default function App() {
   }, [clearRenderIndicator, isAdjustingCrop, isPanDragging]);
 
   const { customPresets, savePreset, importPreset, deletePreset } = useCustomPresets();
-  const { customLightSources, saveCustomLightSource } = useCustomLightSources();
+  const { customLightSources, saveCustomLightSource, deleteCustomLightSource } = useCustomLightSources();
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
 
   useEffect(() => registerBeforeUnloadGuard(() => tabs.some((tab) => tab.document.dirty)), [tabs]);
@@ -1450,6 +1451,17 @@ export default function App() {
     return saveCustomLightSource(draft);
   }, [saveCustomLightSource]);
 
+  const handleDeleteCustomLightSource = useCallback((id: string) => {
+    deleteCustomLightSource(id);
+  }, [deleteCustomLightSource]);
+
+  const wrappedHandleExportOptionsChange = useCallback((options: Partial<ExportOptions>) => {
+    handleExportOptionsChange(options);
+    if (!documentState) {
+      setDefaultExportOptions((current) => ({ ...current, ...options }));
+    }
+  }, [handleExportOptionsChange, documentState]);
+
   const handleDefaultLightSourceChange = useCallback((lightSourceId: string) => {
     const nextId = lightSourceId || 'auto';
     setDefaultLightSourceId(nextId);
@@ -1624,7 +1636,8 @@ export default function App() {
       onReorderTabs={handleReorderTabs}
       onOpenContactSheet={handleOpenContactSheet}
       onSettingsChange={handleSettingsChange}
-      onExportOptionsChange={handleExportOptionsChange}
+      defaultExportOptions={defaultExportOptions}
+      onExportOptionsChange={wrappedHandleExportOptionsChange}
       onColorManagementChange={handleColorManagementChange}
       onInteractionStart={handleInteractionStart}
       onInteractionEnd={handleInteractionEnd}
@@ -1646,6 +1659,7 @@ export default function App() {
       onImportPreset={handleImportPreset}
       onDeletePreset={handleDeletePreset}
       onSaveCustomLightSource={handleSaveCustomLightSource}
+      onDeleteCustomLightSource={handleDeleteCustomLightSource}
       onCopyDebugInfo={handleCopyDebugInfo}
       onToggleGPURendering={handleGPURenderingChange}
       onToggleUltraSmoothDrag={handleUltraSmoothDragChange}

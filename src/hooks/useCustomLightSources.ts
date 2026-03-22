@@ -92,8 +92,17 @@ export function useCustomLightSources() {
     return nextProfile;
   }, [lightSourcesById]);
 
+  const deleteCustomLightSource = useCallback((id: string) => {
+    setCustomLightSources((current) => {
+      const next = current.filter((profile) => profile.id !== id);
+      persistLightSources(next);
+      return next;
+    });
+  }, []);
+
   return {
     customLightSources,
     saveCustomLightSource,
+    deleteCustomLightSource,
   };
 }

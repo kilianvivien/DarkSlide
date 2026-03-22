@@ -31,7 +31,7 @@ import { ZoomBar } from './ZoomBar';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
 import { ErrorBoundary } from './ErrorBoundary';
-import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS } from '../constants';
+import { DEFAULT_COLOR_MANAGEMENT } from '../constants';
 import {
   BatchJobEntry,
 } from '../utils/batchProcessor';
@@ -152,6 +152,7 @@ type AppShellProps = {
     sharedProfile: FilmProfile;
     sharedColorManagement: ColorManagementSettings;
   }) => void;
+  defaultExportOptions: WorkspaceDocument['exportOptions'];
   onSettingsChange: (newSettings: Partial<ConversionSettings>) => void;
   onExportOptionsChange: (options: Partial<WorkspaceDocument['exportOptions']>) => void;
   onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
@@ -181,6 +182,7 @@ type AppShellProps = {
     spectralBias: [number, number, number];
     flareCharacteristic: LightSourceProfile['flareCharacteristic'];
   }) => Promise<LightSourceProfile>;
+  onDeleteCustomLightSource: (id: string) => void;
   onCopyDebugInfo: () => Promise<void>;
   onToggleGPURendering: (enabled: boolean) => void;
   onToggleUltraSmoothDrag: (enabled: boolean) => void;
@@ -304,6 +306,7 @@ export function AppShell({
   onSelectTab,
   onReorderTabs,
   onOpenContactSheet,
+  defaultExportOptions,
   onSettingsChange,
   onExportOptionsChange,
   onColorManagementChange,
@@ -327,6 +330,7 @@ export function AppShell({
   onImportPreset,
   onDeletePreset,
   onSaveCustomLightSource,
+  onDeleteCustomLightSource,
   onCopyDebugInfo,
   onToggleGPURendering,
   onToggleUltraSmoothDrag,
@@ -430,7 +434,7 @@ export function AppShell({
               <ErrorBoundary>
                 <Sidebar
                   settings={documentState?.settings ?? fallbackProfile.defaultSettings}
-                  exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
+                  exportOptions={documentState?.exportOptions ?? defaultExportOptions}
                   colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
                   sourceMetadata={documentState?.source ?? null}
                   cropImageWidth={cropImageSize.width}
@@ -443,7 +447,7 @@ export function AppShell({
                   onInteractionEnd={onInteractionEnd}
                   activeProfile={documentState ? activeProfile : null}
                   estimatedFlare={documentState?.estimatedFlare ?? null}
-                  lightSourceId={documentState?.lightSourceId ?? null}
+                  lightSourceId={documentState?.lightSourceId ?? defaultLightSourceId ?? null}
                   cropSource={documentState?.cropSource ?? null}
                   lightSourceProfiles={lightSourceProfiles}
                   hasActiveFlatFieldProfile={activeFlatFieldLoaded}
@@ -466,7 +470,6 @@ export function AppShell({
                   onSetPointPicker={onSetActivePointPicker}
                   onOpenSettings={onOpenSettingsModal}
                   onLightSourceChange={onLightSourceChange}
-                  onSaveCustomLightSource={onSaveCustomLightSource}
                 />
               </ErrorBoundary>
             </motion.div>
@@ -915,6 +918,8 @@ export function AppShell({
           lightSourceProfiles={lightSourceProfiles}
           defaultLightSourceId={defaultLightSourceId}
           onDefaultLightSourceChange={onDefaultLightSourceChange}
+          onSaveCustomLightSource={onSaveCustomLightSource}
+          onDeleteCustomLightSource={onDeleteCustomLightSource}
           flatFieldProfileNames={flatFieldProfileNames}
           activeFlatFieldProfileName={activeFlatFieldProfileName}
           activeFlatFieldLoaded={activeFlatFieldLoaded}
@@ -923,7 +928,7 @@ export function AppShell({
           onImportFlatFieldReference={onImportFlatFieldReference}
           onDeleteFlatFieldProfile={onDeleteFlatFieldProfile}
           onRenameFlatFieldProfile={onRenameFlatFieldProfile}
-          exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
+          exportOptions={documentState?.exportOptions ?? defaultExportOptions}
           onExportOptionsChange={onExportOptionsChange}
           externalEditorPath={externalEditorPath}
           externalEditorName={externalEditorName}

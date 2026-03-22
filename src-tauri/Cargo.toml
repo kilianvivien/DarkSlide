@@ -1,6 +1,6 @@
 [package]
 name = "darkslide"
-version = "0.4.1"
+version = "0.5.0"
 description = "A professional-grade film negative to positive converter."
 authors = ["Kilian Vivien"]
 license = "MIT"

@@ -268,17 +268,6 @@ export const CropPane = memo(function CropPane({
 
   return (
     <div className="space-y-8">
-      {onRedetectFrame && (
-        <button
-          type="button"
-          onClick={onRedetectFrame}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-all hover:bg-zinc-800 hover:text-zinc-100"
-        >
-          <ScanLine size={14} />
-          Auto Crop
-        </button>
-      )}
-
       <section>
         <h2 className="mb-6 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
           <RotateCw size={12} /> Orientation
@@ -293,7 +282,7 @@ export const CropPane = memo(function CropPane({
             {rotation}°
           </span>
         </button>
-        <div className="mt-4 rounded-xl border border-zinc-800/70 bg-zinc-900/30 p-4">
+        <div className="mt-4">
           <Slider
             label="Level"
             value={levelAngle}
@@ -321,23 +310,38 @@ export const CropPane = memo(function CropPane({
           <CropIcon size={12} /> Aspect Ratio Presets
         </h2>
 
-        <button
-          type="button"
-          onClick={() => handleAspectChange(null)}
-          className={`mb-4 flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-all ${
-            isAspectSelected(null)
-              ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
-              : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
-          }`}
-        >
-          <span className="opacity-60"><CropIcon size={14} /></span>
-          <div className="flex flex-col items-start leading-tight">
-            <span className="font-medium">Free</span>
-            <span className={`text-[9px] uppercase tracking-wider opacity-50 ${isAspectSelected(null) ? 'text-zinc-700' : 'text-zinc-500'}`}>
-              Unlocked
-            </span>
-          </div>
-        </button>
+        <div className="mb-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => handleAspectChange(null)}
+            className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-all ${
+              isAspectSelected(null)
+                ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
+                : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
+            }`}
+          >
+            <span className="opacity-60"><CropIcon size={14} /></span>
+            <div className="flex flex-col items-start leading-tight">
+              <span className="font-medium">Free</span>
+              <span className={`text-[9px] uppercase tracking-wider opacity-50 ${isAspectSelected(null) ? 'text-zinc-700' : 'text-zinc-500'}`}>
+                Unlocked
+              </span>
+            </div>
+          </button>
+          {onRedetectFrame && (
+            <button
+              type="button"
+              onClick={onRedetectFrame}
+              className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2.5 text-sm font-medium text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              <ScanLine size={14} className="shrink-0 opacity-60" />
+              <div className="flex flex-col items-start leading-tight">
+                <span className="font-medium">Auto Crop</span>
+                <span className="text-[9px] uppercase tracking-wider opacity-50 text-zinc-500">Detect</span>
+              </div>
+            </button>
+          )}
+        </div>
 
         <div className="flex gap-4 border-b border-zinc-800">
           {CROP_TABS.map((tab) => (

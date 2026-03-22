@@ -28,6 +28,14 @@ interface SettingsModalProps {
   lightSourceProfiles: LightSourceProfile[];
   defaultLightSourceId: string;
   onDefaultLightSourceChange: (lightSourceId: string) => void;
+  onSaveCustomLightSource: (profile: {
+    id?: string | null;
+    name: string;
+    colorTemperature: number;
+    spectralBias: [number, number, number];
+    flareCharacteristic: LightSourceProfile['flareCharacteristic'];
+  }) => Promise<LightSourceProfile> | LightSourceProfile;
+  onDeleteCustomLightSource: (id: string) => void;
   flatFieldProfileNames: string[];
   activeFlatFieldProfileName: string | null;
   activeFlatFieldLoaded: boolean;
@@ -293,6 +301,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   lightSourceProfiles,
   defaultLightSourceId,
   onDefaultLightSourceChange,
+  onSaveCustomLightSource,
+  onDeleteCustomLightSource,
   flatFieldProfileNames,
   activeFlatFieldProfileName,
   activeFlatFieldLoaded,
@@ -314,6 +324,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'calibration' | 'shortcuts' | 'diagnostics'>('performance');
   const [copied, setCopied] = useState(false);
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
+  const [showLightSourceForm, setShowLightSourceForm] = useState(false);
+  const [lsDraftName, setLsDraftName] = useState('');
+  const [lsDraftTemp, setLsDraftTemp] = useState(5500);
+  const [lsDraftBias, setLsDraftBias] = useState<[number, number, number]>([1, 1, 1]);
+  const [lsDraftFlare, setLsDraftFlare] = useState<LightSourceProfile['flareCharacteristic']>('medium');
   const modalRef = useRef<HTMLDivElement>(null);
   const calibrationInputRef = useRef<HTMLInputElement>(null);
 
@@ -401,6 +416,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } catch (error) {
       setCalibrationError(error instanceof Error ? error.message : String(error));
     }
+  };
+
+  const openNewLightSourceForm = () => {
+    setLsDraftName('');
+    setLsDraftTemp(5500);
+    setLsDraftBias([1, 1, 1]);
+    setLsDraftFlare('medium');
+    setShowLightSourceForm(true);
+  };
+
+  const handleLightSourceFormSave = async () => {
+    await onSaveCustomLightSource({
+      id: null,
+      name: lsDraftName.trim() || 'Custom Light Source',
+      colorTemperature: lsDraftTemp,
+      spectralBias: lsDraftBias,
+      flareCharacteristic: lsDraftFlare,
+    });
+    setShowLightSourceForm(false);
   };
 
   return (
@@ -822,6 +856,139 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               <option key={profile.id} value={profile.id}>{profile.name}</option>
                             ))}
                           </select>
+                        </div>
+
+                        {/* Custom Light Sources */}
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Custom Light Sources</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              Define your own scanning light profiles with a specific color temperature and spectral bias.
+                            </p>
+                          </div>
+
+                          {lightSourceProfiles.filter((p) => p.id.startsWith('custom-')).length > 0 ? (
+                            <div className="space-y-1.5">
+                              {lightSourceProfiles.filter((p) => p.id.startsWith('custom-')).map((profile) => (
+                                <div
+                                  key={profile.id}
+                                  className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2.5"
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-[13px] font-medium text-zinc-200 truncate">{profile.name}</p>
+                                    <p className="text-[11px] text-zinc-500 mt-0.5">
+                                      {profile.colorTemperature.toLocaleString()}K · {profile.flareCharacteristic} flare
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => onDeleteCustomLightSource(profile.id)}
+                                    className="shrink-0 flex items-center gap-1.5 rounded-md border border-red-950/80 bg-zinc-950 px-2 py-1.5 text-[12px] text-red-400 transition-all hover:bg-red-950/30"
+                                  >
+                                    <Trash2 size={12} />
+                                    Delete
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-[12px] text-zinc-600">No custom profiles yet.</p>
+                          )}
+
+                          {showLightSourceForm ? (
+                            <div className="space-y-3 rounded-lg border border-zinc-700 bg-zinc-950/80 p-3">
+                              <div className="grid grid-cols-2 gap-2">
+                                <div className="space-y-1">
+                                  <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Name</p>
+                                  <input
+                                    type="text"
+                                    placeholder="My Light Source"
+                                    value={lsDraftName}
+                                    onChange={(e) => setLsDraftName(e.target.value)}
+                                    className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-[13px] text-zinc-100 outline-none transition-colors focus:border-zinc-500"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Color Temp (K)</p>
+                                  <input
+                                    type="number"
+                                    min={1000}
+                                    max={10000}
+                                    step={50}
+                                    value={lsDraftTemp}
+                                    onChange={(e) => setLsDraftTemp(Number(e.target.value) || 5500)}
+                                    className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-[13px] text-zinc-100 outline-none transition-colors focus:border-zinc-500"
+                                  />
+                                </div>
+                              </div>
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500 mb-1.5">Spectral Bias (R / G / B)</p>
+                                <div className="grid grid-cols-3 gap-2">
+                                  {(['R', 'G', 'B'] as const).map((ch, i) => (
+                                    <div key={ch} className="space-y-1">
+                                      <p className="text-[10px] text-zinc-600 text-center">{ch}</p>
+                                      <input
+                                        type="number"
+                                        min={0.5}
+                                        max={1.5}
+                                        step={0.01}
+                                        value={lsDraftBias[i]}
+                                        onChange={(e) => {
+                                          const next: [number, number, number] = [...lsDraftBias] as [number, number, number];
+                                          next[i] = Number(e.target.value) || 1;
+                                          setLsDraftBias(next);
+                                        }}
+                                        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[13px] text-zinc-100 outline-none transition-colors focus:border-zinc-500 text-center"
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500 mb-1.5">Flare Characteristic</p>
+                                <div className="grid grid-cols-3 gap-2">
+                                  {(['low', 'medium', 'high'] as const).map((value) => (
+                                    <button
+                                      key={value}
+                                      type="button"
+                                      onClick={() => setLsDraftFlare(value)}
+                                      className={`rounded-md border py-1.5 text-[12px] capitalize transition-all ${
+                                        lsDraftFlare === value
+                                          ? 'border-zinc-100 bg-zinc-100 text-zinc-950'
+                                          : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                                      }`}
+                                    >
+                                      {value}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="flex justify-end gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowLightSourceForm(false)}
+                                  className="rounded-md border border-zinc-800 px-3 py-1.5 text-[12px] text-zinc-400 transition-all hover:bg-zinc-900"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { void handleLightSourceFormSave(); }}
+                                  className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[12px] text-emerald-200 transition-all hover:bg-emerald-500/20"
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={openNewLightSourceForm}
+                              className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-700 py-2 text-[12px] text-zinc-500 transition-all hover:border-zinc-500 hover:text-zinc-300"
+                            >
+                              <span className="text-base leading-none">+</span> Add custom profile
+                            </button>
+                          )}
                         </div>
 
                         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
