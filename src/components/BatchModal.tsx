@@ -213,14 +213,16 @@ export function BatchModal({
   };
 
   const handleAddFiles = async () => {
+    if (!isDesktopShell()) {
+      fileInputRef.current?.click();
+      return;
+    }
+
     try {
       const nativeFiles = await openMultipleImageFiles();
       if (nativeFiles.length > 0) {
         addFiles(nativeFiles.map((entry) => ({ file: entry.file, nativePath: entry.path, nativeSize: entry.size })));
-        return;
       }
-
-      fileInputRef.current?.click();
     } catch (addError) {
       setError(addError instanceof Error ? addError.message : String(addError));
     }

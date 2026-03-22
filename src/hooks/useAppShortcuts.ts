@@ -1,5 +1,7 @@
 import { Dispatch, SetStateAction, useEffect } from 'react';
 import { DocumentTab } from '../types';
+import { openImageFileByPath } from '../utils/fileBridge';
+import { clearRecentFiles } from '../utils/recentFilesStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 
 type UseAppShortcutsOptions = {
@@ -15,6 +17,7 @@ type UseAppShortcutsOptions = {
   onUndo: () => void;
   onRedo: () => void;
   onOpenImage: () => Promise<void>;
+  onOpenRecentFile: (file: File, path: string, size?: number) => Promise<string | null>;
   onOpenInEditor: () => Promise<void>;
   onCloseImage: () => Promise<void>;
   onDownload: () => Promise<void>;
@@ -43,6 +46,7 @@ export function useAppShortcuts({
   onUndo,
   onRedo,
   onOpenImage,
+  onOpenRecentFile,
   onOpenInEditor,
   onCloseImage,
   onDownload,
@@ -146,7 +150,22 @@ export function useAppShortcuts({
         case 'show-settings':
           setShowSettingsModal(true);
           break;
+        case 'clear-recent-files':
+          clearRecentFiles();
+          break;
       }
+    },
+    onMenuOpenRecent: (path) => {
+      void (async () => {
+        try {
+          const result = await openImageFileByPath(path);
+          if (result) {
+            await onOpenRecentFile(result.file, path, result.size);
+          }
+        } catch {
+          void onOpenImage();
+        }
+      })();
     },
     enableMenuEvents: usesNativeFileDialogs,
   });

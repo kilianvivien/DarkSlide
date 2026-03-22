@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Check, Download, Film, Layers, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES } from '../constants';
-import { confirmDeletePreset, savePresetFile, openPresetFile } from '../utils/fileBridge';
+import { confirmDeletePreset, isDesktopShell, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
 import { DarkslidePresetFile, FilmProfile, ScannerType } from '../types';
@@ -221,10 +221,14 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     setPresetTab('custom');
     setIsSaving(false);
 
+    if (!isDesktopShell()) {
+      fileInputRef.current?.click();
+      return;
+    }
+
     try {
       const opened = await openPresetFile();
       if (!opened) {
-        fileInputRef.current?.click();
         return;
       }
 

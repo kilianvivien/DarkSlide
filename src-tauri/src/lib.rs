@@ -4,7 +4,7 @@ use std::process::Command;
 
 use rawler::analyze::{analyze_metadata, AnalyzerData};
 use rawler::imgop::develop::{ProcessingStep, RawDevelop};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
 use tauri::Manager;
@@ -254,6 +254,68 @@ fn open_url_in_browser(url: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn read_file_by_path(path: String) -> Result<tauri::ipc::Response, String> {
+    fs::read(&path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|error| format!("Failed to read {path}: {error}"))
+}
+
+#[tauri::command]
+fn file_size_by_path(path: String) -> Result<u64, String> {
+    fs::metadata(&path)
+        .map(|m| m.len())
+        .map_err(|error| format!("Failed to stat {path}: {error}"))
+}
+
+#[derive(Deserialize)]
+struct RecentMenuEntry {
+    name: String,
+    path: String,
+}
+
+struct RecentMenuState {
+    submenu: std::sync::Mutex<tauri::menu::Submenu<tauri::Wry>>,
+}
+
+#[tauri::command]
+fn update_recent_files_menu(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, RecentMenuState>,
+    entries: Vec<RecentMenuEntry>,
+) -> Result<(), String> {
+    let submenu = state.submenu.lock().map_err(|error| error.to_string())?;
+
+    // Remove all existing items.
+    for item in submenu.items().map_err(|error| error.to_string())? {
+        let _ = submenu.remove(&item);
+    }
+
+    // Add new items.
+    for entry in &entries {
+        let label = &entry.name;
+        let id = format!("recent::{}", entry.path);
+        let item = MenuItemBuilder::with_id(id, label)
+            .build(&app)
+            .map_err(|error| error.to_string())?;
+        submenu.append(&item).map_err(|error| error.to_string())?;
+    }
+
+    if !entries.is_empty() {
+        let separator = PredefinedMenuItem::separator(&app)
+            .map_err(|error| error.to_string())?;
+        submenu.append(&separator).map_err(|error| error.to_string())?;
+    }
+
+    let clear_item = MenuItemBuilder::with_id("clear-recent-files", "Clear Recent")
+        .enabled(!entries.is_empty())
+        .build(&app)
+        .map_err(|error| error.to_string())?;
+    submenu.append(&clear_item).map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 #[cfg(target_os = "macos")]
 fn open_saved_file_in_editor(path: String, editor_path: Option<String>) -> Result<(), String> {
     let command = build_open_saved_file_command(&path, editor_path.as_deref());
@@ -275,7 +337,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             decode_raw,
             save_blob_to_directory,
-            open_saved_file_in_editor
+            open_saved_file_in_editor,
+            read_file_by_path,
+            file_size_by_path,
+            update_recent_files_menu
         ])
         .setup(|app| {
             let import_item = MenuItemBuilder::with_id("open", "Import...")
@@ -334,8 +399,21 @@ pub fn run() {
                 .accelerator("CmdOrCtrl+-")
                 .build(app)?;
 
+            let recent_submenu = SubmenuBuilder::with_id(app, "open-recent", "Open Recent")
+                .item(
+                    &MenuItemBuilder::with_id("clear-recent-files", "Clear Recent")
+                        .enabled(false)
+                        .build(app)?,
+                )
+                .build()?;
+
+            app.manage(RecentMenuState {
+                submenu: std::sync::Mutex::new(recent_submenu.clone()),
+            });
+
             let file_menu = SubmenuBuilder::new(app, "File")
                 .item(&import_item)
+                .item(&recent_submenu)
                 .separator()
                 .item(&export_item)
                 .item(&batch_export_item)
@@ -416,15 +494,24 @@ pub fn run() {
             app.set_menu(menu)?;
 
             app.on_menu_event(move |app_handle, event| {
-                if event.id().0.as_str() == "open-github-repo" {
+                let id = event.id().0.as_str();
+
+                if id == "open-github-repo" {
                     if let Err(error) = open_url_in_browser(GITHUB_REPOSITORY_URL) {
                         eprintln!("failed to open GitHub repository URL: {error}");
                     }
                     return;
                 }
 
+                if let Some(path) = id.strip_prefix("recent::") {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.emit("menu-open-recent", path);
+                    }
+                    return;
+                }
+
                 if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.emit("menu-action", event.id().0.as_str());
+                    let _ = window.emit("menu-action", id);
                 }
             });
 

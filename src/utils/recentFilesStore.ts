@@ -44,8 +44,26 @@ export function addRecentFile(entry: Omit<RecentFileEntry, 'timestamp'>): void {
   const updated = [{ ...entry, timestamp: Date.now() }, ...filtered].slice(0, MAX_ENTRIES);
   const store: RecentFilesStore = { version: 1, entries: updated };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  void syncRecentFilesToMenu();
 }
 
 export function clearRecentFiles(): void {
   localStorage.removeItem(STORAGE_KEY);
+  void syncRecentFilesToMenu();
+}
+
+export async function syncRecentFilesToMenu(): Promise<void> {
+  try {
+    const { isTauri, invoke } = await import('@tauri-apps/api/core');
+    if (!isTauri()) return;
+
+    const entries = loadRecentFiles()
+      .filter((entry): entry is RecentFileEntry & { path: string } => entry.path !== null);
+
+    await invoke('update_recent_files_menu', {
+      entries: entries.map((entry) => ({ name: entry.name, path: entry.path })),
+    });
+  } catch {
+    // Best-effort; ignore failures in non-Tauri environments or tests.
+  }
 }

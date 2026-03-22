@@ -162,7 +162,28 @@ export async function openMultipleImageFiles(): Promise<NativeOpenFileResult[]> 
 
 export async function openImageFileByPath(path: string): Promise<NativeOpenFileResult | null> {
   if (!isDesktopShell()) return null;
-  return openDesktopFile(path);
+
+  // Use Rust commands directly instead of the FS plugin so that files
+  // opened in a previous session (stored in recent files) remain accessible
+  // even though the dialog-granted FS scope has expired.
+  const fileName = getFileName(path);
+  const extension = getFileExtension(fileName);
+
+  if (isRawExtension(extension)) {
+    const size = await invoke<number>('file_size_by_path', { path });
+    return {
+      file: new File([], fileName, { type: 'application/octet-stream' }),
+      path,
+      size,
+    };
+  }
+
+  const bytes = await invoke<ArrayBuffer>('read_file_by_path', { path });
+  return {
+    file: new File([new Uint8Array(bytes)], fileName, { type: getMimeTypeForFile(fileName) }),
+    path,
+    size: bytes.byteLength,
+  };
 }
 
 export async function saveExportBlob(blob: Blob, filename: string, format: ExportFormat) {

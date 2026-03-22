@@ -14,6 +14,7 @@ export type ShortcutMap = Record<string, ShortcutDefinition>;
 type UseKeyboardShortcutsOptions = {
   shortcuts: ShortcutMap;
   onMenuAction?: (action: string) => void;
+  onMenuOpenRecent?: (path: string) => void;
   enableMenuEvents?: boolean;
 };
 
@@ -31,11 +32,15 @@ function isEditableTarget(target: EventTarget | null) {
 export function useKeyboardShortcuts({
   shortcuts,
   onMenuAction,
+  onMenuOpenRecent,
   enableMenuEvents = false,
 }: UseKeyboardShortcutsOptions) {
   const getShortcuts = useEvent(() => shortcuts);
   const handleMenuAction = useEvent((action: string) => {
     onMenuAction?.(action);
+  });
+  const handleMenuOpenRecent = useEvent((path: string) => {
+    onMenuOpenRecent?.(path);
   });
 
   useEffect(() => {
@@ -91,9 +96,17 @@ export function useKeyboardShortcuts({
           return;
         }
 
-        unlisten = await listen<string>('menu-action', (event) => {
+        const unlistenAction = await listen<string>('menu-action', (event) => {
           handleMenuAction(event.payload);
         });
+        if (cancelled) { unlistenAction(); return; }
+
+        const unlistenRecent = await listen<string>('menu-open-recent', (event) => {
+          handleMenuOpenRecent(event.payload);
+        });
+        if (cancelled) { unlistenAction(); unlistenRecent(); return; }
+
+        unlisten = () => { unlistenAction(); unlistenRecent(); };
       } catch {
         // Ignore non-Tauri environments.
       }
@@ -103,5 +116,5 @@ export function useKeyboardShortcuts({
       cancelled = true;
       unlisten?.();
     };
-  }, [enableMenuEvents, handleMenuAction]);
+  }, [enableMenuEvents, handleMenuAction, handleMenuOpenRecent]);
 }

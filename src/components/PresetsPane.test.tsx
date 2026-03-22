@@ -11,6 +11,7 @@ const fileBridgeState = vi.hoisted(() => ({
 
 vi.mock('../utils/fileBridge', () => ({
   confirmDeletePreset: fileBridgeState.confirmDeletePreset,
+  isDesktopShell: () => false,
   openPresetFile: fileBridgeState.openPresetFile,
   savePresetFile: fileBridgeState.savePresetFile,
 }));

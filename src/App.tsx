@@ -16,6 +16,7 @@ import { getTransformedDimensions } from './utils/imagePipeline';
 import { clamp } from './utils/math';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
+import { syncRecentFilesToMenu } from './utils/recentFilesStore';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs, saveMaxResidentDocs } from './utils/residentDocsStore';
 
@@ -224,6 +225,7 @@ export default function App() {
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
 
   useEffect(() => registerBeforeUnloadGuard(() => tabs.some((tab) => tab.document.dirty)), [tabs]);
+  useEffect(() => { void syncRecentFilesToMenu(); }, []);
   const persistedProfiles = useMemo(() => [...FILM_PROFILES, ...customPresets], [customPresets]);
   const profilesById = useMemo(() => {
     const map = new Map<string, FilmProfile>();
@@ -1391,6 +1393,7 @@ export default function App() {
     onUndo: handleUndo,
     onRedo: handleRedo,
     onOpenImage: handleOpenImage,
+    onOpenRecentFile: importFile,
     onOpenInEditor: async () => { await handleOpenInEditor(); },
     onCloseImage: async () => { await handleCloseImage(); },
     onDownload: async () => { await handleDownload(); },
