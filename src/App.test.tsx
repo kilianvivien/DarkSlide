@@ -24,6 +24,7 @@ class MockImageBitmap {
 
 const workerState = vi.hoisted(() => ({
   decode: vi.fn(),
+  detectFrame: vi.fn(),
   render: vi.fn(),
   export: vi.fn(),
   sampleFilmBase: vi.fn(),
@@ -227,6 +228,8 @@ vi.mock('./utils/imageWorkerClient', () => ({
 
     decode = workerState.decode;
 
+    detectFrame = workerState.detectFrame;
+
     render = workerState.render;
 
     export = workerState.export;
@@ -359,6 +362,7 @@ describe('App import and preview pipeline', () => {
     localStorage.clear();
     coreState.invoke.mockReset();
     workerState.decode.mockReset();
+    workerState.detectFrame.mockReset();
     workerState.render.mockReset();
     workerState.export.mockReset();
     workerState.sampleFilmBase.mockReset();
@@ -445,6 +449,46 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps single-image imports full-frame and does not auto-run frame detection', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(4032, 6048));
+    workerState.detectFrame.mockResolvedValue({
+      left: 0.1,
+      top: 0.1,
+      right: 0.9,
+      bottom: 0.9,
+      angle: 1.2,
+      confidence: 4,
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan-a.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.detectFrame).not.toHaveBeenCalled();
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+    expect(workerState.render.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      settings: expect.objectContaining({
+        crop: {
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          aspectRatio: null,
+        },
+      }),
+    }));
+    expect(screen.queryByText(/Auto-crop skipped/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Frame detected and crop applied/i)).not.toBeInTheDocument();
   });
 
   it('shows the desktop-only RAW error in the browser build', async () => {

@@ -141,4 +141,16 @@ describe('CropPane', () => {
       aspectRatio: 20 / 30,
     }));
   });
+
+  it('renders the auto crop action and forwards clicks to frame detection', () => {
+    const onRedetectFrame = vi.fn();
+
+    renderCropPane({
+      onRedetectFrame,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /auto crop/i }));
+
+    expect(onRedetectFrame).toHaveBeenCalledTimes(1);
+  });
 });

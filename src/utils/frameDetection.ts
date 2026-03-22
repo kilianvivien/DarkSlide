@@ -4,14 +4,20 @@ import { DetectedFrame } from '../types';
 const MAX_DETECTION_ANGLE = 5;
 const MIN_FRAME_AREA = 0.2;
 const MAX_FRAME_AREA = 0.98;
-const PEAK_SIGMA_THRESHOLD = 2;
 const MIN_CONFIDENCE = 3;
 const SAMPLE_COUNT = 8;
-const MIN_ABSOLUTE_PEAK_FACTOR = 16;
+const MIN_ABSOLUTE_PEAK_FACTOR = 10;
+const EDGE_SEARCH_BAND_FRACTION = 0.18;
+const CANDIDATE_THRESHOLD_SIGMA = 1.25;
+const SMOOTHING_RADIUS_FRACTION = 0.006;
+const MAX_SMOOTHING_RADIUS = 8;
+const EDGE_CONTRAST_SCALE = 20;
 
 type Peak = {
   index: number;
   value: number;
+  score: number;
+  contrast: number;
 };
 
 export function detectFrame(
@@ -24,8 +30,8 @@ export function detectFrame(
   }
 
   const grayscale = buildGrayscale(pixels, width, height);
-  const projectionX = new Float32Array(width);
-  const projectionY = new Float32Array(height);
+  const rawProjectionX = new Float32Array(width);
+  const rawProjectionY = new Float32Array(height);
   const gradientY = new Float32Array(width * height);
 
   for (let y = 1; y < height - 1; y += 1) {
@@ -36,20 +42,60 @@ export function detectFrame(
       const gy = grayscale[index + width] - grayscale[index - width];
       const absGx = Math.abs(gx);
       const absGy = Math.abs(gy);
-      projectionX[x] += absGx;
-      projectionY[y] += absGy;
+      rawProjectionX[x] += absGx;
+      rawProjectionY[y] += absGy;
       gradientY[index] = absGy;
     }
   }
 
+  const projectionX = smoothProfile(rawProjectionX);
+  const projectionY = smoothProfile(rawProjectionY);
   const xStats = getStats(projectionX);
   const yStats = getStats(projectionY);
-  const leftPeak = findPeakFromStart(projectionX, xStats.mean + xStats.sigma * PEAK_SIGMA_THRESHOLD);
-  const rightPeak = findPeakFromEnd(projectionX, xStats.mean + xStats.sigma * PEAK_SIGMA_THRESHOLD);
-  const topPeak = findPeakFromStart(projectionY, yStats.mean + yStats.sigma * PEAK_SIGMA_THRESHOLD);
-  const bottomPeak = findPeakFromEnd(projectionY, yStats.mean + yStats.sigma * PEAK_SIGMA_THRESHOLD);
 
-  if (!leftPeak || !rightPeak || !topPeak || !bottomPeak || xStats.sigma <= 0 || yStats.sigma <= 0) {
+  if (xStats.sigma <= 0 || yStats.sigma <= 0) {
+    return null;
+  }
+
+  const xBandEnd = Math.max(2, Math.floor((width - 1) * EDGE_SEARCH_BAND_FRACTION));
+  const xBandStart = Math.min(width - 3, Math.ceil((width - 1) * (1 - EDGE_SEARCH_BAND_FRACTION)));
+  const yBandEnd = Math.max(2, Math.floor((height - 1) * EDGE_SEARCH_BAND_FRACTION));
+  const yBandStart = Math.min(height - 3, Math.ceil((height - 1) * (1 - EDGE_SEARCH_BAND_FRACTION)));
+
+  const leftPeak = findBestPeakInBand(
+    projectionX,
+    xStats.mean + xStats.sigma * CANDIDATE_THRESHOLD_SIGMA,
+    xStats.sigma,
+    1,
+    xBandEnd,
+    (index) => measureVerticalEdgeContrast(grayscale, width, height, index, 'left'),
+  );
+  const rightPeak = findBestPeakInBand(
+    projectionX,
+    xStats.mean + xStats.sigma * CANDIDATE_THRESHOLD_SIGMA,
+    xStats.sigma,
+    xBandStart,
+    width - 2,
+    (index) => measureVerticalEdgeContrast(grayscale, width, height, index, 'right'),
+  );
+  const topPeak = findBestPeakInBand(
+    projectionY,
+    yStats.mean + yStats.sigma * CANDIDATE_THRESHOLD_SIGMA,
+    yStats.sigma,
+    1,
+    yBandEnd,
+    (index) => measureHorizontalEdgeContrast(grayscale, width, height, index, 'top'),
+  );
+  const bottomPeak = findBestPeakInBand(
+    projectionY,
+    yStats.mean + yStats.sigma * CANDIDATE_THRESHOLD_SIGMA,
+    yStats.sigma,
+    yBandStart,
+    height - 2,
+    (index) => measureHorizontalEdgeContrast(grayscale, width, height, index, 'bottom'),
+  );
+
+  if (!leftPeak || !rightPeak || !topPeak || !bottomPeak) {
     return null;
   }
 
@@ -148,22 +194,83 @@ function isLocalMaximum(values: Float32Array, index: number) {
   return values[index] >= values[index - 1] && values[index] >= values[index + 1];
 }
 
-function findPeakFromStart(values: Float32Array, threshold: number): Peak | null {
-  for (let index = 1; index < values.length - 1; index += 1) {
-    if (values[index] > threshold && isLocalMaximum(values, index)) {
-      return { index, value: values[index] };
-    }
+function smoothProfile(values: Float32Array) {
+  const radius = Math.max(2, Math.min(MAX_SMOOTHING_RADIUS, Math.round(values.length * SMOOTHING_RADIUS_FRACTION)));
+  const smoothed = new Float32Array(values.length);
+  const prefix = new Float32Array(values.length + 1);
+
+  for (let index = 0; index < values.length; index += 1) {
+    prefix[index + 1] = prefix[index] + values[index];
   }
-  return null;
+
+  for (let index = 0; index < values.length; index += 1) {
+    const start = Math.max(0, index - radius);
+    const end = Math.min(values.length - 1, index + radius);
+    smoothed[index] = (prefix[end + 1] - prefix[start]) / Math.max(1, end - start + 1);
+  }
+
+  return smoothed;
 }
 
-function findPeakFromEnd(values: Float32Array, threshold: number): Peak | null {
-  for (let index = values.length - 2; index >= 1; index -= 1) {
-    if (values[index] > threshold && isLocalMaximum(values, index)) {
-      return { index, value: values[index] };
+function findBestPeakInBand(
+  values: Float32Array,
+  threshold: number,
+  sigma: number,
+  start: number,
+  end: number,
+  getContrast: (index: number) => number,
+): Peak | null {
+  if (start > end) {
+    return null;
+  }
+
+  const candidates: Peak[] = [];
+  let fallbackIndex = start;
+  let fallbackValue = Number.NEGATIVE_INFINITY;
+  let strongestLocalMaxIndex = -1;
+  let strongestLocalMaxValue = Number.NEGATIVE_INFINITY;
+
+  for (let index = start; index <= end; index += 1) {
+    const value = values[index];
+    if (value > fallbackValue) {
+      fallbackValue = value;
+      fallbackIndex = index;
+    }
+
+    if (index <= 0 || index >= values.length - 1 || !isLocalMaximum(values, index)) {
+      continue;
+    }
+
+    if (value > strongestLocalMaxValue) {
+      strongestLocalMaxValue = value;
+      strongestLocalMaxIndex = index;
+    }
+
+    if (value >= threshold) {
+      const contrast = getContrast(index);
+      candidates.push({
+        index,
+        value,
+        contrast,
+        score: value / Math.max(sigma, 1e-6) + contrast / EDGE_CONTRAST_SCALE,
+      });
     }
   }
-  return null;
+
+  if (candidates.length === 0) {
+    const chosenIndex = strongestLocalMaxIndex >= 0 ? strongestLocalMaxIndex : fallbackIndex;
+    const chosenValue = values[chosenIndex];
+    const contrast = getContrast(chosenIndex);
+    candidates.push({
+      index: chosenIndex,
+      value: chosenValue,
+      contrast,
+      score: chosenValue / Math.max(sigma, 1e-6) + contrast / EDGE_CONTRAST_SCALE,
+    });
+  }
+
+  candidates.sort((a, b) => b.score - a.score || b.value - a.value);
+  return candidates[0] ?? null;
 }
 
 function refinePeak(values: Float32Array, centerIndex: number) {
@@ -180,6 +287,79 @@ function refinePeak(values: Float32Array, centerIndex: number) {
   }
 
   return centerIndex + (left - right) / denominator;
+}
+
+function measureVerticalEdgeContrast(
+  grayscale: Float32Array,
+  width: number,
+  height: number,
+  edgeX: number,
+  side: 'left' | 'right',
+) {
+  const yStart = Math.max(0, Math.floor(height * 0.1));
+  const yEnd = Math.min(height - 1, Math.ceil(height * 0.9));
+  const bandWidth = Math.max(1, Math.round(width * 0.012));
+
+  if (side === 'left') {
+    const outer = averageRegion(grayscale, width, 0, edgeX - bandWidth, edgeX - 1, yStart, yEnd);
+    const inner = averageRegion(grayscale, width, 0, edgeX, edgeX + bandWidth - 1, yStart, yEnd);
+    return Math.abs(inner - outer);
+  }
+
+  const inner = averageRegion(grayscale, width, 0, edgeX - bandWidth + 1, edgeX, yStart, yEnd);
+  const outer = averageRegion(grayscale, width, 0, edgeX + 1, edgeX + bandWidth, yStart, yEnd);
+  return Math.abs(inner - outer);
+}
+
+function measureHorizontalEdgeContrast(
+  grayscale: Float32Array,
+  width: number,
+  height: number,
+  edgeY: number,
+  side: 'top' | 'bottom',
+) {
+  const xStart = Math.max(0, Math.floor(width * 0.1));
+  const xEnd = Math.min(width - 1, Math.ceil(width * 0.9));
+  const bandHeight = Math.max(1, Math.round(height * 0.012));
+
+  if (side === 'top') {
+    const outer = averageRegion(grayscale, width, height, xStart, xEnd, edgeY - bandHeight, edgeY - 1);
+    const inner = averageRegion(grayscale, width, height, xStart, xEnd, edgeY, edgeY + bandHeight - 1);
+    return Math.abs(inner - outer);
+  }
+
+  const inner = averageRegion(grayscale, width, height, xStart, xEnd, edgeY - bandHeight + 1, edgeY);
+  const outer = averageRegion(grayscale, width, height, xStart, xEnd, edgeY + 1, edgeY + bandHeight);
+  return Math.abs(inner - outer);
+}
+
+function averageRegion(
+  grayscale: Float32Array,
+  width: number,
+  heightOrZero: number,
+  xStart: number,
+  xEnd: number,
+  yStart: number,
+  yEnd: number,
+) {
+  const inferredHeight = heightOrZero || Math.floor(grayscale.length / Math.max(width, 1));
+  const clampedXStart = clamp(Math.min(xStart, xEnd), 0, width - 1);
+  const clampedXEnd = clamp(Math.max(xStart, xEnd), 0, width - 1);
+  const clampedYStart = clamp(Math.min(yStart, yEnd), 0, inferredHeight - 1);
+  const clampedYEnd = clamp(Math.max(yStart, yEnd), 0, inferredHeight - 1);
+
+  let total = 0;
+  let count = 0;
+
+  for (let y = clampedYStart; y <= clampedYEnd; y += 1) {
+    const rowOffset = y * width;
+    for (let x = clampedXStart; x <= clampedXEnd; x += 1) {
+      total += grayscale[rowOffset + x];
+      count += 1;
+    }
+  }
+
+  return total / Math.max(count, 1);
 }
 
 function fitHorizontalEdgeSlope(

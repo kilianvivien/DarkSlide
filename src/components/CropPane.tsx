@@ -268,6 +268,17 @@ export const CropPane = memo(function CropPane({
 
   return (
     <div className="space-y-8">
+      {onRedetectFrame && (
+        <button
+          type="button"
+          onClick={onRedetectFrame}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-all hover:bg-zinc-800 hover:text-zinc-100"
+        >
+          <ScanLine size={14} />
+          Auto Crop
+        </button>
+      )}
+
       <section>
         <h2 className="mb-6 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
           <RotateCw size={12} /> Orientation
@@ -416,17 +427,6 @@ export const CropPane = memo(function CropPane({
           )}
         </div>
       </section>
-
-      {onRedetectFrame && (
-        <button
-          type="button"
-          onClick={onRedetectFrame}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-all hover:bg-zinc-800 hover:text-zinc-100"
-        >
-          <ScanLine size={14} />
-          Re-detect Frame
-        </button>
-      )}
 
       {cropSource === 'auto' && (
         <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300">

@@ -360,22 +360,6 @@ const [importError, setImportError] = useState<string | null>(null);
       const savedLightSourceId = typeof window !== 'undefined'
         ? window.localStorage.getItem('darkslide_default_light_source')
         : null;
-      const detectedFrame = typeof worker.detectFrame === 'function'
-        ? await worker.detectFrame(documentId).catch(() => null)
-        : null;
-      const nextSettings = detectedFrame
-        ? {
-          ...initialSettings,
-          crop: {
-            x: detectedFrame.left,
-            y: detectedFrame.top,
-            width: detectedFrame.right - detectedFrame.left,
-            height: detectedFrame.bottom - detectedFrame.top,
-            aspectRatio: null,
-          },
-          levelAngle: detectedFrame.angle,
-        }
-        : initialSettings;
       const nextDocument: WorkspaceDocument = {
         id: documentId,
         source: {
@@ -383,7 +367,7 @@ const [importError, setImportError] = useState<string | null>(null);
           size: sourceFileSize,
         },
         previewLevels: decoded.previewLevels,
-        settings: nextSettings,
+        settings: initialSettings,
         colorManagement: createDocumentColorManagement(decoded.metadata, {
           ...DEFAULT_EXPORT_OPTIONS,
           ...(savedExportOptions ? {
@@ -396,7 +380,7 @@ const [importError, setImportError] = useState<string | null>(null);
         }),
         estimatedFlare: decoded.estimatedFlare,
         lightSourceId: savedLightSourceId && savedLightSourceId !== 'auto' ? savedLightSourceId : null,
-        cropSource: detectedFrame ? 'auto' : null,
+        cropSource: null,
         rawImportProfile,
         profileId: rawImportProfile?.id ?? initialProfile.id,
         exportOptions: {
@@ -418,23 +402,9 @@ const [importError, setImportError] = useState<string | null>(null);
 
       tabsApi.replaceDocument(documentId, nextDocument);
 
-      if (decoded.metadata.unsupportedColorProfileName && detectedFrame) {
-        setTransientNotice({
-          message: `Frame detected and crop applied. Unsupported source profile "${decoded.metadata.unsupportedColorProfileName}" is using sRGB until you override it.`,
-          tone: 'success',
-        });
-      } else if (decoded.metadata.unsupportedColorProfileName) {
+      if (decoded.metadata.unsupportedColorProfileName) {
         setTransientNotice({
           message: `Unsupported source profile "${decoded.metadata.unsupportedColorProfileName}". DarkSlide is using sRGB until you override it.`,
-        });
-      } else if (detectedFrame) {
-        setTransientNotice({
-          message: 'Frame detected and crop applied.',
-          tone: 'success',
-        });
-      } else {
-        setTransientNotice({
-          message: 'Auto-crop skipped. Manual crop is still available.',
         });
       }
 

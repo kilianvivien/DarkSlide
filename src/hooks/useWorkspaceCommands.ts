@@ -928,7 +928,7 @@ export function useWorkspaceCommands({
 
       const detected = await worker.detectFrame(documentState.id);
       if (!detected) {
-        showTransientNotice('Auto-crop skipped. Manual crop is still available.');
+        showTransientNotice('No frame detected. Adjust crop manually.');
         return;
       }
 
