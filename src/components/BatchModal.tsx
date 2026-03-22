@@ -104,6 +104,8 @@ export function BatchModal({
   const [selectedProfileId, setSelectedProfileId] = useState(FILM_PROFILES[0]?.id ?? 'generic-color');
   const [selectedCustomProfileId, setSelectedCustomProfileId] = useState(customProfiles[0]?.id ?? '');
   const [ignorePresetCropAndRotation, setIgnorePresetCropAndRotation] = useState(false);
+  const [batchAutoCrop, setBatchAutoCrop] = useState(true);
+  const [batchFlareMode, setBatchFlareMode] = useState<'per-image' | 'first-frame'>('per-image');
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
     ...DEFAULT_EXPORT_OPTIONS,
     filenameBase: '{original}_darkslide',
@@ -141,6 +143,8 @@ export function BatchModal({
     setSettingsSource(currentSettings && currentProfile ? 'current' : 'builtin');
     setColorManagement(currentColorManagement ?? DEFAULT_COLOR_MANAGEMENT);
     setIgnorePresetCropAndRotation(false);
+    setBatchAutoCrop(true);
+    setBatchFlareMode('per-image');
   }, [currentColorManagement, currentProfile, currentSettings, isOpen]);
 
   useEffect(() => {
@@ -328,6 +332,10 @@ export function BatchModal({
         exportOptions,
         resolvedOutputPath,
         cancelTokenRef.current,
+        {
+          autoCrop: batchAutoCrop,
+          flareMode: batchFlareMode,
+        },
       )) {
         if (event.type === 'done') {
           successCount += 1;
@@ -575,6 +583,26 @@ export function BatchModal({
                           )}
                         </div>
                       )}
+                    </section>
+
+                    <section className="space-y-3">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Scanning Corrections</h3>
+                      <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+                        <CheckOption checked={batchAutoCrop} disabled={isRunning} onChange={setBatchAutoCrop}>
+                          Auto-crop each scan after decode
+                        </CheckOption>
+                        <div className="space-y-2">
+                          <p className="text-xs text-zinc-500">Flare estimation</p>
+                          <div className="space-y-2">
+                            <RadioOption checked={batchFlareMode === 'per-image'} disabled={isRunning} onChange={() => setBatchFlareMode('per-image')}>
+                              Per image
+                            </RadioOption>
+                            <RadioOption checked={batchFlareMode === 'first-frame'} disabled={isRunning} onChange={() => setBatchFlareMode('first-frame')}>
+                              First frame (roll)
+                            </RadioOption>
+                          </div>
+                        </div>
+                      </div>
                     </section>
 
                     <div className="border-t border-zinc-800/80" />

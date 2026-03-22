@@ -6,7 +6,7 @@ struct Uniforms {
   processMode: f32,
   isColor: f32,
   bwEnabled: f32,
-  _pad1: f32,
+  isSlide: f32,
 
   exposureFactor: f32,
   contrastFactor: f32,
@@ -38,10 +38,10 @@ struct Uniforms {
   bwBlueMix: f32,
   bwTone: f32,
 
-  _pad5: f32,
-  _pad6: f32,
-  _pad7: f32,
-  _pad8: f32,
+  flareFloorR: f32,
+  flareFloorG: f32,
+  flareFloorB: f32,
+  flareStrength: f32,
 
   cm0: f32,
   cm1: f32,
@@ -77,6 +77,11 @@ struct Uniforms {
   profileMatrix7: f32,
   profileMatrix8: f32,
   _pad15: f32,
+
+  lightSourceBiasR: f32,
+  lightSourceBiasG: f32,
+  lightSourceBiasB: f32,
+  hasFlatField: f32,
 };
 
 struct BlurParams {
@@ -222,6 +227,8 @@ fn textureCoord(position: vec4<f32>) -> vec2<i32> {
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> uniforms: Uniforms;
 @group(0) @binding(2) var<storage, read> curveLuts: array<f32>;
+@group(0) @binding(3) var flatFieldTexture: texture_2d<f32>;
+@group(0) @binding(4) var flatFieldSampler: sampler;
 
 fn lookupCurve(channel: u32, value: f32) -> f32 {
   let idx = clamp(u32(round(clampF(value, 0.0, 1.0) * 255.0)), 0u, 255u);
@@ -238,9 +245,31 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
   var b = converted.z;
 
   if (uniforms.processMode > 0.5) {
-    r = 1.0 - r;
-    g = 1.0 - g;
-    b = 1.0 - b;
+    if (uniforms.hasFlatField > 0.5) {
+      let dims = vec2<f32>(textureDimensions(inputTexture));
+      let uv = vec2<f32>(
+        position.x / max(dims.x - 1.0, 1.0),
+        position.y / max(dims.y - 1.0, 1.0),
+      );
+      let ff = textureSampleLevel(flatFieldTexture, flatFieldSampler, uv, 0.0);
+      r = clampF(r / max(ff.r, 0.05), 0.0, 1.0);
+      g = clampF(g / max(ff.g, 0.05), 0.0, 1.0);
+      b = clampF(b / max(ff.b, 0.05), 0.0, 1.0);
+    }
+
+    r = max(r - uniforms.flareFloorR * uniforms.flareStrength, 0.0);
+    g = max(g - uniforms.flareFloorG * uniforms.flareStrength, 0.0);
+    b = max(b - uniforms.flareFloorB * uniforms.flareStrength, 0.0);
+
+    r = clampF(r / max(uniforms.lightSourceBiasR, 0.05), 0.0, 1.0);
+    g = clampF(g / max(uniforms.lightSourceBiasG, 0.05), 0.0, 1.0);
+    b = clampF(b / max(uniforms.lightSourceBiasB, 0.05), 0.0, 1.0);
+
+    if (uniforms.isSlide <= 0.5) {
+      r = 1.0 - r;
+      g = 1.0 - g;
+      b = 1.0 - b;
+    }
 
     r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
     g = applyFilmBaseCompensation(g, uniforms.filmBaseG);

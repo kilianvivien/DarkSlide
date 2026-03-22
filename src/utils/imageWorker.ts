@@ -42,6 +42,9 @@ import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constant
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
 import { getColorProfileIdFromName, identifyIccProfile, convertImageDataColorProfile } from './colorProfiles';
 import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata';
+import { applyFlatFieldCorrection } from './flatField';
+import { detectFrame } from './frameDetection';
+import { estimateFlare } from './flareEstimation';
 import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
@@ -75,13 +78,22 @@ interface StoredTileJob {
   width: number;
   height: number;
   halo: number;
+  comparisonMode?: 'processed' | 'original';
+  flatFieldHandledInWorker?: boolean;
 }
+
+type LoadedFlatField = {
+  name: string;
+  size: number;
+  data: Float32Array;
+};
 
 const documents = new Map<string, StoredDocument>();
 const tileJobs = new Map<string, StoredTileJob>();
 const cancelledJobs = new Map<string, number>();
 let rotateCanvas: OffscreenCanvas | null = null;
 let outputCanvas: OffscreenCanvas | null = null;
+let activeFlatField: LoadedFlatField | null = null;
 const TILE_SIZE = 1024;
 const CANCELLED_JOB_TTL_MS = 2_000;
 
@@ -222,6 +234,28 @@ function buildPreviewLevels(sourceCanvas: OffscreenCanvas, displayScaleFactor = 
   }
 
   return previews;
+}
+
+function getOrCreatePreviewByMaxDimension(document: StoredDocument, maxDimension: number) {
+  const existing = document.previews.find((preview) => preview.level.maxDimension === maxDimension);
+  if (existing) {
+    return existing;
+  }
+
+  const canvas = buildPreviewCanvas(document.sourceCanvas, maxDimension);
+  const preview = {
+    level: {
+      id: `preview-${maxDimension}`,
+      width: canvas.width,
+      height: canvas.height,
+      maxDimension,
+    },
+    canvas,
+  } satisfies StoredPreview;
+
+  document.previews.push(preview);
+  document.previews.sort((left, right) => left.level.maxDimension - right.level.maxDimension);
+  return preview;
 }
 
 function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
@@ -551,6 +585,57 @@ function handleEvictPreviews(payload: { documentId?: string | null; preserveDocu
   return { evicted: true } as const;
 }
 
+function readAnalysisPreview(documentId: string) {
+  const document = getStoredDocument(documentId);
+  const preview = getOrCreatePreviewByMaxDimension(document, 1024);
+  const context = preview.canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Could not read analysis preview.');
+  }
+
+  return context.getImageData(0, 0, preview.canvas.width, preview.canvas.height);
+}
+
+function handleDetectFrame(documentId: string) {
+  const start = performance.now();
+  const preview = readAnalysisPreview(documentId);
+  const detected = detectFrame(preview.data, preview.width, preview.height);
+  const durationMs = performance.now() - start;
+  void durationMs;
+  return detected;
+}
+
+function handleComputeFlare(documentId: string) {
+  const start = performance.now();
+  const preview = readAnalysisPreview(documentId);
+  const flare = estimateFlare(preview.data, preview.width, preview.height);
+  const durationMs = performance.now() - start;
+  void durationMs;
+  return flare;
+}
+
+function handleLoadFlatField(name: string, size: number, data: Float32Array) {
+  activeFlatField = {
+    name,
+    size,
+    data: new Float32Array(data.buffer.slice(0)),
+  };
+  return { loaded: true } as const;
+}
+
+function handleClearFlatField() {
+  activeFlatField = null;
+  return { cleared: true } as const;
+}
+
+function applyActiveFlatFieldIfNeeded(imageData: ImageData, enabled: boolean | undefined) {
+  if (!activeFlatField || !enabled) {
+    return;
+  }
+
+  applyFlatFieldCorrection(imageData.data, imageData.width, imageData.height, activeFlatField.data, activeFlatField.size);
+}
+
 async function handleDecode(payload: DecodeRequest) {
   if (payload.mime === 'image/x-raw-rgba') {
     if (!payload.rawDimensions) {
@@ -589,9 +674,12 @@ async function handleDecode(payload: DecodeRequest) {
       lastAccessedAt: Date.now(),
     });
 
+    const estimatedFlare = handleComputeFlare(payload.documentId);
+
     return {
       metadata,
       previewLevels: previewStore.map((preview) => preview.level),
+      estimatedFlare,
     } satisfies DecodedImage;
   }
 
@@ -671,9 +759,12 @@ async function handleDecode(payload: DecodeRequest) {
     lastAccessedAt: Date.now(),
   });
 
+  const estimatedFlare = handleComputeFlare(payload.documentId);
+
   return {
     metadata,
     previewLevels: previewStore.map((preview) => preview.level),
+    estimatedFlare,
   } satisfies DecodedImage;
 }
 
@@ -698,6 +789,8 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
         width: transformed.width,
         height: transformed.height,
         halo: 0,
+        comparisonMode: payload.comparisonMode,
+        flatFieldHandledInWorker: payload.flatFieldHandledInWorker ?? true,
       } satisfies StoredTileJob;
     },
   });
@@ -746,6 +839,9 @@ function handleReadTile(payload: ReadTileRequest) {
   const readWidth = payload.width + haloLeft + haloRight;
   const readHeight = payload.height + haloTop + haloBottom;
   const imageData = ctx.getImageData(readX, readY, readWidth, readHeight);
+  if (job.comparisonMode === 'processed' && job.flatFieldHandledInWorker !== false) {
+    applyActiveFlatFieldIfNeeded(imageData, true);
+  }
 
   if (isRecentlyCancelledJob(payload.jobId)) {
     throw createError('JOB_CANCELLED', 'The tile job was cancelled.');
@@ -782,6 +878,9 @@ function handleRender(payload: RenderRequest) {
   if (!ctx) throw new Error('Could not read rendered preview.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
+  if (payload.comparisonMode === 'processed') {
+    applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
+  }
   const histogram = payload.skipProcessing
     ? buildEmptyHistogram()
     : processImageData(
@@ -794,6 +893,9 @@ function handleRender(payload: RenderRequest) {
       payload.tonalCharacter,
       payload.inputProfileId ?? 'srgb',
       payload.outputProfileId ?? 'srgb',
+      payload.filmType ?? 'negative',
+      payload.flareFloor ?? null,
+      payload.lightSourceBias ?? [1, 1, 1],
     );
 
   if (!payload.skipProcessing) {
@@ -819,6 +921,7 @@ function handleSampleFilmBase(payload: SampleRequest) {
   const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not sample film base.');
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
+  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
   ctx.putImageData(imageData, 0, 0);
 
@@ -858,6 +961,7 @@ async function handleExport(payload: ExportRequest) {
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
+  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
 
   if (payload.skipProcessing) {
     return {
@@ -880,6 +984,9 @@ async function handleExport(payload: ExportRequest) {
     payload.tonalCharacter,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
+    payload.filmType ?? 'negative',
+    payload.flareFloor ?? null,
+    payload.lightSourceBias ?? [1, 1, 1],
   );
   ctx.putImageData(imageData, 0, 0);
 
@@ -931,6 +1038,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
     }
 
     const imageData = sourceContext.getImageData(0, 0, transformed.width, transformed.height);
+    applyActiveFlatFieldIfNeeded(imageData, settings.flatFieldEnabled);
     processImageData(
       imageData,
       settings,
@@ -941,6 +1049,9 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       profile.tonalCharacter,
       resolveStoredInputProfileId(document, colorManagement?.inputMode ?? 'auto', colorManagement?.inputProfileId ?? 'srgb'),
       payload.exportOptions.outputProfileId,
+      profile.filmType ?? 'negative',
+      payload.flareFloorPerCell?.[index] ?? null,
+      payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
     );
 
     const col = index % columns;
@@ -1014,6 +1125,18 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         return;
       case 'sample-film-base':
         reply(request, handleSampleFilmBase(request.payload));
+        return;
+      case 'detect-frame':
+        reply(request, handleDetectFrame(request.payload.documentId));
+        return;
+      case 'compute-flare':
+        reply(request, handleComputeFlare(request.payload.documentId));
+        return;
+      case 'load-flat-field':
+        reply(request, handleLoadFlatField(request.payload.name, request.payload.size, request.payload.data));
+        return;
+      case 'clear-flat-field':
+        reply(request, handleClearFlatField());
         return;
       case 'export':
         reply(request, await handleExport(request.payload));

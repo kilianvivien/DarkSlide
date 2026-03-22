@@ -6,6 +6,7 @@ import {
   ConversionSettings,
   DecodeRequest,
   DecodedImage,
+  DetectedFrame,
   ExportRequest,
   ExportResult,
   FilmBaseSample,
@@ -50,6 +51,12 @@ type CachedDecodeRequest = {
   workerEpoch: number;
   evictionTimeout: number | null;
 };
+
+type ActiveFlatFieldState = {
+  name: string;
+  size: number;
+  data: Float32Array;
+} | null;
 
 const MISSING_DOCUMENT_MESSAGE = 'The image document is no longer available.';
 const DECODE_CACHE_TTL_MS = 60_000;
@@ -186,6 +193,8 @@ export class ImageWorkerClient {
 
   private gpuDeviceLostNotified = false;
 
+  private activeFlatField: ActiveFlatFieldState = null;
+
   private backendMode: RenderBackendDiagnostics['backendMode'] = 'cpu-worker';
 
   private sourceKind: TileSourceKind | null = null;
@@ -269,6 +278,21 @@ export class ImageWorkerClient {
     worker.onmessageerror = () => {
       this.handleWorkerFailure(new FatalImageWorkerError('The image worker produced an unreadable message and was restarted.'));
     };
+
+    if (this.activeFlatField) {
+      const payload = {
+        name: this.activeFlatField.name,
+        size: this.activeFlatField.size,
+        data: new Float32Array(this.activeFlatField.data.buffer.slice(0)),
+      };
+      const id = `load-flat-field-${crypto.randomUUID()}`;
+      worker.postMessage({
+        id,
+        epoch: this.workerEpoch,
+        type: 'load-flat-field',
+        payload,
+      } as WorkerMessage, [payload.data.buffer]);
+    }
 
     return worker;
   }
@@ -526,6 +550,11 @@ export class ImageWorkerClient {
     this.gpuDisabledReason = null;
     this.lastGPUError = null;
     this.gpuDeviceLostNotified = false;
+    if (this.activeFlatField) {
+      this.gpuPipeline.loadFlatFieldTexture?.(this.activeFlatField.data, this.activeFlatField.size);
+    } else {
+      this.gpuPipeline.clearFlatFieldTexture?.();
+    }
     this.emitBackendDiagnosticsChange();
     return this.gpuPipeline;
   }
@@ -617,6 +646,9 @@ export class ImageWorkerClient {
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
+    filmType?: RenderRequest['filmType'],
+    flareFloor?: RenderRequest['flareFloor'],
+    lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
     const imageData = new ImageData(
       new Uint8ClampedArray(prepared.width * prepared.height * 4),
@@ -638,7 +670,7 @@ export class ImageWorkerClient {
       });
 
       const tileImage = useGPU && this.gpuPipeline
-        ? await this.gpuPipeline.processTile(rawTile, settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter, inputProfileId, outputProfileId)
+        ? await this.gpuPipeline.processTile(rawTile, settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter, inputProfileId, outputProfileId, filmType, flareFloor, lightSourceBias)
         : trimTileImageData(rawTile);
 
       blitTile(imageData.data, prepared.width, tile.x, tile.y, tileImage);
@@ -663,6 +695,9 @@ export class ImageWorkerClient {
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
+    filmType?: RenderRequest['filmType'],
+    flareFloor?: RenderRequest['flareFloor'],
+    lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
     const rawPreview = await this.readTile({
       documentId: prepared.documentId,
@@ -684,6 +719,9 @@ export class ImageWorkerClient {
         tonalCharacter,
         inputProfileId,
         outputProfileId,
+        filmType,
+        flareFloor,
+        lightSourceBias,
       )
       : trimTileImageData(rawPreview);
 
@@ -936,6 +974,7 @@ export class ImageWorkerClient {
         sourceKind: 'preview',
         settings: payload.settings,
         comparisonMode: payload.comparisonMode,
+        flatFieldHandledInWorker: false,
         targetMaxDimension: payload.targetMaxDimension,
       });
 
@@ -950,6 +989,9 @@ export class ImageWorkerClient {
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
+        payload.filmType,
+        payload.flareFloor,
+        payload.lightSourceBias,
       );
       await this.cancelTileJob(payload.documentId, jobId);
       if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
@@ -1090,6 +1132,47 @@ export class ImageWorkerClient {
     );
   }
 
+  async detectFrame(documentId: string) {
+    await this.ensureDocumentLoaded(documentId);
+    return this.requestWithDocumentRecovery<DetectedFrame | null>(
+      documentId,
+      () => this.request<DetectedFrame | null>('detect-frame', { documentId }),
+      true,
+    );
+  }
+
+  async computeFlare(documentId: string) {
+    await this.ensureDocumentLoaded(documentId);
+    return this.requestWithDocumentRecovery<[number, number, number]>(
+      documentId,
+      () => this.request<[number, number, number]>('compute-flare', { documentId }),
+      true,
+    );
+  }
+
+  async loadFlatField(name: string, data: Float32Array, size: number) {
+    this.activeFlatField = {
+      name,
+      size,
+      data: new Float32Array(data.buffer.slice(0)),
+    };
+    const payload = {
+      name,
+      size,
+      data: new Float32Array(data.buffer.slice(0)),
+    };
+    const result = await this.request<{ loaded: true }>('load-flat-field', payload, [payload.data.buffer]);
+    this.gpuPipeline?.loadFlatFieldTexture?.(this.activeFlatField.data, this.activeFlatField.size);
+    return result;
+  }
+
+  async clearFlatField() {
+    this.activeFlatField = null;
+    const result = await this.request<{ cleared: true }>('clear-flat-field', {});
+    this.gpuPipeline?.clearFlatFieldTexture?.();
+    return result;
+  }
+
   async export(payload: ExportRequest) {
     await this.ensureDocumentLoaded(payload.documentId);
     const result = await this.exportInternal(payload, true);
@@ -1151,6 +1234,7 @@ export class ImageWorkerClient {
         sourceKind: 'source',
         settings: payload.settings,
         comparisonMode: 'processed',
+        flatFieldHandledInWorker: false,
       });
       const assembled = await this.assembleTileJob(
         prepared,
@@ -1162,6 +1246,9 @@ export class ImageWorkerClient {
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
+        payload.filmType,
+        payload.flareFloor,
+        payload.lightSourceBias,
       );
       await this.cancelTileJob(payload.documentId, jobId);
 

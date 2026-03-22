@@ -16,6 +16,20 @@ export interface BatchJobEntry {
   status: 'pending' | 'processing' | 'done' | 'error';
   errorMessage?: string;
   progress?: number;
+  detectedFrame?: {
+    top: number;
+    left: number;
+    bottom: number;
+    right: number;
+    angle: number;
+    confidence: number;
+  } | null;
+  estimatedFlare?: [number, number, number] | null;
+}
+
+export interface BatchRunOptions {
+  autoCrop?: boolean;
+  flareMode?: 'per-image' | 'first-frame';
 }
 
 function applyNamingTemplate(filename: string, template: string, sequence: number, format: ExportOptions['format']) {
@@ -55,7 +69,10 @@ export async function* runBatch(
   exportOptions: ExportOptions,
   outputPath: string | null,
   cancelToken: { cancelled: boolean },
+  options: BatchRunOptions = {},
 ): AsyncGenerator<BatchProgressEvent> {
+  let rollFlare: [number, number, number] | null = null;
+
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     if (cancelToken.cancelled) {
@@ -88,6 +105,7 @@ export async function* runBatch(
 
           const decoded = await workerClient.decode(decodeRequest);
           sourceMetadata = decoded.metadata;
+          entry.estimatedFlare = decoded.estimatedFlare;
         } else {
           if (!entry.file) {
             throw new Error(`Missing file for batch entry "${entry.filename}".`);
@@ -104,20 +122,54 @@ export async function* runBatch(
             size: entry.file.size,
           });
           sourceMetadata = decoded.metadata;
+          entry.estimatedFlare = decoded.estimatedFlare;
         }
       } else {
         yield { type: 'progress', entryId: entry.id, progress: 0.35 };
       }
 
+      if (options.autoCrop !== false) {
+        entry.detectedFrame = typeof workerClient.detectFrame === 'function'
+          ? await workerClient.detectFrame(documentId).catch(() => null)
+          : null;
+      }
+
+      if (!entry.estimatedFlare) {
+        entry.estimatedFlare = typeof workerClient.computeFlare === 'function'
+          ? await workerClient.computeFlare(documentId).catch(() => null)
+          : null;
+      }
+
       yield { type: 'progress', entryId: entry.id, progress: 0.55 };
+
+      const entrySettings = structuredClone(sharedSettings);
+      if (entry.detectedFrame && options.autoCrop !== false) {
+        entrySettings.crop = {
+          x: entry.detectedFrame.left,
+          y: entry.detectedFrame.top,
+          width: entry.detectedFrame.right - entry.detectedFrame.left,
+          height: entry.detectedFrame.bottom - entry.detectedFrame.top,
+          aspectRatio: null,
+        };
+        entrySettings.levelAngle = entry.detectedFrame.angle;
+      }
+
+      const flareFloor = options.flareMode === 'first-frame'
+        ? (rollFlare ?? entry.estimatedFlare ?? null)
+        : (entry.estimatedFlare ?? null);
+      if (options.flareMode === 'first-frame' && !rollFlare && flareFloor) {
+        rollFlare = flareFloor;
+      }
 
       const result = await workerClient.export({
         documentId,
-        settings: sharedSettings,
+        settings: entrySettings,
         isColor: sharedProfile.type === 'color' && !sharedSettings.blackAndWhite.enabled,
+        filmType: sharedProfile.filmType,
         inputProfileId: resolveBatchInputProfileId(sourceMetadata, sharedColorManagement),
         outputProfileId: exportOptions.outputProfileId,
         options: exportOptions,
+        flareFloor,
         maskTuning: sharedProfile.maskTuning,
         colorMatrix: sharedProfile.colorMatrix,
         tonalCharacter: sharedProfile.tonalCharacter,

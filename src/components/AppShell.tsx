@@ -6,6 +6,7 @@ import {
   Download,
   ExternalLink,
   FileWarning,
+  Grid3x3,
   Image as ImageIcon,
   Loader2,
   PanelLeft,
@@ -45,6 +46,7 @@ import {
   CropTab,
   DocumentTab,
   FilmProfile,
+  LightSourceProfile,
   NotificationSettings,
   RenderBackendDiagnostics,
   ScannerType,
@@ -70,6 +72,7 @@ type AppShellProps = {
   fallbackProfile: FilmProfile;
   activeProfile: FilmProfile;
   builtinProfiles: FilmProfile[];
+  lightSourceProfiles: LightSourceProfile[];
   customPresets: FilmProfile[];
   savePresetTags: string[];
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'export';
@@ -101,6 +104,11 @@ type AppShellProps = {
   ultraSmoothDragEnabled: boolean;
   notificationSettings: NotificationSettings;
   renderBackendDiagnostics: RenderBackendDiagnostics;
+  defaultLightSourceId: string;
+  flatFieldProfileNames: string[];
+  activeFlatFieldProfileName: string | null;
+  activeFlatFieldLoaded: boolean;
+  activeFlatFieldPreview: { data: Float32Array; size: number } | null;
   maxResidentDocs: MaxResidentDocs;
   externalEditorPath: string | null;
   externalEditorName: string | null;
@@ -156,19 +164,33 @@ type AppShellProps = {
   onSidebarScrollTopChange: (scrollTop: number) => void;
   onSidebarTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'export') => void;
   onCropTabChange: (tab: CropTab) => void;
+  onRedetectFrame: () => void;
   onCropDone: () => void;
   onResetCrop: () => void;
   onSetActivePointPicker: React.Dispatch<React.SetStateAction<'black' | 'white' | 'grey' | null>>;
   onOpenSettingsModal: () => void;
+  onLightSourceChange: (lightSourceId: string | null) => void;
   onProfileChange: (profile: FilmProfile) => void;
   onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => void;
   onImportPreset: (profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => void;
   onDeletePreset: (id: string) => void;
+  onSaveCustomLightSource: (profile: {
+    id?: string | null;
+    name: string;
+    colorTemperature: number;
+    spectralBias: [number, number, number];
+    flareCharacteristic: LightSourceProfile['flareCharacteristic'];
+  }) => Promise<LightSourceProfile>;
   onCopyDebugInfo: () => Promise<void>;
   onToggleGPURendering: (enabled: boolean) => void;
   onToggleUltraSmoothDrag: (enabled: boolean) => void;
   onMaxResidentDocsChange: (value: MaxResidentDocs) => void;
   onNotificationSettingsChange: (options: Partial<NotificationSettings>) => void;
+  onDefaultLightSourceChange: (lightSourceId: string) => void;
+  onSelectFlatFieldProfile: (name: string | null) => Promise<void>;
+  onImportFlatFieldReference: (file: File) => Promise<string>;
+  onDeleteFlatFieldProfile: (name: string) => Promise<void>;
+  onRenameFlatFieldProfile: (currentName: string, nextName: string) => Promise<string>;
   onChooseExternalEditor: () => Promise<void>;
   onClearExternalEditor: () => void;
   onChooseOpenInEditorOutputPath: () => Promise<void>;
@@ -207,6 +229,7 @@ export function AppShell({
   fallbackProfile,
   activeProfile,
   builtinProfiles,
+  lightSourceProfiles,
   customPresets,
   savePresetTags,
   sidebarTab,
@@ -238,6 +261,11 @@ export function AppShell({
   ultraSmoothDragEnabled,
   notificationSettings,
   renderBackendDiagnostics,
+  defaultLightSourceId,
+  flatFieldProfileNames,
+  activeFlatFieldProfileName,
+  activeFlatFieldLoaded,
+  activeFlatFieldPreview,
   maxResidentDocs,
   externalEditorPath,
   externalEditorName,
@@ -288,19 +316,27 @@ export function AppShell({
   onSidebarScrollTopChange,
   onSidebarTabChange,
   onCropTabChange,
+  onRedetectFrame,
   onCropDone,
   onResetCrop,
   onSetActivePointPicker,
   onOpenSettingsModal,
+  onLightSourceChange,
   onProfileChange,
   onSavePreset,
   onImportPreset,
   onDeletePreset,
+  onSaveCustomLightSource,
   onCopyDebugInfo,
   onToggleGPURendering,
   onToggleUltraSmoothDrag,
   onMaxResidentDocsChange,
   onNotificationSettingsChange,
+  onDefaultLightSourceChange,
+  onSelectFlatFieldProfile,
+  onImportFlatFieldReference,
+  onDeleteFlatFieldProfile,
+  onRenameFlatFieldProfile,
   onChooseExternalEditor,
   onClearExternalEditor,
   onChooseOpenInEditorOutputPath,
@@ -406,6 +442,11 @@ export function AppShell({
                   onInteractionStart={onInteractionStart}
                   onInteractionEnd={onInteractionEnd}
                   activeProfile={documentState ? activeProfile : null}
+                  estimatedFlare={documentState?.estimatedFlare ?? null}
+                  lightSourceId={documentState?.lightSourceId ?? null}
+                  cropSource={documentState?.cropSource ?? null}
+                  lightSourceProfiles={lightSourceProfiles}
+                  hasActiveFlatFieldProfile={activeFlatFieldLoaded}
                   histogramData={documentState?.histogram ?? null}
                   isPickingFilmBase={isPickingFilmBase}
                   onTogglePicker={onToggleFilmBasePicker}
@@ -418,11 +459,14 @@ export function AppShell({
                   onTabChange={onSidebarTabChange}
                   cropTab={cropTab}
                   onCropTabChange={onCropTabChange}
+                  onRedetectFrame={onRedetectFrame}
                   onCropDone={onCropDone}
                   onResetCrop={onResetCrop}
                   activePointPicker={activePointPicker}
                   onSetPointPicker={onSetActivePointPicker}
                   onOpenSettings={onOpenSettingsModal}
+                  onLightSourceChange={onLightSourceChange}
+                  onSaveCustomLightSource={onSaveCustomLightSource}
                 />
               </ErrorBoundary>
             </motion.div>
@@ -725,6 +769,14 @@ export function AppShell({
                           {documentState.source.width.toLocaleString()} × {documentState.source.height.toLocaleString()} px
                         </span>
                       </div>
+                      {documentState.settings.flatFieldEnabled && activeFlatFieldLoaded && (
+                        <div className="flex items-center gap-2 rounded-2xl border border-emerald-900/60 bg-emerald-950/35 px-3 py-2 shadow-2xl backdrop-blur-md">
+                          <Grid3x3 size={14} className="text-emerald-300" />
+                          <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-200">
+                            {activeFlatFieldProfileName ? `Flat-field · ${activeFlatFieldProfileName}` : 'Flat-field active'}
+                          </span>
+                        </div>
+                      )}
                       </div>
 
                       <div className="flex flex-wrap items-center justify-end gap-3">
@@ -860,6 +912,17 @@ export function AppShell({
           colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
           sourceMetadata={documentState?.source ?? null}
           onColorManagementChange={onColorManagementChange}
+          lightSourceProfiles={lightSourceProfiles}
+          defaultLightSourceId={defaultLightSourceId}
+          onDefaultLightSourceChange={onDefaultLightSourceChange}
+          flatFieldProfileNames={flatFieldProfileNames}
+          activeFlatFieldProfileName={activeFlatFieldProfileName}
+          activeFlatFieldLoaded={activeFlatFieldLoaded}
+          activeFlatFieldPreview={activeFlatFieldPreview}
+          onSelectFlatFieldProfile={onSelectFlatFieldProfile}
+          onImportFlatFieldReference={onImportFlatFieldReference}
+          onDeleteFlatFieldProfile={onDeleteFlatFieldProfile}
+          onRenameFlatFieldProfile={onRenameFlatFieldProfile}
           exportOptions={documentState?.exportOptions ?? DEFAULT_EXPORT_OPTIONS}
           onExportOptionsChange={onExportOptionsChange}
           externalEditorPath={externalEditorPath}

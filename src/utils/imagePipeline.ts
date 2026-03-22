@@ -6,6 +6,7 @@ import {
   CropSettings,
   ExportFormat,
   FilmBaseSample,
+  FilmProfileType,
   HistogramData,
   MaskTuning,
   PreviewLevel,
@@ -247,6 +248,14 @@ function applyFilmBaseCompensation(value: number, sampleValue: number) {
   return clamp((value - invertedFilmBase) / Math.max(1 / 255, 1 - invertedFilmBase), 0, 1);
 }
 
+function applyFlareCorrection(value: number, floor: number, strength: number) {
+  return Math.max(0, value - floor * strength);
+}
+
+function applyLightSourceCorrection(value: number, bias: number) {
+  return clamp(value / Math.max(bias, 0.05), 0, 1);
+}
+
 function mixBlackAndWhiteChannels(r: number, g: number, b: number, redMix: number, greenMix: number, blueMix: number) {
   const baseGray = LUMA_R * r + LUMA_G * g + LUMA_B * b;
   return clamp(
@@ -298,16 +307,23 @@ export function buildProcessingUniforms(
   tonalCharacter?: TonalCharacter,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
+  filmType: FilmProfileType = 'negative',
+  flareFloor: [number, number, number] | null = null,
+  lightSourceBias: [number, number, number] = [1, 1, 1],
 ) {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
+  const flareCorrection = effectiveSettings.flareCorrection ?? 50;
+  const normalizedFlareFloor: [number, number, number] = flareFloor
+    ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
+    : [0, 0, 0];
 
   return new Float32Array([
     comparisonMode === 'processed' ? 1 : 0,
     isColor ? 1 : 0,
     effectiveSettings.blackAndWhite.enabled ? 1 : 0,
-    0,
+    filmType === 'slide' ? 1 : 0,
 
     Math.pow(2, effectiveSettings.exposure / 50),
     (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast)),
@@ -338,10 +354,11 @@ export function buildProcessingUniforms(
     effectiveSettings.blackAndWhite.greenMix / 100,
     effectiveSettings.blackAndWhite.blueMix / 100,
     effectiveSettings.blackAndWhite.tone / 100,
-    0,
-    0,
-    0,
-    0,
+
+    normalizedFlareFloor[0],
+    normalizedFlareFloor[1],
+    normalizedFlareFloor[2],
+    flareCorrection / 100,
 
     colorMatrix?.[0] ?? 1,
     colorMatrix?.[1] ?? 0,
@@ -377,6 +394,11 @@ export function buildProcessingUniforms(
     profileTransform[7],
     profileTransform[8],
     0,
+
+    lightSourceBias[0],
+    lightSourceBias[1],
+    lightSourceBias[2],
+    settings.flatFieldEnabled ? 1 : 0,
   ]);
 }
 
@@ -527,6 +549,9 @@ export function processImageData(
   tonalCharacter?: TonalCharacter,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
+  filmType: FilmProfileType = 'negative',
+  flareFloor: [number, number, number] | null = null,
+  lightSourceBias: [number, number, number] = [1, 1, 1],
 ): HistogramData {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
 
@@ -548,6 +573,10 @@ export function processImageData(
   const temperatureShift = effectiveSettings.temperature / 255;
   const tintShift = effectiveSettings.tint / 255;
   const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
+  const flareStrength = (effectiveSettings.flareCorrection ?? 50) / 100;
+  const flareFloorNormalized: [number, number, number] = flareFloor
+    ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
+    : [0, 0, 0];
 
   for (let index = 0; index < 256; index += 1) {
     fusedR[index] = lutR[lutRGB[index]] / 255;
@@ -563,9 +592,19 @@ export function processImageData(
     [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
 
     if (comparisonMode === 'processed') {
-      r = 1 - r;
-      g = 1 - g;
-      b = 1 - b;
+      r = applyFlareCorrection(r, flareFloorNormalized[0], flareStrength);
+      g = applyFlareCorrection(g, flareFloorNormalized[1], flareStrength);
+      b = applyFlareCorrection(b, flareFloorNormalized[2], flareStrength);
+
+      r = applyLightSourceCorrection(r, lightSourceBias[0]);
+      g = applyLightSourceCorrection(g, lightSourceBias[1]);
+      b = applyLightSourceCorrection(b, lightSourceBias[2]);
+
+      if (filmType !== 'slide') {
+        r = 1 - r;
+        g = 1 - g;
+        b = 1 - b;
+      }
 
       r = applyFilmBaseCompensation(r, filmBaseBalance.red);
       g = applyFilmBaseCompensation(g, filmBaseBalance.green);

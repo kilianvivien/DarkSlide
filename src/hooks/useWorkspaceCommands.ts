@@ -28,6 +28,7 @@ import {
   CropTab,
   DocumentTab,
   FilmProfile,
+  LightSourceProfile,
   NotificationSettings,
   RenderBackendDiagnostics,
   ScannerType,
@@ -62,6 +63,8 @@ type UseWorkspaceCommandsOptions = {
   isPickingFilmBase: boolean;
   activePointPicker: 'black' | 'white' | 'grey' | null;
   usesNativeFileDialogs: boolean;
+  lightSourceProfiles: LightSourceProfile[];
+  defaultFlatFieldEnabled?: boolean;
   displayScaleFactor: number;
   persistedProfilesRef: MutableRefObject<FilmProfile[]>;
   prefsSnapshotRef: MutableRefObject<UserPreferences>;
@@ -163,6 +166,8 @@ export function useWorkspaceCommands({
   notificationSettings,
   renderBackendDiagnostics,
   usesNativeFileDialogs,
+  lightSourceProfiles,
+  defaultFlatFieldEnabled = false,
   displayScaleFactor,
   persistedProfilesRef,
   prefsSnapshotRef,
@@ -237,6 +242,23 @@ export function useWorkspaceCommands({
   isPickingFilmBase,
   activePointPicker,
 }: UseWorkspaceCommandsOptions) {
+  const getLightSourceProfile = useCallback((lightSourceId: string | null) => (
+    lightSourceProfiles.find((profile) => profile.id === (lightSourceId ?? 'auto'))
+      ?? lightSourceProfiles[0]
+  ), [lightSourceProfiles]);
+
+  const getDefaultFlareStrength = useCallback((lightSourceId: string | null) => {
+    const profile = getLightSourceProfile(lightSourceId);
+    switch (profile.flareCharacteristic) {
+      case 'low':
+        return 30;
+      case 'high':
+        return 70;
+      default:
+        return 50;
+    }
+  }, [getLightSourceProfile]);
+
   const clearCanvas = useCallback(() => {
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
@@ -294,6 +316,7 @@ export function useWorkspaceCommands({
     activeDocumentIdRef,
     persistedProfilesRef,
     fallbackProfile,
+    defaultFlatFieldEnabled,
     displayScaleFactor,
     tabsApi: {
       openDocument,
@@ -321,6 +344,7 @@ export function useWorkspaceCommands({
         ...current.settings,
         ...newSettings,
       },
+      cropSource: (newSettings.crop || newSettings.levelAngle !== undefined) ? 'manual' : current.cropSource,
       dirty: true,
     }));
   }, [updateDocument]);
@@ -708,6 +732,8 @@ export function useWorkspaceCommands({
       version: 1,
       name,
       type: activeProfile.type,
+      filmType: activeProfile.filmType,
+      category: activeProfile.category,
       description: 'Custom DarkSlide preset',
       defaultSettings: structuredClone(documentState.settings),
       isCustom: true,
@@ -726,6 +752,8 @@ export function useWorkspaceCommands({
     importPreset({
       ...profile,
       version: profile.version ?? 1,
+      filmType: profile.filmType ?? 'negative',
+      category: profile.category ?? 'Generic',
       description: profile.description || 'Imported DarkSlide preset',
       tags: profile.tags?.length ? profile.tags : [profile.type],
       filmStock: profile.filmStock ?? null,
@@ -760,14 +788,18 @@ export function useWorkspaceCommands({
         await primeExportNotificationsPermission();
       }
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
+      const lightSourceBias = getLightSourceProfile(documentState.lightSourceId).spectralBias;
       const result = await worker.export({
         documentId: documentState.id,
         settings: documentState.settings,
         isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+        filmType: activeProfile.filmType,
         inputProfileId,
         outputProfileId: documentState.exportOptions.outputProfileId,
         options: documentState.exportOptions,
         sourceExif: documentState.source.exif,
+        flareFloor: documentState.estimatedFlare,
+        lightSourceBias,
         maskTuning: activeProfile.maskTuning,
         colorMatrix: activeProfile.colorMatrix,
         tonalCharacter: activeProfile.tonalCharacter,
@@ -796,7 +828,7 @@ export function useWorkspaceCommands({
       }, 3000);
       void refreshRenderBackendDiagnostics();
     }
-  }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, workerClientRef]);
+  }, [activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, workerClientRef]);
 
   const handleExportClick = useCallback(() => {
     void handleDownload();
@@ -809,14 +841,18 @@ export function useWorkspaceCommands({
     setDocumentState((current) => current ? { ...current, status: 'exporting' } : current);
     try {
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
+      const lightSourceBias = getLightSourceProfile(documentState.lightSourceId).spectralBias;
       const result = await worker.export({
         documentId: documentState.id,
         settings: documentState.settings,
         isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+        filmType: activeProfile.filmType,
         inputProfileId,
         outputProfileId: documentState.exportOptions.outputProfileId,
         options: documentState.exportOptions,
         sourceExif: documentState.source.exif,
+        flareFloor: documentState.estimatedFlare,
+        lightSourceBias,
         maskTuning: activeProfile.maskTuning,
         colorMatrix: activeProfile.colorMatrix,
         tonalCharacter: activeProfile.tonalCharacter,
@@ -855,7 +891,68 @@ export function useWorkspaceCommands({
       setError(`Open in editor failed. ${message}`);
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'OPEN_IN_EDITOR_FAILED' } : current);
     }
-  }, [activeProfile.colorMatrix, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
+
+  const handleLightSourceChange = useCallback((lightSourceId: string | null) => {
+    updateDocument((current) => {
+      const previousDefault = getDefaultFlareStrength(current.lightSourceId);
+      const nextDefault = getDefaultFlareStrength(lightSourceId);
+      const shouldUpdateFlare = current.settings.flareCorrection === previousDefault;
+
+      return {
+        ...current,
+        lightSourceId,
+        settings: shouldUpdateFlare
+          ? { ...current.settings, flareCorrection: nextDefault }
+          : current.settings,
+        dirty: true,
+      };
+    });
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('darkslide_default_light_source', lightSourceId ?? 'auto');
+    }
+  }, [getDefaultFlareStrength, updateDocument]);
+
+  const handleRedetectFrame = useCallback(async () => {
+    const worker = workerClientRef.current;
+    if (!worker || !documentState) {
+      return;
+    }
+
+    try {
+      if (typeof worker.detectFrame !== 'function') {
+        showTransientNotice('Frame detection is unavailable in this build.');
+        return;
+      }
+
+      const detected = await worker.detectFrame(documentState.id);
+      if (!detected) {
+        showTransientNotice('Auto-crop skipped. Manual crop is still available.');
+        return;
+      }
+
+      updateDocument((current) => ({
+        ...current,
+        settings: {
+          ...current.settings,
+          crop: {
+            x: detected.left,
+            y: detected.top,
+            width: detected.right - detected.left,
+            height: detected.bottom - detected.top,
+            aspectRatio: null,
+          },
+          levelAngle: detected.angle,
+        },
+        cropSource: 'auto',
+        dirty: true,
+      }));
+      showTransientNotice('Frame detected and crop applied.', 'success');
+    } catch (error) {
+      setError(formatError(error));
+    }
+  }, [documentState, formatError, setError, showTransientNotice, updateDocument, workerClientRef]);
 
   const handleChooseExternalEditor = useCallback(async () => {
     const result = await chooseApplicationPath();
@@ -1066,6 +1163,8 @@ export function useWorkspaceCommands({
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
     handleProfileChange,
+    handleLightSourceChange,
+    handleRedetectFrame,
     handleSavePreset,
     handleImportPreset,
     handleDeletePreset,

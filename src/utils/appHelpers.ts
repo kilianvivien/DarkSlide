@@ -168,6 +168,7 @@ export type QueuedPreviewRender = {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  filmType?: 'negative' | 'slide';
   comparisonMode: 'processed' | 'original';
   targetMaxDimension: number;
   previewMode: 'draft' | 'settled';
@@ -176,6 +177,8 @@ export type QueuedPreviewRender = {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  flareFloor?: [number, number, number] | null;
+  lightSourceBias?: [number, number, number];
 };
 
 export type BlockingOverlayState = {

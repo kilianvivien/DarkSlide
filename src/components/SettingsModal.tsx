@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ExportOptions, NotificationSettings, RenderBackendDiagnostics, SourceMetadata } from '../types';
+import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, ImagePlus, Pencil, Trash2 } from 'lucide-react';
+import { ColorManagementSettings, ColorProfileId, ExportOptions, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -25,6 +25,17 @@ interface SettingsModalProps {
   colorManagement: ColorManagementSettings;
   sourceMetadata: SourceMetadata | null;
   onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
+  lightSourceProfiles: LightSourceProfile[];
+  defaultLightSourceId: string;
+  onDefaultLightSourceChange: (lightSourceId: string) => void;
+  flatFieldProfileNames: string[];
+  activeFlatFieldProfileName: string | null;
+  activeFlatFieldLoaded: boolean;
+  activeFlatFieldPreview: { data: Float32Array; size: number } | null;
+  onSelectFlatFieldProfile: (name: string | null) => Promise<void>;
+  onImportFlatFieldReference: (file: File) => Promise<string>;
+  onDeleteFlatFieldProfile: (name: string) => Promise<void>;
+  onRenameFlatFieldProfile: (currentName: string, nextName: string) => Promise<string>;
   exportOptions: ExportOptions;
   onExportOptionsChange: (options: Partial<ExportOptions>) => void;
   externalEditorPath: string | null;
@@ -66,10 +77,67 @@ const TABS = [
   { id: 'export' as const, label: 'Export', icon: Download, disabled: false },
   { id: 'notifications' as const, label: 'Notifications', icon: Bell, disabled: false },
   { id: 'color' as const, label: 'Color', icon: Palette, disabled: false },
+  { id: 'calibration' as const, label: 'Calibration', icon: Grid3x3, disabled: false },
   { id: 'shortcuts' as const, label: 'Shortcuts', icon: Keyboard, disabled: false },
   { id: 'diagnostics' as const, label: 'Diagnostics', icon: Activity, disabled: false },
   { id: 'update' as const, label: 'Update', icon: RefreshCw, disabled: true },
 ];
+
+function FlatFieldPreview({
+  preview,
+}: {
+  preview: { data: Float32Array; size: number } | null;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    const size = 128;
+    canvas.width = size;
+    canvas.height = size;
+
+    if (!preview) {
+      context.clearRect(0, 0, size, size);
+      return;
+    }
+
+    const image = context.createImageData(size, size);
+    const { data, size: sourceSize } = preview;
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const sourceX = Math.min(sourceSize - 1, Math.round((x / Math.max(1, size - 1)) * (sourceSize - 1)));
+        const sourceY = Math.min(sourceSize - 1, Math.round((y / Math.max(1, size - 1)) * (sourceSize - 1)));
+        const sourceOffset = (sourceY * sourceSize + sourceX) * 3;
+        const average = (data[sourceOffset] + data[sourceOffset + 1] + data[sourceOffset + 2]) / 3;
+        const value = Math.max(0, Math.min(255, Math.round(Math.sqrt(average) * 255)));
+        const targetOffset = (y * size + x) * 4;
+        image.data[targetOffset] = value;
+        image.data[targetOffset + 1] = value;
+        image.data[targetOffset + 2] = value;
+        image.data[targetOffset + 3] = 255;
+      }
+    }
+
+    context.putImageData(image, 0, 0);
+  }, [preview]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="h-32 w-32 rounded-xl border border-zinc-800 bg-zinc-950 shadow-inner"
+      aria-label="Flat-field preview"
+    />
+  );
+}
 
 function getRenderBackendLabel(diagnostics: RenderBackendDiagnostics) {
   if (!diagnostics.gpuAvailable) {
@@ -222,6 +290,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   colorManagement,
   sourceMetadata,
   onColorManagementChange,
+  lightSourceProfiles,
+  defaultLightSourceId,
+  onDefaultLightSourceChange,
+  flatFieldProfileNames,
+  activeFlatFieldProfileName,
+  activeFlatFieldLoaded,
+  activeFlatFieldPreview,
+  onSelectFlatFieldProfile,
+  onImportFlatFieldReference,
+  onDeleteFlatFieldProfile,
+  onRenameFlatFieldProfile,
   exportOptions,
   onExportOptionsChange,
   externalEditorPath,
@@ -232,9 +311,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChooseOpenInEditorOutputPath,
   onUseDownloadsForOpenInEditor,
 }) => {
-  const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'shortcuts' | 'diagnostics'>('performance');
+  const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'calibration' | 'shortcuts' | 'diagnostics'>('performance');
   const [copied, setCopied] = useState(false);
+  const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+  const calibrationInputRef = useRef<HTMLInputElement>(null);
 
   useFocusTrap(modalRef, isOpen);
 
@@ -273,6 +354,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const qualityPct = Math.round(exportOptions.quality * 100);
   const showQuality = exportOptions.format !== 'image/png';
 
+  const handleCalibrationSelect = async (value: string) => {
+    try {
+      await onSelectFlatFieldProfile(value || null);
+      setCalibrationError(null);
+    } catch (error) {
+      setCalibrationError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleCalibrationImport = async (file: File) => {
+    try {
+      await onImportFlatFieldReference(file);
+      setCalibrationError(null);
+    } catch (error) {
+      setCalibrationError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleCalibrationDelete = async () => {
+    if (!activeFlatFieldProfileName || !window.confirm(`Delete "${activeFlatFieldProfileName}"?`)) {
+      return;
+    }
+
+    try {
+      await onDeleteFlatFieldProfile(activeFlatFieldProfileName);
+      setCalibrationError(null);
+    } catch (error) {
+      setCalibrationError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleCalibrationRename = async () => {
+    if (!activeFlatFieldProfileName) {
+      return;
+    }
+
+    const nextName = window.prompt('Rename flat-field profile', activeFlatFieldProfileName);
+    if (!nextName) {
+      return;
+    }
+
+    try {
+      await onRenameFlatFieldProfile(activeFlatFieldProfileName, nextName);
+      setCalibrationError(null);
+    } catch (error) {
+      setCalibrationError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -302,6 +432,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="pointer-events-auto w-[min(720px,calc(100vw-2rem))] h-[min(580px,82vh)] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/60 flex flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
+              <input
+                ref={calibrationInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) {
+                    void handleCalibrationImport(file);
+                  }
+                }}
+              />
+
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 shrink-0">
                 <h2 className="text-[13px] font-semibold text-zinc-400 tracking-tight">Settings</h2>
@@ -653,6 +797,107 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             <p className={`text-[11px] leading-relaxed ${sourceMetadata?.unsupportedColorProfileName ? 'text-amber-300' : 'text-zinc-500'}`}>
                               {colorManagementHelper}
                             </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Calibration ── */}
+                    {tab === 'calibration' && (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Default Light Source</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              New imports start with this light source selected. You can still override it per image in the sidebar.
+                            </p>
+                          </div>
+
+                          <select
+                            value={defaultLightSourceId}
+                            onChange={(event) => onDefaultLightSourceChange(event.target.value)}
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
+                          >
+                            {lightSourceProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>{profile.name}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Flat-Field Profiles</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              Import a clean light-source reference to correct vignetting and uneven illumination in camera scans.
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <select
+                              value={activeFlatFieldProfileName ?? ''}
+                              onChange={(event) => { void handleCalibrationSelect(event.target.value); }}
+                              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
+                            >
+                              <option value="">No active profile</option>
+                              {flatFieldProfileNames.map((name) => (
+                                <option key={name} value={name}>{name}</option>
+                              ))}
+                            </select>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => calibrationInputRef.current?.click()}
+                                className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 transition-all hover:bg-zinc-900"
+                              >
+                                <ImagePlus size={13} className="text-zinc-500" />
+                                Import reference image...
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => { void handleCalibrationRename(); }}
+                                disabled={!activeFlatFieldProfileName}
+                                className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-300 transition-all hover:bg-zinc-900 disabled:opacity-40"
+                              >
+                                <Pencil size={13} className="text-zinc-500" />
+                                Rename
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => { void handleCalibrationDelete(); }}
+                                disabled={!activeFlatFieldProfileName}
+                                className="flex items-center gap-2 rounded-lg border border-red-950/80 bg-zinc-950 px-3 py-2 text-[13px] text-red-300 transition-all hover:bg-red-950/30 disabled:opacity-40"
+                              >
+                                <Trash2 size={13} />
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2">
+                            <p className="text-[11px] text-zinc-400">
+                              {activeFlatFieldProfileName
+                                ? (activeFlatFieldLoaded
+                                  ? `Active in the worker: ${activeFlatFieldProfileName}`
+                                  : `Saved profile selected: ${activeFlatFieldProfileName}`)
+                                : 'No flat-field profile is active.'}
+                            </p>
+                          </div>
+
+                          {calibrationError && (
+                            <p className="text-[11px] text-red-300">{calibrationError}</p>
+                          )}
+                        </div>
+
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <p className="text-[13px] font-semibold text-zinc-100">Active Profile Preview</p>
+                              <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                                A quick heatmap-style preview of the stored reference so you can sanity-check that the capture is evenly lit.
+                              </p>
+                            </div>
+                            <FlatFieldPreview preview={activeFlatFieldPreview} />
                           </div>
                         </div>
                       </div>

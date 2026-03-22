@@ -233,4 +233,55 @@ describe('PresetsPane', () => {
 
     expect(screen.getByText('Kodak Gold 200 · Smartphone · Color · Non-RAW')).toBeInTheDocument();
   });
+
+  it('groups built-in stocks by category and labels slide profiles', () => {
+    render(
+      <PresetsPane
+        activeStockId="fuji-provia"
+        onStockChange={vi.fn()}
+        builtinProfiles={[
+          {
+            id: 'generic-color',
+            version: 1,
+            name: 'Generic Color Negative',
+            type: 'color',
+            description: 'Generic',
+            defaultSettings: createDefaultSettings(),
+            filmType: 'negative',
+            category: 'Generic',
+          },
+          {
+            id: 'kodak-gold',
+            version: 1,
+            name: 'Kodak Gold 200',
+            type: 'color',
+            description: 'Kodak',
+            defaultSettings: createDefaultSettings(),
+            filmType: 'negative',
+            category: 'Kodak',
+          },
+          {
+            id: 'fuji-provia',
+            version: 1,
+            name: 'Fuji Provia 100F',
+            type: 'color',
+            description: 'Fuji slide',
+            defaultSettings: createDefaultSettings(),
+            filmType: 'slide',
+            category: 'Fuji',
+          },
+        ]}
+        customPresets={[]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Kodak')).toBeInTheDocument();
+    expect(screen.getByText('Fuji')).toBeInTheDocument();
+    expect(screen.getByText('Slide · Color')).toBeInTheDocument();
+    expect(screen.getByText('Negative · Color')).toBeInTheDocument();
+  });
 });

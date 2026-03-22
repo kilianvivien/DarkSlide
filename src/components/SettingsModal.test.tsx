@@ -22,67 +22,100 @@ vi.mock('motion/react', async () => {
 });
 
 describe('SettingsModal', () => {
+  const createProps = () => ({
+    isOpen: true,
+    onClose: vi.fn(),
+    onCopyDebugInfo: vi.fn(async () => undefined),
+    gpuRenderingEnabled: true,
+    ultraSmoothDragEnabled: false,
+    notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+    onNotificationSettingsChange: vi.fn(),
+    renderBackendDiagnostics: {
+      gpuAvailable: false,
+      gpuEnabled: true,
+      gpuActive: false,
+      gpuAdapterName: null,
+      backendMode: 'cpu-worker' as const,
+      sourceKind: null,
+      previewMode: null,
+      previewLevelId: null,
+      interactionQuality: null,
+      histogramMode: null,
+      tileSize: null,
+      halo: null,
+      tileCount: null,
+      intermediateFormat: null,
+      usedCpuFallback: false,
+      fallbackReason: null,
+      jobDurationMs: null,
+      geometryCacheHit: null,
+      coalescedPreviewRequests: 0,
+      cancelledPreviewJobs: 0,
+      previewBackend: null,
+      lastPreviewJob: null,
+      lastExportJob: null,
+      maxStorageBufferBindingSize: null,
+      maxBufferSize: null,
+      gpuDisabledReason: 'unsupported' as const,
+      lastError: null,
+      workerMemory: null,
+      activeBlobUrlCount: null,
+      oldestActiveBlobUrlAgeMs: null,
+    },
+    onToggleGPURendering: vi.fn(),
+    onToggleUltraSmoothDrag: vi.fn(),
+    maxResidentDocs: 3 as const,
+    onMaxResidentDocsChange: vi.fn(),
+    colorManagement: DEFAULT_COLOR_MANAGEMENT,
+    sourceMetadata: null,
+    onColorManagementChange: vi.fn(),
+    lightSourceProfiles: [
+      {
+        id: 'auto',
+        name: 'Auto (no correction)',
+        colorTemperature: 0,
+        spectralBias: [1, 1, 1] as [number, number, number],
+        flareCharacteristic: 'medium' as const,
+      },
+      {
+        id: 'daylight',
+        name: 'Generic daylight LED panel',
+        colorTemperature: 5500,
+        spectralBias: [1, 0.98, 0.95] as [number, number, number],
+        flareCharacteristic: 'low' as const,
+      },
+    ],
+    defaultLightSourceId: 'auto',
+    onDefaultLightSourceChange: vi.fn(),
+    flatFieldProfileNames: ['Studio Panel'],
+    activeFlatFieldProfileName: 'Studio Panel',
+    activeFlatFieldLoaded: true,
+    activeFlatFieldPreview: {
+      data: new Float32Array([1, 1, 1, 0.8, 0.8, 0.8, 0.6, 0.6, 0.6, 0.4, 0.4, 0.4]),
+      size: 2,
+    },
+    onSelectFlatFieldProfile: vi.fn(async () => undefined),
+    onImportFlatFieldReference: vi.fn(async () => 'Studio Panel'),
+    onDeleteFlatFieldProfile: vi.fn(async () => undefined),
+    onRenameFlatFieldProfile: vi.fn(async () => 'Studio Panel Renamed'),
+    exportOptions: DEFAULT_EXPORT_OPTIONS,
+    onExportOptionsChange: vi.fn(),
+    externalEditorPath: null,
+    externalEditorName: null,
+    openInEditorOutputPath: null,
+    onChooseExternalEditor: vi.fn(),
+    onClearExternalEditor: vi.fn(),
+    onChooseOpenInEditorOutputPath: vi.fn(),
+    onUseDownloadsForOpenInEditor: vi.fn(),
+  });
+
   it('lets the user change the resident worker document limit', () => {
+    const props = createProps();
     const onMaxResidentDocsChange = vi.fn();
+    props.onMaxResidentDocsChange = onMaxResidentDocsChange;
 
     render(
-      <SettingsModal
-        isOpen
-        onClose={vi.fn()}
-        onCopyDebugInfo={vi.fn(async () => undefined)}
-        gpuRenderingEnabled
-        ultraSmoothDragEnabled={false}
-        notificationSettings={DEFAULT_NOTIFICATION_SETTINGS}
-        onNotificationSettingsChange={vi.fn()}
-        renderBackendDiagnostics={{
-          gpuAvailable: false,
-          gpuEnabled: true,
-          gpuActive: false,
-          gpuAdapterName: null,
-          backendMode: 'cpu-worker',
-          sourceKind: null,
-          previewMode: null,
-          previewLevelId: null,
-          interactionQuality: null,
-          histogramMode: null,
-          tileSize: null,
-          halo: null,
-          tileCount: null,
-          intermediateFormat: null,
-          usedCpuFallback: false,
-          fallbackReason: null,
-          jobDurationMs: null,
-          geometryCacheHit: null,
-          coalescedPreviewRequests: 0,
-          cancelledPreviewJobs: 0,
-          previewBackend: null,
-          lastPreviewJob: null,
-          lastExportJob: null,
-          maxStorageBufferBindingSize: null,
-          maxBufferSize: null,
-          gpuDisabledReason: 'unsupported',
-          lastError: null,
-          workerMemory: null,
-          activeBlobUrlCount: null,
-          oldestActiveBlobUrlAgeMs: null,
-        }}
-        onToggleGPURendering={vi.fn()}
-        onToggleUltraSmoothDrag={vi.fn()}
-        maxResidentDocs={3}
-        onMaxResidentDocsChange={onMaxResidentDocsChange}
-        colorManagement={DEFAULT_COLOR_MANAGEMENT}
-        sourceMetadata={null}
-        onColorManagementChange={vi.fn()}
-        exportOptions={DEFAULT_EXPORT_OPTIONS}
-        onExportOptionsChange={vi.fn()}
-        externalEditorPath={null}
-        externalEditorName={null}
-        openInEditorOutputPath={null}
-        onChooseExternalEditor={vi.fn()}
-        onClearExternalEditor={vi.fn()}
-        onChooseOpenInEditorOutputPath={vi.fn()}
-        onUseDownloadsForOpenInEditor={vi.fn()}
-      />,
+      <SettingsModal {...props} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '5' }));
@@ -90,66 +123,12 @@ describe('SettingsModal', () => {
   });
 
   it('renders a notifications tab and updates notification settings', () => {
+    const props = createProps();
     const onNotificationSettingsChange = vi.fn();
+    props.onNotificationSettingsChange = onNotificationSettingsChange;
 
     render(
-      <SettingsModal
-        isOpen
-        onClose={vi.fn()}
-        onCopyDebugInfo={vi.fn(async () => undefined)}
-        gpuRenderingEnabled
-        ultraSmoothDragEnabled={false}
-        notificationSettings={DEFAULT_NOTIFICATION_SETTINGS}
-        onNotificationSettingsChange={onNotificationSettingsChange}
-        renderBackendDiagnostics={{
-          gpuAvailable: false,
-          gpuEnabled: true,
-          gpuActive: false,
-          gpuAdapterName: null,
-          backendMode: 'cpu-worker',
-          sourceKind: null,
-          previewMode: null,
-          previewLevelId: null,
-          interactionQuality: null,
-          histogramMode: null,
-          tileSize: null,
-          halo: null,
-          tileCount: null,
-          intermediateFormat: null,
-          usedCpuFallback: false,
-          fallbackReason: null,
-          jobDurationMs: null,
-          geometryCacheHit: null,
-          coalescedPreviewRequests: 0,
-          cancelledPreviewJobs: 0,
-          previewBackend: null,
-          lastPreviewJob: null,
-          lastExportJob: null,
-          maxStorageBufferBindingSize: null,
-          maxBufferSize: null,
-          gpuDisabledReason: 'unsupported',
-          lastError: null,
-          workerMemory: null,
-          activeBlobUrlCount: null,
-          oldestActiveBlobUrlAgeMs: null,
-        }}
-        onToggleGPURendering={vi.fn()}
-        onToggleUltraSmoothDrag={vi.fn()}
-        maxResidentDocs={3}
-        onMaxResidentDocsChange={vi.fn()}
-        colorManagement={DEFAULT_COLOR_MANAGEMENT}
-        sourceMetadata={null}
-        onColorManagementChange={vi.fn()}
-        exportOptions={DEFAULT_EXPORT_OPTIONS}
-        onExportOptionsChange={vi.fn()}
-        externalEditorPath={null}
-        externalEditorName={null}
-        openInEditorOutputPath={null}
-        onChooseExternalEditor={vi.fn()}
-        onClearExternalEditor={vi.fn()}
-        onChooseOpenInEditorOutputPath={vi.fn()}
-        onUseDownloadsForOpenInEditor={vi.fn()}
-      />,
+      <SettingsModal {...props} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
@@ -157,5 +136,28 @@ describe('SettingsModal', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Batch exports' }));
     expect(onNotificationSettingsChange).toHaveBeenCalledWith({ batchComplete: false });
+  });
+
+  it('renders the calibration tab and lets the user switch the active flat-field profile', () => {
+    const props = createProps();
+    const onSelectFlatFieldProfile = vi.fn(async () => undefined);
+    const onDefaultLightSourceChange = vi.fn();
+    props.onSelectFlatFieldProfile = onSelectFlatFieldProfile;
+    props.onDefaultLightSourceChange = onDefaultLightSourceChange;
+    props.flatFieldProfileNames = ['Studio Panel', 'Tablet Light'];
+
+    render(
+      <SettingsModal {...props} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Calibration' }));
+    expect(screen.getByText('Flat-Field Profiles')).toBeInTheDocument();
+    expect(screen.getByLabelText('Flat-field preview')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByDisplayValue('Studio Panel'), { target: { value: 'Tablet Light' } });
+    expect(onSelectFlatFieldProfile).toHaveBeenCalledWith('Tablet Light');
+
+    fireEvent.change(screen.getByDisplayValue('Auto (no correction)'), { target: { value: 'daylight' } });
+    expect(onDefaultLightSourceChange).toHaveBeenCalledWith('daylight');
   });
 });

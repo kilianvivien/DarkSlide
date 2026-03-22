@@ -4,6 +4,7 @@ import type {
   ContactSheetResult,
   DecodeRequest,
   DecodedImage,
+  DetectedFrame,
   ExportRequest,
   ExportResult,
   FilmBaseSample,
@@ -28,6 +29,20 @@ export interface EvictPreviewsPayload {
   maxResidentDocuments?: number | null;
 }
 
+export interface DetectFramePayload {
+  documentId: string;
+}
+
+export interface ComputeFlarePayload {
+  documentId: string;
+}
+
+export interface LoadFlatFieldPayload {
+  name: string;
+  size: number;
+  data: Float32Array;
+}
+
 export interface WorkerError {
   code: string;
   message: string;
@@ -40,6 +55,10 @@ export type WorkerRequest =
   | { type: 'read-tile'; payload: ReadTileRequest }
   | { type: 'cancel-job'; payload: CancelTileJobRequest }
   | { type: 'sample-film-base'; payload: SampleRequest }
+  | { type: 'detect-frame'; payload: DetectFramePayload }
+  | { type: 'compute-flare'; payload: ComputeFlarePayload }
+  | { type: 'load-flat-field'; payload: LoadFlatFieldPayload }
+  | { type: 'clear-flat-field'; payload: Record<string, never> }
   | { type: 'export'; payload: ExportRequest }
   | { type: 'contact-sheet'; payload: ContactSheetRequest }
   | { type: 'diagnostics'; payload: Record<string, never> }
@@ -55,7 +74,12 @@ export type WorkerSuccessPayload =
   | RawExportResult
   | ContactSheetResult
   | FilmBaseSample
+  | DetectedFrame
+  | [number, number, number]
   | WorkerMemoryDiagnostics
+  | null
+  | { loaded: true }
+  | { cleared: true }
   | { disposed: true }
   | { cancelled: true }
   | { evicted: true };

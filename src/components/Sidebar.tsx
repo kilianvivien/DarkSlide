@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Activity,
@@ -14,7 +14,7 @@ import {
   SlidersHorizontal,
   Wand2,
 } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LightSourceProfile, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
@@ -124,6 +124,11 @@ interface SidebarProps {
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
   activeProfile: FilmProfile | null;
+  estimatedFlare?: [number, number, number] | null;
+  lightSourceId?: string | null;
+  cropSource?: 'auto' | 'manual' | null;
+  lightSourceProfiles?: LightSourceProfile[];
+  hasActiveFlatFieldProfile?: boolean;
   histogramData: HistogramData | null;
   isPickingFilmBase: boolean;
   onTogglePicker: () => void;
@@ -136,11 +141,20 @@ interface SidebarProps {
   onTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'export') => void;
   cropTab: CropTab;
   onCropTabChange: (tab: CropTab) => void;
+  onRedetectFrame?: () => void;
   onCropDone: () => void;
   onResetCrop: () => void;
   activePointPicker: 'black' | 'white' | 'grey' | null;
   onSetPointPicker: (mode: 'black' | 'white' | 'grey' | null) => void;
   onOpenSettings: () => void;
+  onLightSourceChange?: (lightSourceId: string | null) => void;
+  onSaveCustomLightSource?: (profile: {
+    id?: string | null;
+    name: string;
+    colorTemperature: number;
+    spectralBias: [number, number, number];
+    flareCharacteristic: LightSourceProfile['flareCharacteristic'];
+  }) => Promise<LightSourceProfile>;
 }
 
 export const Sidebar = memo(function Sidebar({
@@ -157,6 +171,11 @@ export const Sidebar = memo(function Sidebar({
   onInteractionStart,
   onInteractionEnd,
   activeProfile,
+  estimatedFlare,
+  lightSourceId = null,
+  cropSource = null,
+  lightSourceProfiles = [],
+  hasActiveFlatFieldProfile = false,
   histogramData,
   isPickingFilmBase,
   onTogglePicker,
@@ -166,20 +185,32 @@ export const Sidebar = memo(function Sidebar({
   onTabChange,
   cropTab,
   onCropTabChange,
+  onRedetectFrame,
   onCropDone,
   onResetCrop,
   activePointPicker,
   onSetPointPicker,
   onOpenSettings,
+  onLightSourceChange,
+  onSaveCustomLightSource,
   onOpenBatchExport,
   contentScrollTop = 0,
   onContentScrollTopChange,
   }: SidebarProps) {
   const isColor = activeProfile?.type === 'color';
   const contentRef = useRef<HTMLDivElement>(null);
+  const [showCustomLightSourceForm, setShowCustomLightSourceForm] = useState(false);
+  const [customLightSourceName, setCustomLightSourceName] = useState('Custom Light Source');
+  const [customLightSourceTemperature, setCustomLightSourceTemperature] = useState(5500);
+  const [customLightSourceBias, setCustomLightSourceBias] = useState<[number, number, number]>([1, 1, 1]);
+  const [customLightSourceFlare, setCustomLightSourceFlare] = useState<LightSourceProfile['flareCharacteristic']>('medium');
   const filmBaseInstruction = isPickingFilmBase
     ? 'Click an unexposed film-base area…'
     : 'Sample Film Base';
+  const selectedLightSourceProfile = useMemo(
+    () => lightSourceProfiles.find((profile) => profile.id === (lightSourceId ?? 'auto')) ?? null,
+    [lightSourceId, lightSourceProfiles],
+  );
 
   useEffect(() => {
     const element = contentRef.current;
@@ -338,6 +369,69 @@ export const Sidebar = memo(function Sidebar({
     onSetPointPicker(activePointPicker === mode ? null : mode);
   }, [activePointPicker, onSetPointPicker]);
 
+  useEffect(() => {
+    if (!selectedLightSourceProfile || !selectedLightSourceProfile.id.startsWith('custom-')) {
+      return;
+    }
+
+    setCustomLightSourceName(selectedLightSourceProfile.name);
+    setCustomLightSourceTemperature(selectedLightSourceProfile.colorTemperature);
+    setCustomLightSourceBias(selectedLightSourceProfile.spectralBias);
+    setCustomLightSourceFlare(selectedLightSourceProfile.flareCharacteristic);
+  }, [selectedLightSourceProfile]);
+
+  const handleLightSourceSelect = useCallback((value: string) => {
+    if (value === '__custom__') {
+      if (selectedLightSourceProfile?.id.startsWith('custom-')) {
+        setCustomLightSourceName(selectedLightSourceProfile.name);
+        setCustomLightSourceTemperature(selectedLightSourceProfile.colorTemperature);
+        setCustomLightSourceBias(selectedLightSourceProfile.spectralBias);
+        setCustomLightSourceFlare(selectedLightSourceProfile.flareCharacteristic);
+      } else {
+        setCustomLightSourceName('Custom Light Source');
+        setCustomLightSourceTemperature(5500);
+        setCustomLightSourceBias([1, 1, 1]);
+        setCustomLightSourceFlare('medium');
+      }
+      setShowCustomLightSourceForm(true);
+      return;
+    }
+
+    setShowCustomLightSourceForm(false);
+    onLightSourceChange?.(value === 'auto' ? null : value);
+  }, [onLightSourceChange, selectedLightSourceProfile]);
+
+  const handleCustomLightSourceBiasChange = useCallback((channel: 0 | 1 | 2, value: number) => {
+    setCustomLightSourceBias((current) => {
+      const next: [number, number, number] = [...current] as [number, number, number];
+      next[channel] = value;
+      return next;
+    });
+  }, []);
+
+  const handleCustomLightSourceSave = useCallback(async () => {
+    if (!onSaveCustomLightSource) {
+      return;
+    }
+
+    const saved = await onSaveCustomLightSource({
+      id: selectedLightSourceProfile?.id.startsWith('custom-') ? selectedLightSourceProfile.id : null,
+      name: customLightSourceName,
+      colorTemperature: customLightSourceTemperature,
+      spectralBias: customLightSourceBias,
+      flareCharacteristic: customLightSourceFlare,
+    });
+    setShowCustomLightSourceForm(false);
+    onLightSourceChange?.(saved.id);
+  }, [
+    customLightSourceBias,
+    customLightSourceFlare,
+    customLightSourceName,
+    customLightSourceTemperature,
+    onLightSourceChange,
+    onSaveCustomLightSource,
+    selectedLightSourceProfile,
+  ]);
 
   const isWebpExport = exportOptions.format === 'image/webp';
 
@@ -402,6 +496,162 @@ export const Sidebar = memo(function Sidebar({
                     <Pipette size={16} className={isPickingFilmBase ? 'animate-pulse' : ''} />
                     <span className="text-sm font-medium">{filmBaseInstruction}</span>
                   </button>
+                </section>
+
+                {hasActiveFlatFieldProfile && (
+                  <section>
+                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                      <Focus size={12} /> Flat-Field Correction
+                    </h2>
+                    <div className="rounded-xl border border-zinc-800/70 bg-zinc-900/30 p-4">
+                      <label className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-zinc-100">Apply flat-field reference</p>
+                          <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                            Corrects light falloff and uneven illumination before inversion.
+                          </p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(settings.flatFieldEnabled)}
+                          onChange={(event) => onSettingsChange({ flatFieldEnabled: event.target.checked })}
+                          className="mt-1 accent-zinc-200"
+                        />
+                      </label>
+                    </div>
+                  </section>
+                )}
+
+                <section>
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                    <Settings2 size={12} /> Scanning Corrections
+                  </h2>
+                  <div className="space-y-4 rounded-xl border border-zinc-800/70 bg-zinc-900/30 p-4">
+                    <label className="block space-y-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Light Source</span>
+                      <select
+                        value={lightSourceId ?? 'auto'}
+                        onChange={(event) => handleLightSourceSelect(event.target.value)}
+                        className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-zinc-500"
+                      >
+                        {lightSourceProfiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>{profile.name}</option>
+                        ))}
+                        <option value="__custom__">Custom...</option>
+                      </select>
+                    </label>
+
+                    {showCustomLightSourceForm && (
+                      <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                        <label className="block space-y-1.5">
+                          <span className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Name</span>
+                          <input
+                            type="text"
+                            value={customLightSourceName}
+                            onChange={(event) => setCustomLightSourceName(event.target.value)}
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-zinc-500"
+                          />
+                        </label>
+
+                        <label className="block space-y-1.5">
+                          <span className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Color Temperature</span>
+                          <input
+                            type="number"
+                            min={1000}
+                            max={10000}
+                            step={50}
+                            value={customLightSourceTemperature}
+                            onChange={(event) => setCustomLightSourceTemperature(Number(event.target.value) || 5500)}
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-zinc-500"
+                          />
+                        </label>
+
+                        <Slider
+                          label="Red Bias"
+                          value={customLightSourceBias[0]}
+                          min={0.5}
+                          max={1.5}
+                          step={0.01}
+                          onChange={(value) => handleCustomLightSourceBiasChange(0, value)}
+                          onInteractionStart={onInteractionStart}
+                          onInteractionEnd={onInteractionEnd}
+                        />
+                        <Slider
+                          label="Green Bias"
+                          value={customLightSourceBias[1]}
+                          min={0.5}
+                          max={1.5}
+                          step={0.01}
+                          onChange={(value) => handleCustomLightSourceBiasChange(1, value)}
+                          onInteractionStart={onInteractionStart}
+                          onInteractionEnd={onInteractionEnd}
+                        />
+                        <Slider
+                          label="Blue Bias"
+                          value={customLightSourceBias[2]}
+                          min={0.5}
+                          max={1.5}
+                          step={0.01}
+                          onChange={(value) => handleCustomLightSourceBiasChange(2, value)}
+                          onInteractionStart={onInteractionStart}
+                          onInteractionEnd={onInteractionEnd}
+                        />
+
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Flare Characteristic</span>
+                          <div className="grid grid-cols-3 gap-2">
+                            {(['low', 'medium', 'high'] as const).map((value) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => setCustomLightSourceFlare(value)}
+                                className={`rounded-lg border px-3 py-2 text-xs uppercase tracking-widest transition-all ${
+                                  customLightSourceFlare === value
+                                    ? 'border-zinc-100 bg-zinc-100 text-zinc-950'
+                                    : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                                }`}
+                              >
+                                {value}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowCustomLightSourceForm(false)}
+                            className="rounded-lg border border-zinc-800 px-3 py-2 text-xs uppercase tracking-widest text-zinc-400 transition-all hover:bg-zinc-900 hover:text-zinc-200"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { void handleCustomLightSourceSave(); }}
+                            className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs uppercase tracking-widest text-emerald-200 transition-all hover:bg-emerald-500/20"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <Slider
+                      label="Flare Correction"
+                      value={settings.flareCorrection}
+                      min={0}
+                      max={100}
+                      onChange={(value) => onSettingsChange({ flareCorrection: value })}
+                      onInteractionStart={onInteractionStart}
+                      onInteractionEnd={onInteractionEnd}
+                    />
+
+                    {estimatedFlare && (
+                      <p className="text-xs text-zinc-500">
+                        Floor: R{estimatedFlare[0]} G{estimatedFlare[1]} B{estimatedFlare[2]}
+                      </p>
+                    )}
+                  </div>
                 </section>
 
                 <section>
@@ -567,6 +817,7 @@ export const Sidebar = memo(function Sidebar({
               >
                 <CropPane
                   crop={settings.crop}
+                  cropSource={cropSource}
                   rotation={settings.rotation}
                   levelAngle={settings.levelAngle}
                   imageWidth={cropImageWidth}
@@ -577,6 +828,7 @@ export const Sidebar = memo(function Sidebar({
                   onRotate={handleCropRotate}
                   onLevelAngleChange={handleLevelAngleChange}
                   onLevelInteractionChange={onLevelInteractionChange}
+                  onRedetectFrame={onRedetectFrame}
                   onDone={onCropDone}
                   onResetCrop={onResetCrop}
                 />

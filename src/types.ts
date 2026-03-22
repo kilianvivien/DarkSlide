@@ -4,6 +4,9 @@ export type FilmType = 'color' | 'bw';
 export type CropTab = 'Film' | 'Print' | 'Social' | 'Digital';
 export type ScannerType = 'flatbed' | 'camera' | 'dedicated' | 'smartphone';
 export type ColorProfileId = 'srgb' | 'display-p3' | 'adobe-rgb';
+export type FilmProfileType = 'negative' | 'slide';
+export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'Lomography' | 'Generic';
+export type CropSource = 'auto' | 'manual';
 
 export interface CurvePoint {
   x: number;
@@ -23,6 +26,15 @@ export interface CropSettings {
   width: number;
   height: number;
   aspectRatio: number | null;
+}
+
+export interface DetectedFrame {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+  angle: number;
+  confidence: number;
 }
 
 export interface ExifMetadata {
@@ -83,10 +95,20 @@ export interface BlackAndWhiteSettings {
   tone: number; // -100 - 100
 }
 
+export interface LightSourceProfile {
+  id: string;
+  name: string;
+  colorTemperature: number;
+  spectralBias: [number, number, number];
+  flareCharacteristic: 'low' | 'medium' | 'high';
+}
+
 export interface ConversionSettings {
   exposure: number;
   contrast: number;
   saturation: number;
+  flareCorrection?: number;
+  flatFieldEnabled?: boolean;
   temperature: number;
   tint: number;
   redBalance: number;
@@ -133,6 +155,8 @@ export interface FilmProfile {
   version: number;
   name: string;
   type: FilmType;
+  filmType?: FilmProfileType;
+  category?: FilmProfileCategory;
   description: string;
   defaultSettings: ConversionSettings;
   maskTuning?: MaskTuning;
@@ -182,6 +206,7 @@ export interface SourceMetadata {
 export interface DecodedImage {
   metadata: SourceMetadata;
   previewLevels: PreviewLevel[];
+  estimatedFlare?: [number, number, number] | null;
 }
 
 export interface RawDecodeResult {
@@ -199,6 +224,9 @@ export interface WorkspaceDocument {
   previewLevels: PreviewLevel[];
   settings: ConversionSettings;
   colorManagement: ColorManagementSettings;
+  estimatedFlare?: [number, number, number] | null;
+  lightSourceId?: string | null;
+  cropSource?: CropSource | null;
   rawImportProfile?: FilmProfile | null;
   profileId: string;
   exportOptions: ExportOptions;
@@ -235,6 +263,7 @@ export interface RenderRequest {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  filmType?: FilmProfileType;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   revision: number;
@@ -246,6 +275,8 @@ export interface RenderRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  flareFloor?: [number, number, number] | null;
+  lightSourceBias?: [number, number, number];
   skipProcessing?: boolean;
 }
 
@@ -263,6 +294,7 @@ export interface ExportRequest {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  filmType?: FilmProfileType;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   options: ExportOptions;
@@ -270,6 +302,8 @@ export interface ExportRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  flareFloor?: [number, number, number] | null;
+  lightSourceBias?: [number, number, number];
   skipProcessing?: boolean;
 }
 
@@ -295,6 +329,8 @@ export interface ContactSheetRequest {
   settingsPerCell: ConversionSettings[];
   profilePerCell: FilmProfile[];
   colorManagementPerCell: ColorManagementSettings[];
+  flareFloorPerCell?: Array<[number, number, number] | null>;
+  lightSourceBiasPerCell?: Array<[number, number, number]>;
 }
 
 export interface ContactSheetResult {
@@ -326,6 +362,7 @@ export interface PrepareTileJobRequest {
   sourceKind: TileSourceKind;
   settings: ConversionSettings;
   comparisonMode: 'processed' | 'original';
+  flatFieldHandledInWorker?: boolean;
   targetMaxDimension?: number;
 }
 

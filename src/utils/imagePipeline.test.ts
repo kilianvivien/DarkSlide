@@ -107,8 +107,18 @@ describe('processImageData', () => {
 });
 
 describe('buildProcessingUniforms', () => {
-  it('keeps the GPU uniform payload at 60 floats', () => {
-    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(60);
+  it('keeps the GPU uniform payload aligned at 64 floats', () => {
+    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(64);
+  });
+
+  it('stores the flat-field flag in the final uniform slot', () => {
+    const uniforms = buildProcessingUniforms(
+      createDefaultSettings({ flatFieldEnabled: true }),
+      true,
+      'processed',
+    );
+
+    expect(uniforms[63]).toBe(1);
   });
 });
 

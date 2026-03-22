@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES } from './constants';
+import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LIGHT_SOURCE_PROFILES } from './constants';
 import { AppShell } from './components/AppShell';
 import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
@@ -7,6 +7,8 @@ import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
 import { useRenderQueue } from './hooks/useRenderQueue';
 import { useWorkspaceCommands } from './hooks/useWorkspaceCommands';
+import { useCalibration } from './hooks/useCalibration';
+import { useCustomLightSources } from './hooks/useCustomLightSources';
 import { useViewportZoom } from './hooks/useViewportZoom';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
 import { isDesktopShell, registerBeforeUnloadGuard } from './utils/fileBridge';
@@ -130,6 +132,12 @@ export default function App() {
   });
 
   const [displayScaleFactor, setDisplayScaleFactor] = useState(() => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1));
+  const [workerReadyVersion, setWorkerReadyVersion] = useState(0);
+  const [defaultLightSourceId, setDefaultLightSourceId] = useState<string>(() => (
+    typeof window !== 'undefined'
+      ? window.localStorage.getItem('darkslide_default_light_source') ?? 'auto'
+      : 'auto'
+  ));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -181,6 +189,7 @@ export default function App() {
     documentId: string;
     settings: ConversionSettings;
     isColor: boolean;
+    filmType?: 'negative' | 'slide';
     comparisonMode: 'processed' | 'original';
     targetMaxDimension: number;
     inputProfileId: string;
@@ -188,6 +197,8 @@ export default function App() {
     maskTuning?: MaskTuning;
     colorMatrix?: ColorMatrix;
     tonalCharacter?: TonalCharacter;
+    flareFloor?: [number, number, number] | null;
+    lightSourceBias?: [number, number, number];
   }) => JSON.stringify(payload), []);
 
   const clearRenderIndicator = useCallback(() => {
@@ -222,6 +233,7 @@ export default function App() {
   }, [clearRenderIndicator, isAdjustingCrop, isPanDragging]);
 
   const { customPresets, savePreset, importPreset, deletePreset } = useCustomPresets();
+  const { customLightSources, saveCustomLightSource } = useCustomLightSources();
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
 
   useEffect(() => registerBeforeUnloadGuard(() => tabs.some((tab) => tab.document.dirty)), [tabs]);
@@ -245,6 +257,12 @@ export default function App() {
       : FILM_PROFILES
   ), [documentState?.rawImportProfile]);
   const allProfiles = useMemo(() => [...builtinProfiles, ...customPresets], [builtinProfiles, customPresets]);
+  const allLightSourceProfiles = useMemo(() => [...LIGHT_SOURCE_PROFILES, ...customLightSources], [customLightSources]);
+  const lightSourceProfilesById = useMemo(() => {
+    const map = new Map(allLightSourceProfiles.map((profile) => [profile.id, profile] as const));
+    return map;
+  }, [allLightSourceProfiles]);
+  const calibration = useCalibration(workerClientRef, workerReadyVersion);
 
   // Always-current ref for non-transient profiles — avoids adding them to importFile's deps
   const persistedProfilesRef = useRef(persistedProfiles);
@@ -595,6 +613,7 @@ export default function App() {
         showTransientNotice(message || 'GPU unavailable — retrying on the next render');
       },
     });
+    setWorkerReadyVersion((current) => current + 1);
     void workerClientRef.current.getGPUDiagnostics().then(setRenderBackendDiagnostics).catch(() => {
       // Ignore diagnostics refresh failures during startup.
     });
@@ -843,6 +862,7 @@ export default function App() {
     documentId: string,
     settings: ConversionSettings,
     isColor: boolean,
+    filmType: 'negative' | 'slide',
     nextComparisonMode: 'processed' | 'original',
     nextTargetMaxDimension: number,
     previewMode: 'draft' | 'settled',
@@ -851,6 +871,8 @@ export default function App() {
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
+    flareFloor?: [number, number, number] | null,
+    lightSourceBias?: [number, number, number],
   ) => {
     const worker = workerClientRef.current;
     if (!worker) return;
@@ -867,6 +889,7 @@ export default function App() {
       documentId,
       settings,
       isColor,
+      filmType,
       comparisonMode: nextComparisonMode,
       targetMaxDimension: nextTargetMaxDimension,
       inputProfileId,
@@ -874,6 +897,8 @@ export default function App() {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      flareFloor,
+      lightSourceBias,
     });
 
     const shouldLogInteractiveDraftDiagnostics = !(previewMode === 'draft' && interactionQuality !== null);
@@ -904,6 +929,7 @@ export default function App() {
         documentId,
         settings,
         isColor,
+        filmType,
         inputProfileId,
         outputProfileId,
         revision,
@@ -915,6 +941,8 @@ export default function App() {
         maskTuning,
         colorMatrix,
         tonalCharacter,
+        flareFloor,
+        lightSourceBias,
       });
 
       const isLatestResult = activeDocumentIdRef.current === result.documentId
@@ -1023,6 +1051,7 @@ export default function App() {
         next.documentId,
         next.settings,
         next.isColor,
+        next.filmType ?? 'negative',
         next.comparisonMode,
         next.targetMaxDimension,
         next.previewMode,
@@ -1031,6 +1060,8 @@ export default function App() {
         next.maskTuning,
         next.colorMatrix,
         next.tonalCharacter,
+        next.flareFloor,
+        next.lightSourceBias,
       );
     },
     cancelActive: (next) => {
@@ -1067,6 +1098,9 @@ export default function App() {
     const profileMaskTuning = activeProfile.maskTuning;
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
+    const profileFilmType = activeProfile.filmType;
+    const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const flareFloor = documentState.estimatedFlare;
     const previewMode = isDraftPreview ? 'draft' : 'settled';
     const interactionQuality: InteractionQuality | null = comparisonMode === 'processed'
       ? (
@@ -1086,6 +1120,7 @@ export default function App() {
       documentId,
       settings,
       isColor,
+      filmType: profileFilmType,
       comparisonMode,
       targetMaxDimension: renderTargetDimension,
       previewMode,
@@ -1094,12 +1129,15 @@ export default function App() {
       maskTuning: profileMaskTuning,
       colorMatrix: profileColorMatrix,
       tonalCharacter: profileTonalCharacter,
+      flareFloor,
+      lightSourceBias,
     } satisfies QueuedPreviewRender;
     const queuedSettledRenderKey = previewMode === 'settled' && interactionQuality === null
       ? createPreviewRenderKey({
         documentId,
         settings,
         isColor,
+        filmType: profileFilmType,
         comparisonMode,
         targetMaxDimension: renderTargetDimension,
         inputProfileId: getResolvedInputProfileId(documentState.source, documentState.colorManagement),
@@ -1107,6 +1145,8 @@ export default function App() {
         maskTuning: profileMaskTuning,
         colorMatrix: profileColorMatrix,
         tonalCharacter: profileTonalCharacter,
+        flareFloor,
+        lightSourceBias,
       })
       : null;
 
@@ -1120,6 +1160,7 @@ export default function App() {
         documentId,
         settings,
         isColor,
+        profileFilmType,
         comparisonMode,
         switchDraftTargetDimension,
         'draft',
@@ -1128,6 +1169,8 @@ export default function App() {
         profileMaskTuning,
         profileColorMatrix,
         profileTonalCharacter,
+        flareFloor,
+        lightSourceBias,
       ).finally(() => {
         if (activeDocumentIdRef.current !== documentId) {
           return;
@@ -1199,6 +1242,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [
     activeProfile.colorMatrix,
+    activeProfile.filmType,
     activeProfile.maskTuning,
     activeProfile.tonalCharacter,
     activeProfile.type,
@@ -1207,6 +1251,8 @@ export default function App() {
     displaySettings,
     documentState?.id,
     documentState?.colorManagement,
+    documentState?.estimatedFlare,
+    documentState?.lightSourceId,
     documentState?.previewLevels.length,
     documentState?.source,
     enqueuePreviewRender,
@@ -1219,6 +1265,7 @@ export default function App() {
     isInteractingWithPreviewControls,
     isPanDragging,
     isZooming,
+    lightSourceProfilesById,
     renderTargetDimension,
     ultraSmoothDragEnabled,
   ]);
@@ -1245,6 +1292,8 @@ export default function App() {
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
     handleProfileChange,
+    handleLightSourceChange,
+    handleRedetectFrame,
     handleSavePreset,
     handleImportPreset,
     handleDeletePreset,
@@ -1285,6 +1334,8 @@ export default function App() {
     isPickingFilmBase,
     activePointPicker,
     usesNativeFileDialogs,
+    lightSourceProfiles: allLightSourceProfiles,
+    defaultFlatFieldEnabled: calibration.activeProfileLoaded,
     displayScaleFactor,
     persistedProfilesRef,
     prefsSnapshotRef,
@@ -1355,6 +1406,72 @@ export default function App() {
     formatError,
     getErrorCode,
   });
+
+  const handleSelectFlatFieldProfile = useCallback(async (name: string | null) => {
+    await calibration.selectActiveProfile(name);
+    if (!documentState) {
+      return;
+    }
+
+    updateDocument((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        flatFieldEnabled: Boolean(name),
+      },
+      dirty: true,
+    }));
+  }, [calibration, documentState, updateDocument]);
+
+  const handleImportFlatFieldReference = useCallback(async (file: File) => {
+    const importedName = await calibration.importFlatFieldFile(file);
+    if (documentState) {
+      updateDocument((current) => ({
+        ...current,
+        settings: {
+          ...current.settings,
+          flatFieldEnabled: true,
+        },
+        dirty: true,
+      }));
+    }
+    return importedName;
+  }, [calibration, documentState, updateDocument]);
+
+  const handleDeleteFlatFieldProfile = useCallback(async (name: string) => {
+    await calibration.removeProfile(name);
+  }, [calibration]);
+
+  const handleRenameFlatFieldProfile = useCallback(async (currentName: string, nextName: string) => {
+    return calibration.renameProfile(currentName, nextName);
+  }, [calibration]);
+
+  const handleSaveCustomLightSource = useCallback(async (draft: Parameters<typeof saveCustomLightSource>[0]) => {
+    return saveCustomLightSource(draft);
+  }, [saveCustomLightSource]);
+
+  const handleDefaultLightSourceChange = useCallback((lightSourceId: string) => {
+    const nextId = lightSourceId || 'auto';
+    setDefaultLightSourceId(nextId);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('darkslide_default_light_source', nextId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!documentState || calibration.activeProfileLoaded || !documentState.settings.flatFieldEnabled) {
+      return;
+    }
+
+    updateDocument((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        flatFieldEnabled: false,
+      },
+      dirty: current.dirty,
+    }));
+  }, [calibration.activeProfileLoaded, documentState, updateDocument]);
 
   const handleToggleComparison = useCallback(() => {
     setComparisonMode((current) => current === 'processed' ? 'original' : 'processed');
@@ -1431,6 +1548,7 @@ export default function App() {
       fallbackProfile={fallbackProfile}
       activeProfile={activeProfile}
       builtinProfiles={builtinProfiles}
+      lightSourceProfiles={allLightSourceProfiles}
       customPresets={customPresets}
       savePresetTags={savePresetTags}
       sidebarTab={sidebarTab}
@@ -1462,6 +1580,11 @@ export default function App() {
       ultraSmoothDragEnabled={ultraSmoothDragEnabled}
       notificationSettings={notificationSettings}
       renderBackendDiagnostics={renderBackendDiagnostics}
+      defaultLightSourceId={defaultLightSourceId}
+      flatFieldProfileNames={calibration.profileNames}
+      activeFlatFieldProfileName={calibration.activeProfileName}
+      activeFlatFieldLoaded={calibration.activeProfileLoaded}
+      activeFlatFieldPreview={calibration.activeProfilePreview}
       maxResidentDocs={maxResidentDocs}
       externalEditorPath={externalEditorPath}
       externalEditorName={externalEditorName}
@@ -1512,19 +1635,27 @@ export default function App() {
       onSidebarScrollTopChange={handleSidebarScrollTopChange}
       onSidebarTabChange={handleSidebarTabChange}
       onCropTabChange={handleCropTabChange}
+      onRedetectFrame={handleRedetectFrame}
       onCropDone={handleCropDone}
       onResetCrop={handleResetCrop}
       onSetActivePointPicker={setActivePointPicker}
       onOpenSettingsModal={handleOpenSettingsModal}
+      onLightSourceChange={handleLightSourceChange}
       onProfileChange={handleProfileChange}
       onSavePreset={handleSavePreset}
       onImportPreset={handleImportPreset}
       onDeletePreset={handleDeletePreset}
+      onSaveCustomLightSource={handleSaveCustomLightSource}
       onCopyDebugInfo={handleCopyDebugInfo}
       onToggleGPURendering={handleGPURenderingChange}
       onToggleUltraSmoothDrag={handleUltraSmoothDragChange}
       onMaxResidentDocsChange={handleMaxResidentDocsChange}
       onNotificationSettingsChange={handleNotificationSettingsChange}
+      onDefaultLightSourceChange={handleDefaultLightSourceChange}
+      onSelectFlatFieldProfile={handleSelectFlatFieldProfile}
+      onImportFlatFieldReference={handleImportFlatFieldReference}
+      onDeleteFlatFieldProfile={handleDeleteFlatFieldProfile}
+      onRenameFlatFieldProfile={handleRenameFlatFieldProfile}
       onChooseExternalEditor={handleChooseExternalEditor}
       onClearExternalEditor={handleClearExternalEditor}
       onChooseOpenInEditorOutputPath={handleChooseOpenInEditorOutputPath}

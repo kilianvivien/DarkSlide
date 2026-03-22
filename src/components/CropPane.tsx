@@ -8,6 +8,7 @@ import {
   RectangleHorizontal,
   RectangleVertical,
   RotateCw,
+  ScanLine,
   Smartphone,
   Square,
 } from 'lucide-react';
@@ -73,6 +74,7 @@ const RATIO_GROUPS = buildRatioGroups();
 
 interface CropPaneProps {
   crop: CropSettings;
+  cropSource?: 'auto' | 'manual' | null;
   rotation: number;
   levelAngle: number;
   imageWidth: number;
@@ -83,12 +85,14 @@ interface CropPaneProps {
   onRotate: (rotation: number, crop: CropSettings) => void;
   onLevelAngleChange: (levelAngle: number) => void;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
+  onRedetectFrame?: () => void;
   onDone: () => void;
   onResetCrop: () => void;
 }
 
 export const CropPane = memo(function CropPane({
   crop,
+  cropSource,
   rotation,
   levelAngle,
   imageWidth,
@@ -99,6 +103,7 @@ export const CropPane = memo(function CropPane({
   onRotate,
   onLevelAngleChange,
   onLevelInteractionChange,
+  onRedetectFrame,
   onDone,
   onResetCrop,
 }: CropPaneProps) {
@@ -411,6 +416,23 @@ export const CropPane = memo(function CropPane({
           )}
         </div>
       </section>
+
+      {onRedetectFrame && (
+        <button
+          type="button"
+          onClick={onRedetectFrame}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-all hover:bg-zinc-800 hover:text-zinc-100"
+        >
+          <ScanLine size={14} />
+          Re-detect Frame
+        </button>
+      )}
+
+      {cropSource === 'auto' && (
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300">
+          Crop source: auto
+        </div>
+      )}
 
       <div className="flex gap-3 pt-2">
         <button

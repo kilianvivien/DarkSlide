@@ -55,6 +55,7 @@ type UseFileImportOptions = {
   activeDocumentIdRef: MutableRefObject<string | null>;
   persistedProfilesRef: MutableRefObject<FilmProfile[]>;
   fallbackProfile: FilmProfile;
+  defaultFlatFieldEnabled?: boolean;
   displayScaleFactor: number;
   tabsApi: TabsApi;
   maxTabs: number;
@@ -78,6 +79,7 @@ export function useFileImport({
   activeDocumentIdRef,
   persistedProfilesRef,
   fallbackProfile,
+  defaultFlatFieldEnabled = false,
   displayScaleFactor,
   tabsApi,
   maxTabs,
@@ -92,9 +94,9 @@ export function useFileImport({
   setError,
   setTransientNotice,
 }: UseFileImportOptions) {
-  const importSessionRef = useRef(0);
-  const [isImporting, setIsImporting] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
+const importSessionRef = useRef(0);
+const [isImporting, setIsImporting] = useState(false);
+const [importError, setImportError] = useState<string | null>(null);
 
   const importFile = useCallback(async (file: File, nativePath?: string | null, nativeFileSize?: number) => {
     const worker = workerClientRef.current;
@@ -201,8 +203,14 @@ export function useFileImport({
         height: 0,
       },
       previewLevels: [],
-      settings: structuredClone(initialProfile.defaultSettings),
+      settings: {
+        ...structuredClone(initialProfile.defaultSettings),
+        flatFieldEnabled: defaultFlatFieldEnabled,
+      },
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
+      estimatedFlare: null,
+      lightSourceId: null,
+      cropSource: null,
       profileId: initialProfile.id,
       exportOptions: {
         ...DEFAULT_EXPORT_OPTIONS,
@@ -227,7 +235,10 @@ export function useFileImport({
 
     try {
       let decoded: DecodedImage;
-      let initialSettings = structuredClone(initialProfile.defaultSettings);
+      let initialSettings: ConversionSettings = {
+        ...structuredClone(initialProfile.defaultSettings),
+        flatFieldEnabled: defaultFlatFieldEnabled,
+      };
       let rawImportProfile: FilmProfile | null = null;
 
       if (rawImport) {
@@ -246,6 +257,10 @@ export function useFileImport({
             rawResult.height,
             rawResult.orientation,
           );
+          initialSettings = {
+            ...initialSettings,
+            flatFieldEnabled: defaultFlatFieldEnabled,
+          };
           rawImportProfile = createRawImportProfile(initialProfile, initialSettings);
 
           if (estimatedFilmBase) {
@@ -342,6 +357,25 @@ export function useFileImport({
       }
 
       const savedExportOptions = parsedPrefs?.exportOptions;
+      const savedLightSourceId = typeof window !== 'undefined'
+        ? window.localStorage.getItem('darkslide_default_light_source')
+        : null;
+      const detectedFrame = typeof worker.detectFrame === 'function'
+        ? await worker.detectFrame(documentId).catch(() => null)
+        : null;
+      const nextSettings = detectedFrame
+        ? {
+          ...initialSettings,
+          crop: {
+            x: detectedFrame.left,
+            y: detectedFrame.top,
+            width: detectedFrame.right - detectedFrame.left,
+            height: detectedFrame.bottom - detectedFrame.top,
+            aspectRatio: null,
+          },
+          levelAngle: detectedFrame.angle,
+        }
+        : initialSettings;
       const nextDocument: WorkspaceDocument = {
         id: documentId,
         source: {
@@ -349,7 +383,7 @@ export function useFileImport({
           size: sourceFileSize,
         },
         previewLevels: decoded.previewLevels,
-        settings: initialSettings,
+        settings: nextSettings,
         colorManagement: createDocumentColorManagement(decoded.metadata, {
           ...DEFAULT_EXPORT_OPTIONS,
           ...(savedExportOptions ? {
@@ -360,6 +394,9 @@ export function useFileImport({
             embedOutputProfile: savedExportOptions.embedOutputProfile,
           } : {}),
         }),
+        estimatedFlare: decoded.estimatedFlare,
+        lightSourceId: savedLightSourceId && savedLightSourceId !== 'auto' ? savedLightSourceId : null,
+        cropSource: detectedFrame ? 'auto' : null,
         rawImportProfile,
         profileId: rawImportProfile?.id ?? initialProfile.id,
         exportOptions: {
@@ -381,12 +418,24 @@ export function useFileImport({
 
       tabsApi.replaceDocument(documentId, nextDocument);
 
-      if (decoded.metadata.unsupportedColorProfileName) {
+      if (decoded.metadata.unsupportedColorProfileName && detectedFrame) {
+        setTransientNotice({
+          message: `Frame detected and crop applied. Unsupported source profile "${decoded.metadata.unsupportedColorProfileName}" is using sRGB until you override it.`,
+          tone: 'success',
+        });
+      } else if (decoded.metadata.unsupportedColorProfileName) {
         setTransientNotice({
           message: `Unsupported source profile "${decoded.metadata.unsupportedColorProfileName}". DarkSlide is using sRGB until you override it.`,
         });
+      } else if (detectedFrame) {
+        setTransientNotice({
+          message: 'Frame detected and crop applied.',
+          tone: 'success',
+        });
       } else {
-        setTransientNotice(null);
+        setTransientNotice({
+          message: 'Auto-crop skipped. Manual crop is still available.',
+        });
       }
 
       addRecentFile({
@@ -441,6 +490,7 @@ export function useFileImport({
     activeDocumentIdRef,
     createDocumentColorManagement,
     displayScaleFactor,
+    defaultFlatFieldEnabled,
     disposeDocument,
     fallbackProfile,
     formatError,

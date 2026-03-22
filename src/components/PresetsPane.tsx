@@ -1,10 +1,10 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Check, Download, Film, Layers, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, Download, Film, Layers, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES } from '../constants';
 import { confirmDeletePreset, isDesktopShell, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
-import { DarkslidePresetFile, FilmProfile, ScannerType } from '../types';
+import { DarkslidePresetFile, FilmProfile, FilmProfileCategory, ScannerType } from '../types';
 
 const GENERIC_IDS = new Set(['generic-bw', 'generic-color']);
 
@@ -64,6 +64,14 @@ function formatTag(tag: string | undefined) {
   }
 }
 
+function formatBuiltInProfileLabel(profile: FilmProfile) {
+  const filmTypeLabel = profile.filmType === 'slide' ? 'Slide' : 'Negative';
+  const processLabel = profile.type === 'color' ? 'Color' : 'B&W';
+  return `${filmTypeLabel} · ${processLabel}`;
+}
+
+const CATEGORY_ORDER: FilmProfileCategory[] = ['Generic', 'Kodak', 'Fuji', 'Ilford', 'CineStill', 'Lomography'];
+
 interface PresetsPaneProps {
   activeStockId: string;
   onStockChange: (stock: FilmProfile) => void;
@@ -98,6 +106,14 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   const [importConflict, setImportConflict] = useState<ImportConflictState | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<FilmProfileCategory, boolean>>({
+    Generic: false,
+    Kodak: false,
+    Fuji: false,
+    Ilford: false,
+    CineStill: false,
+    Lomography: false,
+  });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const genericProfiles = useMemo(
@@ -124,6 +140,8 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     const haystack = [
       profile.name,
       profile.filmStock,
+      profile.category,
+      profile.filmType,
       profile.type,
       formatScannerType(profile.scannerType),
       ...(profile.tags?.map(formatTag) ?? []),
@@ -142,6 +160,22 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     () => (isSearching ? stockProfiles.filter(matchesSearch) : stockProfiles),
     [stockProfiles, searchNormalized, isSearching],
   );
+  const groupedStockProfiles = useMemo(() => {
+    const groups = new Map<FilmProfileCategory, FilmProfile[]>();
+    filteredStockProfiles.forEach((profile) => {
+      const category = profile.category ?? 'Generic';
+      const existing = groups.get(category) ?? [];
+      existing.push(profile);
+      groups.set(category, existing);
+    });
+
+    return CATEGORY_ORDER
+      .map((category) => ({
+        category,
+        profiles: groups.get(category) ?? [],
+      }))
+      .filter((group) => group.profiles.length > 0);
+  }, [filteredStockProfiles]);
   const filteredCustomPresets = useMemo(
     () => (isSearching ? customPresets.filter(matchesSearch) : customPresets),
     [customPresets, searchNormalized, isSearching],
@@ -639,32 +673,49 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
             )}
 
             {filteredStockProfiles.length > 0 && (
-              <div className="space-y-3">
-                <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
-                  <Film size={10} /> Film Stocks
-                </h3>
-                <div className="space-y-2">
-                  {filteredStockProfiles.map((stock) => (
-                    <button
-                      key={stock.id}
-                      onClick={() => onStockChange(stock)}
-                      className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
-                        activeStockId === stock.id
-                          ? 'bg-zinc-100 text-zinc-950 shadow-lg'
-                          : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
-                      }`}
-                    >
-                      <Film size={14} className="shrink-0 text-zinc-600" />
-                      <div className="flex flex-col gap-0.5">
-                        <span className="font-medium">{stock.name}</span>
-                        <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
-                          {stock.type === 'color' ? 'Color Negative' : 'Black & White'}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+              groupedStockProfiles.map((group) => (
+                <div key={group.category} className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setCollapsedGroups((current) => ({
+                      ...current,
+                      [group.category]: isSearching ? false : !current[group.category],
+                    }))}
+                    className="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-zinc-500"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Film size={10} /> {group.category}
+                    </span>
+                    <ChevronDown
+                      size={12}
+                      className={`transition-transform ${isSearching || !collapsedGroups[group.category] ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+                  {(isSearching || !collapsedGroups[group.category]) && (
+                    <div className="space-y-2">
+                      {group.profiles.map((stock) => (
+                        <button
+                          key={stock.id}
+                          onClick={() => onStockChange(stock)}
+                          className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
+                            activeStockId === stock.id
+                              ? 'bg-zinc-100 text-zinc-950 shadow-lg'
+                              : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                          }`}
+                        >
+                          <Film size={14} className="shrink-0 text-zinc-600" />
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-medium">{stock.name}</span>
+                            <span className={`text-[10px] opacity-60 ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
+                              {formatBuiltInProfileLabel(stock)}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
+              ))
             )}
 
             {isSearching && filteredGenericProfiles.length === 0 && filteredStockProfiles.length === 0 && (
