@@ -1,101 +1,86 @@
 # DarkSlide
 
 <div align="center">
-  <p>A clean, hobbyist-friendly film negative converter as both a web app and a Tauri desktop binary.</p>
+  <p>Turn your film negatives into beautiful positives — right in your browser or as a desktop app.</p>
   <img src="./.github/assets/screenshot.png" alt="DarkSlide Screenshot" width="800" />
 </div>
 
-## ✨ Features
+## What is DarkSlide?
 
-- **Blazing Fast Conversion**: Worker-backed imaging pipeline with **WebGPU acceleration** for real-time blurs, noise reduction, and the main per-pixel conversion loop.
-- **Precision Editing**: Float32 pipeline processes edits in normalized float space and quantizes only on final write-back — professional-grade color accuracy throughout.
-- **RAW Import** *(desktop only)*: Native DNG, CR3, NEF, ARW, RAF, and RW2 decoding via the Tauri desktop app. Camera white-balance metadata pre-seeds the temperature/tint sliders; the browser build degrades gracefully with a clear "requires desktop app" notice.
-- **Black & White Conversion**: Dedicated B&W layer with per-channel luminance-mix controls, layered on top of the full color pipeline for maximum tonal flexibility.
-- **Film Profiles & Presets**: Ships with a broad mix of color and B&W stocks. Non-destructive undo/redo, auto-balance curves, highlight protection, sharpening, noise reduction, and importable/exportable `.darkslide` preset files. Searchable preset pane for quick access by name.
-- **Pro Workflow**: Multi-document tabs for working across a roll, batch export (with per-batch preset transforms), and contact sheet generation (RAW-aware). Open the current file directly in an external editor (Photoshop, Affinity Photo, etc.) from the toolbar. Export completion is confirmed with a toast notification.
-- **Cross-Platform**: Native desktop app via **Tauri** (native file dialogs, RAW support, external editor integration) with full parity as a browser-based web app.
-- **Pro-Level UI Tools**: Multi-level zoom, pan viewport, histogram, split-view before/after toggle, non-destructive crop with film-format ratio presets, and persistent preferences.
+DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## ⚠️ macOS Installation Note
+## Features
 
-Pre-built macOS binaries are currently **not notarized**. macOS will block the app from opening by default. To run it:
+### Convert & Edit
+- **Instant negative-to-positive conversion** with real-time preview
+- **Film stock profiles** — built-in color and black & white stocks to match the look of popular films
+- **Full editing controls** — exposure, contrast, saturation, temperature, tint, curves, black & white points, and highlight protection
+- **Black & white mode** with per-channel luminance mixing for fine-tuned tonal control
+- **Sharpening & noise reduction** to clean up your scans
+
+### Organize & Export
+- **Work on multiple images at once** with tabbed documents
+- **Batch export** — convert a whole roll with one click, optionally applying a preset to every frame
+- **Contact sheet generation** — create a grid overview of your scans
+- **Save and share presets** — create custom looks and export/import them as `.darkslide` files
+- **Searchable preset browser** for quick access
+
+### Crop & Compose
+- **Non-destructive crop** with common film format ratios (3:2, 4:5, 1:1, 6x7, etc.)
+- **Zoom & pan** for checking fine details
+- **Before/after comparison** to see your edits side by side
+- **Live histogram** with per-channel display
+
+### Desktop App (macOS)
+- **RAW file support** — open DNG, CR3, NEF, ARW, RAF, and RW2 files directly (desktop only)
+- **Native file dialogs** for a smoother experience
+- **Open in external editor** — send your image to Photoshop, Affinity Photo, or any other app
+
+> DarkSlide also works entirely in the browser — no install needed. The desktop app adds RAW support and native OS integration.
+
+## macOS Installation Note
+
+Pre-built macOS binaries are currently **not notarized**. macOS will block the app on first launch:
 
 1. Download and move the app to your Applications folder.
-2. Try to open it — macOS will show a security warning and refuse.
-3. Go to **System Settings → Privacy & Security**, scroll down, and click **"Open Anyway"** next to the DarkSlide entry.
-4. Confirm in the follow-up dialog. The app will open normally from that point on.
+2. Try to open it — macOS will show a security warning.
+3. Go to **System Settings → Privacy & Security** and click **"Open Anyway"**.
+4. Confirm the dialog. It will open normally from then on.
 
-> This only needs to be done once. Notarization is planned for a future release.
+> This only needs to be done once.
 
-## 🚀 Getting Started
+## Getting Started
 
-### Prerequisites
+### Run in the browser (development)
 
-Ensure you have the following installed on your machine:
-- [Node.js](https://nodejs.org/) (v18 or higher)
-- [Rust & Cargo](https://rustup.rs/) (Required to build the Tauri desktop app)
-
-### Installation
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/kilianvivien/DarkSlide.git
-   cd DarkSlide
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-   *(Note: You can also use `yarn` or `pnpm`)*
-
-### Running the Application
-
-**To run the Web App in development mode:**
 ```bash
+git clone https://github.com/kilianvivien/DarkSlide.git
+cd DarkSlide
+npm install
 npm run dev
 ```
 
-**To run the Tauri Desktop App locally:**
+### Run the desktop app
+
+Requires [Rust & Cargo](https://rustup.rs/) in addition to Node.js.
+
 ```bash
 npm run tauri:dev
 ```
 
-## 📦 Building for Production
+### Build for production
 
-- **Build the Web App:**
-  ```bash
-  npm run build
-  ```
-- **Build the Tauri Desktop App:**
-  ```bash
-  npm run tauri:build
-  ```
+```bash
+npm run build          # web app → dist/
+npm run tauri:build    # desktop app
+```
 
-## 🛠 Tech Stack
+## Tech Stack
 
-- **Frontend:** React 19, Vite, Tailwind CSS (v4), TypeScript
-- **Desktop Host:** Tauri, Rust
-- **Image Processing:** Web Workers, WebGPU Compute Shaders, UTIF (TIFF parsing), rawler (RAW decoding)
-- **UI & Animation:** Lucide React, Framer Motion
-
-## 🗺 Roadmap
-
-DarkSlide is continuously evolving. Here's where things stand:
-
-- ✅ **Phases 0–2:** Baseline stabilization, Worker-backed imaging pipeline, and better conversion quality.
-- ✅ **Phase 3:** Tauri desktop shell with native file dialogs and browser fallback.
-- ✅ **Phases 4–6:** Editing polish (zoom/pan, film profiles, per-slider undo, sharpen/noise), UI polish, and beta product finish (persistent preferences, recent files, automated tests).
-- ✅ **Phase 7:** Float32 color negative science — per-profile color matrices, tonal-character metadata, and synthetic ΔE validation.
-- ✅ **Phase 8:** WebGPU-accelerated rendering (GPU blur, main conversion loop, histogram reduction, CPU fallback).
-- ✅ **Phase 9:** RAW import (Tauri desktop), film-format crop ratios, and importable/exportable `.darkslide` preset files.
-- ✅ **Phases 10–11:** Render performance (memoised components, reduced re-renders) and worker/memory hardening (split caches, bounded eviction).
-- ✅ **Phase 12:** Pro workflow — multi-document tabs, batch export, contact sheet export, Open in External Editor, and Display P3 ICC profile recognition on import.
-- ✅ **v0.3.1 polish:** Preset search, export toast notifications, per-batch preset transforms, RAW-aware contact sheets, and recent files capped at five entries.
-- ✅ **Phase 13 / v0.4.0:** Architecture health — App.tsx decomposition into focused hooks, worker protocol type safety, error boundaries, and accessibility baseline. Settings modal redesign (sidebar nav, Export tab). Batch & Contact Sheet modal polish. Smooth zoom/pan with GPU-accelerated transforms, draft render path, render-target hysteresis, and deferred renders during pan.
-- 🔜 **Phase 14:** Smart scanning features.
-- 🔜 **Phase 15:** Conversion quality & minilab emulation.
-- 🔜 **Phase 16:** Scanning workflow & productivity.
+- **Frontend:** React 19, Vite, Tailwind CSS v4, TypeScript
+- **Desktop:** Tauri (Rust)
+- **Image Processing:** Web Workers, WebGPU (with CPU fallback), UTIF, rawler
+- **UI:** Lucide icons, Framer Motion
 
 ## 🙏 Acknowledgements
 
