@@ -51,7 +51,12 @@ Pre-built macOS binaries are currently **not notarized**. macOS will block the a
 
 ## Getting Started
 
-### Run in the browser (development)
+### Install the desktop app
+
+Download the latest `.dmg` installer from the [Releases](https://github.com/kilianvivien/DarkSlide/releases) page — no build step required.
+
+### Run from source (browser)
+
 
 ```bash
 git clone https://github.com/kilianvivien/DarkSlide.git
