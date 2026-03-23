@@ -447,7 +447,7 @@ export function AppShell({
                   onInteractionEnd={onInteractionEnd}
                   activeProfile={documentState ? activeProfile : null}
                   estimatedFlare={documentState?.estimatedFlare ?? null}
-                  lightSourceId={documentState?.lightSourceId ?? defaultLightSourceId ?? null}
+                  lightSourceId={documentState?.lightSourceId ?? null}
                   cropSource={documentState?.cropSource ?? null}
                   lightSourceProfiles={lightSourceProfiles}
                   hasActiveFlatFieldProfile={activeFlatFieldLoaded}

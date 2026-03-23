@@ -1,6 +1,6 @@
 import React, { Dispatch, MutableRefObject, SetStateAction, useCallback, useEffect } from 'react';
 import { flushSync } from 'react-dom';
-import { MAX_OPEN_TABS } from '../constants';
+import { MAX_OPEN_TABS, resolveLightSourceIdForProfile } from '../constants';
 import { useFileImport } from './useFileImport';
 import { appendDiagnostic, getDiagnosticsReport } from '../utils/diagnostics';
 import {
@@ -338,16 +338,25 @@ export function useWorkspaceCommands({
   });
 
   const handleSettingsChange = useCallback((newSettings: Partial<ConversionSettings>) => {
-    updateDocument((current) => ({
-      ...current,
-      settings: {
+    updateDocument((current) => {
+      const nextSettings = {
         ...current.settings,
         ...newSettings,
-      },
-      cropSource: (newSettings.crop || newSettings.levelAngle !== undefined) ? 'manual' : current.cropSource,
-      dirty: true,
-    }));
-  }, [updateDocument]);
+      };
+      const blackAndWhiteEnabled = newSettings.blackAndWhite?.enabled;
+      const nextLightSourceId = blackAndWhiteEnabled === undefined
+        ? current.lightSourceId
+        : resolveLightSourceIdForProfile(activeProfile, current.lightSourceId, { blackAndWhiteEnabled });
+
+      return {
+        ...current,
+        lightSourceId: nextLightSourceId,
+        settings: nextSettings,
+        cropSource: (newSettings.crop || newSettings.levelAngle !== undefined) ? 'manual' : current.cropSource,
+        dirty: true,
+      };
+    });
+  }, [activeProfile, updateDocument]);
 
   const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'export') => {
     setSidebarTab(tab);
@@ -713,9 +722,16 @@ export function useWorkspaceCommands({
   }, [activeTabId, refreshRenderBackendDiagnostics, setMaxResidentDocs, workerClientRef]);
 
   const handleProfileChange = useCallback((profile: FilmProfile) => {
+    const nextLightSourceId = Object.prototype.hasOwnProperty.call(profile, 'lightSourceId')
+      ? (profile.lightSourceId ?? null)
+      : undefined;
+
     updateDocument((current) => ({
       ...current,
       profileId: profile.id,
+      lightSourceId: nextLightSourceId !== undefined
+        ? nextLightSourceId
+        : resolveLightSourceIdForProfile(profile, current.lightSourceId),
       settings: structuredClone(profile.defaultSettings),
       dirty: true,
     }));
@@ -740,6 +756,7 @@ export function useWorkspaceCommands({
       tags: savePresetTags,
       filmStock: metadata?.filmStock?.trim() ? metadata.filmStock.trim() : null,
       scannerType: metadata?.scannerType ?? null,
+      lightSourceId: documentState.lightSourceId ?? null,
     });
     updateDocument((current) => ({
       ...current,
@@ -758,6 +775,9 @@ export function useWorkspaceCommands({
       tags: profile.tags?.length ? profile.tags : [profile.type],
       filmStock: profile.filmStock ?? null,
       scannerType: profile.scannerType ?? null,
+      ...(Object.prototype.hasOwnProperty.call(profile, 'lightSourceId')
+        ? { lightSourceId: profile.lightSourceId ?? null }
+        : {}),
     }, options);
   }, [importPreset]);
 
@@ -908,10 +928,6 @@ export function useWorkspaceCommands({
         dirty: true,
       };
     });
-
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('darkslide_default_light_source', lightSourceId ?? 'auto');
-    }
   }, [getDefaultFlareStrength, updateDocument]);
 
   const handleRedetectFrame = useCallback(async () => {

@@ -89,6 +89,10 @@ const exportNotificationState = vi.hoisted(() => ({
   primeExportNotificationsPermission: vi.fn(),
 }));
 
+const customPresetState = vi.hoisted(() => ({
+  presets: [] as Array<Record<string, unknown>>,
+}));
+
 vi.mock('motion/react', async () => {
   const ReactModule = await import('react');
 
@@ -109,24 +113,29 @@ vi.mock('motion/react', async () => {
 vi.mock('./components/Sidebar', () => ({
   Sidebar: ({
     exportOptions,
+    lightSourceId,
     onInteractionStart,
     onInteractionEnd,
     onOpenSettings,
     onSettingsChange,
+    onLightSourceChange,
     onExportOptionsChange,
     onExport,
     onTogglePicker,
   }: {
     exportOptions: { filenameBase: string };
+    lightSourceId?: string | null;
     onInteractionStart?: () => void;
     onInteractionEnd?: () => void;
     onOpenSettings: () => void;
-    onSettingsChange: (settings: { exposure?: number }) => void;
+    onSettingsChange: (settings: Record<string, unknown>) => void;
+    onLightSourceChange?: (lightSourceId: string | null) => void;
     onExportOptionsChange: (options: { filenameBase?: string }) => void;
     onExport: () => void;
     onTogglePicker: () => void;
   }) => {
     const [exposure, setExposure] = React.useState(0);
+    const [blackAndWhiteEnabled, setBlackAndWhiteEnabled] = React.useState(false);
 
     return (
       <div data-testid="sidebar">
@@ -143,6 +152,33 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={onTogglePicker}>
           Toggle Film Base Picker
+        </button>
+        <div>Current Light Source: {lightSourceId ?? 'auto'}</div>
+        <button type="button" onClick={() => onLightSourceChange?.(null)}>
+          Select Auto Light Source
+        </button>
+        <button type="button" onClick={() => onLightSourceChange?.('daylight')}>
+          Select Daylight Light Source
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setBlackAndWhiteEnabled((current) => {
+              const nextEnabled = !current;
+              onSettingsChange({
+                blackAndWhite: {
+                  enabled: nextEnabled,
+                  redMix: 0,
+                  greenMix: 0,
+                  blueMix: 0,
+                  tone: 0,
+                },
+              });
+              return nextEnabled;
+            });
+          }}
+        >
+          Toggle Black And White
         </button>
         <button type="button" onClick={onInteractionStart}>
           Start Drag
@@ -172,12 +208,17 @@ vi.mock('./components/PresetsPane', () => ({
     builtinProfiles = [],
     customPresets = [],
     onStockChange,
+    onSavePreset,
   }: {
     builtinProfiles?: Array<{ id: string; name: string }>;
     customPresets?: Array<{ id: string; name: string }>;
     onStockChange: (profile: { id: string; name: string }) => void;
+    onSavePreset?: (name: string) => void;
   }) => (
     <div data-testid="presets">
+      <button type="button" onClick={() => onSavePreset?.('Saved Custom Preset')}>
+        Save Custom Preset
+      </button>
       {[...builtinProfiles, ...customPresets].map((profile) => (
         <button
           key={profile.id}
@@ -211,14 +252,47 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: coreState.invoke,
 }));
 
-vi.mock('./hooks/useCustomPresets', () => ({
-  useCustomPresets: () => ({
-    customPresets: [],
-    savePreset: vi.fn(),
-    importPreset: vi.fn(),
-    deletePreset: vi.fn(),
-  }),
-}));
+vi.mock('./hooks/useCustomPresets', async () => {
+  const ReactModule = await import('react');
+
+  return {
+    useCustomPresets: () => {
+      const [customPresets, setCustomPresets] = ReactModule.useState(customPresetState.presets as Array<Record<string, unknown>>);
+
+      return {
+        customPresets,
+        savePreset: (preset: Record<string, unknown>) => {
+          const savedPreset = { ...structuredClone(preset), isCustom: true };
+          const nextPresets = [...customPresetState.presets, savedPreset];
+          customPresetState.presets = nextPresets;
+          setCustomPresets(nextPresets);
+          return savedPreset;
+        },
+        importPreset: (preset: Record<string, unknown>, options: { overwriteId?: string; renameTo?: string } = {}) => {
+          const importedPreset = {
+            ...structuredClone(preset),
+            id: options.overwriteId ?? String(preset.id),
+            name: options.renameTo?.trim() || String(preset.name),
+            isCustom: true,
+          };
+          const nextPresets = options.overwriteId
+            ? customPresetState.presets.map((existingPreset) => (
+              existingPreset.id === options.overwriteId ? importedPreset : existingPreset
+            ))
+            : [...customPresetState.presets, importedPreset];
+          customPresetState.presets = nextPresets;
+          setCustomPresets(nextPresets);
+          return importedPreset;
+        },
+        deletePreset: (id: string) => {
+          const nextPresets = customPresetState.presets.filter((preset) => preset.id !== id);
+          customPresetState.presets = nextPresets;
+          setCustomPresets(nextPresets);
+        },
+      };
+    },
+  };
+});
 
 vi.mock('./utils/imageWorkerClient', () => ({
   ImageWorkerClient: class MockImageWorkerClient {
@@ -360,6 +434,7 @@ describe('App import and preview pipeline', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     localStorage.clear();
+    customPresetState.presets = [];
     coreState.invoke.mockReset();
     workerState.decode.mockReset();
     workerState.detectFrame.mockReset();
@@ -707,6 +782,161 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 200, g: 180, b: 150 });
     expect(latestRenderCall.settings.rotation).toBe(90);
+  });
+
+  it('auto-maps CS-LITE to cool, white, and warm modes as film profiles change', async () => {
+    localStorage.setItem('darkslide_default_light_source', 'cs-lite');
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    let latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      lightSourceBias: [number, number, number];
+    };
+    expect(latestRenderCall.lightSourceBias).toEqual([0.82, 0.87, 1]);
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      lightSourceBias: [number, number, number];
+    };
+    expect(latestRenderCall.lightSourceBias).toEqual([1, 0.94, 0.88]);
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Fuji Provia 100F' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      lightSourceBias: [number, number, number];
+    };
+    expect(latestRenderCall.lightSourceBias).toEqual([1, 0.72, 0.48]);
+  });
+
+  it('lets the user select Auto without overwriting the saved default light source', async () => {
+    localStorage.setItem('darkslide_default_light_source', 'cs-lite');
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(screen.getByText('Current Light Source: cs-lite-cool')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Auto Light Source' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      lightSourceBias: [number, number, number];
+    };
+    expect(latestRenderCall.lightSourceBias).toEqual([1, 1, 1]);
+    expect(screen.getByText('Current Light Source: auto')).toBeInTheDocument();
+    expect(localStorage.getItem('darkslide_default_light_source')).toBe('cs-lite');
+  });
+
+  it('saves and reapplies the embedded light source with a custom preset', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Daylight Light Source' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Auto Light Source' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+    expect(screen.getByText('Current Light Source: auto')).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Custom Preset' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      lightSourceBias: [number, number, number];
+    };
+    expect(screen.getByText('Current Light Source: daylight')).toBeInTheDocument();
+    expect(latestRenderCall.lightSourceBias).toEqual([1, 0.98, 0.95]);
+  });
+
+  it('switches CS-LITE to the white mode when black-and-white conversion is enabled', async () => {
+    localStorage.setItem('darkslide_default_light_source', 'cs-lite');
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Black And White' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      lightSourceBias: [number, number, number];
+    };
+    expect(latestRenderCall.lightSourceBias).toEqual([1, 0.94, 0.88]);
   });
 
   it('shows the RAW decoding overlay while the native decode is still running', async () => {

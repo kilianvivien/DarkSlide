@@ -166,6 +166,7 @@ export interface FilmProfile {
   tags?: string[];
   filmStock?: string | null;
   scannerType?: ScannerType | null;
+  lightSourceId?: string | null;
 }
 
 export interface DarkslidePresetFile {

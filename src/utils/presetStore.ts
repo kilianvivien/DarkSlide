@@ -24,6 +24,7 @@ function isValidProfile(value: unknown): value is FilmProfile {
     && typeof value.name === 'string'
     && (value.type === 'color' || value.type === 'bw')
     && isValidScannerType(value.scannerType)
+    && (value.lightSourceId === undefined || value.lightSourceId === null || typeof value.lightSourceId === 'string')
     && isRecord(defaultSettings)
     && typeof defaultSettings.exposure === 'number'
     && typeof defaultSettings.contrast === 'number'

@@ -45,6 +45,25 @@ describe('validateDarkslideFile', () => {
     });
   });
 
+  it('accepts embedded light source metadata in preset files', () => {
+    expect(validateDarkslideFile({
+      darkslideVersion: '1.0.0',
+      profile: {
+        id: 'custom-3',
+        version: 1,
+        name: 'CS-LITE Scan',
+        type: 'color',
+        description: 'Custom DarkSlide preset',
+        defaultSettings: createDefaultSettings(),
+        lightSourceId: 'cs-lite-cool',
+      },
+    })).toMatchObject({
+      profile: {
+        lightSourceId: 'cs-lite-cool',
+      },
+    });
+  });
+
   it('rejects payloads missing the required profile settings', () => {
     expect(validateDarkslideFile({
       darkslideVersion: '1.0.0',

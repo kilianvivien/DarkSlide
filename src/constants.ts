@@ -148,7 +148,13 @@ const COLOR_MATRICES: Record<string, ColorMatrix> = {
 export const LIGHT_SOURCE_PROFILES: LightSourceProfile[] = [
   { id: 'auto', name: 'Auto (no correction)', colorTemperature: 0, spectralBias: [1, 1, 1], flareCharacteristic: 'medium' },
   { id: 'daylight', name: 'Generic daylight LED panel', colorTemperature: 5500, spectralBias: [1.0, 0.98, 0.95], flareCharacteristic: 'low' },
-  { id: 'cs-lite', name: 'CineStill CS-LITE', colorTemperature: 5000, spectralBias: [1.0, 0.95, 0.88], flareCharacteristic: 'low' },
+  // CineStill publishes the original CS-LITE as a three-mode 3200-9000K source.
+  // Biases are normalized from those mode temperatures so Cool stays blue-heavy,
+  // White lands near daylight, and Warm behaves like a tungsten-balanced source.
+  // We keep the legacy `cs-lite` id on the neutral White mode for saved defaults/docs.
+  { id: 'cs-lite-cool', name: 'CineStill CS-LITE Cool (Color Negative)', colorTemperature: 9000, spectralBias: [0.82, 0.87, 1.0], flareCharacteristic: 'low' },
+  { id: 'cs-lite', name: 'CineStill CS-LITE White (B&W)', colorTemperature: 5600, spectralBias: [1.0, 0.94, 0.88], flareCharacteristic: 'low' },
+  { id: 'cs-lite-warm', name: 'CineStill CS-LITE Warm (Slide)', colorTemperature: 3200, spectralBias: [1.0, 0.72, 0.48], flareCharacteristic: 'low' },
   { id: 'skier', name: 'Skier Sunray Copy Box 3', colorTemperature: 5600, spectralBias: [1.0, 0.97, 0.93], flareCharacteristic: 'low' },
   { id: 'valoi', name: 'VALOI easy35 / Pluto LED', colorTemperature: 5000, spectralBias: [1.0, 0.94, 0.87], flareCharacteristic: 'medium' },
   { id: 'kaiser', name: 'Kaiser Slimlite Plano', colorTemperature: 5300, spectralBias: [1.0, 0.96, 0.91], flareCharacteristic: 'low' },
@@ -157,6 +163,46 @@ export const LIGHT_SOURCE_PROFILES: LightSourceProfile[] = [
 ];
 
 type BuiltinProfileOptions = Omit<FilmProfile, 'version'>;
+
+const CS_LITE_LIGHT_SOURCE_IDS = ['cs-lite-cool', 'cs-lite', 'cs-lite-warm'] as const;
+
+type CsLiteLightSourceId = typeof CS_LITE_LIGHT_SOURCE_IDS[number];
+
+export function isCsLiteLightSourceId(lightSourceId: string | null | undefined): lightSourceId is CsLiteLightSourceId {
+  return typeof lightSourceId === 'string'
+    && (CS_LITE_LIGHT_SOURCE_IDS as readonly string[]).includes(lightSourceId);
+}
+
+export function getSuggestedCsLiteLightSourceId(
+  profile: Pick<FilmProfile, 'type' | 'filmType'>,
+  options?: { blackAndWhiteEnabled?: boolean },
+): CsLiteLightSourceId {
+  if (profile.type === 'bw' || options?.blackAndWhiteEnabled) {
+    return 'cs-lite';
+  }
+
+  if (profile.filmType === 'slide') {
+    return 'cs-lite-warm';
+  }
+
+  return 'cs-lite-cool';
+}
+
+export function resolveLightSourceIdForProfile(
+  profile: Pick<FilmProfile, 'type' | 'filmType'>,
+  lightSourceId: string | null | undefined,
+  options?: { blackAndWhiteEnabled?: boolean },
+): string | null {
+  if (!lightSourceId || lightSourceId === 'auto') {
+    return null;
+  }
+
+  if (isCsLiteLightSourceId(lightSourceId)) {
+    return getSuggestedCsLiteLightSourceId(profile, options);
+  }
+
+  return lightSourceId;
+}
 
 function createBuiltinProfile(profile: BuiltinProfileOptions): FilmProfile {
   return {

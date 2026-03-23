@@ -13,6 +13,7 @@ import {
   DEFAULT_EXPORT_OPTIONS,
   FILM_PROFILES,
   MAX_FILE_SIZE_BYTES,
+  resolveLightSourceIdForProfile,
 } from '../constants';
 import { appendDiagnostic } from '../utils/diagnostics';
 import { addRecentFile } from '../utils/recentFilesStore';
@@ -360,6 +361,7 @@ const [importError, setImportError] = useState<string | null>(null);
       const savedLightSourceId = typeof window !== 'undefined'
         ? window.localStorage.getItem('darkslide_default_light_source')
         : null;
+      const resolvedProfile = rawImportProfile ?? initialProfile;
       const nextDocument: WorkspaceDocument = {
         id: documentId,
         source: {
@@ -379,10 +381,10 @@ const [importError, setImportError] = useState<string | null>(null);
           } : {}),
         }),
         estimatedFlare: decoded.estimatedFlare,
-        lightSourceId: savedLightSourceId && savedLightSourceId !== 'auto' ? savedLightSourceId : null,
+        lightSourceId: resolveLightSourceIdForProfile(resolvedProfile, savedLightSourceId),
         cropSource: null,
         rawImportProfile,
-        profileId: rawImportProfile?.id ?? initialProfile.id,
+        profileId: resolvedProfile.id,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
           ...(savedExportOptions ? {
