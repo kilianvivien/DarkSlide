@@ -185,6 +185,7 @@ export interface FilmProfile {
   filmStock?: string | null;
   scannerType?: ScannerType | null;
   lightSourceId?: string | null;
+  folderId?: string | null;
 }
 
 export interface DarkslidePresetFile {
@@ -550,7 +551,13 @@ export interface WorkerMemoryDiagnostics {
   estimatedMemoryBytes: number;
 }
 
+export interface PresetFolder {
+  id: string;
+  name: string;
+}
+
 export interface VersionedPresetStore {
   version: 1;
   presets: FilmProfile[];
+  folders?: PresetFolder[];
 }

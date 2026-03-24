@@ -1,12 +1,69 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, Download, Film, Layers, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDownUp, Check, ChevronDown, Download, Film, FolderOpen, FolderPlus, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES } from '../constants';
 import { confirmDeletePreset, isDesktopShell, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
-import { DarkslidePresetFile, FilmProfile, FilmProfileCategory, ScannerType } from '../types';
+import { DarkslidePresetFile, FilmProfile, FilmProfileCategory, PresetFolder, ScannerType } from '../types';
 
 const GENERIC_IDS = new Set(['generic-bw', 'generic-color']);
+
+const CUSTOM_FILM_STOCKS_KEY = 'darkslide_custom_film_stocks_v1';
+const CUSTOM_SORT_KEY = 'darkslide_custom_sort_v1';
+
+type CustomPresetSort = 'last-added' | 'color-bw' | 'raw-nonraw' | 'film-stock';
+
+const SORT_OPTIONS: { value: CustomPresetSort; label: string }[] = [
+  { value: 'last-added', label: 'Last added' },
+  { value: 'color-bw', label: 'Color / B&W' },
+  { value: 'raw-nonraw', label: 'RAW / Non-RAW' },
+  { value: 'film-stock', label: 'Film stock' },
+];
+
+function loadCustomFilmStocks(): string[] {
+  try {
+    const stored = localStorage.getItem(CUSTOM_FILM_STOCKS_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveCustomFilmStocks(stocks: string[]) {
+  try {
+    localStorage.setItem(CUSTOM_FILM_STOCKS_KEY, JSON.stringify(stocks));
+  } catch { /* ignore */ }
+}
+
+function loadCustomSort(): CustomPresetSort {
+  try {
+    const stored = localStorage.getItem(CUSTOM_SORT_KEY);
+    if (stored && SORT_OPTIONS.some((o) => o.value === stored)) return stored as CustomPresetSort;
+  } catch { /* ignore */ }
+  return 'last-added';
+}
+
+function sortCustomPresets(presets: FilmProfile[], sort: CustomPresetSort): FilmProfile[] {
+  if (sort === 'last-added') return presets;
+  const sorted = [...presets];
+  switch (sort) {
+    case 'color-bw':
+      sorted.sort((a, b) => {
+        const aType = a.type === 'color' ? 0 : 1;
+        const bType = b.type === 'color' ? 0 : 1;
+        return aType - bType || a.name.localeCompare(b.name);
+      });
+      break;
+    case 'raw-nonraw': {
+      const isRaw = (p: FilmProfile) => p.tags?.includes('raw') ? 0 : 1;
+      sorted.sort((a, b) => isRaw(a) - isRaw(b) || a.name.localeCompare(b.name));
+      break;
+    }
+    case 'film-stock':
+      sorted.sort((a, b) => (a.filmStock ?? '').localeCompare(b.filmStock ?? '') || a.name.localeCompare(b.name));
+      break;
+  }
+  return sorted;
+}
 
 function isGenericProfile(profile: FilmProfile) {
   return GENERIC_IDS.has(profile.id) || profile.id === RAW_IMPORT_PROFILE_ID;
@@ -77,11 +134,16 @@ interface PresetsPaneProps {
   onStockChange: (stock: FilmProfile) => void;
   builtinProfiles?: FilmProfile[];
   customPresets: FilmProfile[];
+  presetFolders?: PresetFolder[];
   canSavePreset: boolean;
   saveTags?: string[];
-  onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => void;
+  onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null; folderId?: string | null }) => void;
   onImportPreset: (profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => void;
   onDeletePreset: (id: string) => void;
+  onCreateFolder?: (name: string) => void;
+  onRenameFolder?: (id: string, name: string) => void;
+  onDeleteFolder?: (id: string) => void;
+  onMovePresetToFolder?: (presetId: string, folderId: string | null) => void;
   onError?: (message: string | null) => void;
 }
 
@@ -90,11 +152,16 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   onStockChange,
   builtinProfiles = FILM_PROFILES,
   customPresets,
+  presetFolders = [],
   canSavePreset,
   saveTags,
   onSavePreset,
   onImportPreset,
   onDeletePreset,
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
+  onMovePresetToFolder,
   onError,
 }) => {
   const [isSaving, setIsSaving] = useState(false);
@@ -106,6 +173,29 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   const [importConflict, setImportConflict] = useState<ImportConflictState | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showFilmStockSuggestions, setShowFilmStockSuggestions] = useState(false);
+  const [filmStockHighlight, setFilmStockHighlight] = useState(-1);
+  const [customFilmStocks, setCustomFilmStocks] = useState(loadCustomFilmStocks);
+  const [customSort, setCustomSort] = useState<CustomPresetSort>(loadCustomSort);
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const [saveFolderId, setSaveFolderId] = useState<string | null>(null);
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  const [editingFolderName, setEditingFolderName] = useState('');
+  const [collapsedCustomGroups, setCollapsedCustomGroups] = useState<Record<string, boolean>>(() => {
+    try {
+      const stored = localStorage.getItem('darkslide_collapsed_custom_groups_v1');
+      if (stored) return JSON.parse(stored);
+    } catch { /* ignore */ }
+    return {};
+  });
+  const [moveMenuPresetId, setMoveMenuPresetId] = useState<string | null>(null);
+  const filmStockInputRef = useRef<HTMLInputElement>(null);
+  const filmStockDropdownRef = useRef<HTMLDivElement>(null);
+  const sortButtonRef = useRef<HTMLButtonElement>(null);
+  const sortMenuRef = useRef<HTMLDivElement>(null);
+  const moveMenuRef = useRef<HTMLDivElement>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<FilmProfileCategory, boolean>>(() => {
     const defaults: Record<FilmProfileCategory, boolean> = {
       Generic: true,
@@ -184,14 +274,87 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       .filter((group) => group.profiles.length > 0);
   }, [filteredStockProfiles]);
   const filteredCustomPresets = useMemo(
-    () => (isSearching ? customPresets.filter(matchesSearch) : customPresets),
-    [customPresets, searchNormalized, isSearching],
+    () => {
+      const base = isSearching ? customPresets.filter(matchesSearch) : customPresets;
+      return sortCustomPresets(base, customSort);
+    },
+    [customPresets, searchNormalized, isSearching, customSort],
   );
+
+  // Film stock suggestions: built-in profile names + custom preset filmStocks + user-entered stocks
+  const filmStockSuggestions = useMemo(() => {
+    const set = new Set<string>();
+    stockProfiles.forEach((p) => set.add(p.name));
+    customPresets.forEach((p) => { if (p.filmStock) set.add(p.filmStock); });
+    customFilmStocks.forEach((s) => set.add(s));
+    const all = Array.from(set).sort((a, b) => a.localeCompare(b));
+    if (!saveFilmStock.trim()) return all;
+    const q = saveFilmStock.trim().toLowerCase();
+    return all.filter((s) => s.toLowerCase().includes(q));
+  }, [stockProfiles, customPresets, customFilmStocks, saveFilmStock]);
+
+  // Close sort menu when clicking outside
+  useEffect(() => {
+    if (!showSortMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (sortMenuRef.current?.contains(e.target as Node)) return;
+      if (sortButtonRef.current?.contains(e.target as Node)) return;
+      setShowSortMenu(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showSortMenu]);
+
+  // Close move menu when clicking outside
+  useEffect(() => {
+    if (!moveMenuPresetId) return;
+    const handler = (e: MouseEvent) => {
+      if (moveMenuRef.current?.contains(e.target as Node)) return;
+      setMoveMenuPresetId(null);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [moveMenuPresetId]);
+
+  const toggleCustomGroup = useCallback((groupId: string) => {
+    setCollapsedCustomGroups((current) => {
+      const next = { ...current, [groupId]: !current[groupId] };
+      try { localStorage.setItem('darkslide_collapsed_custom_groups_v1', JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  // Close film stock dropdown when clicking outside
+  useEffect(() => {
+    if (!showFilmStockSuggestions) return;
+    const handler = (e: MouseEvent) => {
+      if (filmStockDropdownRef.current?.contains(e.target as Node)) return;
+      if (filmStockInputRef.current?.contains(e.target as Node)) return;
+      setShowFilmStockSuggestions(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showFilmStockSuggestions]);
+
+  const persistFilmStock = useCallback((stock: string) => {
+    const trimmed = stock.trim();
+    if (!trimmed) return;
+    // Don't persist if it's already a built-in profile name
+    const isBuiltin = stockProfiles.some((p) => p.name === trimmed);
+    if (isBuiltin) return;
+    setCustomFilmStocks((prev) => {
+      if (prev.includes(trimmed)) return prev;
+      const next = [...prev, trimmed];
+      saveCustomFilmStocks(next);
+      return next;
+    });
+  }, [stockProfiles]);
 
   const resetSaveForm = () => {
     setNewPresetName('');
     setSaveFilmStock('');
     setSaveScannerType(null);
+    setSaveFolderId(null);
     setIsSaving(false);
   };
 
@@ -201,9 +364,13 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       return;
     }
 
+    const filmStock = saveFilmStock.trim() || undefined;
+    if (filmStock) persistFilmStock(filmStock);
+
     onSavePreset(trimmedName, {
-      filmStock: saveFilmStock.trim() || undefined,
+      filmStock,
       scannerType: saveScannerType,
+      folderId: saveFolderId,
     });
     resetSaveForm();
   };
@@ -322,6 +489,128 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
 
     onImportPreset(importConflict.profile, { renameTo });
     setImportConflict(null);
+  };
+
+  const renderCustomPresetRow = (stock: FilmProfile) => {
+    const tagLabels = (stock.tags?.length ? stock.tags : [stock.type])
+      .map(formatTag)
+      .filter((value): value is string => Boolean(value));
+    const metadata = [
+      stock.filmStock,
+      formatScannerType(stock.scannerType),
+      ...tagLabels,
+    ].filter(Boolean);
+
+    return (
+      <div key={stock.id} className="relative">
+        <button
+          onClick={() => onStockChange(stock)}
+          className={`group w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
+            activeStockId === stock.id
+              ? 'bg-zinc-100 text-zinc-950 shadow-lg'
+              : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+          }`}
+        >
+          <Film size={14} className="shrink-0 text-zinc-600" />
+          <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+            <span className="font-medium truncate">{stock.name}</span>
+            {metadata.length > 0 && (
+              <span className={`text-[10px] opacity-60 truncate ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
+                {metadata.join(' · ')}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+            {presetFolders.length > 0 && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setMoveMenuPresetId((current) => current === stock.id ? null : stock.id);
+                }}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); setMoveMenuPresetId((current) => current === stock.id ? null : stock.id); } }}
+                aria-label={`Move ${stock.name} to folder`}
+                className={`p-1 rounded transition-colors ${
+                  activeStockId === stock.id
+                    ? 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-300'
+                    : 'text-zinc-600 hover:text-zinc-100 hover:bg-zinc-800'
+                }`}
+                data-tip="Move to folder"
+              >
+                <FolderOpen size={12} />
+              </span>
+            )}
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleExportPreset(stock);
+              }}
+              onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); void handleExportPreset(stock); } }}
+              aria-label={`Export ${stock.name}`}
+              className={`p-1 rounded transition-colors ${
+                activeStockId === stock.id
+                  ? 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-300'
+                  : 'text-zinc-600 hover:text-zinc-100 hover:bg-zinc-800'
+              }`}
+              data-tip="Export Preset"
+            >
+              <Download size={12} />
+            </span>
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleDeleteClick(stock);
+              }}
+              onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); void handleDeleteClick(stock); } }}
+              aria-label={`Delete ${stock.name}`}
+              className={`p-1 rounded transition-colors ${
+                activeStockId === stock.id
+                  ? 'text-zinc-500 hover:text-red-600 hover:bg-red-100'
+                  : 'text-zinc-600 hover:text-red-400 hover:bg-red-400/10'
+              }`}
+              data-tip="Delete Preset"
+            >
+              <Trash2 size={12} />
+            </span>
+          </div>
+        </button>
+
+        {/* Move-to-folder popup */}
+        {moveMenuPresetId === stock.id && (
+          <div
+            ref={moveMenuRef}
+            className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl"
+          >
+            <button
+              type="button"
+              onClick={() => { onMovePresetToFolder?.(stock.id, null); setMoveMenuPresetId(null); }}
+              className={`w-full px-3 py-1.5 text-left text-xs transition-colors ${
+                !stock.folderId ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+              }`}
+            >
+              Ungrouped
+            </button>
+            {presetFolders.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                onClick={() => { onMovePresetToFolder?.(stock.id, folder.id); setMoveMenuPresetId(null); }}
+                className={`w-full px-3 py-1.5 text-left text-xs transition-colors ${
+                  stock.folderId === folder.id ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                }`}
+              >
+                {folder.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -444,17 +733,77 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                 />
               </label>
 
-              <label className="block">
+              <div className="relative">
                 <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Film stock</span>
                 <input
+                  ref={filmStockInputRef}
                   type="text"
                   value={saveFilmStock}
-                  onChange={(event) => setSaveFilmStock(event.target.value)}
-                  onKeyDown={handleKeyDown}
+                  onChange={(event) => {
+                    setSaveFilmStock(event.target.value);
+                    setShowFilmStockSuggestions(true);
+                    setFilmStockHighlight(-1);
+                  }}
+                  onFocus={() => setShowFilmStockSuggestions(true)}
+                  onKeyDown={(event) => {
+                    if (showFilmStockSuggestions && filmStockSuggestions.length > 0) {
+                      if (event.key === 'ArrowDown') {
+                        event.preventDefault();
+                        setFilmStockHighlight((i) => Math.min(i + 1, filmStockSuggestions.length - 1));
+                        return;
+                      }
+                      if (event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        setFilmStockHighlight((i) => Math.max(i - 1, -1));
+                        return;
+                      }
+                      if (event.key === 'Enter' && filmStockHighlight >= 0) {
+                        event.preventDefault();
+                        setSaveFilmStock(filmStockSuggestions[filmStockHighlight]);
+                        setShowFilmStockSuggestions(false);
+                        setFilmStockHighlight(-1);
+                        return;
+                      }
+                      if (event.key === 'Escape') {
+                        setShowFilmStockSuggestions(false);
+                        return;
+                      }
+                    }
+                    handleKeyDown(event);
+                  }}
                   placeholder="Optional"
+                  autoComplete="off"
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 outline-none transition-colors focus:border-zinc-500 placeholder:text-zinc-600"
                 />
-              </label>
+                {showFilmStockSuggestions && filmStockSuggestions.length > 0 && (
+                  <div
+                    ref={filmStockDropdownRef}
+                    className="absolute z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl custom-scrollbar"
+                  >
+                    {filmStockSuggestions.map((suggestion, index) => (
+                      <button
+                        key={suggestion}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setSaveFilmStock(suggestion);
+                          setShowFilmStockSuggestions(false);
+                          setFilmStockHighlight(-1);
+                          filmStockInputRef.current?.focus();
+                        }}
+                        onMouseEnter={() => setFilmStockHighlight(index)}
+                        className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${
+                          index === filmStockHighlight
+                            ? 'bg-zinc-700 text-zinc-100'
+                            : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                        }`}
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div>
                 <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Scanner</span>
@@ -493,6 +842,39 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                   ))}
                 </div>
               </div>
+
+              {presetFolders.length > 0 && (
+                <div>
+                  <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Folder</span>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSaveFolderId(null)}
+                      className={`rounded-lg border px-3 py-1.5 text-xs transition-all ${
+                        saveFolderId === null
+                          ? 'border-white bg-zinc-100 text-zinc-950 shadow-lg'
+                          : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                      }`}
+                    >
+                      None
+                    </button>
+                    {presetFolders.map((folder) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        onClick={() => setSaveFolderId(folder.id)}
+                        className={`rounded-lg border px-3 py-1.5 text-xs transition-all ${
+                          saveFolderId === folder.id
+                            ? 'border-white bg-zinc-100 text-zinc-950 shadow-lg'
+                            : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                        }`}
+                      >
+                        {folder.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="mt-4 flex justify-end gap-2">
@@ -548,9 +930,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
 
         {presetTab === 'custom' ? (
           <div
-            className={`space-y-4 rounded-xl border border-dashed p-3 transition-colors ${
-              isDropTarget ? 'border-zinc-300 bg-zinc-900/70' : 'border-zinc-800 bg-transparent'
-            }`}
+            className="space-y-6"
             onDragOver={(event) => {
               event.preventDefault();
               setIsDropTarget(true);
@@ -565,87 +945,261 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
               }
             }}
           >
-            <div className="flex items-center justify-between">
-              <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">
-                Custom Presets
-              </h3>
-              <button
-                type="button"
-                onClick={() => void handleImportClick()}
-                aria-label="Import preset"
-                className="rounded-md p-1.5 text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-100"
-                data-tip="Import Preset"
-              >
-                <Upload size={14} />
-              </button>
-            </div>
+            {isDropTarget && (
+              <div className="rounded-lg border border-dashed border-zinc-400 bg-zinc-900/50 py-4 text-center text-[11px] text-zinc-400">
+                Drop .darkslide file here
+              </div>
+            )}
 
             {filteredCustomPresets.length === 0 && !isSearching && customPresets.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center gap-3">
-                <Layers size={24} className="text-zinc-700" />
-                <p className="text-[11px] text-zinc-600 leading-relaxed max-w-[180px]">
-                  No custom presets yet. Save one from the current edit or import a `.darkslide` file.
-                </p>
+              <div className="space-y-3">
+                <div className="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                  <span className="flex items-center gap-1.5">
+                    <FolderOpen size={10} /> Actions
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleImportClick()}
+                    aria-label="Import preset"
+                    className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-400 transition-all hover:bg-zinc-900 hover:text-zinc-200"
+                  >
+                    <Upload size={10} /> Import
+                  </button>
+                </div>
+                <div className="flex flex-col items-center justify-center py-12 text-center gap-3">
+                  <Layers size={24} className="text-zinc-700" />
+                  <p className="text-[11px] text-zinc-600 leading-relaxed max-w-[180px]">
+                    No custom presets yet. Save one from the current edit or import a `.darkslide` file.
+                  </p>
+                </div>
               </div>
-            ) : filteredCustomPresets.length === 0 ? (
-              <p className="text-center text-[11px] text-zinc-600 py-6">No matching presets</p>
             ) : (
-              <div className="space-y-2">
-                {filteredCustomPresets.map((stock) => {
-                  const tagLabels = (stock.tags?.length ? stock.tags : [stock.type])
-                    .map(formatTag)
-                    .filter((value): value is string => Boolean(value));
-                  const metadata = [
-                    stock.filmStock,
-                    formatScannerType(stock.scannerType),
-                    ...tagLabels,
-                  ].filter(Boolean);
+              <>
+                {/* --- Toolbar row --- */}
+                <div className="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                  <span className="flex items-center gap-1.5">
+                    <Layers size={10} /> Presets
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => { setIsCreatingFolder(true); setNewFolderName(''); }}
+                      aria-label="New folder"
+                      className="rounded-md p-1 text-zinc-500 transition-all hover:bg-zinc-800 hover:text-zinc-100"
+                      data-tip="New Folder"
+                    >
+                      <FolderPlus size={10} />
+                    </button>
+                    <div className="relative">
+                      <button
+                        ref={sortButtonRef}
+                        type="button"
+                        onClick={() => setShowSortMenu((v) => !v)}
+                        aria-label="Sort presets"
+                        className={`rounded-md p-1 transition-all ${
+                          showSortMenu || customSort !== 'last-added'
+                            ? 'text-zinc-100 bg-zinc-800'
+                            : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100'
+                        }`}
+                        data-tip="Sort Presets"
+                      >
+                        <ArrowDownUp size={10} />
+                      </button>
+                      {showSortMenu && (
+                        <div
+                          ref={sortMenuRef}
+                          className="absolute right-0 z-50 mt-1 w-40 rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl"
+                        >
+                          {SORT_OPTIONS.map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => {
+                                setCustomSort(option.value);
+                                setShowSortMenu(false);
+                                try { localStorage.setItem(CUSTOM_SORT_KEY, option.value); } catch { /* ignore */ }
+                              }}
+                              className={`w-full px-3 py-1.5 text-left text-xs transition-colors ${
+                                customSort === option.value
+                                  ? 'bg-zinc-700 text-zinc-100'
+                                  : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleImportClick()}
+                      aria-label="Import preset"
+                      className="rounded-md p-1 text-zinc-500 transition-all hover:bg-zinc-800 hover:text-zinc-100"
+                      data-tip="Import Preset"
+                    >
+                      <Upload size={10} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* --- New folder inline form --- */}
+                {isCreatingFolder && (
+                  <div className="flex items-center gap-2">
+                    <FolderOpen size={12} className="shrink-0 text-zinc-500" />
+                    <input
+                      type="text"
+                      value={newFolderName}
+                      onChange={(e) => setNewFolderName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newFolderName.trim()) {
+                          onCreateFolder?.(newFolderName.trim());
+                          setIsCreatingFolder(false);
+                          setNewFolderName('');
+                        }
+                        if (e.key === 'Escape') {
+                          setIsCreatingFolder(false);
+                          setNewFolderName('');
+                        }
+                      }}
+                      placeholder="Folder name..."
+                      className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors focus:border-zinc-500 placeholder:text-zinc-600"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (newFolderName.trim()) {
+                          onCreateFolder?.(newFolderName.trim());
+                        }
+                        setIsCreatingFolder(false);
+                        setNewFolderName('');
+                      }}
+                      className="p-1 text-emerald-500 hover:bg-emerald-500/20 rounded transition-colors"
+                    >
+                      <Check size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setIsCreatingFolder(false); setNewFolderName(''); }}
+                      className="p-1 text-red-500 hover:bg-red-500/20 rounded transition-colors"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                )}
+
+                {/* --- Folder groups --- */}
+                {presetFolders.map((folder) => {
+                  const folderPresets = filteredCustomPresets.filter((p) => p.folderId === folder.id);
+                  if (isSearching && folderPresets.length === 0) return null;
+                  const isCollapsed = !isSearching && collapsedCustomGroups[folder.id];
 
                   return (
-                    <div key={stock.id} className="relative group flex items-center">
-                      <button
-                        onClick={() => onStockChange(stock)}
-                        className={`flex-1 text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex flex-col gap-0.5 ${
-                          activeStockId === stock.id
-                            ? 'bg-zinc-100 text-zinc-950 shadow-lg'
-                            : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
-                        }`}
-                      >
-                        <span className="font-medium">{stock.name}</span>
-                        {metadata.length > 0 && (
-                          <span className={`text-[11px] ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
-                            {metadata.join(' · ')}
-                          </span>
-                        )}
-                      </button>
-                      <div className="absolute right-2 flex items-center gap-1 opacity-0 transition-all group-hover:opacity-100">
+                    <div key={folder.id} className="space-y-3">
+                      <div className="flex w-full items-center justify-between">
                         <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleExportPreset(stock);
-                          }}
-                          aria-label={`Export ${stock.name}`}
-                          className="p-1.5 text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 rounded"
-                          data-tip="Export Preset"
+                          type="button"
+                          onClick={() => toggleCustomGroup(folder.id)}
+                          className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-zinc-500"
                         >
-                          <Download size={12} />
+                          <FolderOpen size={10} />
+                          {editingFolderId === folder.id ? (
+                            <input
+                              type="text"
+                              value={editingFolderName}
+                              onChange={(e) => setEditingFolderName(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                e.stopPropagation();
+                                if (e.key === 'Enter' && editingFolderName.trim()) {
+                                  onRenameFolder?.(folder.id, editingFolderName.trim());
+                                  setEditingFolderId(null);
+                                }
+                                if (e.key === 'Escape') setEditingFolderId(null);
+                              }}
+                              onBlur={() => {
+                                if (editingFolderName.trim()) {
+                                  onRenameFolder?.(folder.id, editingFolderName.trim());
+                                }
+                                setEditingFolderId(null);
+                              }}
+                              className="bg-transparent border-b border-zinc-500 outline-none text-zinc-300 w-20"
+                              autoFocus
+                            />
+                          ) : (
+                            <span>{folder.name}</span>
+                          )}
+                          <ChevronDown
+                            size={12}
+                            className={`transition-transform ${isSearching || !isCollapsed ? 'rotate-180' : ''}`}
+                          />
                         </button>
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleDeleteClick(stock);
-                          }}
-                          aria-label={`Delete ${stock.name}`}
-                          className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded"
-                          data-tip="Delete Preset"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            type="button"
+                            onClick={() => { setEditingFolderId(folder.id); setEditingFolderName(folder.name); }}
+                            aria-label={`Rename ${folder.name}`}
+                            className="rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
+                          >
+                            <Pencil size={10} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDeleteFolder?.(folder.id)}
+                            aria-label={`Delete folder ${folder.name}`}
+                            className="rounded p-1 text-zinc-600 transition-colors hover:bg-red-400/10 hover:text-red-400"
+                          >
+                            <Trash2 size={10} />
+                          </button>
+                        </div>
                       </div>
+                      {!isCollapsed && (
+                        folderPresets.length === 0 ? (
+                          <p className="text-[11px] text-zinc-600 pl-6">Empty folder</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {folderPresets.map((stock) => renderCustomPresetRow(stock))}
+                          </div>
+                        )
+                      )}
                     </div>
                   );
                 })}
-              </div>
+
+                {/* --- Ungrouped presets --- */}
+                {(() => {
+                  const ungrouped = filteredCustomPresets.filter((p) => !p.folderId || !presetFolders.some((f) => f.id === p.folderId));
+                  if (ungrouped.length === 0 && presetFolders.length > 0) return null;
+                  if (ungrouped.length === 0 && isSearching) return null;
+                  return (
+                    <div className="space-y-3">
+                      {presetFolders.length > 0 && (
+                        <div className="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                          <span className="flex items-center gap-1.5">
+                            <Film size={10} /> Ungrouped
+                          </span>
+                        </div>
+                      )}
+                      {ungrouped.length === 0 ? (
+                        isSearching ? (
+                          <p className="text-center text-[11px] text-zinc-600 py-6">No matching presets</p>
+                        ) : null
+                      ) : (
+                        <div className="space-y-2">
+                          {ungrouped.map((stock) => renderCustomPresetRow(stock))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {isSearching && filteredCustomPresets.length === 0 && (
+                  <p className="text-center text-[11px] text-zinc-600 py-6">No matching presets</p>
+                )}
+              </>
             )}
           </div>
         ) : (

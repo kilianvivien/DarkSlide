@@ -97,6 +97,7 @@ describe('PresetsPane', () => {
     expect(onSavePreset).toHaveBeenCalledWith('My Preset', {
       filmStock: 'Kodak Gold 200',
       scannerType: 'smartphone',
+      folderId: null,
     });
   });
 
@@ -281,6 +282,11 @@ describe('PresetsPane', () => {
 
     expect(screen.getByText('Kodak')).toBeInTheDocument();
     expect(screen.getByText('Fuji')).toBeInTheDocument();
+
+    // Expand collapsed groups to see profile labels
+    fireEvent.click(screen.getByText('Kodak'));
+    fireEvent.click(screen.getByText('Fuji'));
+
     expect(screen.getByText('Slide · Color')).toBeInTheDocument();
     expect(screen.getByText('Negative · Color')).toBeInTheDocument();
   });

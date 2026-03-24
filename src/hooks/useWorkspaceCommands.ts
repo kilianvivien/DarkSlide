@@ -768,7 +768,7 @@ export function useWorkspaceCommands({
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [documentState?.labStyleId, prefsSnapshotRef, resetHistory, updateDocument]);
 
-  const handleSavePreset = useCallback((name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => {
+  const handleSavePreset = useCallback((name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null; folderId?: string | null }) => {
     if (!documentState) return;
     const newPreset = savePreset({
       id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -786,6 +786,7 @@ export function useWorkspaceCommands({
       filmStock: metadata?.filmStock?.trim() ? metadata.filmStock.trim() : null,
       scannerType: metadata?.scannerType ?? null,
       lightSourceId: documentState.lightSourceId ?? null,
+      folderId: metadata?.folderId ?? null,
     });
     updateDocument((current) => ({
       ...current,

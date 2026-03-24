@@ -247,7 +247,7 @@ export default function App() {
     }, RENDER_INDICATOR_DELAY_MS);
   }, [clearRenderIndicator, isAdjustingCrop, isPanDragging]);
 
-  const { customPresets, savePreset, importPreset, deletePreset } = useCustomPresets();
+  const { customPresets, folders: presetFolders, savePreset, importPreset, deletePreset, createFolder, renameFolder, deleteFolder, movePresetToFolder } = useCustomPresets();
   const { customLightSources, saveCustomLightSource, deleteCustomLightSource } = useCustomLightSources();
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
 
@@ -1731,6 +1731,7 @@ export default function App() {
       labStyleProfiles={LAB_STYLE_PROFILES}
       lightSourceProfiles={allLightSourceProfiles}
       customPresets={customPresets}
+      presetFolders={presetFolders}
       savePresetTags={savePresetTags}
       sidebarTab={sidebarTab}
       cropTab={cropTab}
@@ -1829,6 +1830,10 @@ export default function App() {
       onSavePreset={handleSavePreset}
       onImportPreset={handleImportPreset}
       onDeletePreset={handleDeletePreset}
+      onCreateFolder={createFolder}
+      onRenameFolder={renameFolder}
+      onDeleteFolder={deleteFolder}
+      onMovePresetToFolder={movePresetToFolder}
       onSaveCustomLightSource={handleSaveCustomLightSource}
       onDeleteCustomLightSource={handleDeleteCustomLightSource}
       onCopyDebugInfo={handleCopyDebugInfo}

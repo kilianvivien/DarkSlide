@@ -50,6 +50,7 @@ import {
   LabStyleProfile,
   LightSourceProfile,
   NotificationSettings,
+  PresetFolder,
   RenderBackendDiagnostics,
   ScannerType,
   WorkspaceDocument,
@@ -78,6 +79,7 @@ type AppShellProps = {
   labStyleProfiles: LabStyleProfile[];
   lightSourceProfiles: LightSourceProfile[];
   customPresets: FilmProfile[];
+  presetFolders: PresetFolder[];
   savePresetTags: string[];
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'export';
   cropTab: CropTab;
@@ -181,6 +183,10 @@ type AppShellProps = {
   onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => void;
   onImportPreset: (profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => void;
   onDeletePreset: (id: string) => void;
+  onCreateFolder: (name: string) => void;
+  onRenameFolder: (id: string, name: string) => void;
+  onDeleteFolder: (id: string) => void;
+  onMovePresetToFolder: (presetId: string, folderId: string | null) => void;
   onSaveCustomLightSource: (profile: {
     id?: string | null;
     name: string;
@@ -241,6 +247,7 @@ export function AppShell({
   labStyleProfiles,
   lightSourceProfiles,
   customPresets,
+  presetFolders,
   savePresetTags,
   sidebarTab,
   cropTab,
@@ -339,6 +346,10 @@ export function AppShell({
   onSavePreset,
   onImportPreset,
   onDeletePreset,
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
+  onMovePresetToFolder,
   onSaveCustomLightSource,
   onDeleteCustomLightSource,
   onCopyDebugInfo,
@@ -898,11 +909,16 @@ export function AppShell({
                   onStockChange={onProfileChange}
                   builtinProfiles={builtinProfiles}
                   customPresets={customPresets}
+                  presetFolders={presetFolders}
                   canSavePreset={Boolean(documentState)}
                   saveTags={savePresetTags}
                   onSavePreset={onSavePreset}
                   onImportPreset={onImportPreset}
                   onDeletePreset={onDeletePreset}
+                  onCreateFolder={onCreateFolder}
+                  onRenameFolder={onRenameFolder}
+                  onDeleteFolder={onDeleteFolder}
+                  onMovePresetToFolder={onMovePresetToFolder}
                   onError={onSetError}
                 />
               </ErrorBoundary>

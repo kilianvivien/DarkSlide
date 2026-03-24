@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { FilmProfile } from '../types';
-import { loadPresetStore, savePresetStore } from '../utils/presetStore';
+import { FilmProfile, PresetFolder } from '../types';
+import { loadPresetStore, loadPresetFolders, loadPresetStoreAsync, savePresetStore } from '../utils/presetStore';
 
 function createCustomPresetId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -10,16 +10,35 @@ function createCustomPresetId() {
   return `custom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function createFolderId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `folder-${crypto.randomUUID()}`;
+  }
+
+  return `folder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function useCustomPresets() {
   const [customPresets, setCustomPresets] = useState<FilmProfile[]>([]);
+  const [folders, setFolders] = useState<PresetFolder[]>([]);
 
   useEffect(() => {
+    // Synchronous load for first render
     setCustomPresets(loadPresetStore());
+    setFolders(loadPresetFolders());
+
+    // Async load from IndexedDB (may have newer data after migration)
+    void loadPresetStoreAsync().then(({ presets, folders: f }) => {
+      setCustomPresets(presets);
+      setFolders(f);
+    });
   }, []);
 
-  const persist = (nextPresets: FilmProfile[]) => {
+  const persist = (nextPresets: FilmProfile[], nextFolders?: PresetFolder[]) => {
+    const f = nextFolders ?? folders;
     setCustomPresets(nextPresets);
-    savePresetStore(nextPresets);
+    setFolders(f);
+    savePresetStore(nextPresets, f);
   };
 
   const savePreset = (preset: FilmProfile) => {
@@ -55,5 +74,43 @@ export function useCustomPresets() {
     persist(customPresets.filter((preset) => preset.id !== id));
   };
 
-  return { customPresets, savePreset, importPreset, deletePreset };
+  const createFolder = (name: string) => {
+    const folder: PresetFolder = { id: createFolderId(), name: name.trim() };
+    const nextFolders = [...folders, folder];
+    persist(customPresets, nextFolders);
+    return folder;
+  };
+
+  const renameFolder = (id: string, name: string) => {
+    const nextFolders = folders.map((f) => (f.id === id ? { ...f, name: name.trim() } : f));
+    persist(customPresets, nextFolders);
+  };
+
+  const deleteFolder = (id: string) => {
+    // Unassign presets from the deleted folder
+    const nextPresets = customPresets.map((p) =>
+      p.folderId === id ? { ...p, folderId: null } : p,
+    );
+    const nextFolders = folders.filter((f) => f.id !== id);
+    persist(nextPresets, nextFolders);
+  };
+
+  const movePresetToFolder = (presetId: string, folderId: string | null) => {
+    const nextPresets = customPresets.map((p) =>
+      p.id === presetId ? { ...p, folderId } : p,
+    );
+    persist(nextPresets);
+  };
+
+  return {
+    customPresets,
+    folders,
+    savePreset,
+    importPreset,
+    deletePreset,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    movePresetToFolder,
+  };
 }
