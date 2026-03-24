@@ -106,13 +106,20 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   const [importConflict, setImportConflict] = useState<ImportConflictState | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<FilmProfileCategory, boolean>>({
-    Generic: false,
-    Kodak: false,
-    Fuji: false,
-    Ilford: false,
-    CineStill: false,
-    Lomography: false,
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<FilmProfileCategory, boolean>>(() => {
+    const defaults: Record<FilmProfileCategory, boolean> = {
+      Generic: true,
+      Kodak: true,
+      Fuji: true,
+      Ilford: true,
+      CineStill: true,
+      Lomography: true,
+    };
+    try {
+      const stored = localStorage.getItem('darkslide_collapsed_groups_v1');
+      if (stored) return { ...defaults, ...JSON.parse(stored) };
+    } catch { /* ignore */ }
+    return defaults;
   });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -677,10 +684,11 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                 <div key={group.category} className="space-y-3">
                   <button
                     type="button"
-                    onClick={() => setCollapsedGroups((current) => ({
-                      ...current,
-                      [group.category]: isSearching ? false : !current[group.category],
-                    }))}
+                    onClick={() => setCollapsedGroups((current) => {
+                      const next = { ...current, [group.category]: isSearching ? false : !current[group.category] };
+                      try { localStorage.setItem('darkslide_collapsed_groups_v1', JSON.stringify(next)); } catch { /* ignore */ }
+                      return next;
+                    })}
                     className="flex w-full items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-zinc-500"
                   >
                     <span className="flex items-center gap-1.5">

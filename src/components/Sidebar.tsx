@@ -456,6 +456,14 @@ export const Sidebar = memo(function Sidebar({
                 <section>
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
                     <Settings2 size={12} /> Scanning Corrections
+                    <button
+                      data-tip="Correct for light source color cast, lab-specific color shifts, and lens flare from the scanner or enlarger."
+                      aria-label="Scanning corrections help"
+                      className="ml-1 text-zinc-700 hover:text-zinc-500 transition-colors"
+                      tabIndex={-1}
+                    >
+                      <Info size={10} />
+                    </button>
                   </h2>
                   <div className="mb-4 flex items-center gap-3">
                     <span className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-zinc-400">Light Source</span>
@@ -494,29 +502,23 @@ export const Sidebar = memo(function Sidebar({
                       onInteractionEnd={onInteractionEnd}
                     />
 
-                  {estimatedFlare && (
-                    <p className="text-xs text-zinc-500">
-                      Floor: R{estimatedFlare[0]} G{estimatedFlare[1]} B{estimatedFlare[2]}
-                    </p>
-                  )}
                 </section>
 
                 <section>
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                     <SlidersHorizontal size={12} /> Basic Adjustments
-                  </h2>
-                  {histogramData && (
-                    <div className="mb-5 flex flex-wrap gap-2">
+                    {histogramData && (
                       <button
                         type="button"
                         onClick={onAutoAdjust}
-                        className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-200"
+                        data-tip="Auto-sets exposure, contrast, black point, and white point from the image histogram"
+                        className="ml-auto flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-200"
                       >
                         <Wand2 size={10} />
                         Auto
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </h2>
 
                   <Slider label="Exposure" value={settings.exposure} min={-100} max={100} onChange={scalarSliderHandlers.exposure} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   <Slider label="Contrast" value={settings.contrast} min={-100} max={100} onChange={scalarSliderHandlers.contrast} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
