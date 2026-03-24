@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { ArrowDownUp, Check, ChevronDown, Download, Film, FolderOpen, FolderPlus, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
-import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES } from '../constants';
+import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from '../constants';
 import { confirmDeletePreset, isDesktopShell, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
@@ -495,89 +496,138 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     const tagLabels = (stock.tags?.length ? stock.tags : [stock.type])
       .map(formatTag)
       .filter((value): value is string => Boolean(value));
-    const metadata = [
+    const labStyleName = stock.labStyleId ? LAB_STYLE_PROFILES_MAP[stock.labStyleId]?.name : null;
+    const lightSourceName = stock.lightSourceId
+      ? LIGHT_SOURCE_PROFILES.find((ls) => ls.id === stock.lightSourceId)?.name ?? null
+      : null;
+    const compactMeta = [
       stock.filmStock,
       formatScannerType(stock.scannerType),
       ...tagLabels,
     ].filter(Boolean);
+    const expandedDetails = [
+      stock.filmStock ? ['Film stock', stock.filmStock] : null,
+      formatScannerType(stock.scannerType) ? ['Scanner', formatScannerType(stock.scannerType)] : null,
+      lightSourceName ? ['Light source', lightSourceName] : null,
+      labStyleName ? ['Lab style', labStyleName] : null,
+    ].filter((entry): entry is [string, string] => entry !== null);
+    const isExpanded = activeStockId === stock.id;
 
     return (
       <div key={stock.id} className="relative">
         <button
           onClick={() => onStockChange(stock)}
-          className={`group w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
-            activeStockId === stock.id
+          className={`group w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex flex-col gap-1 ${
+            isExpanded
               ? 'bg-zinc-100 text-zinc-950 shadow-lg'
               : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
           }`}
         >
-          <Film size={14} className="shrink-0 text-zinc-600" />
-          <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-            <span className="font-medium truncate">{stock.name}</span>
-            {metadata.length > 0 && (
-              <span className={`text-[10px] opacity-60 truncate ${activeStockId === stock.id ? 'text-zinc-700' : 'text-zinc-500'}`}>
-                {metadata.join(' · ')}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
-            {presetFolders.length > 0 && (
+          {/* Top row: icon + name + action buttons */}
+          <div className="flex w-full items-center gap-3">
+            <Film size={14} className="shrink-0 text-zinc-600" />
+            <div className="min-w-0 flex-1">
+              <span className="font-medium truncate block">{stock.name}</span>
+              {!isExpanded && compactMeta.length > 0 && (
+                <span className="text-[10px] opacity-60 truncate block text-zinc-500">
+                  {compactMeta.join(' · ')}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+              {presetFolders.length > 0 && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMoveMenuPresetId((current) => current === stock.id ? null : stock.id);
+                  }}
+                  onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); setMoveMenuPresetId((current) => current === stock.id ? null : stock.id); } }}
+                  aria-label={`Move ${stock.name} to folder`}
+                  className={`p-1 rounded transition-colors ${
+                    isExpanded
+                      ? 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-300'
+                      : 'text-zinc-600 hover:text-zinc-100 hover:bg-zinc-800'
+                  }`}
+                  data-tip="Move to folder"
+                >
+                  <FolderOpen size={12} />
+                </span>
+              )}
               <span
                 role="button"
                 tabIndex={0}
                 onClick={(event) => {
                   event.stopPropagation();
-                  setMoveMenuPresetId((current) => current === stock.id ? null : stock.id);
+                  void handleExportPreset(stock);
                 }}
-                onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); setMoveMenuPresetId((current) => current === stock.id ? null : stock.id); } }}
-                aria-label={`Move ${stock.name} to folder`}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); void handleExportPreset(stock); } }}
+                aria-label={`Export ${stock.name}`}
                 className={`p-1 rounded transition-colors ${
-                  activeStockId === stock.id
+                  isExpanded
                     ? 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-300'
                     : 'text-zinc-600 hover:text-zinc-100 hover:bg-zinc-800'
                 }`}
-                data-tip="Move to folder"
+                data-tip="Export Preset"
               >
-                <FolderOpen size={12} />
+                <Download size={12} />
               </span>
-            )}
-            <span
-              role="button"
-              tabIndex={0}
-              onClick={(event) => {
-                event.stopPropagation();
-                void handleExportPreset(stock);
-              }}
-              onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); void handleExportPreset(stock); } }}
-              aria-label={`Export ${stock.name}`}
-              className={`p-1 rounded transition-colors ${
-                activeStockId === stock.id
-                  ? 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-300'
-                  : 'text-zinc-600 hover:text-zinc-100 hover:bg-zinc-800'
-              }`}
-              data-tip="Export Preset"
-            >
-              <Download size={12} />
-            </span>
-            <span
-              role="button"
-              tabIndex={0}
-              onClick={(event) => {
-                event.stopPropagation();
-                void handleDeleteClick(stock);
-              }}
-              onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); void handleDeleteClick(stock); } }}
-              aria-label={`Delete ${stock.name}`}
-              className={`p-1 rounded transition-colors ${
-                activeStockId === stock.id
-                  ? 'text-zinc-500 hover:text-red-600 hover:bg-red-100'
-                  : 'text-zinc-600 hover:text-red-400 hover:bg-red-400/10'
-              }`}
-              data-tip="Delete Preset"
-            >
-              <Trash2 size={12} />
-            </span>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleDeleteClick(stock);
+                }}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); void handleDeleteClick(stock); } }}
+                aria-label={`Delete ${stock.name}`}
+                className={`p-1 rounded transition-colors ${
+                  isExpanded
+                    ? 'text-zinc-500 hover:text-red-600 hover:bg-red-100'
+                    : 'text-zinc-600 hover:text-red-400 hover:bg-red-400/10'
+                }`}
+                data-tip="Delete Preset"
+              >
+                <Trash2 size={12} />
+              </span>
+            </div>
           </div>
+          {/* Expanded details row: full width below */}
+          <AnimatePresence initial={false}>
+            {isExpanded && expandedDetails.length > 0 && (
+              <motion.div
+                key="details"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeInOut' }}
+                className="w-full overflow-hidden"
+              >
+                <div className="border-t border-zinc-200 pt-2 mt-1 space-y-1.5">
+                  {expandedDetails.length > 0 && (
+                    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                      {expandedDetails.map(([label, value]) => (
+                        <React.Fragment key={label}>
+                          <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide whitespace-nowrap">{label}</span>
+                          <span className="text-[10px] text-zinc-600">{value}</span>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  )}
+                  {tagLabels.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-0.5">
+                      {tagLabels.map((tag) => (
+                        <span key={tag} className="inline-flex items-center rounded-full bg-zinc-200 px-2 py-0.5 text-[9px] font-medium text-zinc-600">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </button>
 
         {/* Move-to-folder popup */}
@@ -1137,24 +1187,26 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                             className={`transition-transform ${isSearching || !isCollapsed ? 'rotate-180' : ''}`}
                           />
                         </button>
-                        <div className="flex items-center gap-0.5">
-                          <button
-                            type="button"
-                            onClick={() => { setEditingFolderId(folder.id); setEditingFolderName(folder.name); }}
-                            aria-label={`Rename ${folder.name}`}
-                            className="rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
-                          >
-                            <Pencil size={10} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDeleteFolder?.(folder.id)}
-                            aria-label={`Delete folder ${folder.name}`}
-                            className="rounded p-1 text-zinc-600 transition-colors hover:bg-red-400/10 hover:text-red-400"
-                          >
-                            <Trash2 size={10} />
-                          </button>
-                        </div>
+                        {!isCollapsed && (
+                          <div className="flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => { setEditingFolderId(folder.id); setEditingFolderName(folder.name); }}
+                              aria-label={`Rename ${folder.name}`}
+                              className="rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
+                            >
+                              <Pencil size={10} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteFolder?.(folder.id)}
+                              aria-label={`Delete folder ${folder.name}`}
+                              className="rounded p-1 text-zinc-600 transition-colors hover:bg-red-400/10 hover:text-red-400"
+                            >
+                              <Trash2 size={10} />
+                            </button>
+                          </div>
+                        )}
                       </div>
                       {!isCollapsed && (
                         folderPresets.length === 0 ? (

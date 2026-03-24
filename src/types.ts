@@ -186,6 +186,7 @@ export interface FilmProfile {
   scannerType?: ScannerType | null;
   lightSourceId?: string | null;
   folderId?: string | null;
+  labStyleId?: string | null;
 }
 
 export interface DarkslidePresetFile {

@@ -30,6 +30,7 @@ interface BatchModalProps {
   notificationSettings: NotificationSettings;
   customProfiles: FilmProfile[];
   openTabs: DocumentTab[];
+  defaultOutputPath?: string | null;
 }
 
 function formatFileSize(size: number) {
@@ -100,6 +101,7 @@ export function BatchModal({
   notificationSettings,
   customProfiles,
   openTabs,
+  defaultOutputPath,
 }: BatchModalProps) {
   const [entries, setEntries] = useState<BatchJobEntry[]>([]);
   const [settingsSource, setSettingsSource] = useState<SettingsSourceMode>(currentSettings && currentProfile ? 'current' : 'builtin');
@@ -114,7 +116,7 @@ export function BatchModal({
     filenameBase: '{original}_darkslide',
   });
   const [colorManagement, setColorManagement] = useState<ColorManagementSettings>(currentColorManagement ?? DEFAULT_COLOR_MANAGEMENT);
-  const [outputPath, setOutputPath] = useState<string | null>(null);
+  const [outputPath, setOutputPath] = useState<string | null>(defaultOutputPath ?? null);
   const [isRunning, setIsRunning] = useState(false);
   const [colorMgmtExpanded, setColorMgmtExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -574,9 +576,9 @@ export function BatchModal({
                           </select>
                           {selectedCustomProfileHasEmbeddedTransforms && (
                             <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3.5 py-3">
-                              <p className="text-xs font-medium text-amber-200">This custom preset includes crop or rotation.</p>
+                              <p className="text-xs font-medium text-amber-200">This preset has a saved crop or rotation.</p>
                               <p className="mt-1 text-[11px] leading-5 text-amber-100/80">
-                                Batch export and contact sheets will reuse those embedded transforms unless you ignore them here.
+                                Every image will be cropped and rotated the same way. Tick the box below to skip this and keep each image as-is.
                               </p>
                               <div className="mt-3">
                                 <CheckOption

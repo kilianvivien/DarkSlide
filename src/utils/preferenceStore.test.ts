@@ -28,6 +28,8 @@ const VALID_PREFS: UserPreferences = {
   externalEditorPath: null,
   externalEditorName: null,
   openInEditorOutputPath: null,
+  batchOutputPath: null,
+  contactSheetOutputPath: null,
 };
 
 beforeEach(() => {

@@ -99,6 +99,8 @@ export default function App() {
   const [externalEditorPath, setExternalEditorPath] = useState<string | null>(() => initialPreferences?.externalEditorPath ?? null);
   const [externalEditorName, setExternalEditorName] = useState<string | null>(() => initialPreferences?.externalEditorName ?? null);
   const [openInEditorOutputPath, setOpenInEditorOutputPath] = useState<string | null>(() => initialPreferences?.openInEditorOutputPath ?? null);
+  const [batchOutputPath, setBatchOutputPath] = useState<string | null>(() => initialPreferences?.batchOutputPath ?? null);
+  const [contactSheetOutputPath, setContactSheetOutputPath] = useState<string | null>(() => initialPreferences?.contactSheetOutputPath ?? null);
   const [defaultExportOptions, setDefaultExportOptions] = useState<ExportOptions>(() => initialPreferences?.exportOptions ?? DEFAULT_EXPORT_OPTIONS);
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [isRenderIndicatorVisible, setIsRenderIndicatorVisible] = useState(false);
@@ -298,6 +300,8 @@ export default function App() {
     externalEditorPath: initialPreferences?.externalEditorPath ?? null,
     externalEditorName: initialPreferences?.externalEditorName ?? null,
     openInEditorOutputPath: initialPreferences?.openInEditorOutputPath ?? null,
+    batchOutputPath: initialPreferences?.batchOutputPath ?? null,
+    contactSheetOutputPath: initialPreferences?.contactSheetOutputPath ?? null,
   });
   prefsSnapshotRef.current = {
     version: 4,
@@ -313,6 +317,8 @@ export default function App() {
     externalEditorPath,
     externalEditorName,
     openInEditorOutputPath,
+    batchOutputPath,
+    contactSheetOutputPath,
   };
   const activeProfile = documentState
     ? profilesById.get(documentState.profileId) ?? fallbackProfile
@@ -1380,6 +1386,10 @@ export default function App() {
     handleClearExternalEditor,
     handleChooseOpenInEditorOutputPath,
     handleUseDownloadsForOpenInEditor,
+    handleChooseBatchOutputPath,
+    handleUseDownloadsForBatch,
+    handleChooseContactSheetOutputPath,
+    handleUseDownloadsForContactSheet,
     handleCanvasClick,
     handleCopyDebugInfo,
     handleDrop,
@@ -1470,6 +1480,8 @@ export default function App() {
     setExternalEditorPath,
     setExternalEditorName,
     setOpenInEditorOutputPath,
+    setBatchOutputPath,
+    setContactSheetOutputPath,
     setShowTabSwitchOverlay,
     setTabSwitchOverlayKey,
     setPreviewVisibility,
@@ -1771,6 +1783,8 @@ export default function App() {
       externalEditorPath={externalEditorPath}
       externalEditorName={externalEditorName}
       openInEditorOutputPath={openInEditorOutputPath}
+      batchOutputPath={batchOutputPath}
+      contactSheetOutputPath={contactSheetOutputPath}
       zoom={zoom}
       fitScale={fitScale}
       effectiveZoom={effectiveZoom}
@@ -1850,6 +1864,10 @@ export default function App() {
       onClearExternalEditor={handleClearExternalEditor}
       onChooseOpenInEditorOutputPath={handleChooseOpenInEditorOutputPath}
       onUseDownloadsForOpenInEditor={handleUseDownloadsForOpenInEditor}
+      onChooseBatchOutputPath={handleChooseBatchOutputPath}
+      onUseDownloadsForBatch={handleUseDownloadsForBatch}
+      onChooseContactSheetOutputPath={handleChooseContactSheetOutputPath}
+      onUseDownloadsForContactSheet={handleUseDownloadsForContactSheet}
       onCanvasClick={handleCanvasClick}
       onHandleZoomWheel={handleZoomWheel}
       onStartPan={handlePanStart}

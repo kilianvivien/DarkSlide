@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, X } from 'lucide-react';
 import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile, NotificationSettings } from '../types';
-import { isDesktopShell, saveExportBlob } from '../utils/fileBridge';
+import { isDesktopShell, saveExportBlob, saveToDirectory } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { BatchJobEntry } from '../utils/batchProcessor';
 import { getColorProfileDescription } from '../utils/colorProfiles';
@@ -21,6 +21,7 @@ interface ContactSheetModalProps {
   sharedColorManagement: ColorManagementSettings | null;
   notificationSettings: NotificationSettings;
   workerClient: ImageWorkerClient | null;
+  defaultOutputPath?: string | null;
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -69,6 +70,7 @@ export function ContactSheetModal({
   sharedColorManagement,
   notificationSettings,
   workerClient,
+  defaultOutputPath,
 }: ContactSheetModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>(entries.map((entry) => entry.id));
@@ -305,7 +307,13 @@ export function ContactSheetModal({
         })),
       });
 
-      const saveResult = await saveExportBlob(result.blob, result.filename, format);
+      let saveResult: 'saved' | 'cancelled';
+      if (defaultOutputPath) {
+        await saveToDirectory(result.blob, result.filename, defaultOutputPath);
+        saveResult = 'saved';
+      } else {
+        saveResult = await saveExportBlob(result.blob, result.filename, format);
+      }
       if (saveResult === 'saved') {
         if (notificationSettings.enabled && notificationSettings.contactSheetComplete) {
           await notifyExportFinished({

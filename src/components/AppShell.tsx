@@ -119,6 +119,8 @@ type AppShellProps = {
   externalEditorPath: string | null;
   externalEditorName: string | null;
   openInEditorOutputPath: string | null;
+  batchOutputPath: string | null;
+  contactSheetOutputPath: string | null;
   zoom: number | 'fit';
   fitScale: number;
   effectiveZoom: number;
@@ -209,6 +211,10 @@ type AppShellProps = {
   onClearExternalEditor: () => void;
   onChooseOpenInEditorOutputPath: () => Promise<void>;
   onUseDownloadsForOpenInEditor: () => void;
+  onChooseBatchOutputPath: () => Promise<void>;
+  onUseDownloadsForBatch: () => void;
+  onChooseContactSheetOutputPath: () => Promise<void>;
+  onUseDownloadsForContactSheet: () => void;
   onCanvasClick: (event: React.MouseEvent<HTMLCanvasElement>) => Promise<void>;
   onHandleZoomWheel: (deltaY: number, normX: number, normY: number) => void;
   onStartPan: (clientX: number, clientY: number) => void;
@@ -287,6 +293,8 @@ export function AppShell({
   externalEditorPath,
   externalEditorName,
   openInEditorOutputPath,
+  batchOutputPath,
+  contactSheetOutputPath,
   zoom,
   fitScale,
   effectiveZoom,
@@ -366,6 +374,10 @@ export function AppShell({
   onClearExternalEditor,
   onChooseOpenInEditorOutputPath,
   onUseDownloadsForOpenInEditor,
+  onChooseBatchOutputPath,
+  onUseDownloadsForBatch,
+  onChooseContactSheetOutputPath,
+  onUseDownloadsForContactSheet,
   onCanvasClick,
   onHandleZoomWheel,
   onStartPan,
@@ -806,9 +818,9 @@ export function AppShell({
                         </div>
                       )}
                       {activeLabStyle && (
-                        <div className="flex items-center gap-2 rounded-2xl border border-amber-900/60 bg-amber-950/35 px-3 py-2 shadow-2xl backdrop-blur-md">
-                          <Building2 size={14} className="text-amber-300" />
-                          <span className="text-[10px] font-mono uppercase tracking-widest text-amber-200">
+                        <div className="flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 shadow-2xl backdrop-blur-md">
+                          <Building2 size={14} className="text-zinc-500" />
+                          <span className="px-2 text-[10px] font-mono uppercase tracking-widest text-zinc-500">
                             {activeLabStyle.name}
                           </span>
                         </div>
@@ -975,6 +987,12 @@ export function AppShell({
           onClearExternalEditor={onClearExternalEditor}
           onChooseOpenInEditorOutputPath={() => { void onChooseOpenInEditorOutputPath(); }}
           onUseDownloadsForOpenInEditor={onUseDownloadsForOpenInEditor}
+          batchOutputPath={batchOutputPath}
+          onChooseBatchOutputPath={() => { void onChooseBatchOutputPath(); }}
+          onUseDownloadsForBatch={onUseDownloadsForBatch}
+          contactSheetOutputPath={contactSheetOutputPath}
+          onChooseContactSheetOutputPath={() => { void onChooseContactSheetOutputPath(); }}
+          onUseDownloadsForContactSheet={onUseDownloadsForContactSheet}
         />
       </ErrorBoundary>
       <ErrorBoundary>
@@ -993,6 +1011,7 @@ export function AppShell({
           notificationSettings={notificationSettings}
           customProfiles={customPresets}
           openTabs={tabs}
+          defaultOutputPath={batchOutputPath}
         />
       </ErrorBoundary>
       <ErrorBoundary>
@@ -1005,6 +1024,7 @@ export function AppShell({
           sharedColorManagement={contactSheetSharedColorManagement}
           notificationSettings={notificationSettings}
           workerClient={workerClient}
+          defaultOutputPath={contactSheetOutputPath}
         />
       </ErrorBoundary>
     </div>

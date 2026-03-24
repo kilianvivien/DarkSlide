@@ -152,6 +152,8 @@ type UseWorkspaceCommandsOptions = {
   setExternalEditorPath: SetState<string | null>;
   setExternalEditorName: SetState<string | null>;
   setOpenInEditorOutputPath: SetState<string | null>;
+  setBatchOutputPath: SetState<string | null>;
+  setContactSheetOutputPath: SetState<string | null>;
   setShowTabSwitchOverlay: SetState<boolean>;
   setTabSwitchOverlayKey: SetState<number>;
   setPreviewVisibility: (next: boolean) => void;
@@ -247,6 +249,8 @@ export function useWorkspaceCommands({
   setExternalEditorPath,
   setExternalEditorName,
   setOpenInEditorOutputPath,
+  setBatchOutputPath,
+  setContactSheetOutputPath,
   setShowTabSwitchOverlay,
   setTabSwitchOverlayKey,
   setPreviewVisibility,
@@ -755,6 +759,10 @@ export function useWorkspaceCommands({
       ? (profile.lightSourceId ?? null)
       : undefined;
 
+    const nextLabStyleId = Object.prototype.hasOwnProperty.call(profile, 'labStyleId')
+      ? (profile.labStyleId ?? null)
+      : undefined;
+
     updateDocument((current) => ({
       ...current,
       profileId: profile.id,
@@ -762,9 +770,11 @@ export function useWorkspaceCommands({
         ? nextLightSourceId
         : resolveLightSourceIdForProfile(profile, current.lightSourceId),
       settings: structuredClone(profile.defaultSettings),
+      ...(nextLabStyleId !== undefined ? { labStyleId: nextLabStyleId } : {}),
       dirty: true,
     }));
-    resetHistory(createHistoryEntry(profile.defaultSettings, documentState?.labStyleId ?? null));
+    const resolvedLabStyleId = nextLabStyleId !== undefined ? nextLabStyleId : (documentState?.labStyleId ?? null);
+    resetHistory(createHistoryEntry(profile.defaultSettings, resolvedLabStyleId));
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [documentState?.labStyleId, prefsSnapshotRef, resetHistory, updateDocument]);
 
@@ -787,6 +797,7 @@ export function useWorkspaceCommands({
       scannerType: metadata?.scannerType ?? null,
       lightSourceId: documentState.lightSourceId ?? null,
       folderId: metadata?.folderId ?? null,
+      labStyleId: documentState.labStyleId ?? null,
     });
     updateDocument((current) => ({
       ...current,
@@ -1046,6 +1057,40 @@ export function useWorkspaceCommands({
     savePreferences({ ...prefsSnapshotRef.current, openInEditorOutputPath: null });
   }, [prefsSnapshotRef, setOpenInEditorOutputPath]);
 
+  const handleChooseBatchOutputPath = useCallback(async () => {
+    try {
+      const selected = await openDirectory();
+      if (!selected) return;
+      setBatchOutputPath(selected);
+      savePreferences({ ...prefsSnapshotRef.current, batchOutputPath: selected });
+    } catch (pathError) {
+      const message = formatError(pathError, { preservePrefix: true });
+      setError(`Could not choose a batch export folder. ${message}`);
+    }
+  }, [formatError, prefsSnapshotRef, setError, setBatchOutputPath]);
+
+  const handleUseDownloadsForBatch = useCallback(() => {
+    setBatchOutputPath(null);
+    savePreferences({ ...prefsSnapshotRef.current, batchOutputPath: null });
+  }, [prefsSnapshotRef, setBatchOutputPath]);
+
+  const handleChooseContactSheetOutputPath = useCallback(async () => {
+    try {
+      const selected = await openDirectory();
+      if (!selected) return;
+      setContactSheetOutputPath(selected);
+      savePreferences({ ...prefsSnapshotRef.current, contactSheetOutputPath: selected });
+    } catch (pathError) {
+      const message = formatError(pathError, { preservePrefix: true });
+      setError(`Could not choose a contact sheet export folder. ${message}`);
+    }
+  }, [formatError, prefsSnapshotRef, setError, setContactSheetOutputPath]);
+
+  const handleUseDownloadsForContactSheet = useCallback(() => {
+    setContactSheetOutputPath(null);
+    savePreferences({ ...prefsSnapshotRef.current, contactSheetOutputPath: null });
+  }, [prefsSnapshotRef, setContactSheetOutputPath]);
+
   const handleCanvasClick = useCallback(async (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!documentState || !displaySettings || !displayCanvasRef.current || !workerClientRef.current) return;
     if (!isPickingFilmBase && !activePointPicker) return;
@@ -1237,6 +1282,10 @@ export function useWorkspaceCommands({
     handleClearExternalEditor,
     handleChooseOpenInEditorOutputPath,
     handleUseDownloadsForOpenInEditor,
+    handleChooseBatchOutputPath,
+    handleUseDownloadsForBatch,
+    handleChooseContactSheetOutputPath,
+    handleUseDownloadsForContactSheet,
     handleCanvasClick,
     handleCopyDebugInfo,
     handleDrop,

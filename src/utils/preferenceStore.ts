@@ -17,6 +17,8 @@ export interface UserPreferences {
   externalEditorPath: string | null;
   externalEditorName: string | null;
   openInEditorOutputPath: string | null;
+  batchOutputPath: string | null;
+  contactSheetOutputPath: string | null;
 }
 
 function isValidPreferences(value: unknown): value is UserPreferences {
@@ -44,6 +46,8 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     (prefs.externalEditorPath === undefined || prefs.externalEditorPath === null || typeof prefs.externalEditorPath === 'string') &&
     (prefs.externalEditorName === undefined || prefs.externalEditorName === null || typeof prefs.externalEditorName === 'string') &&
     (prefs.openInEditorOutputPath === undefined || prefs.openInEditorOutputPath === null || typeof prefs.openInEditorOutputPath === 'string') &&
+    (prefs.batchOutputPath === undefined || prefs.batchOutputPath === null || typeof prefs.batchOutputPath === 'string') &&
+    (prefs.contactSheetOutputPath === undefined || prefs.contactSheetOutputPath === null || typeof prefs.contactSheetOutputPath === 'string') &&
     (prefs.notificationSettings.enabled === undefined || typeof prefs.notificationSettings.enabled === 'boolean') &&
     (prefs.notificationSettings.exportComplete === undefined || typeof prefs.notificationSettings.exportComplete === 'boolean') &&
     (prefs.notificationSettings.batchComplete === undefined || typeof prefs.notificationSettings.batchComplete === 'boolean') &&
@@ -155,6 +159,8 @@ function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPr
     externalEditorPath: null,
     externalEditorName: null,
     openInEditorOutputPath: null,
+    batchOutputPath: null,
+    contactSheetOutputPath: null,
   };
 }
 
@@ -180,6 +186,8 @@ function migrateVersion2Preferences(legacy: ReturnType<typeof JSON.parse>): User
     externalEditorPath: legacy.externalEditorPath ?? null,
     externalEditorName: legacy.externalEditorName ?? null,
     openInEditorOutputPath: null,
+    batchOutputPath: null,
+    contactSheetOutputPath: null,
   };
 }
 
@@ -205,6 +213,8 @@ function migrateVersion3Preferences(legacy: ReturnType<typeof JSON.parse>): User
     externalEditorPath: legacy.externalEditorPath ?? null,
     externalEditorName: legacy.externalEditorName ?? null,
     openInEditorOutputPath: legacy.openInEditorOutputPath ?? null,
+    batchOutputPath: null,
+    contactSheetOutputPath: null,
   };
 }
 
@@ -241,6 +251,8 @@ export function loadPreferences(): UserPreferences | null {
       externalEditorPath: parsed.externalEditorPath ?? null,
       externalEditorName: parsed.externalEditorName ?? null,
       openInEditorOutputPath: parsed.openInEditorOutputPath ?? null,
+      batchOutputPath: parsed.batchOutputPath ?? null,
+      contactSheetOutputPath: parsed.contactSheetOutputPath ?? null,
     };
   } catch {
     return null;

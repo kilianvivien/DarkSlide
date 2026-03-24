@@ -53,6 +53,12 @@ interface SettingsModalProps {
   onClearExternalEditor: () => void;
   onChooseOpenInEditorOutputPath: () => void;
   onUseDownloadsForOpenInEditor: () => void;
+  batchOutputPath: string | null;
+  onChooseBatchOutputPath: () => void;
+  onUseDownloadsForBatch: () => void;
+  contactSheetOutputPath: string | null;
+  onChooseContactSheetOutputPath: () => void;
+  onUseDownloadsForContactSheet: () => void;
 }
 
 type DiagnosticCardItem = {
@@ -320,8 +326,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClearExternalEditor,
   onChooseOpenInEditorOutputPath,
   onUseDownloadsForOpenInEditor,
+  batchOutputPath,
+  onChooseBatchOutputPath,
+  onUseDownloadsForBatch,
+  contactSheetOutputPath,
+  onChooseContactSheetOutputPath,
+  onUseDownloadsForContactSheet,
 }) => {
   const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'calibration' | 'shortcuts' | 'diagnostics'>('performance');
+  const [folderTab, setFolderTab] = useState<'editor' | 'batch' | 'contact'>('editor');
   const [copied, setCopied] = useState(false);
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const [showLightSourceForm, setShowLightSourceForm] = useState(false);
@@ -721,36 +734,112 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           </p>
                         </div>
 
-                        {/* Editor Export Folder */}
+                        {/* Export Folders */}
                         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
-                          <div>
-                            <p className="text-[13px] font-semibold text-zinc-100">Editor Export Folder</p>
-                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
-                              Where your photo is saved before opening in the external app.
-                            </p>
+                          <p className="text-[13px] font-semibold text-zinc-100">Export Folders</p>
+                          <div className="flex gap-1 rounded-lg bg-zinc-950 p-0.5">
+                            {([
+                              ['editor', 'Editor'],
+                              ['batch', 'Batch'],
+                              ['contact', 'Contact Sheet'],
+                            ] as const).map(([key, label]) => (
+                              <button
+                                key={key}
+                                type="button"
+                                onClick={() => setFolderTab(key)}
+                                className={`flex-1 rounded-md px-2 py-1.5 text-[12px] font-medium transition-all ${
+                                  folderTab === key
+                                    ? 'bg-zinc-800 text-zinc-100 shadow-sm'
+                                    : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
                           </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              onClick={onChooseOpenInEditorOutputPath}
-                              className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 hover:bg-zinc-900 transition-all"
-                            >
-                              <FolderOpen size={13} className="text-zinc-500" />
-                              Choose Folder…
-                            </button>
-                            <button
-                              onClick={onUseDownloadsForOpenInEditor}
-                              className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
-                                openInEditorOutputPath
-                                  ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                  : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                              }`}
-                            >
-                              Use Downloads
-                            </button>
-                          </div>
-                          <p className="text-[11px] text-zinc-600 font-mono break-all">
-                            {openInEditorOutputPath ?? 'Downloads'}
+                          <p className="text-[12px] leading-relaxed text-zinc-500">
+                            {folderTab === 'editor' && 'Where your photo is saved before opening in the external app.'}
+                            {folderTab === 'batch' && 'Where batch-processed images are saved by default.'}
+                            {folderTab === 'contact' && 'Where contact sheets are saved by default.'}
                           </p>
+                          {folderTab === 'editor' && (
+                            <>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={onChooseOpenInEditorOutputPath}
+                                  className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 hover:bg-zinc-900 transition-all"
+                                >
+                                  <FolderOpen size={13} className="text-zinc-500" />
+                                  Choose Folder…
+                                </button>
+                                <button
+                                  onClick={onUseDownloadsForOpenInEditor}
+                                  className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
+                                    openInEditorOutputPath
+                                      ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
+                                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                  }`}
+                                >
+                                  Use Downloads
+                                </button>
+                              </div>
+                              <p className="text-[11px] text-zinc-600 font-mono break-all">
+                                {openInEditorOutputPath ?? 'Downloads'}
+                              </p>
+                            </>
+                          )}
+                          {folderTab === 'batch' && (
+                            <>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={onChooseBatchOutputPath}
+                                  className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 hover:bg-zinc-900 transition-all"
+                                >
+                                  <FolderOpen size={13} className="text-zinc-500" />
+                                  Choose Folder…
+                                </button>
+                                <button
+                                  onClick={onUseDownloadsForBatch}
+                                  className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
+                                    batchOutputPath
+                                      ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
+                                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                  }`}
+                                >
+                                  Use Downloads
+                                </button>
+                              </div>
+                              <p className="text-[11px] text-zinc-600 font-mono break-all">
+                                {batchOutputPath ?? 'Downloads'}
+                              </p>
+                            </>
+                          )}
+                          {folderTab === 'contact' && (
+                            <>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={onChooseContactSheetOutputPath}
+                                  className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 hover:bg-zinc-900 transition-all"
+                                >
+                                  <FolderOpen size={13} className="text-zinc-500" />
+                                  Choose Folder…
+                                </button>
+                                <button
+                                  onClick={onUseDownloadsForContactSheet}
+                                  className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
+                                    contactSheetOutputPath
+                                      ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
+                                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                  }`}
+                                >
+                                  Use Downloads
+                                </button>
+                              </div>
+                              <p className="text-[11px] text-zinc-600 font-mono break-all">
+                                {contactSheetOutputPath ?? 'Downloads'}
+                              </p>
+                            </>
+                          )}
                         </div>
                       </div>
                     )}

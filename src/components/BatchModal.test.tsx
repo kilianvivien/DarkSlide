@@ -163,7 +163,7 @@ describe('BatchModal', () => {
     await screen.findByText('open-scan.tiff');
     fireEvent.click(screen.getByText('Custom'));
 
-    expect(screen.getByText('This custom preset includes crop or rotation.')).toBeInTheDocument();
+    expect(screen.getByText('This preset has a saved crop or rotation.')).toBeInTheDocument();
   });
 
   it('shows a warning for custom presets with embedded rotation', async () => {
@@ -183,7 +183,7 @@ describe('BatchModal', () => {
     await screen.findByText('open-scan.tiff');
     fireEvent.click(screen.getByText('Custom'));
 
-    expect(screen.getByText('This custom preset includes crop or rotation.')).toBeInTheDocument();
+    expect(screen.getByText('This preset has a saved crop or rotation.')).toBeInTheDocument();
   });
 
   it('does not show the warning for built-in profiles or neutral custom presets', async () => {
@@ -199,10 +199,10 @@ describe('BatchModal', () => {
     });
 
     await screen.findByText('open-scan.tiff');
-    expect(screen.queryByText('This custom preset includes crop or rotation.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This preset has a saved crop or rotation.')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Custom'));
-    expect(screen.queryByText('This custom preset includes crop or rotation.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This preset has a saved crop or rotation.')).not.toBeInTheDocument();
   });
 
   it('passes neutralized settings into batch export when ignore is enabled', async () => {
