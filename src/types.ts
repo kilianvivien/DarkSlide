@@ -71,6 +71,21 @@ export interface TonalCharacter {
   midtoneAnchor: number;
 }
 
+export interface LabStyleProfile {
+  id: string;
+  name: string;
+  description: string;
+  toneCurve: CurvePoint[];
+  channelCurves?: {
+    r?: CurvePoint[];
+    g?: CurvePoint[];
+    b?: CurvePoint[];
+  };
+  tonalCharacterOverride?: Partial<TonalCharacter>;
+  saturationBias: number;
+  temperatureBias: number;
+}
+
 export interface MaskTuning {
   highlightProtectionBias: number;
   blackPointBias: number;
@@ -107,6 +122,8 @@ export interface ConversionSettings {
   exposure: number;
   contrast: number;
   saturation: number;
+  shadowRecovery?: number;
+  midtoneContrast?: number;
   flareCorrection?: number;
   flatFieldEnabled?: boolean;
   temperature: number;
@@ -162,6 +179,7 @@ export interface FilmProfile {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  toneCurve?: CurvePoint[];
   isCustom?: boolean;
   tags?: string[];
   filmStock?: string | null;
@@ -230,6 +248,7 @@ export interface WorkspaceDocument {
   cropSource?: CropSource | null;
   rawImportProfile?: FilmProfile | null;
   profileId: string;
+  labStyleId: string | null;
   exportOptions: ExportOptions;
   histogram: HistogramData | null;
   renderRevision: number;
@@ -238,10 +257,15 @@ export interface WorkspaceDocument {
   errorCode?: string;
 }
 
+export interface DocumentHistoryEntry {
+  settings: ConversionSettings;
+  labStyleId: string | null;
+}
+
 export interface DocumentTab {
   id: string;
   document: WorkspaceDocument;
-  historyStack: ConversionSettings[];
+  historyStack: DocumentHistoryEntry[];
   historyIndex: number;
   zoom: ZoomLevel;
   pan: { x: number; y: number };
@@ -276,6 +300,12 @@ export interface RenderRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  labStyleToneCurve?: CurvePoint[];
+  labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] };
+  labTonalCharacterOverride?: Partial<TonalCharacter>;
+  labSaturationBias?: number;
+  labTemperatureBias?: number;
+  highlightDensityEstimate?: number;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
   skipProcessing?: boolean;
@@ -289,6 +319,7 @@ export interface RenderResult {
   previewLevelId: string;
   imageData: ImageData;
   histogram: HistogramData;
+  highlightDensity: number;
 }
 
 export interface ExportRequest {
@@ -303,6 +334,12 @@ export interface ExportRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  labStyleToneCurve?: CurvePoint[];
+  labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] };
+  labTonalCharacterOverride?: Partial<TonalCharacter>;
+  labSaturationBias?: number;
+  labTemperatureBias?: number;
+  highlightDensityEstimate?: number;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
   skipProcessing?: boolean;

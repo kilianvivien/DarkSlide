@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LIGHT_SOURCE_PROFILES } from './constants';
+import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from './constants';
 import { AppShell } from './components/AppShell';
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
@@ -14,13 +14,21 @@ import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
 import { isDesktopShell, registerBeforeUnloadGuard } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
-import { getTransformedDimensions } from './utils/imagePipeline';
+import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
 import { clamp } from './utils/math';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
 import { syncRecentFilesToMenu } from './utils/recentFilesStore';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs, saveMaxResidentDocs } from './utils/residentDocsStore';
+import { autoAnalyze } from './utils/autoAnalysis';
+
+function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
+  return {
+    settings: structuredClone(document.settings),
+    labStyleId: document.labStyleId,
+  };
+}
 
 export default function App() {
   const RENDER_INDICATOR_DELAY_MS = 450;
@@ -153,6 +161,7 @@ export default function App() {
     imageData: ImageData;
     imageBitmap: ImageBitmap | null;
   } | null>(null);
+  const currentPreviewImageDataRef = useRef<ImageData | null>(null);
   const previewRetryFrameRef = useRef<number | null>(null);
   const interactivePreviewFrameRef = useRef<number | null>(null);
   const pendingInteractivePreviewRef = useRef<QueuedPreviewRender | null>(null);
@@ -198,6 +207,12 @@ export default function App() {
     maskTuning?: MaskTuning;
     colorMatrix?: ColorMatrix;
     tonalCharacter?: TonalCharacter;
+    labStyleToneCurve?: FilmProfile['toneCurve'];
+    labStyleChannelCurves?: { r?: FilmProfile['toneCurve']; g?: FilmProfile['toneCurve']; b?: FilmProfile['toneCurve'] };
+    labTonalCharacterOverride?: Partial<TonalCharacter>;
+    labSaturationBias?: number;
+    labTemperatureBias?: number;
+    highlightDensityEstimate?: number;
     flareFloor?: [number, number, number] | null;
     lightSourceBias?: [number, number, number];
   }) => JSON.stringify(payload), []);
@@ -303,6 +318,10 @@ export default function App() {
   const activeProfile = documentState
     ? profilesById.get(documentState.profileId) ?? fallbackProfile
     : fallbackProfile;
+  const activeLabStyle = useMemo(
+    () => (documentState?.labStyleId ? LAB_STYLE_PROFILES_MAP[documentState.labStyleId] ?? null : null),
+    [documentState?.labStyleId],
+  );
   const savePresetTags = useMemo(() => (
     documentState
       ? getPresetTags(documentState.settings, activeProfile.type, documentState.source.extension)
@@ -567,7 +586,7 @@ export default function App() {
     cancelScheduledInteractivePreview();
     setIsInteractingWithPreviewControls(false);
     if (documentState) {
-      commitInteraction(documentState.settings);
+      commitInteraction(createDocumentHistoryEntry(documentState));
     }
   }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
 
@@ -594,7 +613,7 @@ export default function App() {
     cancelScheduledInteractivePreview();
     setIsAdjustingCrop(false);
     if (documentState) {
-      commitInteraction(documentState.settings);
+      commitInteraction(createDocumentHistoryEntry(documentState));
     }
   }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
 
@@ -731,10 +750,10 @@ export default function App() {
     if (!documentState) return;
     if (isInteractingRef.current) return;
     const timer = window.setTimeout(() => {
-      pushHistoryEntry(documentState.settings);
+      pushHistoryEntry(createDocumentHistoryEntry(documentState));
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [documentState?.settings, pushHistoryEntry]);
+  }, [documentState, pushHistoryEntry]);
 
   const setPreviewVisibility = useCallback((next: boolean) => {
     hasVisiblePreviewRef.current = next;
@@ -765,6 +784,7 @@ export default function App() {
     } else {
       ctx.putImageData(imageData, 0, 0);
     }
+    currentPreviewImageDataRef.current = imageData;
     setCanvasSize({ width: imageData.width, height: imageData.height });
     return true;
   }, []);
@@ -830,6 +850,15 @@ export default function App() {
     flushPendingPreview();
   }, [documentState?.id, documentState?.status, flushPendingPreview]);
 
+  useEffect(() => {
+    const currentPreview = currentPreviewImageDataRef.current;
+    if (!currentPreview || !displayCanvasRef.current) {
+      return;
+    }
+
+    drawPreview(currentPreview, null);
+  }, [comparisonMode, drawPreview]);
+
   const calculateTargetMaxDimension = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return 1024;
@@ -872,6 +901,12 @@ export default function App() {
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
+    labStyleToneCurve?: FilmProfile['toneCurve'],
+    labStyleChannelCurves?: { r?: FilmProfile['toneCurve']; g?: FilmProfile['toneCurve']; b?: FilmProfile['toneCurve'] },
+    labTonalCharacterOverride?: Partial<TonalCharacter>,
+    labSaturationBias?: number,
+    labTemperatureBias?: number,
+    highlightDensityEstimate?: number,
     flareFloor?: [number, number, number] | null,
     lightSourceBias?: [number, number, number],
   ) => {
@@ -898,6 +933,12 @@ export default function App() {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      labStyleToneCurve,
+      labStyleChannelCurves,
+      labTonalCharacterOverride,
+      labSaturationBias,
+      labTemperatureBias,
+      highlightDensityEstimate,
       flareFloor,
       lightSourceBias,
     });
@@ -942,6 +983,12 @@ export default function App() {
         maskTuning,
         colorMatrix,
         tonalCharacter,
+        labStyleToneCurve,
+        labStyleChannelCurves,
+        labTonalCharacterOverride,
+        labSaturationBias,
+        labTemperatureBias,
+        highlightDensityEstimate,
         flareFloor,
         lightSourceBias,
       });
@@ -1061,6 +1108,12 @@ export default function App() {
         next.maskTuning,
         next.colorMatrix,
         next.tonalCharacter,
+        next.labStyleToneCurve,
+        next.labStyleChannelCurves,
+        next.labTonalCharacterOverride,
+        next.labSaturationBias,
+        next.labTemperatureBias,
+        next.highlightDensityEstimate,
         next.flareFloor,
         next.lightSourceBias,
       );
@@ -1100,6 +1153,7 @@ export default function App() {
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
     const profileFilmType = activeProfile.filmType;
+    const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const flareFloor = documentState.estimatedFlare;
     const previewMode = isDraftPreview ? 'draft' : 'settled';
@@ -1130,6 +1184,12 @@ export default function App() {
       maskTuning: profileMaskTuning,
       colorMatrix: profileColorMatrix,
       tonalCharacter: profileTonalCharacter,
+      labStyleToneCurve: activeLabStyle?.toneCurve,
+      labStyleChannelCurves: activeLabStyle?.channelCurves,
+      labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
+      labSaturationBias: activeLabStyle?.saturationBias ?? 0,
+      labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+      highlightDensityEstimate,
       flareFloor,
       lightSourceBias,
     } satisfies QueuedPreviewRender;
@@ -1146,6 +1206,12 @@ export default function App() {
         maskTuning: profileMaskTuning,
         colorMatrix: profileColorMatrix,
         tonalCharacter: profileTonalCharacter,
+        labStyleToneCurve: activeLabStyle?.toneCurve,
+        labStyleChannelCurves: activeLabStyle?.channelCurves,
+        labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
+        labSaturationBias: activeLabStyle?.saturationBias ?? 0,
+        labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+        highlightDensityEstimate,
         flareFloor,
         lightSourceBias,
       })
@@ -1170,6 +1236,12 @@ export default function App() {
         profileMaskTuning,
         profileColorMatrix,
         profileTonalCharacter,
+        activeLabStyle?.toneCurve,
+        activeLabStyle?.channelCurves,
+        activeLabStyle?.tonalCharacterOverride,
+        activeLabStyle?.saturationBias ?? 0,
+        activeLabStyle?.temperatureBias ?? 0,
+        highlightDensityEstimate,
         flareFloor,
         lightSourceBias,
       ).finally(() => {
@@ -1247,12 +1319,14 @@ export default function App() {
     activeProfile.maskTuning,
     activeProfile.tonalCharacter,
     activeProfile.type,
+    activeLabStyle,
     cancelScheduledInteractivePreview,
     comparisonMode,
     displaySettings,
     documentState?.id,
     documentState?.colorManagement,
     documentState?.estimatedFlare,
+    documentState?.histogram,
     documentState?.lightSourceId,
     documentState?.previewLevels.length,
     documentState?.source,
@@ -1274,6 +1348,7 @@ export default function App() {
   const {
     importFile,
     handleSettingsChange,
+    handleLabStyleChange,
     handleSidebarTabChange,
     handleCropDone,
     handleToggleFilmBasePicker,
@@ -1326,6 +1401,7 @@ export default function App() {
     hasVisiblePreview,
     canvasSize,
     activeProfile,
+    activeLabStyle,
     fallbackProfile,
     savePresetTags,
     notificationSettings,
@@ -1529,6 +1605,21 @@ export default function App() {
     onReset: handleReset,
     onCopyDebugInfo: handleCopyDebugInfo,
     onToggleComparison: handleToggleComparison,
+    onAutoAdjust: () => {
+      if (!documentState?.histogram) {
+        return;
+      }
+      const defaults = activeProfile.defaultSettings;
+      const hasManualAdjustments = documentState.settings.exposure !== defaults.exposure
+        || documentState.settings.temperature !== defaults.temperature
+        || documentState.settings.tint !== defaults.tint
+        || documentState.settings.blackPoint !== defaults.blackPoint
+        || documentState.settings.whitePoint !== defaults.whitePoint;
+      if (hasManualAdjustments && typeof window !== 'undefined' && !window.confirm('Auto will overwrite your manual adjustments. Continue?')) {
+        return;
+      }
+      handleSettingsChange(autoAnalyze(documentState.histogram));
+    },
     onToggleCropOverlay: handleToggleCropOverlay,
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleRightPane,
@@ -1541,6 +1632,25 @@ export default function App() {
   const showBlockingOverlay = Boolean(blockingOverlay);
   const overlayContent = blockingOverlay;
   const isExporting = documentState?.status === 'exporting';
+
+  const handleAutoAdjust = useCallback(() => {
+    if (!documentState?.histogram) {
+      return;
+    }
+
+    const defaults = activeProfile.defaultSettings;
+    const hasManualAdjustments = documentState.settings.exposure !== defaults.exposure
+      || documentState.settings.temperature !== defaults.temperature
+      || documentState.settings.tint !== defaults.tint
+      || documentState.settings.blackPoint !== defaults.blackPoint
+      || documentState.settings.whitePoint !== defaults.whitePoint;
+
+    if (hasManualAdjustments && typeof window !== 'undefined' && !window.confirm('Auto will overwrite your manual adjustments. Continue?')) {
+      return;
+    }
+
+    handleSettingsChange(autoAnalyze(documentState.histogram));
+  }, [activeProfile.defaultSettings, documentState, handleSettingsChange]);
 
   return (
     <AppShell
@@ -1559,7 +1669,9 @@ export default function App() {
       canRedo={canRedo}
       fallbackProfile={fallbackProfile}
       activeProfile={activeProfile}
+      activeLabStyle={activeLabStyle}
       builtinProfiles={builtinProfiles}
+      labStyleProfiles={LAB_STYLE_PROFILES}
       lightSourceProfiles={allLightSourceProfiles}
       customPresets={customPresets}
       savePresetTags={savePresetTags}
@@ -1654,6 +1766,8 @@ export default function App() {
       onSetActivePointPicker={setActivePointPicker}
       onOpenSettingsModal={handleOpenSettingsModal}
       onLightSourceChange={handleLightSourceChange}
+      onLabStyleChange={handleLabStyleChange}
+      onAutoAdjust={handleAutoAdjust}
       onProfileChange={handleProfileChange}
       onSavePreset={handleSavePreset}
       onImportPreset={handleImportPreset}

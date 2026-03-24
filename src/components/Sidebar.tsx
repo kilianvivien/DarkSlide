@@ -14,7 +14,7 @@ import {
   SlidersHorizontal,
   Wand2,
 } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LightSourceProfile, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
@@ -124,6 +124,8 @@ interface SidebarProps {
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
   activeProfile: FilmProfile | null;
+  activeLabStyleId?: string | null;
+  labStyleProfiles?: LabStyleProfile[];
   estimatedFlare?: [number, number, number] | null;
   lightSourceId?: string | null;
   cropSource?: 'auto' | 'manual' | null;
@@ -148,6 +150,8 @@ interface SidebarProps {
   onSetPointPicker: (mode: 'black' | 'white' | 'grey' | null) => void;
   onOpenSettings: () => void;
   onLightSourceChange?: (lightSourceId: string | null) => void;
+  onLabStyleChange?: (labStyleId: string | null) => void;
+  onAutoAdjust?: () => void;
 }
 
 export const Sidebar = memo(function Sidebar({
@@ -164,6 +168,8 @@ export const Sidebar = memo(function Sidebar({
   onInteractionStart,
   onInteractionEnd,
   activeProfile,
+  activeLabStyleId = null,
+  labStyleProfiles = [],
   estimatedFlare,
   lightSourceId = null,
   cropSource = null,
@@ -185,6 +191,8 @@ export const Sidebar = memo(function Sidebar({
   onSetPointPicker,
   onOpenSettings,
   onLightSourceChange,
+  onLabStyleChange,
+  onAutoAdjust,
   onOpenBatchExport,
   contentScrollTop = 0,
   onContentScrollTopChange,
@@ -462,6 +470,20 @@ export const Sidebar = memo(function Sidebar({
                     </select>
                   </div>
 
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-zinc-400">Lab Style</span>
+                    <select
+                      value={activeLabStyleId ?? 'none'}
+                      onChange={(event) => onLabStyleChange?.(event.target.value === 'none' ? null : event.target.value)}
+                      className="min-w-0 flex-1 truncate rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-xs text-zinc-300 outline-none transition-colors focus:border-zinc-500"
+                    >
+                      <option value="none">None</option>
+                      {labStyleProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>{profile.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
                     <Slider
                       label="Flare Correction"
                       value={settings.flareCorrection}
@@ -480,9 +502,21 @@ export const Sidebar = memo(function Sidebar({
                 </section>
 
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                     <SlidersHorizontal size={12} /> Basic Adjustments
                   </h2>
+                  {histogramData && (
+                    <div className="mb-5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={onAutoAdjust}
+                        className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-200"
+                      >
+                        <Wand2 size={10} />
+                        Auto
+                      </button>
+                    </div>
+                  )}
 
                   <Slider label="Exposure" value={settings.exposure} min={-100} max={100} onChange={scalarSliderHandlers.exposure} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   <Slider label="Contrast" value={settings.contrast} min={-100} max={100} onChange={scalarSliderHandlers.contrast} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
@@ -495,6 +529,25 @@ export const Sidebar = memo(function Sidebar({
                     max={100}
                     onChange={scalarSliderHandlers.highlightProtection}
                     unit="%"
+                    onInteractionStart={onInteractionStart}
+                    onInteractionEnd={onInteractionEnd}
+                  />
+                  <Slider
+                    label="Shadow Recovery"
+                    value={settings.shadowRecovery ?? 0}
+                    min={0}
+                    max={100}
+                    onChange={(value) => onSettingsChange({ shadowRecovery: value })}
+                    unit="%"
+                    onInteractionStart={onInteractionStart}
+                    onInteractionEnd={onInteractionEnd}
+                  />
+                  <Slider
+                    label="Midtone Contrast"
+                    value={settings.midtoneContrast ?? 0}
+                    min={-100}
+                    max={100}
+                    onChange={(value) => onSettingsChange({ midtoneContrast: value })}
                     onInteractionStart={onInteractionStart}
                     onInteractionEnd={onInteractionEnd}
                   />

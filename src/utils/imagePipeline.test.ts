@@ -107,8 +107,8 @@ describe('processImageData', () => {
 });
 
 describe('buildProcessingUniforms', () => {
-  it('keeps the GPU uniform payload aligned at 64 floats', () => {
-    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(64);
+  it('keeps the GPU uniform payload aligned at 68 floats', () => {
+    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(68);
   });
 
   it('stores the flat-field flag in the final uniform slot', () => {
@@ -118,7 +118,7 @@ describe('buildProcessingUniforms', () => {
       'processed',
     );
 
-    expect(uniforms[63]).toBe(1);
+    expect(uniforms[67]).toBe(1);
   });
 });
 
@@ -195,6 +195,28 @@ describe('contrast slider', () => {
     const pixel = createPixel(127, 127, 127);
     processImageData(pixel, { ...neutralSettings, contrast: 0 }, true, 'processed');
     expect(midpointDeviation(pixel)).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('shadowRecovery and midtoneContrast sliders', () => {
+  it('shadow recovery lifts deep shadows without affecting bright pixels', () => {
+    const dark = createPixel(235, 235, 235);
+    const recovered = createPixel(235, 235, 235);
+
+    processImageData(dark, { ...neutralSettings, shadowRecovery: 0 }, true, 'processed');
+    processImageData(recovered, { ...neutralSettings, shadowRecovery: 80 }, true, 'processed');
+
+    expect(luminance(recovered)).toBeGreaterThan(luminance(dark));
+  });
+
+  it('positive midtone contrast increases separation around the midpoint', () => {
+    const base = createPixel(127, 127, 127);
+    const boosted = createPixel(127, 127, 127);
+
+    processImageData(base, { ...neutralSettings, midtoneContrast: 0 }, true, 'processed');
+    processImageData(boosted, { ...neutralSettings, midtoneContrast: 60 }, true, 'processed');
+
+    expect(midpointDeviation(boosted)).toBeGreaterThanOrEqual(midpointDeviation(base));
   });
 });
 

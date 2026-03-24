@@ -1,18 +1,25 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ConversionSettings, DocumentTab, WorkspaceDocument } from '../types';
+import { ConversionSettings, DocumentHistoryEntry, DocumentTab, WorkspaceDocument } from '../types';
 import { ZoomLevel } from './useViewportZoom';
 
 const HISTORY_LIMIT = 50;
 
-function settingsEqual(a: ConversionSettings | undefined, b: ConversionSettings) {
+function historyEntryEqual(a: DocumentHistoryEntry | undefined, b: DocumentHistoryEntry) {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function createHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
+  return {
+    settings: structuredClone(document.settings),
+    labStyleId: document.labStyleId,
+  };
 }
 
 function createDocumentTab(document: WorkspaceDocument): DocumentTab {
   return {
     id: document.id,
     document,
-    historyStack: [structuredClone(document.settings)],
+    historyStack: [createHistoryEntry(document)],
     historyIndex: 0,
     zoom: 'fit',
     pan: { x: 0.5, y: 0.5 },
@@ -26,7 +33,7 @@ export function useDocumentTabs() {
   const tabsRef = useRef<DocumentTab[]>([]);
   tabsRef.current = tabs;
 
-  const interactionSnapshotRef = useRef<ConversionSettings | null>(null);
+  const interactionSnapshotRef = useRef<DocumentHistoryEntry | null>(null);
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? null,
@@ -73,7 +80,7 @@ export function useDocumentTabs() {
     )));
   }, [activeTabId]);
 
-  const pushHistoryEntry = useCallback((nextState: ConversionSettings) => {
+  const pushHistoryEntry = useCallback((nextState: DocumentHistoryEntry) => {
     if (!activeTabId) {
       return;
     }
@@ -85,7 +92,7 @@ export function useDocumentTabs() {
 
       const baseHistory = tab.historyStack.slice(0, tab.historyIndex + 1);
       const lastEntry = baseHistory[baseHistory.length - 1];
-      if (settingsEqual(lastEntry, nextState)) {
+      if (historyEntryEqual(lastEntry, nextState)) {
         return tab;
       }
 
@@ -98,7 +105,7 @@ export function useDocumentTabs() {
     }));
   }, [activeTabId]);
 
-  const resetHistory = useCallback((nextState: ConversionSettings) => {
+  const resetHistory = useCallback((nextState: DocumentHistoryEntry) => {
     if (!activeTabId) {
       return;
     }
@@ -113,17 +120,17 @@ export function useDocumentTabs() {
 
   const beginInteraction = useCallback(() => {
     if (activeDocument) {
-      interactionSnapshotRef.current = structuredClone(activeDocument.settings);
+      interactionSnapshotRef.current = createHistoryEntry(activeDocument);
     }
   }, [activeDocument]);
 
-  const commitInteraction = useCallback((currentState: ConversionSettings) => {
+  const commitInteraction = useCallback((currentState: DocumentHistoryEntry) => {
     const snapshot = interactionSnapshotRef.current;
     interactionSnapshotRef.current = null;
     if (!snapshot) {
       return;
     }
-    if (settingsEqual(snapshot, currentState)) {
+    if (historyEntryEqual(snapshot, currentState)) {
       return;
     }
     pushHistoryEntry(currentState);
@@ -140,7 +147,7 @@ export function useDocumentTabs() {
     updateTabById(documentId, (tab) => ({
       ...tab,
       document: nextDocument,
-      historyStack: [structuredClone(nextDocument.settings)],
+      historyStack: [createHistoryEntry(nextDocument)],
       historyIndex: 0,
     }));
   }, [updateTabById]);
@@ -239,7 +246,12 @@ export function useDocumentTabs() {
       return {
         ...tab,
         historyIndex: nextIndex,
-        document: previousState ? { ...tab.document, settings: previousState, dirty: true } : tab.document,
+        document: previousState ? {
+          ...tab.document,
+          settings: previousState.settings,
+          labStyleId: previousState.labStyleId,
+          dirty: true,
+        } : tab.document,
       };
     }));
   }, [activeTabId]);
@@ -257,7 +269,12 @@ export function useDocumentTabs() {
       return {
         ...tab,
         historyIndex: nextIndex,
-        document: nextState ? { ...tab.document, settings: nextState, dirty: true } : tab.document,
+        document: nextState ? {
+          ...tab.document,
+          settings: nextState.settings,
+          labStyleId: nextState.labStyleId,
+          dirty: true,
+        } : tab.document,
       };
     }));
   }, [activeTabId]);

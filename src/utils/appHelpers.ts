@@ -177,6 +177,12 @@ export type QueuedPreviewRender = {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  labStyleToneCurve?: FilmProfile['toneCurve'];
+  labStyleChannelCurves?: { r?: FilmProfile['toneCurve']; g?: FilmProfile['toneCurve']; b?: FilmProfile['toneCurve'] };
+  labTonalCharacterOverride?: Partial<TonalCharacter>;
+  labSaturationBias?: number;
+  labTemperatureBias?: number;
+  highlightDensityEstimate?: number;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
 };

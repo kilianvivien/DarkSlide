@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, ChevronDown, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, NotificationSettings } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, NotificationSettings } from '../types';
 import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
 import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
@@ -25,6 +25,7 @@ interface BatchModalProps {
   workerClient: ImageWorkerClient | null;
   currentSettings: ConversionSettings | null;
   currentProfile: FilmProfile | null;
+  currentLabStyle: LabStyleProfile | null;
   currentColorManagement: ColorManagementSettings | null;
   notificationSettings: NotificationSettings;
   customProfiles: FilmProfile[];
@@ -94,6 +95,7 @@ export function BatchModal({
   workerClient,
   currentSettings,
   currentProfile,
+  currentLabStyle,
   currentColorManagement,
   notificationSettings,
   customProfiles,
@@ -106,6 +108,7 @@ export function BatchModal({
   const [ignorePresetCropAndRotation, setIgnorePresetCropAndRotation] = useState(false);
   const [batchAutoCrop, setBatchAutoCrop] = useState(true);
   const [batchFlareMode, setBatchFlareMode] = useState<'per-image' | 'first-frame'>('per-image');
+  const [batchAutoMode, setBatchAutoMode] = useState<'off' | 'per-image' | 'first-frame'>('off');
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
     ...DEFAULT_EXPORT_OPTIONS,
     filenameBase: '{original}_darkslide',
@@ -145,6 +148,7 @@ export function BatchModal({
     setIgnorePresetCropAndRotation(false);
     setBatchAutoCrop(true);
     setBatchFlareMode('per-image');
+    setBatchAutoMode('off');
   }, [currentColorManagement, currentProfile, currentSettings, isOpen]);
 
   useEffect(() => {
@@ -262,6 +266,7 @@ export function BatchModal({
   const sharedProfile = settingsSource === 'current'
     ? currentProfile
     : (settingsSource === 'builtin' ? selectedBuiltinProfile : selectedCustomProfile);
+  const sharedLabStyle = settingsSource === 'current' ? currentLabStyle : null;
   const sharedSettings = settingsSource === 'current'
     ? currentSettings
     : (sharedProfile
@@ -324,6 +329,7 @@ export function BatchModal({
         runnableEntries,
         structuredClone(sharedSettings),
         sharedProfile,
+        sharedLabStyle,
         {
           ...colorManagement,
           outputProfileId: exportOptions.outputProfileId,
@@ -335,6 +341,7 @@ export function BatchModal({
         {
           autoCrop: batchAutoCrop,
           flareMode: batchFlareMode,
+          autoMode: batchAutoMode,
         },
       )) {
         if (event.type === 'done') {
@@ -598,6 +605,20 @@ export function BatchModal({
                               Per image
                             </RadioOption>
                             <RadioOption checked={batchFlareMode === 'first-frame'} disabled={isRunning} onChange={() => setBatchFlareMode('first-frame')}>
+                              First frame (roll)
+                            </RadioOption>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <p className="text-xs text-zinc-500">Auto analysis</p>
+                          <div className="space-y-2">
+                            <RadioOption checked={batchAutoMode === 'off'} disabled={isRunning} onChange={() => setBatchAutoMode('off')}>
+                              Off
+                            </RadioOption>
+                            <RadioOption checked={batchAutoMode === 'per-image'} disabled={isRunning} onChange={() => setBatchAutoMode('per-image')}>
+                              Per image
+                            </RadioOption>
+                            <RadioOption checked={batchAutoMode === 'first-frame'} disabled={isRunning} onChange={() => setBatchAutoMode('first-frame')}>
                               First frame (roll)
                             </RadioOption>
                           </div>

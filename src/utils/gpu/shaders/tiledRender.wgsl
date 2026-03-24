@@ -38,6 +38,11 @@ struct Uniforms {
   bwBlueMix: f32,
   bwTone: f32,
 
+  shadowRecovery: f32,
+  midtoneContrast: f32,
+  highlightDensity: f32,
+  _pad8: f32,
+
   flareFloorR: f32,
   flareFloorG: f32,
   flareFloorB: f32,
@@ -180,15 +185,36 @@ fn applyTonalCharacter(value: f32, uniforms: Uniforms) -> f32 {
 
   next += uniforms.midtoneAnchor;
 
-  let threshold = 200.0 / 255.0;
-  if (uniforms.highlightProtection > 0.0 && next > threshold) {
-    let protection = clampF(uniforms.highlightProtection / 100.0, 0.0, 0.95);
-    let shoulder = (next - threshold) / (1.0 - threshold);
-    let softness = 1.0 - protection * pow(clampF(shoulder, 0.0, 1.0), max(uniforms.highlightRolloff, 0.05));
-    next = threshold + shoulder * (1.0 - threshold) * softness;
+  return clampF(next, 0.0, 1.0);
+}
+
+fn applyHighlightRolloff(value: f32, anchor: f32, strength: f32) -> f32 {
+  if (value <= anchor || strength <= 0.0) {
+    return value;
   }
 
-  return clampF(next, 0.0, 1.0);
+  let safeAnchor = clampF(anchor, 0.0, 0.99);
+  let excess = (value - safeAnchor) / (1.0 - safeAnchor);
+  let compressed = pow(clampF(excess, 0.0, 1.0), 1.0 + strength);
+  return safeAnchor + compressed * (1.0 - safeAnchor);
+}
+
+fn applyShadowRecovery(value: f32, strength: f32) -> f32 {
+  if (value >= 0.25 || strength <= 0.0) {
+    return value;
+  }
+
+  let t = 1.0 - value / 0.25;
+  return value + (0.25 - value) * strength * t * t;
+}
+
+fn applyMidtoneContrast(value: f32, strength: f32) -> f32 {
+  if (strength == 0.0) {
+    return value;
+  }
+
+  let weight = max(0.0, 1.0 - 4.0 * (value - 0.5) * (value - 0.5));
+  return 0.5 + (value - 0.5) * (1.0 + strength * weight);
 }
 
 fn mixBlackAndWhiteChannels(r: f32, g: f32, b: f32, uniforms: Uniforms) -> f32 {
@@ -318,9 +344,38 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
     g = uniforms.contrastFactor * (g - 0.5) + 0.5;
     b = uniforms.contrastFactor * (b - 0.5) + 0.5;
 
+    r = applyShadowRecovery(r, uniforms.shadowRecovery);
+    g = applyShadowRecovery(g, uniforms.shadowRecovery);
+    b = applyShadowRecovery(b, uniforms.shadowRecovery);
+
+    r = applyMidtoneContrast(r, uniforms.midtoneContrast);
+    g = applyMidtoneContrast(g, uniforms.midtoneContrast);
+    b = applyMidtoneContrast(b, uniforms.midtoneContrast);
+
     r = applyTonalCharacter(r, uniforms);
     g = applyTonalCharacter(g, uniforms);
     b = applyTonalCharacter(b, uniforms);
+
+    let threshold = 200.0 / 255.0;
+    let effectiveRolloff = max(uniforms.highlightRolloff, 0.05) * (1.0 + clampF(uniforms.highlightDensity, 0.0, 1.0) * 0.5);
+    let protection = clampF(uniforms.highlightProtection / 100.0, 0.0, 0.95);
+    if (protection > 0.0) {
+      if (r > threshold) {
+        let shoulder = (r - threshold) / (1.0 - threshold);
+        let softness = 1.0 - protection * pow(clampF(shoulder, 0.0, 1.0), effectiveRolloff);
+        r = threshold + shoulder * (1.0 - threshold) * softness;
+      }
+      if (g > threshold) {
+        let shoulder = (g - threshold) / (1.0 - threshold);
+        let softness = 1.0 - protection * pow(clampF(shoulder, 0.0, 1.0), effectiveRolloff);
+        g = threshold + shoulder * (1.0 - threshold) * softness;
+      }
+      if (b > threshold) {
+        let shoulder = (b - threshold) / (1.0 - threshold);
+        let softness = 1.0 - protection * pow(clampF(shoulder, 0.0, 1.0), effectiveRolloff);
+        b = threshold + shoulder * (1.0 - threshold) * softness;
+      }
+    }
 
     if (uniforms.isColor > 0.5 && uniforms.bwEnabled <= 0.5) {
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;

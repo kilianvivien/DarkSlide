@@ -17,6 +17,7 @@ import { savePreferences, UserPreferences } from '../utils/preferenceStore';
 import { saveMaxResidentDocs, MaxResidentDocs } from '../utils/residentDocsStore';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 import { clamp } from '../utils/math';
+import { computeHighlightDensity } from '../utils/imagePipeline';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
 import {
   BatchJobEntry,
@@ -26,14 +27,26 @@ import {
   ColorManagementSettings,
   ConversionSettings,
   CropTab,
+  DocumentHistoryEntry,
   DocumentTab,
   FilmProfile,
   LightSourceProfile,
   NotificationSettings,
   RenderBackendDiagnostics,
   ScannerType,
+  TonalCharacter,
   WorkspaceDocument,
 } from '../types';
+
+function createHistoryEntry(
+  settings: ConversionSettings,
+  labStyleId: string | null,
+): DocumentHistoryEntry {
+  return {
+    settings: structuredClone(settings),
+    labStyleId,
+  };
+}
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
@@ -54,6 +67,13 @@ type UseWorkspaceCommandsOptions = {
   hasVisiblePreview: boolean;
   canvasSize: { width: number; height: number };
   activeProfile: FilmProfile;
+  activeLabStyle: {
+    toneCurve: FilmProfile['toneCurve'];
+    channelCurves?: { r?: FilmProfile['toneCurve']; g?: FilmProfile['toneCurve']; b?: FilmProfile['toneCurve'] };
+    tonalCharacterOverride?: Partial<TonalCharacter>;
+    saturationBias: number;
+    temperatureBias: number;
+  } | null;
   fallbackProfile: FilmProfile;
   savePresetTags: string[];
   notificationSettings: NotificationSettings;
@@ -97,8 +117,8 @@ type UseWorkspaceCommandsOptions = {
   setActiveSidebarScrollTop: (scrollTop: number) => void;
   setDocumentState: (nextState: WorkspaceDocument | null | ((current: WorkspaceDocument | null) => WorkspaceDocument | null)) => void;
   updateDocument: (updater: (current: WorkspaceDocument) => WorkspaceDocument) => void;
-  pushHistoryEntry: (nextState: ConversionSettings) => void;
-  resetHistory: (nextState: ConversionSettings) => void;
+  pushHistoryEntry: (nextState: DocumentHistoryEntry) => void;
+  resetHistory: (nextState: DocumentHistoryEntry) => void;
   zoomToFit: () => void;
   setZoomLevel: (zoom: number | 'fit') => void;
   setPan: Dispatch<SetStateAction<{ x: number; y: number }>>;
@@ -161,6 +181,7 @@ export function useWorkspaceCommands({
   hasVisiblePreview,
   canvasSize,
   activeProfile,
+  activeLabStyle,
   fallbackProfile,
   savePresetTags,
   notificationSettings,
@@ -357,6 +378,14 @@ export function useWorkspaceCommands({
       };
     });
   }, [activeProfile, updateDocument]);
+
+  const handleLabStyleChange = useCallback((labStyleId: string | null) => {
+    updateDocument((current) => ({
+      ...current,
+      labStyleId,
+      dirty: true,
+    }));
+  }, [updateDocument]);
 
   const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'export') => {
     setSidebarTab(tab);
@@ -735,9 +764,9 @@ export function useWorkspaceCommands({
       settings: structuredClone(profile.defaultSettings),
       dirty: true,
     }));
-    resetHistory(profile.defaultSettings);
+    resetHistory(createHistoryEntry(profile.defaultSettings, documentState?.labStyleId ?? null));
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
-  }, [prefsSnapshotRef, resetHistory, updateDocument]);
+  }, [documentState?.labStyleId, prefsSnapshotRef, resetHistory, updateDocument]);
 
   const handleSavePreset = useCallback((name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => {
     if (!documentState) return;
@@ -790,7 +819,7 @@ export function useWorkspaceCommands({
 
   const handleReset = useCallback(() => {
     if (!documentState) return;
-    pushHistoryEntry(documentState.settings);
+    pushHistoryEntry(createHistoryEntry(documentState.settings, documentState.labStyleId));
     updateDocument((current) => ({
       ...current,
       settings: structuredClone(activeProfile.defaultSettings),
@@ -809,6 +838,7 @@ export function useWorkspaceCommands({
       }
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
       const lightSourceBias = getLightSourceProfile(documentState.lightSourceId).spectralBias;
+      const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
       const result = await worker.export({
         documentId: documentState.id,
         settings: documentState.settings,
@@ -823,6 +853,12 @@ export function useWorkspaceCommands({
         maskTuning: activeProfile.maskTuning,
         colorMatrix: activeProfile.colorMatrix,
         tonalCharacter: activeProfile.tonalCharacter,
+        labStyleToneCurve: activeLabStyle?.toneCurve,
+        labStyleChannelCurves: activeLabStyle?.channelCurves,
+        labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
+        labSaturationBias: activeLabStyle?.saturationBias ?? 0,
+        labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+        highlightDensityEstimate,
       });
 
       const saveResult = await saveExportBlob(result.blob, result.filename, documentState.exportOptions.format);
@@ -848,7 +884,7 @@ export function useWorkspaceCommands({
       }, 3000);
       void refreshRenderBackendDiagnostics();
     }
-  }, [activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, workerClientRef]);
+  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, workerClientRef]);
 
   const handleExportClick = useCallback(() => {
     void handleDownload();
@@ -862,6 +898,7 @@ export function useWorkspaceCommands({
     try {
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
       const lightSourceBias = getLightSourceProfile(documentState.lightSourceId).spectralBias;
+      const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
       const result = await worker.export({
         documentId: documentState.id,
         settings: documentState.settings,
@@ -876,6 +913,12 @@ export function useWorkspaceCommands({
         maskTuning: activeProfile.maskTuning,
         colorMatrix: activeProfile.colorMatrix,
         tonalCharacter: activeProfile.tonalCharacter,
+        labStyleToneCurve: activeLabStyle?.toneCurve,
+        labStyleChannelCurves: activeLabStyle?.channelCurves,
+        labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
+        labSaturationBias: activeLabStyle?.saturationBias ?? 0,
+        labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+        highlightDensityEstimate,
       });
 
       const editorPath = prefsSnapshotRef.current.externalEditorPath;
@@ -911,7 +954,7 @@ export function useWorkspaceCommands({
       setError(`Open in editor failed. ${message}`);
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'OPEN_IN_EDITOR_FAILED' } : current);
     }
-  }, [activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleLightSourceChange = useCallback((lightSourceId: string | null) => {
     updateDocument((current) => {
@@ -1160,6 +1203,7 @@ export function useWorkspaceCommands({
   return {
     importFile,
     handleSettingsChange,
+    handleLabStyleChange,
     handleSidebarTabChange,
     handleCropDone,
     handleToggleFilmBasePicker,

@@ -71,6 +71,7 @@ function createOpenTab(profile: FilmProfile): DocumentTab {
     settings: createDefaultSettings(),
     colorManagement: DEFAULT_COLOR_MANAGEMENT,
     profileId: profile.id,
+    labStyleId: null,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     histogram: null,
     renderRevision: 1,
@@ -81,7 +82,7 @@ function createOpenTab(profile: FilmProfile): DocumentTab {
   return {
     id: 'tab-1',
     document,
-    historyStack: [document.settings],
+    historyStack: [{ settings: document.settings, labStyleId: document.labStyleId }],
     historyIndex: 0,
     zoom: 'fit',
     pan: { x: 0.5, y: 0.5 },
@@ -117,6 +118,7 @@ function renderModal({
       workerClient={{} as ImageWorkerClient}
       currentSettings={currentSettings}
       currentProfile={currentProfile}
+      currentLabStyle={null}
       currentColorManagement={DEFAULT_COLOR_MANAGEMENT}
       notificationSettings={notificationSettings}
       customProfiles={customProfiles}
@@ -298,7 +300,7 @@ describe('BatchModal', () => {
     });
 
     expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
-    expect(runBatchState.runBatch.mock.calls[0]?.[6]).toBe('/Users/tester/Pictures/DarkSlide');
+    expect(runBatchState.runBatch.mock.calls[0]?.[7]).toBe('/Users/tester/Pictures/DarkSlide');
   });
 
   it('keeps the batch stopped when the desktop destination prompt is cancelled', async () => {
@@ -339,7 +341,7 @@ describe('BatchModal', () => {
 
     expect(fileBridgeState.getDesktopDownloadsDirectory).toHaveBeenCalledTimes(1);
     expect(fileBridgeState.openDirectory).not.toHaveBeenCalled();
-    expect(runBatchState.runBatch.mock.calls[0]?.[6]).toBe('/Users/tester/Downloads');
+    expect(runBatchState.runBatch.mock.calls[0]?.[7]).toBe('/Users/tester/Downloads');
   });
 
   it('does not re-prompt when a desktop destination is already selected', async () => {
@@ -362,7 +364,7 @@ describe('BatchModal', () => {
     });
 
     expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
-    expect(runBatchState.runBatch.mock.calls[0]?.[6]).toBe('/Users/tester/Exports');
+    expect(runBatchState.runBatch.mock.calls[0]?.[7]).toBe('/Users/tester/Exports');
   });
 
   it('sends one completion notification when the batch succeeds', async () => {

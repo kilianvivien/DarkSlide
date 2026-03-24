@@ -28,6 +28,7 @@ import {
 import {
   assertSupportedDimensions,
   buildEmptyHistogram,
+  computeHighlightDensity,
   getExtensionFromFormat,
   getFileExtension,
   getCropPixelBounds,
@@ -891,12 +892,19 @@ function handleRender(payload: RenderRequest) {
       payload.maskTuning,
       payload.colorMatrix,
       payload.tonalCharacter,
+      payload.labStyleToneCurve,
+      payload.labStyleChannelCurves,
+      payload.labTonalCharacterOverride,
+      payload.labSaturationBias ?? 0,
+      payload.labTemperatureBias ?? 0,
+      payload.highlightDensityEstimate ?? 0,
       payload.inputProfileId ?? 'srgb',
       payload.outputProfileId ?? 'srgb',
       payload.filmType ?? 'negative',
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
     );
+  const highlightDensity = computeHighlightDensity(histogram);
 
   if (!payload.skipProcessing) {
     ctx.putImageData(imageData, 0, 0);
@@ -910,6 +918,7 @@ function handleRender(payload: RenderRequest) {
     previewLevelId: preview.level.id,
     imageData,
     histogram,
+    highlightDensity,
   } satisfies RenderResult;
 }
 
@@ -982,6 +991,12 @@ async function handleExport(payload: ExportRequest) {
     payload.maskTuning,
     payload.colorMatrix,
     payload.tonalCharacter,
+    payload.labStyleToneCurve,
+    payload.labStyleChannelCurves,
+    payload.labTonalCharacterOverride,
+    payload.labSaturationBias ?? 0,
+    payload.labTemperatureBias ?? 0,
+    payload.highlightDensityEstimate ?? 0,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     payload.filmType ?? 'negative',
@@ -1047,6 +1062,12 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       profile.maskTuning,
       profile.colorMatrix,
       profile.tonalCharacter,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      0,
+      0,
       resolveStoredInputProfileId(document, colorManagement?.inputMode ?? 'auto', colorManagement?.inputProfileId ?? 'srgb'),
       payload.exportOptions.outputProfileId,
       profile.filmType ?? 'negative',

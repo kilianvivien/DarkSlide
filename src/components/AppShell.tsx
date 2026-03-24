@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
+  Building2,
   Crop,
   Download,
   ExternalLink,
@@ -46,6 +47,7 @@ import {
   CropTab,
   DocumentTab,
   FilmProfile,
+  LabStyleProfile,
   LightSourceProfile,
   NotificationSettings,
   RenderBackendDiagnostics,
@@ -71,7 +73,9 @@ type AppShellProps = {
   canRedo: boolean;
   fallbackProfile: FilmProfile;
   activeProfile: FilmProfile;
+  activeLabStyle: LabStyleProfile | null;
   builtinProfiles: FilmProfile[];
+  labStyleProfiles: LabStyleProfile[];
   lightSourceProfiles: LightSourceProfile[];
   customPresets: FilmProfile[];
   savePresetTags: string[];
@@ -171,6 +175,8 @@ type AppShellProps = {
   onSetActivePointPicker: React.Dispatch<React.SetStateAction<'black' | 'white' | 'grey' | null>>;
   onOpenSettingsModal: () => void;
   onLightSourceChange: (lightSourceId: string | null) => void;
+  onLabStyleChange: (labStyleId: string | null) => void;
+  onAutoAdjust: () => void;
   onProfileChange: (profile: FilmProfile) => void;
   onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => void;
   onImportPreset: (profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => void;
@@ -230,7 +236,9 @@ export function AppShell({
   canRedo,
   fallbackProfile,
   activeProfile,
+  activeLabStyle,
   builtinProfiles,
+  labStyleProfiles,
   lightSourceProfiles,
   customPresets,
   savePresetTags,
@@ -325,6 +333,8 @@ export function AppShell({
   onSetActivePointPicker,
   onOpenSettingsModal,
   onLightSourceChange,
+  onLabStyleChange,
+  onAutoAdjust,
   onProfileChange,
   onSavePreset,
   onImportPreset,
@@ -446,6 +456,8 @@ export function AppShell({
                   onInteractionStart={onInteractionStart}
                   onInteractionEnd={onInteractionEnd}
                   activeProfile={documentState ? activeProfile : null}
+                  activeLabStyleId={documentState?.labStyleId ?? null}
+                  labStyleProfiles={labStyleProfiles}
                   estimatedFlare={documentState?.estimatedFlare ?? null}
                   lightSourceId={documentState?.lightSourceId ?? null}
                   cropSource={documentState?.cropSource ?? null}
@@ -470,6 +482,8 @@ export function AppShell({
                   onSetPointPicker={onSetActivePointPicker}
                   onOpenSettings={onOpenSettingsModal}
                   onLightSourceChange={onLightSourceChange}
+                  onLabStyleChange={onLabStyleChange}
+                  onAutoAdjust={onAutoAdjust}
                 />
               </ErrorBoundary>
             </motion.div>
@@ -780,6 +794,14 @@ export function AppShell({
                           </span>
                         </div>
                       )}
+                      {activeLabStyle && (
+                        <div className="flex items-center gap-2 rounded-2xl border border-amber-900/60 bg-amber-950/35 px-3 py-2 shadow-2xl backdrop-blur-md">
+                          <Building2 size={14} className="text-amber-300" />
+                          <span className="text-[10px] font-mono uppercase tracking-widest text-amber-200">
+                            {activeLabStyle.name}
+                          </span>
+                        </div>
+                      )}
                       </div>
 
                       <div className="flex flex-wrap items-center justify-end gap-3">
@@ -950,6 +972,7 @@ export function AppShell({
           workerClient={workerClient}
           currentSettings={documentState?.settings ?? null}
           currentProfile={documentState ? activeProfile : null}
+          currentLabStyle={documentState ? activeLabStyle : null}
           currentColorManagement={documentState?.colorManagement ?? null}
           notificationSettings={notificationSettings}
           customProfiles={customPresets}

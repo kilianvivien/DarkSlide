@@ -28,7 +28,7 @@ import {
   WorkerMemoryDiagnostics,
 } from '../types';
 import { appendDiagnostic } from './diagnostics';
-import { accumulateHistogram, buildEmptyHistogram, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
+import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
 import { convertImageDataColorProfile, getPreferredPreviewDisplayProfile } from './colorProfiles';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
@@ -646,6 +646,12 @@ export class ImageWorkerClient {
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
+    labStyleToneCurve?: RenderRequest['labStyleToneCurve'],
+    labStyleChannelCurves?: RenderRequest['labStyleChannelCurves'],
+    labTonalCharacterOverride?: RenderRequest['labTonalCharacterOverride'],
+    labSaturationBias?: RenderRequest['labSaturationBias'],
+    labTemperatureBias?: RenderRequest['labTemperatureBias'],
+    highlightDensityEstimate?: RenderRequest['highlightDensityEstimate'],
     filmType?: RenderRequest['filmType'],
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
@@ -670,7 +676,26 @@ export class ImageWorkerClient {
       });
 
       const tileImage = useGPU && this.gpuPipeline
-        ? await this.gpuPipeline.processTile(rawTile, settings, isColor, comparisonMode, maskTuning, colorMatrix, tonalCharacter, inputProfileId, outputProfileId, filmType, flareFloor, lightSourceBias)
+        ? await this.gpuPipeline.processTile(
+          rawTile,
+          settings,
+          isColor,
+          comparisonMode,
+          maskTuning,
+          colorMatrix,
+          tonalCharacter,
+          labStyleToneCurve,
+          labStyleChannelCurves,
+          labTonalCharacterOverride,
+          labSaturationBias,
+          labTemperatureBias,
+          highlightDensityEstimate,
+          inputProfileId,
+          outputProfileId,
+          filmType,
+          flareFloor,
+          lightSourceBias,
+        )
         : trimTileImageData(rawTile);
 
       blitTile(imageData.data, prepared.width, tile.x, tile.y, tileImage);
@@ -695,6 +720,12 @@ export class ImageWorkerClient {
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
+    labStyleToneCurve?: RenderRequest['labStyleToneCurve'],
+    labStyleChannelCurves?: RenderRequest['labStyleChannelCurves'],
+    labTonalCharacterOverride?: RenderRequest['labTonalCharacterOverride'],
+    labSaturationBias?: RenderRequest['labSaturationBias'],
+    labTemperatureBias?: RenderRequest['labTemperatureBias'],
+    highlightDensityEstimate?: RenderRequest['highlightDensityEstimate'],
     filmType?: RenderRequest['filmType'],
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
@@ -717,6 +748,12 @@ export class ImageWorkerClient {
         maskTuning,
         colorMatrix,
         tonalCharacter,
+        labStyleToneCurve,
+        labStyleChannelCurves,
+        labTonalCharacterOverride,
+        labSaturationBias,
+        labTemperatureBias,
+        highlightDensityEstimate,
         inputProfileId,
         outputProfileId,
         filmType,
@@ -750,6 +787,7 @@ export class ImageWorkerClient {
     return {
       imageData,
       histogram,
+      highlightDensity: computeHighlightDensity(histogram),
       tileCount: 1,
     };
   }
@@ -989,6 +1027,12 @@ export class ImageWorkerClient {
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
+        payload.labStyleToneCurve,
+        payload.labStyleChannelCurves,
+        payload.labTonalCharacterOverride,
+        payload.labSaturationBias,
+        payload.labTemperatureBias,
+        payload.highlightDensityEstimate,
         payload.filmType,
         payload.flareFloor,
         payload.lightSourceBias,
@@ -1063,6 +1107,7 @@ export class ImageWorkerClient {
         previewLevelId: prepared.previewLevelId ?? 'preview-source',
         imageData: assembled.imageData,
         histogram: assembled.histogram,
+        highlightDensity: assembled.highlightDensity,
       } satisfies RenderResult;
     } catch (error) {
       await this.cancelTileJob(payload.documentId, jobId);
@@ -1246,6 +1291,12 @@ export class ImageWorkerClient {
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
+        payload.labStyleToneCurve,
+        payload.labStyleChannelCurves,
+        payload.labTonalCharacterOverride,
+        payload.labSaturationBias,
+        payload.labTemperatureBias,
+        payload.highlightDensityEstimate,
         payload.filmType,
         payload.flareFloor,
         payload.lightSourceBias,

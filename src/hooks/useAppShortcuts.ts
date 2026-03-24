@@ -24,6 +24,7 @@ type UseAppShortcutsOptions = {
   onReset: () => void;
   onCopyDebugInfo: () => Promise<void>;
   onToggleComparison: () => void;
+  onAutoAdjust: () => void;
   onToggleCropOverlay: () => void;
   onToggleLeftPane: () => void;
   onToggleRightPane: () => void;
@@ -53,6 +54,7 @@ export function useAppShortcuts({
   onReset,
   onCopyDebugInfo,
   onToggleComparison,
+  onAutoAdjust,
   onToggleCropOverlay,
   onToggleLeftPane,
   onToggleRightPane,
@@ -74,6 +76,7 @@ export function useAppShortcuts({
       zoomInPlus: { key: '+', meta: true, handler: zoomIn },
       zoomOut: { key: '-', meta: true, handler: zoomOut },
       export: { key: 'e', meta: true, when: () => documentStatePresent, handler: () => { void onDownload(); } },
+      autoAdjust: { key: 'a', meta: true, shift: true, when: () => documentStatePresent, handler: onAutoAdjust },
       batchExport: { key: 'e', meta: true, shift: true, handler: () => setShowBatchModal(true) },
       previousTab: {
         key: '[',

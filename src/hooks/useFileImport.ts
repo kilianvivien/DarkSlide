@@ -213,6 +213,7 @@ const [importError, setImportError] = useState<string | null>(null);
       lightSourceId: null,
       cropSource: null,
       profileId: initialProfile.id,
+      labStyleId: null,
       exportOptions: {
         ...DEFAULT_EXPORT_OPTIONS,
         filenameBase: sanitizeFilenameBase(file.name),
@@ -385,6 +386,7 @@ const [importError, setImportError] = useState<string | null>(null);
         cropSource: null,
         rawImportProfile,
         profileId: resolvedProfile.id,
+        labStyleId: null,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
           ...(savedExportOptions ? {

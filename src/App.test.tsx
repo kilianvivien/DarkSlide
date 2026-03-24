@@ -412,6 +412,7 @@ function createRenderResult(documentId: string, revision: number, width: number,
       b: new Array(256).fill(0),
       l: new Array(256).fill(0),
     },
+    highlightDensity: 0,
   };
 }
 

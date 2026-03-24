@@ -1,4 +1,4 @@
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, LightSourceProfile, NotificationSettings, TonalCharacter } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings, TonalCharacter } from './types';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -43,6 +43,8 @@ export function createDefaultSettings(overrides: Partial<ConversionSettings> = {
     exposure: 0,
     contrast: 10,
     saturation: 100,
+    shadowRecovery: 0,
+    midtoneContrast: 0,
     flareCorrection: 50,
     flatFieldEnabled: false,
     temperature: 0,
@@ -565,3 +567,75 @@ export const FILM_PROFILES: FilmProfile[] = [
     tonalCharacter: { shadowLift: 0.04, highlightRolloff: 0.38, midtoneAnchor: 0 },
   }),
 ];
+
+export const LAB_STYLE_PROFILES: LabStyleProfile[] = [
+  {
+    id: 'lab-frontier-classic',
+    name: 'Lab: Frontier Classic',
+    description: 'Warm, saturated color with lifted blacks and a gentle shoulder.',
+    toneCurve: [
+      { x: 0, y: 10 },
+      { x: 24, y: 28 },
+      { x: 72, y: 84 },
+      { x: 132, y: 150 },
+      { x: 196, y: 214 },
+      { x: 255, y: 246 },
+    ],
+    channelCurves: {
+      r: [{ x: 0, y: 4 }, { x: 128, y: 132 }, { x: 255, y: 255 }],
+      g: [{ x: 0, y: 0 }, { x: 120, y: 118 }, { x: 255, y: 248 }],
+      b: [{ x: 0, y: 0 }, { x: 128, y: 122 }, { x: 255, y: 244 }],
+    },
+    tonalCharacterOverride: { shadowLift: 0.12, highlightRolloff: 0.7, midtoneAnchor: 0.01 },
+    saturationBias: 10,
+    temperatureBias: 8,
+  },
+  {
+    id: 'lab-frontier-modern',
+    name: 'Lab: Frontier Modern',
+    description: 'Cleaner highlights with a lighter Frontier-style color signature.',
+    toneCurve: [
+      { x: 0, y: 6 },
+      { x: 36, y: 38 },
+      { x: 96, y: 104 },
+      { x: 160, y: 170 },
+      { x: 220, y: 228 },
+      { x: 255, y: 250 },
+    ],
+    channelCurves: {
+      r: [{ x: 0, y: 2 }, { x: 128, y: 130 }, { x: 255, y: 253 }],
+      g: [{ x: 0, y: 0 }, { x: 128, y: 126 }, { x: 255, y: 250 }],
+    },
+    tonalCharacterOverride: { shadowLift: 0.08, highlightRolloff: 0.58 },
+    saturationBias: 3,
+    temperatureBias: 3,
+  },
+  {
+    id: 'lab-noritsu',
+    name: 'Lab: Noritsu',
+    description: 'Cooler, straighter midtones with slightly firmer contrast.',
+    toneCurve: [
+      { x: 0, y: 2 },
+      { x: 48, y: 44 },
+      { x: 116, y: 114 },
+      { x: 184, y: 188 },
+      { x: 255, y: 252 },
+    ],
+    tonalCharacterOverride: { shadowLift: 0.04, highlightRolloff: 0.42, midtoneAnchor: -0.005 },
+    saturationBias: -2,
+    temperatureBias: -5,
+  },
+  {
+    id: 'lab-neutral',
+    name: 'Lab: Neutral',
+    description: 'Minimal transfer curve and color bias for manual grading.',
+    toneCurve: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    tonalCharacterOverride: { shadowLift: 0.02, highlightRolloff: 0.35 },
+    saturationBias: 0,
+    temperatureBias: 0,
+  },
+];
+
+export const LAB_STYLE_PROFILES_MAP: Record<string, LabStyleProfile> = Object.fromEntries(
+  LAB_STYLE_PROFILES.map((profile) => [profile.id, profile]),
+);

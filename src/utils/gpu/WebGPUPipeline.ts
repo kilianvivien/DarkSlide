@@ -2,6 +2,7 @@ import {
   ColorProfileId,
   ColorMatrix,
   ConversionSettings,
+  CurvePoint,
   FilmProfileType,
   MaskTuning,
   ReadTileResult,
@@ -14,7 +15,7 @@ import {
 import { clamp } from '../math';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
-const PROCESSING_UNIFORM_BYTES = 64 * 4;
+const PROCESSING_UNIFORM_BYTES = 68 * 4;
 const CURVE_LUT_BYTES = 1024 * 4;
 const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
@@ -506,6 +507,12 @@ export class WebGPUPipeline {
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
+    labStyleToneCurve?: CurvePoint[],
+    labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] },
+    labTonalCharacterOverride?: Partial<TonalCharacter>,
+    labSaturationBias = 0,
+    labTemperatureBias = 0,
+    highlightDensityEstimate = 0,
     inputProfileId: ColorProfileId = 'srgb',
     outputProfileId: ColorProfileId = 'srgb',
     filmType: FilmProfileType = 'negative',
@@ -562,6 +569,10 @@ export class WebGPUPipeline {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      labTonalCharacterOverride,
+      labSaturationBias,
+      labTemperatureBias,
+      highlightDensityEstimate,
       inputProfileId,
       outputProfileId,
       filmType,
@@ -578,7 +589,7 @@ export class WebGPUPipeline {
       this.lastProcessingUniformsHash = processingUniformsHash;
     }
 
-    const curveLut = buildCurveLutBuffer(settings);
+    const curveLut = buildCurveLutBuffer(settings, labStyleToneCurve, labStyleChannelCurves);
     const curveLutHash = hashFloat32Array(curveLut);
     if (curveLutHash !== this.lastCurveLutHash) {
       this.device.queue.writeBuffer(this.curveLutBuffer, 0, curveLut);
@@ -697,6 +708,12 @@ export class WebGPUPipeline {
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
+    labStyleToneCurve?: CurvePoint[],
+    labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] },
+    labTonalCharacterOverride?: Partial<TonalCharacter>,
+    labSaturationBias = 0,
+    labTemperatureBias = 0,
+    highlightDensityEstimate = 0,
     inputProfileId: ColorProfileId = 'srgb',
     outputProfileId: ColorProfileId = 'srgb',
     filmType: FilmProfileType = 'negative',
@@ -711,6 +728,12 @@ export class WebGPUPipeline {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      labStyleToneCurve,
+      labStyleChannelCurves,
+      labTonalCharacterOverride,
+      labSaturationBias,
+      labTemperatureBias,
+      highlightDensityEstimate,
       inputProfileId,
       outputProfileId,
       filmType,
@@ -762,6 +785,12 @@ export class WebGPUPipeline {
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
+    labStyleToneCurve?: CurvePoint[],
+    labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] },
+    labTonalCharacterOverride?: Partial<TonalCharacter>,
+    labSaturationBias = 0,
+    labTemperatureBias = 0,
+    highlightDensityEstimate = 0,
     inputProfileId: ColorProfileId = 'srgb',
     outputProfileId: ColorProfileId = 'srgb',
     filmType: FilmProfileType = 'negative',
@@ -776,6 +805,12 @@ export class WebGPUPipeline {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      labStyleToneCurve,
+      labStyleChannelCurves,
+      labTonalCharacterOverride,
+      labSaturationBias,
+      labTemperatureBias,
+      highlightDensityEstimate,
       inputProfileId,
       outputProfileId,
       filmType,

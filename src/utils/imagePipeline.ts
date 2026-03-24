@@ -23,6 +23,12 @@ let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
 
+type CurveChannelOverrides = {
+  r?: CurvePoint[];
+  g?: CurvePoint[];
+  b?: CurvePoint[];
+};
+
 export function getExtensionFromFormat(format: ExportFormat) {
   switch (format) {
     case 'image/png':
@@ -219,16 +225,57 @@ function applyTonalCharacter(value: number, highlightProtection: number, charact
     next += character.midtoneAnchor;
   }
 
-  const rolloff = character?.highlightRolloff ?? 0.5;
-  const threshold = 200 / 255;
-  if (highlightProtection > 0 && next > threshold) {
-    const protection = clamp(highlightProtection / 100, 0, 0.95);
-    const shoulder = (next - threshold) / (1 - threshold);
-    const softness = 1 - protection * Math.pow(clamp(shoulder, 0, 1), Math.max(rolloff, 0.05));
-    next = threshold + shoulder * (1 - threshold) * softness;
+  return clamp(next, 0, 1);
+}
+
+function applyHighlightRolloff(value: number, anchor: number, strength: number) {
+  if (value <= anchor || strength <= 0) {
+    return value;
   }
 
-  return clamp(next, 0, 1);
+  const safeAnchor = clamp(anchor, 0, 0.99);
+  const excess = (value - safeAnchor) / (1 - safeAnchor);
+  const compressed = Math.pow(clamp(excess, 0, 1), 1 + strength);
+  return safeAnchor + compressed * (1 - safeAnchor);
+}
+
+function applyAdaptiveHighlightRecovery(
+  value: number,
+  highlightProtection: number,
+  highlightDensityEstimate = 0,
+  character?: TonalCharacter,
+) {
+  const toned = applyTonalCharacter(value, 0, character);
+  const threshold = 200 / 255;
+  const effectiveRolloff = (character?.highlightRolloff ?? 0.5) * (1 + clamp(highlightDensityEstimate, 0, 1) * 0.5);
+  if (highlightProtection <= 0 || toned <= threshold) {
+    return clamp(toned, 0, 1);
+  }
+
+  const protection = clamp(highlightProtection / 100, 0, 0.95);
+  const shoulder = (toned - threshold) / (1 - threshold);
+  const softness = 1 - protection * Math.pow(clamp(shoulder, 0, 1), Math.max(effectiveRolloff, 0.05));
+  return clamp(threshold + shoulder * (1 - threshold) * softness, 0, 1);
+}
+
+function applyShadowRecovery(value: number, strength: number) {
+  if (value >= 0.25 || strength <= 0) {
+    return value;
+  }
+
+  const normalizedStrength = clamp(strength / 100, 0, 1);
+  const t = 1 - value / 0.25;
+  return value + (0.25 - value) * normalizedStrength * t * t;
+}
+
+function applyMidtoneContrast(value: number, strength: number) {
+  if (strength === 0) {
+    return value;
+  }
+
+  const normalizedStrength = clamp(strength / 100, -1, 1);
+  const weight = Math.max(0, 1 - 4 * (value - 0.5) * (value - 0.5));
+  return 0.5 + (value - 0.5) * (1 + normalizedStrength * weight);
 }
 
 function getFilmBaseBalance(sample: FilmBaseSample | null) {
@@ -298,6 +345,59 @@ export function resolveEffectiveSettings(
   } : settings;
 }
 
+function composeCurveLut(outer: Uint8Array, inner: Uint8Array) {
+  const result = new Uint8Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    result[index] = outer[inner[index]];
+  }
+  return result;
+}
+
+function createIdentityCurveLut() {
+  const identity = new Uint8Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    identity[index] = index;
+  }
+  return identity;
+}
+
+function buildComposedCurveLuts(
+  settings: ConversionSettings,
+  labStyleToneCurve?: CurvePoint[],
+  labStyleChannelCurves?: CurveChannelOverrides,
+) {
+  const identity = createIdentityCurveLut();
+  const labMaster = labStyleToneCurve ? createCurveLut(labStyleToneCurve) : identity;
+  const labR = labStyleChannelCurves?.r ? createCurveLut(labStyleChannelCurves.r) : identity;
+  const labG = labStyleChannelCurves?.g ? createCurveLut(labStyleChannelCurves.g) : identity;
+  const labB = labStyleChannelCurves?.b ? createCurveLut(labStyleChannelCurves.b) : identity;
+  const userMaster = createCurveLut(settings.curves.rgb);
+  const userR = createCurveLut(settings.curves.red);
+  const userG = createCurveLut(settings.curves.green);
+  const userB = createCurveLut(settings.curves.blue);
+
+  return {
+    master: composeCurveLut(userMaster, labMaster),
+    r: composeCurveLut(userR, labR),
+    g: composeCurveLut(userG, labG),
+    b: composeCurveLut(userB, labB),
+  };
+}
+
+export function computeHighlightDensity(histogram: HistogramData) {
+  const total = histogram.l.reduce((sum, count) => sum + count, 0);
+  if (total <= 0) {
+    return 0;
+  }
+
+  let highlightCount = 0;
+  for (let index = 240; index < histogram.l.length; index += 1) {
+    highlightCount += histogram.l[index];
+  }
+
+  return highlightCount / total;
+}
+
 export function buildProcessingUniforms(
   settings: ConversionSettings,
   isColor: boolean,
@@ -305,6 +405,10 @@ export function buildProcessingUniforms(
   maskTuning?: MaskTuning,
   colorMatrix?: ColorMatrix,
   tonalCharacter?: TonalCharacter,
+  labTonalCharacterOverride?: Partial<TonalCharacter>,
+  labSaturationBias = 0,
+  labTemperatureBias = 0,
+  highlightDensityEstimate = 0,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
   filmType: FilmProfileType = 'negative',
@@ -312,6 +416,13 @@ export function buildProcessingUniforms(
   lightSourceBias: [number, number, number] = [1, 1, 1],
 ) {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
+  const effectiveTonalCharacter = tonalCharacter
+    ? { ...tonalCharacter, ...labTonalCharacterOverride }
+    : (labTonalCharacterOverride ? {
+      shadowLift: labTonalCharacterOverride.shadowLift ?? 0,
+      midtoneAnchor: labTonalCharacterOverride.midtoneAnchor ?? 0,
+      highlightRolloff: labTonalCharacterOverride.highlightRolloff ?? 0.5,
+    } : undefined);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
   const flareCorrection = effectiveSettings.flareCorrection ?? 50;
@@ -327,7 +438,7 @@ export function buildProcessingUniforms(
 
     Math.pow(2, effectiveSettings.exposure / 50),
     (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast)),
-    effectiveSettings.saturation / 100,
+    clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2),
     0,
 
     filmBaseBalance.red,
@@ -340,20 +451,25 @@ export function buildProcessingUniforms(
     effectiveSettings.blueBalance,
     0,
 
-    effectiveSettings.temperature / 255,
+    clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1),
     effectiveSettings.tint / 255,
     effectiveSettings.blackPoint / 255,
     effectiveSettings.whitePoint / 255,
 
     effectiveSettings.highlightProtection,
-    tonalCharacter?.shadowLift ?? 0,
-    tonalCharacter?.midtoneAnchor ?? 0,
-    tonalCharacter?.highlightRolloff ?? 0.5,
+    effectiveTonalCharacter?.shadowLift ?? 0,
+    effectiveTonalCharacter?.midtoneAnchor ?? 0,
+    effectiveTonalCharacter?.highlightRolloff ?? 0.5,
 
     effectiveSettings.blackAndWhite.redMix / 100,
     effectiveSettings.blackAndWhite.greenMix / 100,
     effectiveSettings.blackAndWhite.blueMix / 100,
     effectiveSettings.blackAndWhite.tone / 100,
+
+    (effectiveSettings.shadowRecovery ?? 0) / 100,
+    (effectiveSettings.midtoneContrast ?? 0) / 100,
+    clamp(highlightDensityEstimate, 0, 1),
+    0,
 
     normalizedFlareFloor[0],
     normalizedFlareFloor[1],
@@ -402,18 +518,19 @@ export function buildProcessingUniforms(
   ]);
 }
 
-export function buildCurveLutBuffer(settings: ConversionSettings) {
-  const lutRGB = createCurveLut(settings.curves.rgb);
-  const lutR = createCurveLut(settings.curves.red);
-  const lutG = createCurveLut(settings.curves.green);
-  const lutB = createCurveLut(settings.curves.blue);
+export function buildCurveLutBuffer(
+  settings: ConversionSettings,
+  labStyleToneCurve?: CurvePoint[],
+  labStyleChannelCurves?: CurveChannelOverrides,
+) {
+  const lut = buildComposedCurveLuts(settings, labStyleToneCurve, labStyleChannelCurves);
   const result = new Float32Array(1024);
 
   for (let index = 0; index < 256; index += 1) {
-    result[index] = lutRGB[index] / 255;
-    result[256 + index] = lutR[index] / 255;
-    result[512 + index] = lutG[index] / 255;
-    result[768 + index] = lutB[index] / 255;
+    result[index] = lut.master[index] / 255;
+    result[256 + index] = lut.r[index] / 255;
+    result[512 + index] = lut.g[index] / 255;
+    result[768 + index] = lut.b[index] / 255;
   }
 
   return result;
@@ -547,6 +664,12 @@ export function processImageData(
   maskTuning?: MaskTuning,
   colorMatrix?: ColorMatrix,
   tonalCharacter?: TonalCharacter,
+  labStyleToneCurve?: CurvePoint[],
+  labStyleChannelCurves?: CurveChannelOverrides,
+  labTonalCharacterOverride?: Partial<TonalCharacter>,
+  labSaturationBias = 0,
+  labTemperatureBias = 0,
+  highlightDensityEstimate = 0,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
   filmType: FilmProfileType = 'negative',
@@ -554,23 +677,27 @@ export function processImageData(
   lightSourceBias: [number, number, number] = [1, 1, 1],
 ): HistogramData {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
+  const effectiveTonalCharacter = tonalCharacter
+    ? { ...tonalCharacter, ...labTonalCharacterOverride }
+    : (labTonalCharacterOverride ? {
+      shadowLift: labTonalCharacterOverride.shadowLift ?? 0,
+      midtoneAnchor: labTonalCharacterOverride.midtoneAnchor ?? 0,
+      highlightRolloff: labTonalCharacterOverride.highlightRolloff ?? 0.5,
+    } : undefined);
 
   const data = imageData.data;
-  const lutRGB = createCurveLut(effectiveSettings.curves.rgb);
-  const lutR = createCurveLut(effectiveSettings.curves.red);
-  const lutG = createCurveLut(effectiveSettings.curves.green);
-  const lutB = createCurveLut(effectiveSettings.curves.blue);
+  const lut = buildComposedCurveLuts(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
   const fusedR = new Float32Array(256);
   const fusedG = new Float32Array(256);
   const fusedB = new Float32Array(256);
   const histogram = buildEmptyHistogram();
   const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
   const contrastFactor = (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast));
-  const saturationFactor = effectiveSettings.saturation / 100;
+  const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;
-  const temperatureShift = effectiveSettings.temperature / 255;
+  const temperatureShift = clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1);
   const tintShift = effectiveSettings.tint / 255;
   const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
   const flareStrength = (effectiveSettings.flareCorrection ?? 50) / 100;
@@ -579,9 +706,9 @@ export function processImageData(
     : [0, 0, 0];
 
   for (let index = 0; index < 256; index += 1) {
-    fusedR[index] = lutR[lutRGB[index]] / 255;
-    fusedG[index] = lutG[lutRGB[index]] / 255;
-    fusedB[index] = lutB[lutRGB[index]] / 255;
+    fusedR[index] = lut.r[lut.master[index]] / 255;
+    fusedG[index] = lut.g[lut.master[index]] / 255;
+    fusedB[index] = lut.b[lut.master[index]] / 255;
   }
 
   for (let index = 0; index < data.length; index += 4) {
@@ -653,9 +780,17 @@ export function processImageData(
       g = contrastFactor * (g - 0.5) + 0.5;
       b = contrastFactor * (b - 0.5) + 0.5;
 
-      r = applyTonalCharacter(r, effectiveSettings.highlightProtection, tonalCharacter);
-      g = applyTonalCharacter(g, effectiveSettings.highlightProtection, tonalCharacter);
-      b = applyTonalCharacter(b, effectiveSettings.highlightProtection, tonalCharacter);
+      r = applyShadowRecovery(r, effectiveSettings.shadowRecovery ?? 0);
+      g = applyShadowRecovery(g, effectiveSettings.shadowRecovery ?? 0);
+      b = applyShadowRecovery(b, effectiveSettings.shadowRecovery ?? 0);
+
+      r = applyMidtoneContrast(r, effectiveSettings.midtoneContrast ?? 0);
+      g = applyMidtoneContrast(g, effectiveSettings.midtoneContrast ?? 0);
+      b = applyMidtoneContrast(b, effectiveSettings.midtoneContrast ?? 0);
+
+      r = applyAdaptiveHighlightRecovery(r, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
+      g = applyAdaptiveHighlightRecovery(g, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
+      b = applyAdaptiveHighlightRecovery(b, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
 
       const gray = LUMA_R * r + LUMA_G * g + LUMA_B * b;
       if (isColor && !effectiveSettings.blackAndWhite.enabled) {
