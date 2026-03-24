@@ -21,6 +21,10 @@ vi.mock('motion/react', async () => {
   };
 });
 
+vi.mock('../utils/fileBridge', () => ({
+  isDesktopShell: () => true,
+}));
+
 describe('SettingsModal', () => {
   const createProps = () => ({
     isOpen: true,
@@ -107,6 +111,16 @@ describe('SettingsModal', () => {
     onClearExternalEditor: vi.fn(),
     onChooseOpenInEditorOutputPath: vi.fn(),
     onUseDownloadsForOpenInEditor: vi.fn(),
+    batchOutputPath: null,
+    onChooseBatchOutputPath: vi.fn(),
+    onUseDownloadsForBatch: vi.fn(),
+    contactSheetOutputPath: null,
+    onChooseContactSheetOutputPath: vi.fn(),
+    onUseDownloadsForContactSheet: vi.fn(),
+    customPresetCount: 12,
+    presetFolderCount: 3,
+    onExportPresetBackup: vi.fn(async () => 'saved' as const),
+    onImportPresetBackup: vi.fn(async () => 'imported' as const),
   });
 
   it('lets the user change the resident worker document limit', () => {
@@ -159,5 +173,26 @@ describe('SettingsModal', () => {
 
     fireEvent.change(screen.getByDisplayValue('Auto (no correction)'), { target: { value: 'daylight' } });
     expect(onDefaultLightSourceChange).toHaveBeenCalledWith('daylight');
+  });
+
+  it('renders the backup tab and triggers preset backup actions', () => {
+    const props = createProps();
+    const onExportPresetBackup = vi.fn(async () => 'saved' as const);
+    const onImportPresetBackup = vi.fn(async () => 'imported' as const);
+    props.onExportPresetBackup = onExportPresetBackup;
+    props.onImportPresetBackup = onImportPresetBackup;
+
+    render(
+      <SettingsModal {...props} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Backup' }));
+    expect(screen.getByText('12 presets across 3 folders')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export backup' }));
+    expect(onExportPresetBackup).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Import backup' }));
+    expect(onImportPresetBackup).toHaveBeenCalledTimes(1);
   });
 });

@@ -121,6 +121,8 @@ type AppShellProps = {
   openInEditorOutputPath: string | null;
   batchOutputPath: string | null;
   contactSheetOutputPath: string | null;
+  customPresetCount: number;
+  presetFolderCount: number;
   zoom: number | 'fit';
   fitScale: number;
   effectiveZoom: number;
@@ -215,6 +217,8 @@ type AppShellProps = {
   onUseDownloadsForBatch: () => void;
   onChooseContactSheetOutputPath: () => Promise<void>;
   onUseDownloadsForContactSheet: () => void;
+  onExportPresetBackup: () => Promise<'saved' | 'cancelled'>;
+  onImportPresetBackup: (file?: File) => Promise<'imported' | 'cancelled'>;
   onCanvasClick: (event: React.MouseEvent<HTMLCanvasElement>) => Promise<void>;
   onHandleZoomWheel: (deltaY: number, normX: number, normY: number) => void;
   onStartPan: (clientX: number, clientY: number) => void;
@@ -295,6 +299,8 @@ export function AppShell({
   openInEditorOutputPath,
   batchOutputPath,
   contactSheetOutputPath,
+  customPresetCount,
+  presetFolderCount,
   zoom,
   fitScale,
   effectiveZoom,
@@ -378,6 +384,8 @@ export function AppShell({
   onUseDownloadsForBatch,
   onChooseContactSheetOutputPath,
   onUseDownloadsForContactSheet,
+  onExportPresetBackup,
+  onImportPresetBackup,
   onCanvasClick,
   onHandleZoomWheel,
   onStartPan,
@@ -993,6 +1001,10 @@ export function AppShell({
           contactSheetOutputPath={contactSheetOutputPath}
           onChooseContactSheetOutputPath={() => { void onChooseContactSheetOutputPath(); }}
           onUseDownloadsForContactSheet={onUseDownloadsForContactSheet}
+          customPresetCount={customPresetCount}
+          presetFolderCount={presetFolderCount}
+          onExportPresetBackup={() => onExportPresetBackup()}
+          onImportPresetBackup={(file) => onImportPresetBackup(file)}
         />
       </ErrorBoundary>
       <ErrorBoundary>

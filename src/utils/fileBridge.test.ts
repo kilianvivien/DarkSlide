@@ -46,7 +46,7 @@ vi.mock('@tauri-apps/api/path', () => ({
   downloadDir: pathState.downloadDir,
 }));
 
-import { confirmDeletePreset, getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFile, openInExternalEditor, openPresetFile, saveExportBlob, savePresetFile, saveToDirectory } from './fileBridge';
+import { confirmDeletePreset, confirmReplacePresetLibrary, getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFile, openInExternalEditor, openPresetBackupFile, openPresetFile, saveExportBlob, savePresetBackupFile, savePresetFile, saveToDirectory } from './fileBridge';
 
 describe('fileBridge', () => {
   beforeEach(() => {
@@ -207,6 +207,54 @@ describe('fileBridge', () => {
       content: '{"darkslideVersion":"1.0.0"}',
       fileName: 'preset.darkslide',
     });
+  });
+
+  it('writes preset backups through the desktop save dialog', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.save.mockResolvedValue('/Users/tester/Desktop/library.darkslide-library');
+
+    const result = await savePresetBackupFile('{"kind":"preset-backup"}', 'library.darkslide-library');
+
+    expect(result).toBe('saved');
+    expect(dialogState.save).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Export Preset Backup',
+      defaultPath: 'library.darkslide-library',
+      filters: [expect.objectContaining({
+        name: 'DarkSlide Preset Backup',
+        extensions: ['darkslide-library'],
+      })],
+    }));
+    expect(fsState.writeTextFile).toHaveBeenCalledWith('/Users/tester/Desktop/library.darkslide-library', '{"kind":"preset-backup"}');
+  });
+
+  it('opens preset backup files through the desktop dialog', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.open.mockResolvedValue('/Users/tester/Desktop/library.darkslide-library');
+    fsState.readTextFile.mockResolvedValue('{"kind":"preset-backup"}');
+
+    const result = await openPresetBackupFile();
+
+    expect(fsState.readTextFile).toHaveBeenCalledWith('/Users/tester/Desktop/library.darkslide-library');
+    expect(result).toEqual({
+      content: '{"kind":"preset-backup"}',
+      fileName: 'library.darkslide-library',
+    });
+  });
+
+  it('confirms preset library replacement through the desktop dialog', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.ask.mockResolvedValue(true);
+
+    const result = await confirmReplacePresetLibrary();
+
+    expect(result).toBe(true);
+    expect(dialogState.ask).toHaveBeenCalledWith(
+      'Importing a preset backup will replace all existing custom presets and folders. Continue?',
+      expect.objectContaining({
+        title: 'Replace Preset Library',
+        okLabel: 'Replace',
+      }),
+    );
   });
 
   it('uses Downloads when no custom open-in-editor destination is configured', async () => {

@@ -28,6 +28,11 @@ const PRESET_FILTER = {
   extensions: ['darkslide'],
 };
 
+const PRESET_BACKUP_FILTER = {
+  name: 'DarkSlide Preset Backup',
+  extensions: ['darkslide-library'],
+};
+
 const BROWSER_DIRECTORY_PREFIX = '[browser-dir] ';
 
 let selectedBrowserDirectoryHandle: FileSystemDirectoryHandle | null = null;
@@ -343,6 +348,58 @@ export async function openPresetFile(): Promise<{ content: string; fileName: str
   };
 }
 
+export async function savePresetBackupFile(json: string, filename: string): Promise<'saved' | 'cancelled'> {
+  if (isDesktopShell()) {
+    const [{ save }, { writeTextFile }] = await Promise.all([
+      import('@tauri-apps/plugin-dialog'),
+      import('@tauri-apps/plugin-fs'),
+    ]);
+
+    const selected = await save({
+      title: 'Export Preset Backup',
+      defaultPath: filename,
+      filters: [PRESET_BACKUP_FILTER],
+    });
+
+    if (!selected) {
+      return 'cancelled';
+    }
+
+    await writeTextFile(selected, json);
+    return 'saved';
+  }
+
+  triggerBrowserDownload(new Blob([json], { type: 'application/json' }), filename);
+  return 'saved';
+}
+
+export async function openPresetBackupFile(): Promise<{ content: string; fileName: string } | null> {
+  if (!isDesktopShell()) {
+    return null;
+  }
+
+  const [{ open }, { readTextFile }] = await Promise.all([
+    import('@tauri-apps/plugin-dialog'),
+    import('@tauri-apps/plugin-fs'),
+  ]);
+
+  const selected = await open({
+    title: 'Import Preset Backup',
+    directory: false,
+    multiple: false,
+    filters: [PRESET_BACKUP_FILTER],
+  });
+
+  if (!selected || Array.isArray(selected)) {
+    return null;
+  }
+
+  return {
+    content: await readTextFile(selected),
+    fileName: getFileName(selected),
+  };
+}
+
 export async function openInExternalEditor(
   blob: Blob,
   filename: string,
@@ -422,6 +479,22 @@ export async function confirmDeletePreset(name: string): Promise<boolean> {
       title: 'Delete Preset',
       kind: 'warning',
       okLabel: 'Delete',
+      cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
+}
+
+export async function confirmReplacePresetLibrary(): Promise<boolean> {
+  const message = 'Importing a preset backup will replace all existing custom presets and folders. Continue?';
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Replace Preset Library',
+      kind: 'warning',
+      okLabel: 'Replace',
       cancelLabel: 'Cancel',
     });
   }

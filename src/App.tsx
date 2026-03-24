@@ -11,11 +11,12 @@ import { useCalibration } from './hooks/useCalibration';
 import { useCustomLightSources } from './hooks/useCustomLightSources';
 import { useViewportZoom } from './hooks/useViewportZoom';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
-import { isDesktopShell, registerBeforeUnloadGuard } from './utils/fileBridge';
+import { confirmReplacePresetLibrary, isDesktopShell, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
 import { clamp } from './utils/math';
+import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
 import { syncRecentFilesToMenu } from './utils/recentFilesStore';
@@ -249,7 +250,7 @@ export default function App() {
     }, RENDER_INDICATOR_DELAY_MS);
   }, [clearRenderIndicator, isAdjustingCrop, isPanDragging]);
 
-  const { customPresets, folders: presetFolders, savePreset, importPreset, deletePreset, createFolder, renameFolder, deleteFolder, movePresetToFolder } = useCustomPresets();
+  const { customPresets, folders: presetFolders, savePreset, importPreset, deletePreset, createFolder, renameFolder, deleteFolder, movePresetToFolder, replaceLibrary } = useCustomPresets();
   const { customLightSources, saveCustomLightSource, deleteCustomLightSource } = useCustomLightSources();
   const fallbackProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
 
@@ -1542,6 +1543,45 @@ export default function App() {
     deleteCustomLightSource(id);
   }, [deleteCustomLightSource]);
 
+  const handleExportPresetBackup = useCallback(async () => {
+    const payload = createPresetBackupFile(customPresets, presetFolders);
+    const dateLabel = payload.exportedAt.slice(0, 10);
+    return savePresetBackupFile(
+      JSON.stringify(payload, null, 2),
+      `darkslide-presets-${dateLabel}.darkslide-library`,
+    );
+  }, [customPresets, presetFolders]);
+
+  const handleImportPresetBackup = useCallback(async (file?: File) => {
+    const opened = file
+      ? { content: await file.text(), fileName: file.name }
+      : await openPresetBackupFile();
+
+    if (!opened) {
+      return 'cancelled' as const;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(opened.content);
+    } catch {
+      throw new Error(`Preset backup import failed. ${opened.fileName} is not valid JSON.`);
+    }
+
+    const backup = validatePresetBackupFile(parsed);
+    if (!backup) {
+      throw new Error(`Preset backup import failed. ${opened.fileName} is not a valid preset backup.`);
+    }
+
+    const confirmed = await confirmReplacePresetLibrary();
+    if (!confirmed) {
+      return 'cancelled' as const;
+    }
+
+    replaceLibrary(backup.presets, backup.folders);
+    return 'imported' as const;
+  }, [replaceLibrary]);
+
   const wrappedHandleExportOptionsChange = useCallback((options: Partial<ExportOptions>) => {
     handleExportOptionsChange(options);
     if (!documentState) {
@@ -1785,6 +1825,8 @@ export default function App() {
       openInEditorOutputPath={openInEditorOutputPath}
       batchOutputPath={batchOutputPath}
       contactSheetOutputPath={contactSheetOutputPath}
+      customPresetCount={customPresets.length}
+      presetFolderCount={presetFolders.length}
       zoom={zoom}
       fitScale={fitScale}
       effectiveZoom={effectiveZoom}
@@ -1868,6 +1910,8 @@ export default function App() {
       onUseDownloadsForBatch={handleUseDownloadsForBatch}
       onChooseContactSheetOutputPath={handleChooseContactSheetOutputPath}
       onUseDownloadsForContactSheet={handleUseDownloadsForContactSheet}
+      onExportPresetBackup={handleExportPresetBackup}
+      onImportPresetBackup={handleImportPresetBackup}
       onCanvasClick={handleCanvasClick}
       onHandleZoomWheel={handleZoomWheel}
       onStartPan={handlePanStart}

@@ -102,6 +102,13 @@ export function useCustomPresets() {
     persist(nextPresets);
   };
 
+  const replaceLibrary = (nextPresets: FilmProfile[], nextFolders: PresetFolder[]) => {
+    persist(
+      nextPresets.map((preset) => ({ ...structuredClone(preset), isCustom: true })),
+      structuredClone(nextFolders),
+    );
+  };
+
   return {
     customPresets,
     folders,
@@ -112,5 +119,6 @@ export function useCustomPresets() {
     renameFolder,
     deleteFolder,
     movePresetToFolder,
+    replaceLibrary,
   };
 }

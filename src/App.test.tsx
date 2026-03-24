@@ -76,12 +76,15 @@ const fileBridgeState = vi.hoisted(() => ({
   openImageFile: vi.fn(),
   openImageFileByPath: vi.fn(),
   openMultipleImageFiles: vi.fn(),
+  openPresetBackupFile: vi.fn(),
   openDirectory: vi.fn(),
   openInExternalEditor: vi.fn(),
   chooseApplicationPath: vi.fn(),
   confirmDiscard: vi.fn(),
+  confirmReplacePresetLibrary: vi.fn(),
   saveToDirectory: vi.fn(),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
+  savePresetBackupFile: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
   registerBeforeUnloadGuard: vi.fn(() => vi.fn()),
 }));
 
@@ -92,6 +95,7 @@ const exportNotificationState = vi.hoisted(() => ({
 
 const customPresetState = vi.hoisted(() => ({
   presets: [] as Array<Record<string, unknown>>,
+  folders: [] as Array<{ id: string; name: string }>,
 }));
 
 vi.mock('motion/react', async () => {
@@ -264,9 +268,11 @@ vi.mock('./hooks/useCustomPresets', async () => {
   return {
     useCustomPresets: () => {
       const [customPresets, setCustomPresets] = ReactModule.useState(customPresetState.presets as Array<Record<string, unknown>>);
+      const [folders, setFolders] = ReactModule.useState(customPresetState.folders as Array<{ id: string; name: string }>);
 
       return {
         customPresets,
+        folders,
         savePreset: (preset: Record<string, unknown>) => {
           const savedPreset = { ...structuredClone(preset), isCustom: true };
           const nextPresets = [...customPresetState.presets, savedPreset];
@@ -294,6 +300,12 @@ vi.mock('./hooks/useCustomPresets', async () => {
           const nextPresets = customPresetState.presets.filter((preset) => preset.id !== id);
           customPresetState.presets = nextPresets;
           setCustomPresets(nextPresets);
+        },
+        replaceLibrary: (presets: Array<Record<string, unknown>>, nextFolders: Array<{ id: string; name: string }>) => {
+          customPresetState.presets = presets;
+          customPresetState.folders = nextFolders;
+          setCustomPresets(presets);
+          setFolders(nextFolders);
         },
       };
     },
@@ -343,12 +355,15 @@ vi.mock('./utils/fileBridge', () => ({
   openImageFile: fileBridgeState.openImageFile,
   openImageFileByPath: fileBridgeState.openImageFileByPath,
   openMultipleImageFiles: fileBridgeState.openMultipleImageFiles,
+  openPresetBackupFile: fileBridgeState.openPresetBackupFile,
   openDirectory: fileBridgeState.openDirectory,
   openInExternalEditor: fileBridgeState.openInExternalEditor,
   chooseApplicationPath: fileBridgeState.chooseApplicationPath,
   confirmDiscard: fileBridgeState.confirmDiscard,
+  confirmReplacePresetLibrary: fileBridgeState.confirmReplacePresetLibrary,
   saveToDirectory: fileBridgeState.saveToDirectory,
   saveExportBlob: fileBridgeState.saveExportBlob,
+  savePresetBackupFile: fileBridgeState.savePresetBackupFile,
   registerBeforeUnloadGuard: fileBridgeState.registerBeforeUnloadGuard,
 }));
 
@@ -444,6 +459,7 @@ describe('App import and preview pipeline', () => {
     vi.useFakeTimers();
     localStorage.clear();
     customPresetState.presets = [];
+    customPresetState.folders = [];
     coreState.invoke.mockReset();
     workerState.decode.mockReset();
     workerState.detectFrame.mockReset();
@@ -460,13 +476,17 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.openImageFile.mockReset();
     fileBridgeState.openImageFileByPath.mockReset();
     fileBridgeState.openMultipleImageFiles.mockReset();
+    fileBridgeState.openPresetBackupFile.mockReset();
     fileBridgeState.openDirectory.mockReset();
     fileBridgeState.openInExternalEditor.mockReset();
     fileBridgeState.chooseApplicationPath.mockReset();
     fileBridgeState.confirmDiscard.mockReset();
+    fileBridgeState.confirmReplacePresetLibrary.mockReset();
     fileBridgeState.saveToDirectory.mockReset();
     fileBridgeState.saveExportBlob.mockReset();
+    fileBridgeState.savePresetBackupFile.mockReset();
     fileBridgeState.saveExportBlob.mockResolvedValue('saved');
+    fileBridgeState.savePresetBackupFile.mockResolvedValue('saved');
     exportNotificationState.notifyExportFinished.mockReset();
     exportNotificationState.primeExportNotificationsPermission.mockReset();
     exportNotificationState.notifyExportFinished.mockResolvedValue(undefined);
@@ -479,6 +499,7 @@ describe('App import and preview pipeline', () => {
       destinationDirectory: '/Users/tester/Downloads',
     });
     fileBridgeState.confirmDiscard.mockResolvedValue(true);
+    fileBridgeState.confirmReplacePresetLibrary.mockResolvedValue(true);
 
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),

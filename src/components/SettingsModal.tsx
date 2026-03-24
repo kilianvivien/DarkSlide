@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, ImagePlus, Pencil, Trash2 } from 'lucide-react';
+import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, ImagePlus, Pencil, Trash2, Upload } from 'lucide-react';
 import { ColorManagementSettings, ColorProfileId, ExportOptions, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
+import { isDesktopShell } from '../utils/fileBridge';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { MAX_RESIDENT_DOC_OPTIONS, MaxResidentDocs } from '../utils/residentDocsStore';
 
@@ -59,6 +60,10 @@ interface SettingsModalProps {
   contactSheetOutputPath: string | null;
   onChooseContactSheetOutputPath: () => void;
   onUseDownloadsForContactSheet: () => void;
+  customPresetCount: number;
+  presetFolderCount: number;
+  onExportPresetBackup: () => Promise<'saved' | 'cancelled'>;
+  onImportPresetBackup: (file?: File) => Promise<'imported' | 'cancelled'>;
 }
 
 type DiagnosticCardItem = {
@@ -92,6 +97,7 @@ const TABS = [
   { id: 'notifications' as const, label: 'Notifications', icon: Bell, disabled: false },
   { id: 'color' as const, label: 'Color', icon: Palette, disabled: false },
   { id: 'calibration' as const, label: 'Calibration', icon: Grid3x3, disabled: false },
+  { id: 'backup' as const, label: 'Backup', icon: Copy, disabled: false },
   { id: 'shortcuts' as const, label: 'Shortcuts', icon: Keyboard, disabled: false },
   { id: 'diagnostics' as const, label: 'Diagnostics', icon: Activity, disabled: false },
   { id: 'update' as const, label: 'Update', icon: RefreshCw, disabled: true },
@@ -332,8 +338,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   contactSheetOutputPath,
   onChooseContactSheetOutputPath,
   onUseDownloadsForContactSheet,
+  customPresetCount,
+  presetFolderCount,
+  onExportPresetBackup,
+  onImportPresetBackup,
 }) => {
-  const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'calibration' | 'shortcuts' | 'diagnostics'>('performance');
+  const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'calibration' | 'backup' | 'shortcuts' | 'diagnostics'>('performance');
   const [folderTab, setFolderTab] = useState<'editor' | 'batch' | 'contact'>('editor');
   const [copied, setCopied] = useState(false);
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
@@ -342,8 +352,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [lsDraftTemp, setLsDraftTemp] = useState(5500);
   const [lsDraftBias, setLsDraftBias] = useState<[number, number, number]>([1, 1, 1]);
   const [lsDraftFlare, setLsDraftFlare] = useState<LightSourceProfile['flareCharacteristic']>('medium');
+  const [backupFeedback, setBackupFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const calibrationInputRef = useRef<HTMLInputElement>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
 
   useFocusTrap(modalRef, isOpen);
 
@@ -450,6 +462,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setShowLightSourceForm(false);
   };
 
+  const handleBackupExport = async () => {
+    try {
+      const result = await onExportPresetBackup();
+      if (result === 'saved') {
+        setBackupFeedback({ tone: 'success', message: 'Preset backup saved.' });
+      }
+    } catch (error) {
+      setBackupFeedback({
+        tone: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const handleBackupImport = async (file?: File) => {
+    try {
+      const result = await onImportPresetBackup(file);
+      if (result === 'imported') {
+        setBackupFeedback({ tone: 'success', message: 'Preset backup imported.' });
+      }
+    } catch (error) {
+      setBackupFeedback({
+        tone: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -489,6 +529,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   event.target.value = '';
                   if (file) {
                     void handleCalibrationImport(file);
+                  }
+                }}
+              />
+              <input
+                ref={backupInputRef}
+                type="file"
+                accept=".darkslide-library,application/json"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) {
+                    void handleBackupImport(file);
                   }
                 }}
               />
@@ -1155,6 +1208,61 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             </div>
                             <FlatFieldPreview preview={activeFlatFieldPreview} />
                           </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Backup ── */}
+                    {tab === 'backup' && (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Preset Library Backup</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              Export or restore your custom presets and preset folders as a single backup file.
+                            </p>
+                          </div>
+
+                          <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2">
+                            <p className="text-[12px] text-zinc-300">
+                              {customPresetCount} {customPresetCount === 1 ? 'preset' : 'presets'} across {presetFolderCount} {presetFolderCount === 1 ? 'folder' : 'folders'}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => { void handleBackupExport(); }}
+                              className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 transition-all hover:bg-zinc-900"
+                            >
+                              <Download size={13} className="text-zinc-500" />
+                              Export backup
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isDesktopShell()) {
+                                  void handleBackupImport();
+                                  return;
+                                }
+                                backupInputRef.current?.click();
+                              }}
+                              className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 transition-all hover:bg-zinc-900"
+                            >
+                              <Upload size={13} className="text-zinc-500" />
+                              Import backup
+                            </button>
+                          </div>
+
+                          <p className="text-[11px] leading-relaxed text-amber-300">
+                            Import replaces your current custom preset library after confirmation. It does not affect app settings, light sources, or calibration profiles.
+                          </p>
+
+                          {backupFeedback && (
+                            <p className={`text-[11px] ${backupFeedback.tone === 'success' ? 'text-emerald-300' : 'text-red-300'}`}>
+                              {backupFeedback.message}
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}

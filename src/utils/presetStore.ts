@@ -1,4 +1,5 @@
-import { DarkslidePresetFile, FilmProfile, PresetFolder, VersionedPresetStore } from '../types';
+import { DARKSLIDE_PRESET_FILE_VERSION } from '../constants';
+import { DarkslidePresetBackupFile, DarkslidePresetFile, FilmProfile, PresetFolder, VersionedPresetStore } from '../types';
 
 const STORAGE_KEY = 'darkslide_custom_presets_v1';
 const IDB_NAME = 'darkslide';
@@ -21,6 +22,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isValidScannerType(value: unknown) {
   return value == null || value === 'flatbed' || value === 'camera' || value === 'dedicated' || value === 'smartphone';
+}
+
+function isValidPresetFolder(value: unknown): value is PresetFolder {
+  if (!isRecord(value)) return false;
+  return typeof value.id === 'string' && typeof value.name === 'string';
 }
 
 function isValidProfile(value: unknown): value is FilmProfile {
@@ -48,6 +54,50 @@ export function validateDarkslideFile(raw: unknown): DarkslidePresetFile | null 
   }
 
   return raw as unknown as DarkslidePresetFile;
+}
+
+export function createPresetBackupFile(
+  presets: FilmProfile[],
+  folders: PresetFolder[],
+  exportedAt = new Date().toISOString(),
+): DarkslidePresetBackupFile {
+  return {
+    darkslideVersion: DARKSLIDE_PRESET_FILE_VERSION,
+    kind: 'preset-backup',
+    version: 1,
+    exportedAt,
+    presets: structuredClone(presets),
+    folders: structuredClone(folders),
+  };
+}
+
+export function validatePresetBackupFile(raw: unknown): DarkslidePresetBackupFile | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  if (
+    typeof raw.darkslideVersion !== 'string'
+    || raw.kind !== 'preset-backup'
+    || raw.version !== 1
+    || typeof raw.exportedAt !== 'string'
+    || !Array.isArray(raw.presets)
+    || !Array.isArray(raw.folders)
+  ) {
+    return null;
+  }
+
+  if (!raw.presets.every(isValidProfile) || !raw.folders.every(isValidPresetFolder)) {
+    return null;
+  }
+
+  const folderIds = new Set(raw.folders.map((folder) => folder.id));
+  const allPresetFoldersExist = raw.presets.every((preset) => preset.folderId == null || folderIds.has(preset.folderId));
+  if (!allPresetFoldersExist) {
+    return null;
+  }
+
+  return raw as unknown as DarkslidePresetBackupFile;
 }
 
 // ---------------------------------------------------------------------------

@@ -194,6 +194,15 @@ export interface DarkslidePresetFile {
   profile: FilmProfile;
 }
 
+export interface DarkslidePresetBackupFile {
+  darkslideVersion: string;
+  kind: 'preset-backup';
+  version: 1;
+  exportedAt: string;
+  presets: FilmProfile[];
+  folders: PresetFolder[];
+}
+
 export interface HistogramData {
   r: number[];
   g: number[];
