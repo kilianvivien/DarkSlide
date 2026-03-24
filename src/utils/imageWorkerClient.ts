@@ -1,4 +1,6 @@
 import {
+  AutoAnalyzeRequest,
+  AutoAnalyzeResult,
   ColorProfileId,
   ContactSheetRequest,
   ContactSheetResult,
@@ -1173,6 +1175,15 @@ export class ImageWorkerClient {
     return this.requestWithDocumentRecovery(
       payload.documentId,
       () => this.request<FilmBaseSample>('sample-film-base', payload),
+      true,
+    );
+  }
+
+  async autoAnalyze(payload: AutoAnalyzeRequest) {
+    await this.ensureDocumentLoaded(payload.documentId);
+    return this.requestWithDocumentRecovery(
+      payload.documentId,
+      () => this.request<AutoAnalyzeResult>('auto-analyze', payload),
       true,
     );
   }

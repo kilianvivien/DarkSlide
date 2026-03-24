@@ -2,6 +2,8 @@
 
 import UTIF from 'utif';
 import {
+  AutoAnalyzeRequest,
+  AutoAnalyzeResult,
   ColorProfileId,
   CancelTileJobRequest,
   ContactSheetRequest,
@@ -26,10 +28,13 @@ import {
   WorkerMemoryDiagnostics,
 } from '../types';
 import {
+  applyFilmBaseCompensation,
+  applyLightSourceCorrection,
   assertSupportedDimensions,
   buildEmptyHistogram,
   computeHighlightDensity,
   getExtensionFromFormat,
+  getFilmBaseBalance,
   getFileExtension,
   getCropPixelBounds,
   getTransformedDimensions,
@@ -39,6 +44,7 @@ import {
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
+import { analyzeColorBalance, analyzeExposure } from './autoAnalysis';
 import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
 import { getColorProfileIdFromName, identifyIccProfile, convertImageDataColorProfile } from './colorProfiles';
@@ -870,6 +876,84 @@ function handleCancelJob(payload: CancelTileJobRequest) {
   return { cancelled: true } as const;
 }
 
+function applyAutoWhiteBalanceAnalysisStage(
+  imageData: ImageData,
+  payload: AutoAnalyzeRequest,
+) {
+  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
+  convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
+
+  const { data } = imageData;
+  const filmBaseBalance = getFilmBaseBalance(payload.settings.filmBaseSample);
+  const lightSourceBias = payload.lightSourceBias ?? [1, 1, 1];
+  const filmType = payload.filmType ?? 'negative';
+
+  for (let index = 0; index < data.length; index += 4) {
+    let r = data[index] / 255;
+    let g = data[index + 1] / 255;
+    let b = data[index + 2] / 255;
+
+    r = applyLightSourceCorrection(r, lightSourceBias[0]);
+    g = applyLightSourceCorrection(g, lightSourceBias[1]);
+    b = applyLightSourceCorrection(b, lightSourceBias[2]);
+
+    if (filmType !== 'slide') {
+      r = 1 - r;
+      g = 1 - g;
+      b = 1 - b;
+    }
+
+    r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
+    g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
+    b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
+
+    data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
+    data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
+    data[index + 2] = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
+  }
+}
+
+function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
+  const document = getStoredDocument(payload.documentId);
+  const analysisTargetDimension = Math.min(payload.targetMaxDimension, 1024);
+  const level = selectPreviewLevel(document.previews.map((preview) => preview.level), analysisTargetDimension);
+  const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
+  const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
+  const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Could not analyze auto adjustments.');
+
+  const toneImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
+  applyActiveFlatFieldIfNeeded(toneImageData, payload.settings.flatFieldEnabled);
+  const toneHistogram = processImageData(
+    toneImageData,
+    payload.settings,
+    payload.isColor,
+    'processed',
+    payload.maskTuning,
+    payload.colorMatrix,
+    payload.tonalCharacter,
+    payload.labStyleToneCurve,
+    payload.labStyleChannelCurves,
+    payload.labTonalCharacterOverride,
+    payload.labSaturationBias ?? 0,
+    payload.labTemperatureBias ?? 0,
+    payload.highlightDensityEstimate ?? 0,
+    payload.inputProfileId ?? 'srgb',
+    payload.outputProfileId ?? 'srgb',
+    payload.filmType ?? 'negative',
+    payload.flareFloor ?? null,
+    payload.lightSourceBias ?? [1, 1, 1],
+  );
+
+  const whiteBalanceImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
+  applyAutoWhiteBalanceAnalysisStage(whiteBalanceImageData, payload);
+
+  return {
+    ...analyzeExposure(toneHistogram),
+    ...analyzeColorBalance(whiteBalanceImageData),
+  } satisfies AutoAnalyzeResult;
+}
+
 function handleRender(payload: RenderRequest) {
   const document = getStoredDocument(payload.documentId);
   const level = selectPreviewLevel(document.previews.map((preview) => preview.level), payload.targetMaxDimension);
@@ -1133,6 +1217,9 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         reply(request, result, [result.imageData.data.buffer]);
         return;
       }
+      case 'auto-analyze':
+        reply(request, handleAutoAnalyze(request.payload));
+        return;
       case 'prepare-tile-job':
         reply(request, handlePrepareTileJob(request.payload));
         return;

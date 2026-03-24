@@ -494,6 +494,35 @@ export interface RenderBackendDiagnostics {
   oldestActiveBlobUrlAgeMs: number | null;
 }
 
+export interface AutoAnalyzeRequest {
+  documentId: string;
+  settings: ConversionSettings;
+  isColor: boolean;
+  filmType?: FilmProfileType;
+  inputProfileId?: ColorProfileId;
+  outputProfileId?: ColorProfileId;
+  targetMaxDimension: number;
+  maskTuning?: MaskTuning;
+  colorMatrix?: ColorMatrix;
+  tonalCharacter?: TonalCharacter;
+  labStyleToneCurve?: CurvePoint[];
+  labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] };
+  labTonalCharacterOverride?: Partial<TonalCharacter>;
+  labSaturationBias?: number;
+  labTemperatureBias?: number;
+  highlightDensityEstimate?: number;
+  flareFloor?: [number, number, number] | null;
+  lightSourceBias?: [number, number, number];
+}
+
+export interface AutoAnalyzeResult {
+  exposure: number;
+  blackPoint: number;
+  whitePoint: number;
+  temperature: number | null;
+  tint: number | null;
+}
+
 export interface SampleRequest {
   documentId: string;
   settings: ConversionSettings;

@@ -26,6 +26,7 @@ const workerState = vi.hoisted(() => ({
   decode: vi.fn(),
   detectFrame: vi.fn(),
   render: vi.fn(),
+  autoAnalyze: vi.fn(),
   export: vi.fn(),
   sampleFilmBase: vi.fn(),
   disposeDocument: vi.fn(async () => ({ disposed: true })),
@@ -119,6 +120,7 @@ vi.mock('./components/Sidebar', () => ({
     onOpenSettings,
     onSettingsChange,
     onLightSourceChange,
+    onAutoAdjust,
     onExportOptionsChange,
     onExport,
     onTogglePicker,
@@ -130,6 +132,7 @@ vi.mock('./components/Sidebar', () => ({
     onOpenSettings: () => void;
     onSettingsChange: (settings: Record<string, unknown>) => void;
     onLightSourceChange?: (lightSourceId: string | null) => void;
+    onAutoAdjust?: () => void;
     onExportOptionsChange: (options: { filenameBase?: string }) => void;
     onExport: () => void;
     onTogglePicker: () => void;
@@ -159,6 +162,9 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={() => onLightSourceChange?.('daylight')}>
           Select Daylight Light Source
+        </button>
+        <button type="button" onClick={onAutoAdjust}>
+          Auto
         </button>
         <button
           type="button"
@@ -306,6 +312,8 @@ vi.mock('./utils/imageWorkerClient', () => ({
 
     render = workerState.render;
 
+    autoAnalyze = workerState.autoAnalyze;
+
     export = workerState.export;
 
     contactSheet = vi.fn();
@@ -440,6 +448,7 @@ describe('App import and preview pipeline', () => {
     workerState.decode.mockReset();
     workerState.detectFrame.mockReset();
     workerState.render.mockReset();
+    workerState.autoAnalyze.mockReset();
     workerState.export.mockReset();
     workerState.sampleFilmBase.mockReset();
     workerState.disposeDocument.mockClear();
@@ -1108,6 +1117,150 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.redBalance).toBeCloseTo((255 - 151) / (255 - 168));
     expect(latestRenderCall.settings.greenBalance).toBe(1);
     expect(latestRenderCall.settings.blueBalance).toBeCloseTo((255 - 151) / (255 - 134));
+  });
+
+  it('applies worker auto-analysis results from the Auto button', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; settings: { exposure: number; blackPoint: number; whitePoint: number; temperature: number; tint: number } }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.autoAnalyze.mockResolvedValue({
+      exposure: 6,
+      blackPoint: 4,
+      whitePoint: 238,
+      temperature: 22,
+      tint: 3,
+    });
+
+    render(<App />);
+    await uploadFile(createFile('auto-basic.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.autoAnalyze).toHaveBeenCalledTimes(1);
+    expect(
+      (workerState.autoAnalyze.mock.calls[0]?.[0] as { targetMaxDimension: number }).targetMaxDimension,
+    ).toBeLessThanOrEqual(1024);
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        blackPoint: number;
+        whitePoint: number;
+        temperature: number;
+        tint: number;
+      };
+    };
+
+    expect(latestRenderCall.settings.exposure).toBe(6);
+    expect(latestRenderCall.settings.blackPoint).toBe(4);
+    expect(latestRenderCall.settings.whitePoint).toBe(238);
+    expect(latestRenderCall.settings.temperature).toBe(22);
+    expect(latestRenderCall.settings.tint).toBe(3);
+  });
+
+  it('preserves white balance and shows a notice when auto-analysis finds no neutral candidates', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; settings: { exposure: number; blackPoint: number; whitePoint: number; temperature: number; tint: number } }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.autoAnalyze.mockResolvedValue({
+      exposure: 2,
+      blackPoint: 5,
+      whitePoint: 240,
+      temperature: null,
+      tint: null,
+    });
+
+    render(<App />);
+    await uploadFile(createFile('auto-no-neutrals.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        blackPoint: number;
+        whitePoint: number;
+        temperature: number;
+        tint: number;
+      };
+    };
+
+    expect(latestRenderCall.settings.exposure).toBe(2);
+    expect(latestRenderCall.settings.blackPoint).toBe(5);
+    expect(latestRenderCall.settings.whitePoint).toBe(240);
+    expect(latestRenderCall.settings.temperature).toBe(0);
+    expect(latestRenderCall.settings.tint).toBe(0);
+  });
+
+  it('ignores stale auto-analysis results after the active document changes', async () => {
+    const autoRequest = deferred<{
+      exposure: number;
+      blackPoint: number;
+      whitePoint: number;
+      temperature: number;
+      tint: number;
+    }>();
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.autoAnalyze.mockReturnValue(autoRequest.promise);
+
+    render(<App />);
+    await uploadFile(createFile('auto-stale-1.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto' }));
+    await flushMicrotasks();
+
+    await uploadFile(createFile('auto-stale-2.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const renderCountBeforeResolution = workerState.render.mock.calls.length;
+    autoRequest.resolve({
+      exposure: 9,
+      blackPoint: 6,
+      whitePoint: 236,
+      temperature: 18,
+      tint: 4,
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render.mock.calls.length).toBe(renderCountBeforeResolution);
   });
 
   it('schedules slider drag preview at most once per animation frame in balanced mode', async () => {

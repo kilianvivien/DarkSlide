@@ -21,7 +21,6 @@ import { BatchJobEntry } from './utils/batchProcessor';
 import { syncRecentFilesToMenu } from './utils/recentFilesStore';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs, saveMaxResidentDocs } from './utils/residentDocsStore';
-import { autoAnalyze } from './utils/autoAnalysis';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
   return {
@@ -1585,6 +1584,97 @@ export default function App() {
     });
   }, []);
 
+  const handleAutoAdjust = useCallback(async () => {
+    const worker = workerClientRef.current;
+    if (!worker || !documentState || !displaySettings) {
+      return;
+    }
+
+    const defaults = activeProfile.defaultSettings;
+    const hasManualAdjustments = documentState.settings.exposure !== defaults.exposure
+      || documentState.settings.temperature !== defaults.temperature
+      || documentState.settings.tint !== defaults.tint
+      || documentState.settings.blackPoint !== defaults.blackPoint
+      || documentState.settings.whitePoint !== defaults.whitePoint;
+
+    if (hasManualAdjustments && typeof window !== 'undefined' && !window.confirm('Auto will overwrite your manual adjustments. Continue?')) {
+      return;
+    }
+
+    const requestDocumentId = documentState.id;
+    const requestRevision = documentState.renderRevision;
+    const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
+    const outputProfileId = documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
+    const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const result = await worker.autoAnalyze({
+      documentId: requestDocumentId,
+      settings: displaySettings,
+      isColor: activeProfile.type === 'color',
+      filmType: activeProfile.filmType,
+      inputProfileId,
+      outputProfileId,
+      targetMaxDimension: Math.min(targetMaxDimension, 1024),
+      maskTuning: activeProfile.maskTuning,
+      colorMatrix: activeProfile.colorMatrix,
+      tonalCharacter: activeProfile.tonalCharacter,
+      labStyleToneCurve: activeLabStyle?.toneCurve,
+      labStyleChannelCurves: activeLabStyle?.channelCurves,
+      labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
+      labSaturationBias: activeLabStyle?.saturationBias ?? 0,
+      labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+      highlightDensityEstimate: documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0,
+      flareFloor: documentState.estimatedFlare,
+      lightSourceBias,
+    }).catch((error) => {
+      const message = formatError(error);
+      showTransientNotice(`Auto analysis failed. ${message}`);
+      return null;
+    });
+
+    if (!result) {
+      return;
+    }
+
+    const latestDocument = tabsRef.current.find((tab) => tab.id === requestDocumentId)?.document ?? null;
+    if (
+      activeDocumentIdRef.current !== requestDocumentId
+      || !latestDocument
+      || latestDocument.renderRevision !== requestRevision
+    ) {
+      return;
+    }
+
+    const nextSettings: Partial<ConversionSettings> = {
+      exposure: result.exposure,
+      blackPoint: result.blackPoint,
+      whitePoint: result.whitePoint,
+    };
+
+    if (result.temperature !== null && result.tint !== null) {
+      nextSettings.temperature = result.temperature;
+      nextSettings.tint = result.tint;
+    }
+
+    handleSettingsChange(nextSettings);
+    if (result.temperature === null || result.tint === null) {
+      showTransientNotice('Auto adjusted tone, but left white balance unchanged.');
+    }
+  }, [
+    activeLabStyle?.channelCurves,
+    activeLabStyle?.saturationBias,
+    activeLabStyle?.temperatureBias,
+    activeLabStyle?.toneCurve,
+    activeLabStyle?.tonalCharacterOverride,
+    activeProfile,
+    displaySettings,
+    documentState,
+    handleSettingsChange,
+    lightSourceProfilesById,
+    showTransientNotice,
+    tabsRef,
+    targetMaxDimension,
+  ]);
+
   useAppShortcuts({
     tabs,
     activeTabId,
@@ -1605,21 +1695,7 @@ export default function App() {
     onReset: handleReset,
     onCopyDebugInfo: handleCopyDebugInfo,
     onToggleComparison: handleToggleComparison,
-    onAutoAdjust: () => {
-      if (!documentState?.histogram) {
-        return;
-      }
-      const defaults = activeProfile.defaultSettings;
-      const hasManualAdjustments = documentState.settings.exposure !== defaults.exposure
-        || documentState.settings.temperature !== defaults.temperature
-        || documentState.settings.tint !== defaults.tint
-        || documentState.settings.blackPoint !== defaults.blackPoint
-        || documentState.settings.whitePoint !== defaults.whitePoint;
-      if (hasManualAdjustments && typeof window !== 'undefined' && !window.confirm('Auto will overwrite your manual adjustments. Continue?')) {
-        return;
-      }
-      handleSettingsChange(autoAnalyze(documentState.histogram));
-    },
+    onAutoAdjust: () => { void handleAutoAdjust(); },
     onToggleCropOverlay: handleToggleCropOverlay,
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleRightPane,
@@ -1632,25 +1708,6 @@ export default function App() {
   const showBlockingOverlay = Boolean(blockingOverlay);
   const overlayContent = blockingOverlay;
   const isExporting = documentState?.status === 'exporting';
-
-  const handleAutoAdjust = useCallback(() => {
-    if (!documentState?.histogram) {
-      return;
-    }
-
-    const defaults = activeProfile.defaultSettings;
-    const hasManualAdjustments = documentState.settings.exposure !== defaults.exposure
-      || documentState.settings.temperature !== defaults.temperature
-      || documentState.settings.tint !== defaults.tint
-      || documentState.settings.blackPoint !== defaults.blackPoint
-      || documentState.settings.whitePoint !== defaults.whitePoint;
-
-    if (hasManualAdjustments && typeof window !== 'undefined' && !window.confirm('Auto will overwrite your manual adjustments. Continue?')) {
-      return;
-    }
-
-    handleSettingsChange(autoAnalyze(documentState.histogram));
-  }, [activeProfile.defaultSettings, documentState, handleSettingsChange]);
 
   return (
     <AppShell
@@ -1767,7 +1824,7 @@ export default function App() {
       onOpenSettingsModal={handleOpenSettingsModal}
       onLightSourceChange={handleLightSourceChange}
       onLabStyleChange={handleLabStyleChange}
-      onAutoAdjust={handleAutoAdjust}
+      onAutoAdjust={() => { void handleAutoAdjust(); }}
       onProfileChange={handleProfileChange}
       onSavePreset={handleSavePreset}
       onImportPreset={handleImportPreset}

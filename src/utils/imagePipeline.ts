@@ -278,7 +278,7 @@ function applyMidtoneContrast(value: number, strength: number) {
   return 0.5 + (value - 0.5) * (1 + normalizedStrength * weight);
 }
 
-function getFilmBaseBalance(sample: FilmBaseSample | null) {
+export function getFilmBaseBalance(sample: FilmBaseSample | null) {
   if (!sample) {
     return { red: 1, green: 1, blue: 1 };
   }
@@ -290,7 +290,7 @@ function getFilmBaseBalance(sample: FilmBaseSample | null) {
   };
 }
 
-function applyFilmBaseCompensation(value: number, sampleValue: number) {
+export function applyFilmBaseCompensation(value: number, sampleValue: number) {
   const invertedFilmBase = 1 - clamp(sampleValue, 1 / 255, 1);
   return clamp((value - invertedFilmBase) / Math.max(1 / 255, 1 - invertedFilmBase), 0, 1);
 }
@@ -299,7 +299,7 @@ function applyFlareCorrection(value: number, floor: number, strength: number) {
   return Math.max(0, value - floor * strength);
 }
 
-function applyLightSourceCorrection(value: number, bias: number) {
+export function applyLightSourceCorrection(value: number, bias: number) {
   return clamp(value / Math.max(bias, 0.05), 0, 1);
 }
 

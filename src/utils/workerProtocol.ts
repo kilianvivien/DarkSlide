@@ -1,4 +1,6 @@
 import type {
+  AutoAnalyzeRequest,
+  AutoAnalyzeResult,
   CancelTileJobRequest,
   ContactSheetRequest,
   ContactSheetResult,
@@ -51,6 +53,7 @@ export interface WorkerError {
 export type WorkerRequest =
   | { type: 'decode'; payload: DecodeRequest }
   | { type: 'render'; payload: RenderRequest }
+  | { type: 'auto-analyze'; payload: AutoAnalyzeRequest }
   | { type: 'prepare-tile-job'; payload: PrepareTileJobRequest }
   | { type: 'read-tile'; payload: ReadTileRequest }
   | { type: 'cancel-job'; payload: CancelTileJobRequest }
@@ -68,6 +71,7 @@ export type WorkerRequest =
 export type WorkerSuccessPayload =
   | DecodedImage
   | RenderResult
+  | AutoAnalyzeResult
   | PreparedTileJobResult
   | ReadTileResult
   | ExportResult

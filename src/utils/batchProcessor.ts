@@ -3,7 +3,7 @@ import { ImageWorkerClient } from './imageWorkerClient';
 import { getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
 import { decodeDesktopRawForWorker, isRawExtension } from './rawImport';
 import { isDesktopShell, saveExportBlob, saveToDirectory } from './fileBridge';
-import { autoAnalyze, AutoAnalysisResult } from './autoAnalysis';
+import type { AutoAnalyzeResult } from '../types';
 
 export interface BatchJobEntry {
   id: string;
@@ -75,7 +75,7 @@ export async function* runBatch(
   options: BatchRunOptions = {},
 ): AsyncGenerator<BatchProgressEvent> {
   let rollFlare: [number, number, number] | null = null;
-  let rollAutoAnalysis: AutoAnalysisResult | null = null;
+  let rollAutoAnalysis: AutoAnalyzeResult | null = null;
 
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
@@ -170,17 +170,14 @@ export async function* runBatch(
       if ((options.autoMode ?? 'off') !== 'off') {
         const autoResult = (options.autoMode === 'first-frame' && rollAutoAnalysis)
           ? rollAutoAnalysis
-          : autoAnalyze((await workerClient.render({
+          : await workerClient.autoAnalyze({
             documentId,
             settings: entrySettings,
             isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
             filmType: sharedProfile.filmType,
             inputProfileId,
             outputProfileId: exportOptions.outputProfileId,
-            revision: index + 1,
             targetMaxDimension: 1024,
-            comparisonMode: 'processed',
-            histogramMode: 'full',
             maskTuning: sharedProfile.maskTuning,
             colorMatrix: sharedProfile.colorMatrix,
             tonalCharacter: sharedProfile.tonalCharacter,
@@ -190,7 +187,7 @@ export async function* runBatch(
             labSaturationBias: sharedLabStyle?.saturationBias ?? 0,
             labTemperatureBias: sharedLabStyle?.temperatureBias ?? 0,
             flareFloor,
-          })).histogram);
+          });
 
         if (options.autoMode === 'first-frame' && !rollAutoAnalysis) {
           rollAutoAnalysis = autoResult;
@@ -199,8 +196,10 @@ export async function* runBatch(
         entrySettings.exposure = autoResult.exposure;
         entrySettings.blackPoint = autoResult.blackPoint;
         entrySettings.whitePoint = autoResult.whitePoint;
-        entrySettings.temperature = autoResult.temperature;
-        entrySettings.tint = autoResult.tint;
+        if (autoResult.temperature !== null && autoResult.tint !== null) {
+          entrySettings.temperature = autoResult.temperature;
+          entrySettings.tint = autoResult.tint;
+        }
       }
 
       const result = await workerClient.export({
