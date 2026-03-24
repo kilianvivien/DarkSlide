@@ -5,7 +5,7 @@ export type CropTab = 'Film' | 'Print' | 'Social' | 'Digital';
 export type ScannerType = 'flatbed' | 'camera' | 'dedicated' | 'smartphone';
 export type ColorProfileId = 'srgb' | 'display-p3' | 'adobe-rgb';
 export type FilmProfileType = 'negative' | 'slide';
-export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'Lomography' | 'Generic';
+export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'Lomography' | 'Foma' | 'Rollei' | 'Generic';
 export type CropSource = 'auto' | 'manual';
 
 export interface CurvePoint {

@@ -128,7 +128,7 @@ function formatBuiltInProfileLabel(profile: FilmProfile) {
   return `${filmTypeLabel} · ${processLabel}`;
 }
 
-const CATEGORY_ORDER: FilmProfileCategory[] = ['Generic', 'Kodak', 'Fuji', 'Ilford', 'CineStill', 'Lomography'];
+const CATEGORY_ORDER: FilmProfileCategory[] = ['Generic', 'Kodak', 'Fuji', 'Ilford', 'CineStill', 'Lomography', 'Foma', 'Rollei'];
 
 interface PresetsPaneProps {
   activeStockId: string;
@@ -205,6 +205,8 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       Ilford: true,
       CineStill: true,
       Lomography: true,
+      Foma: true,
+      Rollei: true,
     };
     try {
       const stored = localStorage.getItem('darkslide_collapsed_groups_v1');
