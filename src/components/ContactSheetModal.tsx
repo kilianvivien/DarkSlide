@@ -296,6 +296,8 @@ export function ContactSheetModal({
           embedMetadata,
           outputProfileId,
           embedOutputProfile,
+          saveSidecar: false,
+          targetMaxDimension: null,
         },
         settingsPerCell: cells.map(() => structuredClone(sharedSettings)),
         profilePerCell: cells.map(() => structuredClone(sharedProfile)),

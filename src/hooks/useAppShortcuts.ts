@@ -1,5 +1,5 @@
 import { Dispatch, SetStateAction, useEffect } from 'react';
-import { DocumentTab } from '../types';
+import { DocumentTab, QuickExportPreset } from '../types';
 import { openImageFileByPath } from '../utils/fileBridge';
 import { clearRecentFiles } from '../utils/recentFilesStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -13,6 +13,7 @@ type UseAppShortcutsOptions = {
   usesNativeFileDialogs: boolean;
   setShowBatchModal: Dispatch<SetStateAction<boolean>>;
   setShowSettingsModal: Dispatch<SetStateAction<boolean>>;
+  setShowScanningSessionPanel: Dispatch<SetStateAction<boolean>>;
   setIsSpaceHeld: Dispatch<SetStateAction<boolean>>;
   onUndo: () => void;
   onRedo: () => void;
@@ -21,6 +22,8 @@ type UseAppShortcutsOptions = {
   onOpenInEditor: () => Promise<void>;
   onCloseImage: () => Promise<void>;
   onDownload: () => Promise<void>;
+  quickExportPresets: QuickExportPreset[];
+  onQuickExport: (preset: QuickExportPreset) => Promise<void>;
   onReset: () => void;
   onCopyDebugInfo: () => Promise<void>;
   onToggleComparison: () => void;
@@ -28,6 +31,9 @@ type UseAppShortcutsOptions = {
   onToggleCropOverlay: () => void;
   onToggleLeftPane: () => void;
   onToggleRightPane: () => void;
+  onToggleRollFilmstrip: () => void;
+  onToggleScanningSession: () => void;
+  onCheckForUpdates: () => void;
   zoomToFit: () => void;
   zoomTo100: () => void;
   zoomIn: () => void;
@@ -43,6 +49,7 @@ export function useAppShortcuts({
   usesNativeFileDialogs,
   setShowBatchModal,
   setShowSettingsModal,
+  setShowScanningSessionPanel,
   setIsSpaceHeld,
   onUndo,
   onRedo,
@@ -51,6 +58,8 @@ export function useAppShortcuts({
   onOpenInEditor,
   onCloseImage,
   onDownload,
+  quickExportPresets,
+  onQuickExport,
   onReset,
   onCopyDebugInfo,
   onToggleComparison,
@@ -58,6 +67,9 @@ export function useAppShortcuts({
   onToggleCropOverlay,
   onToggleLeftPane,
   onToggleRightPane,
+  onToggleRollFilmstrip,
+  onToggleScanningSession,
+  onCheckForUpdates,
   zoomToFit,
   zoomTo100,
   zoomIn,
@@ -76,8 +88,14 @@ export function useAppShortcuts({
       zoomInPlus: { key: '+', meta: true, handler: zoomIn },
       zoomOut: { key: '-', meta: true, handler: zoomOut },
       export: { key: 'e', meta: true, when: () => documentStatePresent, handler: () => { void onDownload(); } },
+      quickExport1: { key: '1', meta: true, shift: true, when: () => Boolean(documentStatePresent && quickExportPresets[0]), handler: () => { void onQuickExport(quickExportPresets[0]!); } },
+      quickExport2: { key: '2', meta: true, shift: true, when: () => Boolean(documentStatePresent && quickExportPresets[1]), handler: () => { void onQuickExport(quickExportPresets[1]!); } },
+      quickExport3: { key: '3', meta: true, shift: true, when: () => Boolean(documentStatePresent && quickExportPresets[2]), handler: () => { void onQuickExport(quickExportPresets[2]!); } },
+      quickExport4: { key: '4', meta: true, shift: true, when: () => Boolean(documentStatePresent && quickExportPresets[3]), handler: () => { void onQuickExport(quickExportPresets[3]!); } },
       autoAdjust: { key: 'a', meta: true, shift: true, when: () => documentStatePresent, handler: onAutoAdjust },
       batchExport: { key: 'e', meta: true, shift: true, handler: () => setShowBatchModal(true) },
+      toggleScanningSession: { key: 'w', meta: true, shift: true, when: () => usesNativeFileDialogs, handler: onToggleScanningSession },
+      toggleRollFilmstrip: { key: 'f', meta: true, shift: true, when: () => tabs.length > 0, handler: onToggleRollFilmstrip },
       previousTab: {
         key: '[',
         meta: true,
@@ -152,6 +170,15 @@ export function useAppShortcuts({
           break;
         case 'show-settings':
           setShowSettingsModal(true);
+          break;
+        case 'scan-session-toggle':
+          setShowScanningSessionPanel((current) => !current);
+          break;
+        case 'toggle-roll-filmstrip':
+          onToggleRollFilmstrip();
+          break;
+        case 'check-for-updates':
+          onCheckForUpdates();
           break;
         case 'clear-recent-files':
           clearRecentFiles();

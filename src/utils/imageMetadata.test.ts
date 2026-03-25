@@ -57,6 +57,8 @@ describe('image metadata helpers', () => {
         embedMetadata: true,
         outputProfileId: 'srgb',
         embedOutputProfile: false,
+        saveSidecar: false,
+        targetMaxDimension: null,
       },
       extracted,
     );
@@ -83,6 +85,8 @@ describe('image metadata helpers', () => {
         embedMetadata: false,
         outputProfileId: 'srgb',
         embedOutputProfile: false,
+        saveSidecar: false,
+        targetMaxDimension: null,
       },
       {
         orientation: 6,

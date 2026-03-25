@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, ImagePlus, Pencil, Trash2, Upload } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ExportOptions, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, ExportOptions, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { isDesktopShell } from '../utils/fileBridge';
@@ -50,10 +50,13 @@ interface SettingsModalProps {
   externalEditorPath: string | null;
   externalEditorName: string | null;
   openInEditorOutputPath: string | null;
+  defaultExportPath: string | null;
   onChooseExternalEditor: () => void;
   onClearExternalEditor: () => void;
   onChooseOpenInEditorOutputPath: () => void;
   onUseDownloadsForOpenInEditor: () => void;
+  onChooseDefaultExportPath: () => void;
+  onUseDownloadsForExport: () => void;
   batchOutputPath: string | null;
   onChooseBatchOutputPath: () => void;
   onUseDownloadsForBatch: () => void;
@@ -64,6 +67,14 @@ interface SettingsModalProps {
   presetFolderCount: number;
   onExportPresetBackup: () => Promise<'saved' | 'cancelled'>;
   onImportPresetBackup: (file?: File) => Promise<'imported' | 'cancelled'>;
+  updateChannel: UpdateChannel;
+  lastUpdateCheckAt: number | null;
+  updateError: string | null;
+  isCheckingForUpdates: boolean;
+  updaterEnabled: boolean;
+  updaterDisabledReason: string | null;
+  onUpdateChannelChange: (channel: UpdateChannel) => void;
+  onCheckForUpdates: () => void;
 }
 
 type DiagnosticCardItem = {
@@ -82,6 +93,8 @@ const SHORTCUTS = [
   { action: 'Undo', key: `${mod}Z` },
   { action: 'Redo', key: `${mod}⇧Z` },
   { action: 'Export', key: `${mod}E` },
+  { action: 'Toggle Filmstrip', key: `${mod}⇧F` },
+  { action: 'Scanning Session', key: `${mod}⇧W` },
   { action: 'Open in Editor', key: `${mod}⇧O` },
   { action: 'Settings', key: `${mod},` },
   { action: 'Zoom to Fit', key: `${mod}0` },
@@ -100,7 +113,7 @@ const TABS = [
   { id: 'backup' as const, label: 'Backup', icon: Copy, disabled: false },
   { id: 'shortcuts' as const, label: 'Shortcuts', icon: Keyboard, disabled: false },
   { id: 'diagnostics' as const, label: 'Diagnostics', icon: Activity, disabled: false },
-  { id: 'update' as const, label: 'Update', icon: RefreshCw, disabled: true },
+  { id: 'update' as const, label: 'Update', icon: RefreshCw, disabled: false },
 ];
 
 function FlatFieldPreview({
@@ -328,10 +341,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   externalEditorPath,
   externalEditorName,
   openInEditorOutputPath,
+  defaultExportPath,
   onChooseExternalEditor,
   onClearExternalEditor,
   onChooseOpenInEditorOutputPath,
   onUseDownloadsForOpenInEditor,
+  onChooseDefaultExportPath,
+  onUseDownloadsForExport,
   batchOutputPath,
   onChooseBatchOutputPath,
   onUseDownloadsForBatch,
@@ -342,9 +358,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   presetFolderCount,
   onExportPresetBackup,
   onImportPresetBackup,
+  updateChannel,
+  lastUpdateCheckAt,
+  updateError,
+  isCheckingForUpdates,
+  updaterEnabled,
+  updaterDisabledReason,
+  onUpdateChannelChange,
+  onCheckForUpdates,
 }) => {
-  const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'calibration' | 'backup' | 'shortcuts' | 'diagnostics'>('performance');
-  const [folderTab, setFolderTab] = useState<'editor' | 'batch' | 'contact'>('editor');
+  const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'calibration' | 'backup' | 'shortcuts' | 'diagnostics' | 'update'>('performance');
+  const [folderTab, setFolderTab] = useState<'editor' | 'quick' | 'batch' | 'contact'>('editor');
   const [copied, setCopied] = useState(false);
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const [showLightSourceForm, setShowLightSourceForm] = useState(false);
@@ -708,6 +732,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               { value: 'image/jpeg', label: 'JPEG' },
                               { value: 'image/png', label: 'PNG' },
                               { value: 'image/webp', label: 'WebP' },
+                              { value: 'image/tiff', label: 'TIFF' },
                             ] as const).map(({ value, label }) => (
                               <button
                                 key={value}
@@ -793,6 +818,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <div className="flex gap-1 rounded-lg bg-zinc-950 p-0.5">
                             {([
                               ['editor', 'Editor'],
+                              ['quick', 'Quick Export'],
                               ['batch', 'Batch'],
                               ['contact', 'Contact Sheet'],
                             ] as const).map(([key, label]) => (
@@ -812,6 +838,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           </div>
                           <p className="text-[12px] leading-relaxed text-zinc-500">
                             {folderTab === 'editor' && 'Where your photo is saved before opening in the external app.'}
+                            {folderTab === 'quick' && 'Where one-click quick exports are saved automatically.'}
                             {folderTab === 'batch' && 'Where batch-processed images are saved by default.'}
                             {folderTab === 'contact' && 'Where contact sheets are saved by default.'}
                           </p>
@@ -864,6 +891,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               </div>
                               <p className="text-[11px] text-zinc-600 font-mono break-all">
                                 {batchOutputPath ?? 'Downloads'}
+                              </p>
+                            </>
+                          )}
+                          {folderTab === 'quick' && (
+                            <>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={onChooseDefaultExportPath}
+                                  className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 hover:bg-zinc-900 transition-all"
+                                >
+                                  <FolderOpen size={13} className="text-zinc-500" />
+                                  Choose Folder…
+                                </button>
+                                <button
+                                  onClick={onUseDownloadsForExport}
+                                  className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
+                                    defaultExportPath
+                                      ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
+                                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                  }`}
+                                >
+                                  Use Save Dialog
+                                </button>
+                              </div>
+                              <p className="text-[11px] text-zinc-600 font-mono break-all">
+                                {defaultExportPath ?? 'No default folder set'}
                               </p>
                             </>
                           )}
@@ -1278,6 +1331,74 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             </kbd>
                           </div>
                         ))}
+                      </div>
+                    )}
+
+                    {tab === 'update' && (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Update Channel</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              Stable follows public releases. Beta checks the preview feed when updater signing is configured for this build.
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            {([
+                              { id: 'stable', label: 'Stable' },
+                              { id: 'beta', label: 'Beta' },
+                            ] as const).map((option) => (
+                              <button
+                                key={option.id}
+                                type="button"
+                                disabled={!updaterEnabled}
+                                onClick={() => onUpdateChannelChange(option.id)}
+                                className={`rounded-xl border px-4 py-2 text-sm transition-colors ${
+                                  updateChannel === option.id
+                                    ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+                                    : 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
+                                } disabled:cursor-not-allowed disabled:opacity-40`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <p className="text-[13px] font-semibold text-zinc-100">Current Version</p>
+                              <p className="mt-0.5 text-[12px] text-zinc-500">{APP_VERSION_LABEL} beta</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={onCheckForUpdates}
+                              disabled={!updaterEnabled || isCheckingForUpdates}
+                              className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2 text-sm text-zinc-200 transition-colors hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {isCheckingForUpdates ? 'Checking…' : 'Check Now'}
+                            </button>
+                          </div>
+                          <p className="text-[12px] text-zinc-500">
+                            Last checked: {lastUpdateCheckAt ? new Date(lastUpdateCheckAt).toLocaleString() : 'Not checked yet'}
+                          </p>
+                          {updateError && (
+                            <div className="rounded-xl border border-amber-900/60 bg-amber-950/35 px-3 py-2 text-[12px] text-amber-100">
+                              {updateError}
+                            </div>
+                          )}
+                          {updaterDisabledReason && (
+                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-[12px] text-zinc-400">
+                              {updaterDisabledReason}
+                            </div>
+                          )}
+                          {!isDesktopShell() && (
+                            <p className="text-[12px] text-zinc-600">
+                              Automatic updates are only available in the desktop app.
+                            </p>
+                          )}
+                        </div>
                       </div>
                     )}
 

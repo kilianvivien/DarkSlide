@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from './constants';
 import { AppShell } from './components/AppShell';
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, TonalCharacter, WorkspaceDocument } from './types';
+import { RollInfoModal } from './components/RollInfoModal';
+import { ScanningSessionPanel } from './components/ScanningSessionPanel';
+import { UpdateBanner } from './components/UpdateBanner';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
@@ -10,8 +13,11 @@ import { useWorkspaceCommands } from './hooks/useWorkspaceCommands';
 import { useCalibration } from './hooks/useCalibration';
 import { useCustomLightSources } from './hooks/useCustomLightSources';
 import { useViewportZoom } from './hooks/useViewportZoom';
+import { useRolls } from './hooks/useRolls';
+import { useScanningSession } from './hooks/useScanningSession';
+import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
-import { confirmReplacePresetLibrary, isDesktopShell, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile } from './utils/fileBridge';
+import { confirmReplacePresetLibrary, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
@@ -22,6 +28,7 @@ import { BatchJobEntry } from './utils/batchProcessor';
 import { syncRecentFilesToMenu } from './utils/recentFilesStore';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs, saveMaxResidentDocs } from './utils/residentDocsStore';
+import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
   return {
@@ -89,6 +96,9 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [showContactSheetModal, setShowContactSheetModal] = useState(false);
+  const [showRollFilmstrip, setShowRollFilmstrip] = useState(false);
+  const [showScanningSessionPanel, setShowScanningSessionPanel] = useState(false);
+  const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
   const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
   const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
   const [contactSheetSharedProfile, setContactSheetSharedProfile] = useState<FilmProfile | null>(null);
@@ -100,9 +110,15 @@ export default function App() {
   const [externalEditorPath, setExternalEditorPath] = useState<string | null>(() => initialPreferences?.externalEditorPath ?? null);
   const [externalEditorName, setExternalEditorName] = useState<string | null>(() => initialPreferences?.externalEditorName ?? null);
   const [openInEditorOutputPath, setOpenInEditorOutputPath] = useState<string | null>(() => initialPreferences?.openInEditorOutputPath ?? null);
+  const [defaultExportPath, setDefaultExportPath] = useState<string | null>(() => initialPreferences?.defaultExportPath ?? null);
   const [batchOutputPath, setBatchOutputPath] = useState<string | null>(() => initialPreferences?.batchOutputPath ?? null);
   const [contactSheetOutputPath, setContactSheetOutputPath] = useState<string | null>(() => initialPreferences?.contactSheetOutputPath ?? null);
+  const [scanningWatchPath, setScanningWatchPath] = useState<string | null>(() => initialPreferences?.scanningWatchPath ?? null);
+  const [scanningAutoExport, setScanningAutoExport] = useState(() => initialPreferences?.scanningAutoExport ?? false);
+  const [scanningAutoExportPath, setScanningAutoExportPath] = useState<string | null>(() => initialPreferences?.scanningAutoExportPath ?? null);
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => initialPreferences?.updateChannel ?? 'stable');
   const [defaultExportOptions, setDefaultExportOptions] = useState<ExportOptions>(() => initialPreferences?.exportOptions ?? DEFAULT_EXPORT_OPTIONS);
+  const [quickExportPresets, setQuickExportPresets] = useState(() => loadQuickExportPresets());
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [isRenderIndicatorVisible, setIsRenderIndicatorVisible] = useState(false);
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
@@ -281,6 +297,18 @@ export default function App() {
     return map;
   }, [allLightSourceProfiles]);
   const calibration = useCalibration(workerClientRef, workerReadyVersion);
+  const {
+    rolls,
+    updateRoll,
+    assignToRoll,
+    getDocumentsInRoll,
+    syncSettingsToRoll,
+    applyFilmBaseToRoll,
+    ensureRollForDirectory,
+  } = useRolls({
+    tabs,
+    updateTabById,
+  });
 
   // Always-current ref for non-transient profiles — avoids adding them to importFile's deps
   const persistedProfilesRef = useRef(persistedProfiles);
@@ -288,7 +316,7 @@ export default function App() {
 
   // Snapshot of the latest preference-relevant state, updated on every render so handlers can always read fresh values
   const prefsSnapshotRef = useRef<UserPreferences>({
-    version: 4,
+    version: 6,
     lastProfileId: fallbackProfile.id,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     notificationSettings: initialPreferences?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS,
@@ -301,11 +329,16 @@ export default function App() {
     externalEditorPath: initialPreferences?.externalEditorPath ?? null,
     externalEditorName: initialPreferences?.externalEditorName ?? null,
     openInEditorOutputPath: initialPreferences?.openInEditorOutputPath ?? null,
+    defaultExportPath: initialPreferences?.defaultExportPath ?? null,
     batchOutputPath: initialPreferences?.batchOutputPath ?? null,
     contactSheetOutputPath: initialPreferences?.contactSheetOutputPath ?? null,
+    scanningWatchPath: initialPreferences?.scanningWatchPath ?? null,
+    scanningAutoExport: initialPreferences?.scanningAutoExport ?? false,
+    scanningAutoExportPath: initialPreferences?.scanningAutoExportPath ?? null,
+    updateChannel: initialPreferences?.updateChannel ?? 'stable',
   });
   prefsSnapshotRef.current = {
-    version: 4,
+    version: 6,
     lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
     exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
     notificationSettings,
@@ -318,9 +351,36 @@ export default function App() {
     externalEditorPath,
     externalEditorName,
     openInEditorOutputPath,
+    defaultExportPath,
     batchOutputPath,
     contactSheetOutputPath,
+    scanningWatchPath,
+    scanningAutoExport,
+    scanningAutoExportPath,
+    updateChannel,
   };
+
+  const getRollById = useCallback((rollId: string | null) => (
+    rollId ? rolls.get(rollId) ?? null : null
+  ), [rolls]);
+  const activeRoll = useMemo(() => getRollById(documentState?.rollId ?? null), [documentState?.rollId, getRollById]);
+  const filmstripTabs = useMemo(() => (
+    activeRoll
+      ? tabs.filter((tab) => tab.rollId === activeRoll.id)
+      : tabs
+  ), [activeRoll, tabs]);
+
+  const resolveRollId = useCallback((nativePath: string | null | undefined) => {
+    if (!nativePath) {
+      return null;
+    }
+    const normalized = nativePath.replace(/\\/g, '/');
+    const lastSlash = normalized.lastIndexOf('/');
+    if (lastSlash < 0) {
+      return null;
+    }
+    return ensureRollForDirectory(normalized.slice(0, lastSlash)).id;
+  }, [ensureRollForDirectory]);
   const activeProfile = documentState
     ? profilesById.get(documentState.profileId) ?? fallbackProfile
     : fallbackProfile;
@@ -1383,10 +1443,13 @@ export default function App() {
     handleDownload,
     handleExportClick,
     handleOpenInEditor,
+    handleQuickExport,
     handleChooseExternalEditor,
     handleClearExternalEditor,
     handleChooseOpenInEditorOutputPath,
     handleUseDownloadsForOpenInEditor,
+    handleChooseDefaultExportPath,
+    handleUseDownloadsForExport,
     handleChooseBatchOutputPath,
     handleUseDownloadsForBatch,
     handleChooseContactSheetOutputPath,
@@ -1481,6 +1544,7 @@ export default function App() {
     setExternalEditorPath,
     setExternalEditorName,
     setOpenInEditorOutputPath,
+    setDefaultExportPath,
     setBatchOutputPath,
     setContactSheetOutputPath,
     setShowTabSwitchOverlay,
@@ -1494,6 +1558,8 @@ export default function App() {
     createDocumentColorManagement,
     formatError,
     getErrorCode,
+    resolveRollId,
+    getRollById,
   });
 
   const handleSelectFlatFieldProfile = useCallback(async (name: string | null) => {
@@ -1581,6 +1647,28 @@ export default function App() {
     replaceLibrary(backup.presets, backup.folders);
     return 'imported' as const;
   }, [replaceLibrary]);
+
+  const handleSaveQuickExportPreset = useCallback(() => {
+    const baseOptions = documentState?.exportOptions ?? defaultExportOptions;
+    const name = window.prompt('Save current export settings as a quick preset', 'Custom Export');
+    if (!name) {
+      return;
+    }
+
+    setQuickExportPresets((current) => {
+      const next = [...current, createFromCurrentSettings(name, baseOptions)];
+      saveQuickExportPresets(next);
+      return loadQuickExportPresets();
+    });
+  }, [defaultExportOptions, documentState?.exportOptions]);
+
+  const handleDeleteQuickExportPreset = useCallback((presetId: string) => {
+    setQuickExportPresets((current) => {
+      const next = current.filter((preset) => preset.id !== presetId);
+      saveQuickExportPresets(next);
+      return loadQuickExportPresets();
+    });
+  }, []);
 
   const wrappedHandleExportOptionsChange = useCallback((options: Partial<ExportOptions>) => {
     handleExportOptionsChange(options);
@@ -1727,6 +1815,255 @@ export default function App() {
     targetMaxDimension,
   ]);
 
+  const handleOpenRollInfo = useCallback((rollId: string) => {
+    setActiveRollInfoId(rollId);
+  }, []);
+
+  const handleSaveRollMetadata = useCallback((rollId: string, updates: Partial<Roll>) => {
+    updateRoll(rollId, {
+      name: updates.name?.trim() || 'Untitled Roll',
+      filmStock: updates.filmStock?.trim() || null,
+      camera: updates.camera?.trim() || null,
+      date: updates.date?.trim() || null,
+      notes: updates.notes ?? '',
+    });
+    setActiveRollInfoId(null);
+  }, [updateRoll]);
+
+  const handleSyncRollSettings = useCallback((tabId: string, rollId: string) => {
+    const tab = tabsRef.current.find((candidate) => candidate.id === tabId) ?? null;
+    const roll = getRollById(rollId);
+    const rollTabs = tabsRef.current.filter((candidate) => candidate.rollId === rollId);
+    if (!tab || !roll || rollTabs.length < 2) {
+      return;
+    }
+
+    if (typeof window !== 'undefined' && !window.confirm(`Apply settings from ${tab.document.source.name} to ${rollTabs.length - 1} other frame(s) in ${roll.name}?`)) {
+      return;
+    }
+
+    syncSettingsToRoll(tabId, rollId);
+    showTransientNotice(`Synced ${roll.name} from ${tab.document.source.name}.`, 'success');
+  }, [getRollById, showTransientNotice, syncSettingsToRoll, tabsRef]);
+
+  const handleApplyRollFilmBase = useCallback((rollId: string) => {
+    const sourceDocument = tabsRef.current.find((tab) => tab.rollId === rollId && tab.document.settings.filmBaseSample)?.document ?? null;
+    const roll = getRollById(rollId);
+    if (!sourceDocument?.settings.filmBaseSample || !roll) {
+      showTransientNotice('Sample a film base on one frame before syncing it to the roll.');
+      return;
+    }
+
+    applyFilmBaseToRoll(sourceDocument.settings.filmBaseSample, rollId);
+    showTransientNotice(`Applied ${roll.name} film base to the full roll.`, 'success');
+  }, [applyFilmBaseToRoll, getRollById, showTransientNotice, tabsRef]);
+
+  const handleRemoveFromRoll = useCallback((tabId: string) => {
+    assignToRoll([tabId], null);
+    showTransientNotice('Removed frame from its roll.', 'success');
+  }, [assignToRoll, showTransientNotice]);
+
+  const handleToggleRollFilmstrip = useCallback(() => {
+    setShowRollFilmstrip((current) => !current);
+  }, []);
+
+  const handleToggleScanningSessionPanel = useCallback(() => {
+    setShowScanningSessionPanel((current) => !current);
+  }, []);
+
+  const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
+    const worker = workerClientRef.current;
+    const tab = tabsRef.current.find((candidate) => candidate.id === documentId) ?? null;
+    if (!worker || !tab) {
+      return;
+    }
+
+    const profile = profilesById.get(tab.document.profileId) ?? fallbackProfile;
+    const labStyle = tab.document.labStyleId ? LAB_STYLE_PROFILES_MAP[tab.document.labStyleId] ?? null : null;
+    const outputProfileId = tab.document.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
+    const lightSourceBias = lightSourceProfilesById.get(tab.document.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const result = await worker.autoAnalyze({
+      documentId,
+      settings: tab.document.settings,
+      isColor: profile.type === 'color',
+      filmType: profile.filmType,
+      inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
+      outputProfileId,
+      targetMaxDimension: Math.min(targetMaxDimension, 1024),
+      maskTuning: profile.maskTuning,
+      colorMatrix: profile.colorMatrix,
+      tonalCharacter: profile.tonalCharacter,
+      labStyleToneCurve: labStyle?.toneCurve,
+      labStyleChannelCurves: labStyle?.channelCurves,
+      labTonalCharacterOverride: labStyle?.tonalCharacterOverride,
+      labSaturationBias: labStyle?.saturationBias ?? 0,
+      labTemperatureBias: labStyle?.temperatureBias ?? 0,
+      highlightDensityEstimate: tab.document.histogram ? computeHighlightDensity(tab.document.histogram) : 0,
+      flareFloor: tab.document.estimatedFlare,
+      lightSourceBias,
+    });
+
+    updateTabById(documentId, (currentTab) => ({
+      ...currentTab,
+      document: {
+        ...currentTab.document,
+        settings: {
+          ...currentTab.document.settings,
+          exposure: result.exposure,
+          blackPoint: result.blackPoint,
+          whitePoint: result.whitePoint,
+          temperature: result.temperature ?? currentTab.document.settings.temperature,
+          tint: result.tint ?? currentTab.document.settings.tint,
+        },
+        dirty: true,
+      },
+    }));
+  }, [fallbackProfile, lightSourceProfilesById, profilesById, tabsRef, targetMaxDimension, updateTabById]);
+
+  const runAutoCropForDocument = useCallback(async (documentId: string) => {
+    const worker = workerClientRef.current;
+    if (!worker) {
+      return;
+    }
+
+    const detected = await worker.detectFrame(documentId);
+    if (!detected) {
+      return;
+    }
+
+    updateTabById(documentId, (currentTab) => ({
+      ...currentTab,
+      document: {
+        ...currentTab.document,
+        settings: {
+          ...currentTab.document.settings,
+          crop: {
+            x: detected.left,
+            y: detected.top,
+            width: detected.right - detected.left,
+            height: detected.bottom - detected.top,
+            aspectRatio: null,
+          },
+          levelAngle: detected.angle,
+        },
+        cropSource: 'auto',
+        dirty: true,
+      },
+    }));
+  }, [updateTabById]);
+
+  const exportDocumentToDirectory = useCallback(async (documentId: string, outputPath: string) => {
+    const worker = workerClientRef.current;
+    const tab = tabsRef.current.find((candidate) => candidate.id === documentId) ?? null;
+    if (!worker || !tab) {
+      return;
+    }
+
+    const profile = profilesById.get(tab.document.profileId) ?? fallbackProfile;
+    const labStyle = tab.document.labStyleId ? LAB_STYLE_PROFILES_MAP[tab.document.labStyleId] ?? null : null;
+    const lightSourceBias = lightSourceProfilesById.get(tab.document.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const result = await worker.export({
+      documentId,
+      settings: tab.document.settings,
+      isColor: profile.type === 'color' && !tab.document.settings.blackAndWhite.enabled,
+      filmType: profile.filmType,
+      inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
+      outputProfileId: tab.document.exportOptions.outputProfileId,
+      options: tab.document.exportOptions,
+      sourceExif: tab.document.source.exif,
+      flareFloor: tab.document.estimatedFlare,
+      lightSourceBias,
+      maskTuning: profile.maskTuning,
+      colorMatrix: profile.colorMatrix,
+      tonalCharacter: profile.tonalCharacter,
+      labStyleToneCurve: labStyle?.toneCurve,
+      labStyleChannelCurves: labStyle?.channelCurves,
+      labTonalCharacterOverride: labStyle?.tonalCharacterOverride,
+      labSaturationBias: labStyle?.saturationBias ?? 0,
+      labTemperatureBias: labStyle?.temperatureBias ?? 0,
+      highlightDensityEstimate: tab.document.histogram ? computeHighlightDensity(tab.document.histogram) : 0,
+    });
+
+    await saveToDirectory(result.blob, result.filename, outputPath);
+    await worker.evictPreviews(documentId).catch(() => undefined);
+  }, [fallbackProfile, lightSourceProfilesById, profilesById, tabsRef]);
+
+  const processScannedFile = useCallback(async (path: string, options: { autoExport: boolean; autoExportPath: string | null }) => {
+    const result = await openImageFileByPath(path);
+    if (!result) {
+      throw new Error('Could not open scanned file.');
+    }
+
+    const documentId = await importFile(result.file, result.path, result.size);
+    if (!documentId) {
+      throw new Error('Could not import scanned file.');
+    }
+
+    await runAutoCropForDocument(documentId).catch(() => undefined);
+    await runAutoAdjustForDocument(documentId).catch(() => undefined);
+
+    if (options.autoExport && options.autoExportPath) {
+      await exportDocumentToDirectory(documentId, options.autoExportPath);
+      return { documentId, exported: true };
+    }
+
+    return { documentId, exported: false };
+  }, [exportDocumentToDirectory, importFile, runAutoAdjustForDocument, runAutoCropForDocument]);
+
+  const { session: scanningSession, startWatching, stopWatching, setAutoExport: configureScanningAutoExport, setWatchPath: setScanningSessionWatchPath, setAutoExportPath: setScanningSessionAutoExportPath, clearQueue: clearScanningQueue } = useScanningSession({
+    initialWatchPath: scanningWatchPath,
+    initialAutoExport: scanningAutoExport,
+    initialAutoExportPath: scanningAutoExportPath,
+    processScan: processScannedFile,
+  });
+
+  const { state: updateState, checkNow: checkForUpdatesNow, startDownload: downloadUpdateNow, dismiss: dismissUpdate } = useAutoUpdate(updateChannel);
+
+  const handleChooseScanningWatchPath = useCallback(async () => {
+    const selected = await openDirectory();
+    if (!selected) {
+      return;
+    }
+    setScanningWatchPath(selected);
+    setScanningSessionWatchPath(selected);
+    savePreferences({ ...prefsSnapshotRef.current, scanningWatchPath: selected });
+  }, [setScanningSessionWatchPath]);
+
+  const handleChooseScanningAutoExportPath = useCallback(async () => {
+    const selected = await openDirectory();
+    if (!selected) {
+      return;
+    }
+    setScanningAutoExportPath(selected);
+    setScanningSessionAutoExportPath(selected);
+    savePreferences({ ...prefsSnapshotRef.current, scanningAutoExportPath: selected });
+  }, [setScanningSessionAutoExportPath]);
+
+  const handleToggleScanningWatcher = useCallback(async () => {
+    if (scanningSession.isWatching) {
+      await stopWatching();
+      return;
+    }
+
+    if (!scanningSession.watchPath) {
+      await handleChooseScanningWatchPath();
+      return;
+    }
+
+    await startWatching(scanningSession.watchPath);
+  }, [handleChooseScanningWatchPath, scanningSession.isWatching, scanningSession.watchPath, startWatching, stopWatching]);
+
+  const handleScanningAutoExportChange = useCallback((enabled: boolean) => {
+    setScanningAutoExport(enabled);
+    configureScanningAutoExport(enabled, scanningAutoExportPath);
+    savePreferences({ ...prefsSnapshotRef.current, scanningAutoExport: enabled });
+  }, [configureScanningAutoExport, scanningAutoExportPath]);
+
+  const handleUpdateChannelChange = useCallback((channel: UpdateChannel) => {
+    setUpdateChannel(channel);
+    savePreferences({ ...prefsSnapshotRef.current, updateChannel: channel });
+  }, []);
+
   useAppShortcuts({
     tabs,
     activeTabId,
@@ -1736,6 +2073,7 @@ export default function App() {
     usesNativeFileDialogs,
     setShowBatchModal,
     setShowSettingsModal,
+    setShowScanningSessionPanel,
     setIsSpaceHeld,
     onUndo: handleUndo,
     onRedo: handleRedo,
@@ -1744,6 +2082,8 @@ export default function App() {
     onOpenInEditor: async () => { await handleOpenInEditor(); },
     onCloseImage: async () => { await handleCloseImage(); },
     onDownload: async () => { await handleDownload(); },
+    quickExportPresets,
+    onQuickExport: async (preset) => { await handleQuickExport(preset); },
     onReset: handleReset,
     onCopyDebugInfo: handleCopyDebugInfo,
     onToggleComparison: handleToggleComparison,
@@ -1751,6 +2091,9 @@ export default function App() {
     onToggleCropOverlay: handleToggleCropOverlay,
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleRightPane,
+    onToggleRollFilmstrip: handleToggleRollFilmstrip,
+    onToggleScanningSession: handleToggleScanningSessionPanel,
+    onCheckForUpdates: () => { void checkForUpdatesNow(); },
     zoomToFit: zoomToFitWithDraft,
     zoomTo100: zoomTo100WithDraft,
     zoomIn: zoomInWithDraft,
@@ -1762,7 +2105,8 @@ export default function App() {
   const isExporting = documentState?.status === 'exporting';
 
   return (
-    <AppShell
+    <>
+      <AppShell
       usesNativeFileDialogs={usesNativeFileDialogs}
       fileInputRef={fileInputRef}
       displayCanvasRef={displayCanvasRef}
@@ -1823,10 +2167,24 @@ export default function App() {
       externalEditorPath={externalEditorPath}
       externalEditorName={externalEditorName}
       openInEditorOutputPath={openInEditorOutputPath}
+      defaultExportPath={defaultExportPath}
       batchOutputPath={batchOutputPath}
       contactSheetOutputPath={contactSheetOutputPath}
       customPresetCount={customPresets.length}
       presetFolderCount={presetFolders.length}
+      quickExportPresets={quickExportPresets}
+      updaterEnabled={updateState.enabled}
+      updaterDisabledReason={updateState.disabledReason}
+      updateChannel={updateChannel}
+      updateLastCheckedAt={updateState.lastCheckedAt}
+      updateError={updateState.error}
+      isCheckingForUpdates={updateState.isChecking}
+      activeRoll={activeRoll}
+      filmstripTabs={filmstripTabs}
+      showRollFilmstrip={showRollFilmstrip}
+      getRollById={getRollById}
+      profilesById={profilesById}
+      lightSourceProfilesById={lightSourceProfilesById}
       zoom={zoom}
       fitScale={fitScale}
       effectiveZoom={effectiveZoom}
@@ -1860,6 +2218,10 @@ export default function App() {
       onRecentImport={importFile}
       onSelectTab={handleSelectTab}
       onReorderTabs={handleReorderTabs}
+      onSyncRollSettings={handleSyncRollSettings}
+      onApplyRollFilmBase={handleApplyRollFilmBase}
+      onRemoveFromRoll={handleRemoveFromRoll}
+      onOpenRollInfo={handleOpenRollInfo}
       onOpenContactSheet={handleOpenContactSheet}
       onSettingsChange={handleSettingsChange}
       defaultExportOptions={defaultExportOptions}
@@ -1870,6 +2232,9 @@ export default function App() {
       onLevelInteractionChange={setIsAdjustingLevel}
       onToggleFilmBasePicker={handleToggleFilmBasePicker}
       onExportClick={handleExportClick}
+      onQuickExport={(preset) => { void handleQuickExport(preset); }}
+      onSaveQuickExportPreset={handleSaveQuickExportPreset}
+      onDeleteQuickExportPreset={handleDeleteQuickExportPreset}
       onOpenBatchExport={handleOpenBatchExport}
       onSidebarScrollTopChange={handleSidebarScrollTopChange}
       onSidebarTabChange={handleSidebarTabChange}
@@ -1906,12 +2271,16 @@ export default function App() {
       onClearExternalEditor={handleClearExternalEditor}
       onChooseOpenInEditorOutputPath={handleChooseOpenInEditorOutputPath}
       onUseDownloadsForOpenInEditor={handleUseDownloadsForOpenInEditor}
+      onChooseDefaultExportPath={handleChooseDefaultExportPath}
+      onUseDownloadsForExport={handleUseDownloadsForExport}
       onChooseBatchOutputPath={handleChooseBatchOutputPath}
       onUseDownloadsForBatch={handleUseDownloadsForBatch}
       onChooseContactSheetOutputPath={handleChooseContactSheetOutputPath}
       onUseDownloadsForContactSheet={handleUseDownloadsForContactSheet}
       onExportPresetBackup={handleExportPresetBackup}
       onImportPresetBackup={handleImportPresetBackup}
+      onUpdateChannelChange={handleUpdateChannelChange}
+      onCheckForUpdates={() => { void checkForUpdatesNow(); }}
       onCanvasClick={handleCanvasClick}
       onHandleZoomWheel={handleZoomWheel}
       onStartPan={handlePanStart}
@@ -1927,6 +2296,57 @@ export default function App() {
       zoomIn={zoomInWithDraft}
       zoomOut={zoomOutWithDraft}
       setZoomLevel={setZoomLevelWithDraft}
-    />
+      />
+
+      {updateState.available && !updateState.dismissed && (
+        <div className={`fixed left-0 right-0 z-40 ${usesNativeFileDialogs ? 'top-8' : 'top-0'}`}>
+          <UpdateBanner
+            version={updateState.version}
+            releaseNotes={updateState.releaseNotes}
+            downloadProgress={updateState.downloadProgress}
+            isBusy={updateState.isDownloading || updateState.isChecking}
+            onCheckNow={() => { void checkForUpdatesNow(); }}
+            onDownload={() => { void downloadUpdateNow(); }}
+            onDismiss={dismissUpdate}
+          />
+        </div>
+      )}
+
+      <ScanningSessionPanel
+        isDesktop={usesNativeFileDialogs}
+        isOpen={showScanningSessionPanel}
+        watchPath={scanningSession.watchPath}
+        isWatching={scanningSession.isWatching}
+        autoExport={scanningSession.autoExport}
+        autoExportPath={scanningSession.autoExportPath}
+        queue={scanningSession.queue}
+        workerClient={workerClientRef.current}
+        tabs={tabs}
+        profilesById={profilesById}
+        lightSourceProfilesById={lightSourceProfilesById}
+        onClose={handleToggleScanningSessionPanel}
+        onPickWatchPath={() => { void handleChooseScanningWatchPath(); }}
+        onToggleWatching={() => { void handleToggleScanningWatcher(); }}
+        onToggleAutoExport={handleScanningAutoExportChange}
+        onPickAutoExportPath={() => { void handleChooseScanningAutoExportPath(); }}
+        onSelectTab={handleSelectTab}
+        onClearQueue={clearScanningQueue}
+      />
+
+      <RollInfoModal
+        isOpen={Boolean(activeRollInfoId)}
+        roll={getRollById(activeRollInfoId)}
+        activeDocument={documentState}
+        frameCount={activeRollInfoId ? getDocumentsInRoll(activeRollInfoId).length : 0}
+        onClose={() => setActiveRollInfoId(null)}
+        onSave={handleSaveRollMetadata}
+        onSyncSettings={(rollId) => {
+          if (activeTabId) {
+            handleSyncRollSettings(activeTabId, rollId);
+          }
+        }}
+        onApplyFilmBase={handleApplyRollFilmBase}
+      />
+    </>
   );
 }

@@ -72,6 +72,7 @@ function createOpenTab(profile: FilmProfile): DocumentTab {
     colorManagement: DEFAULT_COLOR_MANAGEMENT,
     profileId: profile.id,
     labStyleId: null,
+    rollId: null,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     histogram: null,
     renderRevision: 1,
@@ -82,6 +83,7 @@ function createOpenTab(profile: FilmProfile): DocumentTab {
   return {
     id: 'tab-1',
     document,
+    rollId: null,
     historyStack: [{ settings: document.settings, labStyleId: document.labStyleId }],
     historyIndex: 0,
     zoom: 'fit',

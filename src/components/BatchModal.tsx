@@ -633,7 +633,7 @@ export function BatchModal({
                     <section className="space-y-3">
                       <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Export Options</h3>
                       <div className="grid grid-cols-3 gap-1.5">
-                        {(['image/jpeg', 'image/png', 'image/webp'] as const).map((format) => (
+                      {(['image/jpeg', 'image/png', 'image/webp', 'image/tiff'] as const).map((format) => (
                           <button
                             key={format}
                             type="button"
@@ -652,7 +652,7 @@ export function BatchModal({
                           </button>
                         ))}
                       </div>
-                      {exportOptions.format !== 'image/png' && (
+                      {exportOptions.format !== 'image/png' && exportOptions.format !== 'image/tiff' && (
                         <div>
                           <div className="mb-2 flex items-center justify-between">
                             <span className="text-xs text-zinc-400">Quality</span>

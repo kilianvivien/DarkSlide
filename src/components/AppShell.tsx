@@ -32,6 +32,7 @@ import { ZoomBar } from './ZoomBar';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
 import { ErrorBoundary } from './ErrorBoundary';
+import { RollFilmstrip } from './RollFilmstrip';
 import { DEFAULT_COLOR_MANAGEMENT } from '../constants';
 import {
   BatchJobEntry,
@@ -51,7 +52,9 @@ import {
   LightSourceProfile,
   NotificationSettings,
   PresetFolder,
+  QuickExportPreset,
   RenderBackendDiagnostics,
+  Roll,
   ScannerType,
   WorkspaceDocument,
 } from '../types';
@@ -119,10 +122,24 @@ type AppShellProps = {
   externalEditorPath: string | null;
   externalEditorName: string | null;
   openInEditorOutputPath: string | null;
+  defaultExportPath: string | null;
   batchOutputPath: string | null;
   contactSheetOutputPath: string | null;
   customPresetCount: number;
   presetFolderCount: number;
+  quickExportPresets: QuickExportPreset[];
+  updaterEnabled: boolean;
+  updaterDisabledReason: string | null;
+  updateChannel: 'stable' | 'beta';
+  updateLastCheckedAt: number | null;
+  updateError: string | null;
+  isCheckingForUpdates: boolean;
+  activeRoll: Roll | null;
+  filmstripTabs: DocumentTab[];
+  showRollFilmstrip: boolean;
+  getRollById: (rollId: string | null) => Roll | null;
+  profilesById: Map<string, FilmProfile>;
+  lightSourceProfilesById: Map<string, LightSourceProfile>;
   zoom: number | 'fit';
   fitScale: number;
   effectiveZoom: number;
@@ -156,6 +173,10 @@ type AppShellProps = {
   onRecentImport: (file: File, path?: string | null, size?: number) => Promise<string | null>;
   onSelectTab: (tabId: string) => void;
   onReorderTabs: (sourceId: string, targetId: string) => void;
+  onSyncRollSettings: (tabId: string, rollId: string) => void;
+  onApplyRollFilmBase: (rollId: string) => void;
+  onRemoveFromRoll: (tabId: string) => void;
+  onOpenRollInfo: (rollId: string) => void;
   onOpenContactSheet: (payload: {
     entries: BatchJobEntry[];
     sharedSettings: ConversionSettings;
@@ -171,6 +192,9 @@ type AppShellProps = {
   onLevelInteractionChange: React.Dispatch<React.SetStateAction<boolean>>;
   onToggleFilmBasePicker: () => void;
   onExportClick: () => void;
+  onQuickExport: (preset: QuickExportPreset) => void;
+  onSaveQuickExportPreset: () => void;
+  onDeleteQuickExportPreset: (presetId: string) => void;
   onOpenBatchExport: () => void;
   onSidebarScrollTopChange: (scrollTop: number) => void;
   onSidebarTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'export') => void;
@@ -213,12 +237,16 @@ type AppShellProps = {
   onClearExternalEditor: () => void;
   onChooseOpenInEditorOutputPath: () => Promise<void>;
   onUseDownloadsForOpenInEditor: () => void;
+  onChooseDefaultExportPath: () => Promise<void>;
+  onUseDownloadsForExport: () => void;
   onChooseBatchOutputPath: () => Promise<void>;
   onUseDownloadsForBatch: () => void;
   onChooseContactSheetOutputPath: () => Promise<void>;
   onUseDownloadsForContactSheet: () => void;
   onExportPresetBackup: () => Promise<'saved' | 'cancelled'>;
   onImportPresetBackup: (file?: File) => Promise<'imported' | 'cancelled'>;
+  onUpdateChannelChange: (channel: 'stable' | 'beta') => void;
+  onCheckForUpdates: () => void;
   onCanvasClick: (event: React.MouseEvent<HTMLCanvasElement>) => Promise<void>;
   onHandleZoomWheel: (deltaY: number, normX: number, normY: number) => void;
   onStartPan: (clientX: number, clientY: number) => void;
@@ -297,10 +325,24 @@ export function AppShell({
   externalEditorPath,
   externalEditorName,
   openInEditorOutputPath,
+  defaultExportPath,
   batchOutputPath,
   contactSheetOutputPath,
   customPresetCount,
   presetFolderCount,
+  quickExportPresets,
+  updaterEnabled,
+  updaterDisabledReason,
+  updateChannel,
+  updateLastCheckedAt,
+  updateError,
+  isCheckingForUpdates,
+  activeRoll,
+  filmstripTabs,
+  showRollFilmstrip,
+  getRollById,
+  profilesById,
+  lightSourceProfilesById,
   zoom,
   fitScale,
   effectiveZoom,
@@ -334,6 +376,10 @@ export function AppShell({
   onRecentImport,
   onSelectTab,
   onReorderTabs,
+  onSyncRollSettings,
+  onApplyRollFilmBase,
+  onRemoveFromRoll,
+  onOpenRollInfo,
   onOpenContactSheet,
   defaultExportOptions,
   onSettingsChange,
@@ -344,6 +390,9 @@ export function AppShell({
   onLevelInteractionChange,
   onToggleFilmBasePicker,
   onExportClick,
+  onQuickExport,
+  onSaveQuickExportPreset,
+  onDeleteQuickExportPreset,
   onOpenBatchExport,
   onSidebarScrollTopChange,
   onSidebarTabChange,
@@ -380,12 +429,16 @@ export function AppShell({
   onClearExternalEditor,
   onChooseOpenInEditorOutputPath,
   onUseDownloadsForOpenInEditor,
+  onChooseDefaultExportPath,
+  onUseDownloadsForExport,
   onChooseBatchOutputPath,
   onUseDownloadsForBatch,
   onChooseContactSheetOutputPath,
   onUseDownloadsForContactSheet,
   onExportPresetBackup,
   onImportPresetBackup,
+  onUpdateChannelChange,
+  onCheckForUpdates,
   onCanvasClick,
   onHandleZoomWheel,
   onStartPan,
@@ -476,6 +529,7 @@ export function AppShell({
                 <Sidebar
                   settings={documentState?.settings ?? fallbackProfile.defaultSettings}
                   exportOptions={documentState?.exportOptions ?? defaultExportOptions}
+                  quickExportPresets={quickExportPresets}
                   colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
                   sourceMetadata={documentState?.source ?? null}
                   cropImageWidth={cropImageSize.width}
@@ -498,6 +552,9 @@ export function AppShell({
                   isPickingFilmBase={isPickingFilmBase}
                   onTogglePicker={onToggleFilmBasePicker}
                   onExport={onExportClick}
+                  onQuickExport={onQuickExport}
+                  onSaveQuickExportPreset={onSaveQuickExportPreset}
+                  onDeleteQuickExportPreset={onDeleteQuickExportPreset}
                   onOpenBatchExport={onOpenBatchExport}
                   isExporting={isExporting}
                   contentScrollTop={activeTab?.sidebarScrollTop ?? 0}
@@ -644,10 +701,15 @@ export function AppShell({
               <TabBar
                 tabs={tabs}
                 activeTabId={activeTabId}
+                getRollById={getRollById}
                 onSelectTab={onSelectTab}
                 onCloseTab={(tabId) => void onCloseImage(tabId)}
                 onCreateTab={() => void onOpenImage()}
                 onReorderTabs={onReorderTabs}
+                onSyncRollSettings={onSyncRollSettings}
+                onApplyRollFilmBase={onApplyRollFilmBase}
+                onRemoveFromRoll={onRemoveFromRoll}
+                onOpenRollInfo={onOpenRollInfo}
               />
             </ErrorBoundary>
           )}
@@ -807,6 +869,23 @@ export function AppShell({
                         </div>
                       </div>
                     </div>
+
+                    {showRollFilmstrip && filmstripTabs.length > 0 && (
+                      <RollFilmstrip
+                        workerClient={workerClient}
+                        tabs={filmstripTabs}
+                        activeTabId={activeTabId}
+                        activeRoll={activeRoll}
+                        profilesById={profilesById}
+                        lightSourceProfilesById={lightSourceProfilesById}
+                        onSelectTab={onSelectTab}
+                        onOpenRollInfo={() => {
+                          if (activeRoll) {
+                            onOpenRollInfo(activeRoll.id);
+                          }
+                        }}
+                      />
+                    )}
 
                     <div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-3">
@@ -995,6 +1074,9 @@ export function AppShell({
           onClearExternalEditor={onClearExternalEditor}
           onChooseOpenInEditorOutputPath={() => { void onChooseOpenInEditorOutputPath(); }}
           onUseDownloadsForOpenInEditor={onUseDownloadsForOpenInEditor}
+          defaultExportPath={defaultExportPath}
+          onChooseDefaultExportPath={() => { void onChooseDefaultExportPath(); }}
+          onUseDownloadsForExport={onUseDownloadsForExport}
           batchOutputPath={batchOutputPath}
           onChooseBatchOutputPath={() => { void onChooseBatchOutputPath(); }}
           onUseDownloadsForBatch={onUseDownloadsForBatch}
@@ -1005,6 +1087,14 @@ export function AppShell({
           presetFolderCount={presetFolderCount}
           onExportPresetBackup={() => onExportPresetBackup()}
           onImportPresetBackup={(file) => onImportPresetBackup(file)}
+          updateChannel={updateChannel}
+          lastUpdateCheckAt={updateLastCheckedAt}
+          updateError={updateError}
+          isCheckingForUpdates={isCheckingForUpdates}
+          updaterEnabled={updaterEnabled}
+          updaterDisabledReason={updaterDisabledReason}
+          onUpdateChannelChange={onUpdateChannelChange}
+          onCheckForUpdates={onCheckForUpdates}
         />
       </ErrorBoundary>
       <ErrorBoundary>

@@ -19,6 +19,7 @@ import { appendDiagnostic } from '../utils/diagnostics';
 import { addRecentFile } from '../utils/recentFilesStore';
 import { getFileExtension, sanitizeFilenameBase } from '../utils/imagePipeline';
 import { loadPreferences } from '../utils/preferenceStore';
+import { readTextFileByPath } from '../utils/fileBridge';
 import {
   buildRawInitialSettings,
   createRawImportProfile,
@@ -29,6 +30,7 @@ import {
 } from '../utils/rawImport';
 import { isDesktopShell } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
+import { getSidecarCandidatePaths, parseSidecar } from '../utils/sidecarSettings';
 
 type BlockingOverlayState = {
   title: string;
@@ -73,6 +75,7 @@ type UseFileImportOptions = {
   setBlockingOverlay: (state: BlockingOverlayState) => void;
   setError: (message: string | null) => void;
   setTransientNotice: (notice: TransientNoticeState) => void;
+  resolveRollId?: (nativePath: string | null | undefined, fileName: string) => string | null;
 };
 
 export function useFileImport({
@@ -94,10 +97,12 @@ export function useFileImport({
   setBlockingOverlay,
   setError,
   setTransientNotice,
+  resolveRollId,
 }: UseFileImportOptions) {
-const importSessionRef = useRef(0);
-const [isImporting, setIsImporting] = useState(false);
-const [importError, setImportError] = useState<string | null>(null);
+  const importSessionRef = useRef(0);
+  const ignoredSidecarsRef = useRef(new Set<string>());
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   const importFile = useCallback(async (file: File, nativePath?: string | null, nativeFileSize?: number) => {
     const worker = workerClientRef.current;
@@ -169,6 +174,7 @@ const [importError, setImportError] = useState<string | null>(null);
     importSessionRef.current = importSession;
 
     const documentId = crypto.randomUUID();
+    const rollId = resolveRollId?.(nativePath, file.name) ?? null;
     const rawDefaultProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? fallbackProfile;
     const parsedPrefs = loadPreferences();
     const initialProfile = rawImport
@@ -202,6 +208,7 @@ const [importError, setImportError] = useState<string | null>(null);
         size: sourceFileSize,
         width: 0,
         height: 0,
+        nativePath: nativePath ?? null,
       },
       previewLevels: [],
       settings: {
@@ -214,6 +221,7 @@ const [importError, setImportError] = useState<string | null>(null);
       cropSource: null,
       profileId: initialProfile.id,
       labStyleId: null,
+      rollId,
       exportOptions: {
         ...DEFAULT_EXPORT_OPTIONS,
         filenameBase: sanitizeFilenameBase(file.name),
@@ -363,39 +371,56 @@ const [importError, setImportError] = useState<string | null>(null);
         ? window.localStorage.getItem('darkslide_default_light_source')
         : null;
       const resolvedProfile = rawImportProfile ?? initialProfile;
+      let restoredSidecar = null;
+
+      if (nativePath && isDesktopShell() && !ignoredSidecarsRef.current.has(nativePath)) {
+        for (const candidatePath of getSidecarCandidatePaths(nativePath)) {
+          try {
+            const content = await readTextFileByPath(candidatePath);
+            const parsed = parseSidecar(content);
+            if (parsed) {
+              restoredSidecar = parsed;
+              break;
+            }
+          } catch {
+            // Ignore missing sidecar candidates.
+          }
+        }
+      }
+
+      const shouldRestoreSidecar = restoredSidecar
+        ? window.confirm(`Settings sidecar found for "${file.name}". Restore those settings?`)
+        : false;
+
+      if (restoredSidecar && !shouldRestoreSidecar && nativePath) {
+        ignoredSidecarsRef.current.add(nativePath);
+      }
+
       const nextDocument: WorkspaceDocument = {
         id: documentId,
         source: {
           ...decoded.metadata,
           size: sourceFileSize,
+          nativePath: nativePath ?? null,
         },
         previewLevels: decoded.previewLevels,
-        settings: initialSettings,
+        settings: shouldRestoreSidecar
+          ? structuredClone(restoredSidecar.settings)
+          : initialSettings,
         colorManagement: createDocumentColorManagement(decoded.metadata, {
           ...DEFAULT_EXPORT_OPTIONS,
-          ...(savedExportOptions ? {
-            format: savedExportOptions.format,
-            quality: savedExportOptions.quality,
-            embedMetadata: savedExportOptions.embedMetadata,
-            outputProfileId: savedExportOptions.outputProfileId,
-            embedOutputProfile: savedExportOptions.embedOutputProfile,
-          } : {}),
+          ...(shouldRestoreSidecar ? restoredSidecar.exportOptions : savedExportOptions),
         }),
         estimatedFlare: decoded.estimatedFlare,
         lightSourceId: resolveLightSourceIdForProfile(resolvedProfile, savedLightSourceId),
         cropSource: null,
         rawImportProfile,
-        profileId: resolvedProfile.id,
-        labStyleId: null,
+        profileId: shouldRestoreSidecar ? restoredSidecar.profileId : resolvedProfile.id,
+        labStyleId: shouldRestoreSidecar ? (restoredSidecar.labStyleId ?? null) : null,
+        rollId,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
-          ...(savedExportOptions ? {
-            format: savedExportOptions.format,
-            quality: savedExportOptions.quality,
-            embedMetadata: savedExportOptions.embedMetadata,
-            outputProfileId: savedExportOptions.outputProfileId,
-            embedOutputProfile: savedExportOptions.embedOutputProfile,
-          } : {}),
+          ...(shouldRestoreSidecar ? restoredSidecar.exportOptions : savedExportOptions),
           filenameBase: sanitizeFilenameBase(file.name),
         },
         histogram: null,
@@ -403,6 +428,14 @@ const [importError, setImportError] = useState<string | null>(null);
         status: 'ready',
         dirty: false,
       };
+
+      if (shouldRestoreSidecar) {
+        nextDocument.colorManagement = {
+          ...nextDocument.colorManagement,
+          ...restoredSidecar.colorManagement,
+        };
+        nextDocument.lightSourceId = restoredSidecar.lightSourceProfileId ?? nextDocument.lightSourceId;
+      }
 
       tabsApi.replaceDocument(documentId, nextDocument);
 
@@ -479,6 +512,7 @@ const [importError, setImportError] = useState<string | null>(null);
     setTransientNotice,
     tabsApi,
     workerClientRef,
+    resolveRollId,
   ]);
 
   return {

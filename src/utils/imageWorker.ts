@@ -209,6 +209,28 @@ function buildPreviewCanvas(source: OffscreenCanvas, maxDimension: number) {
   return canvas;
 }
 
+function resizeCanvasForExport(source: OffscreenCanvas, targetMaxDimension: number | null) {
+  if (!targetMaxDimension) {
+    return source;
+  }
+
+  const longestEdge = Math.max(source.width, source.height);
+  if (targetMaxDimension >= longestEdge) {
+    return source;
+  }
+
+  const scale = targetMaxDimension / longestEdge;
+  const width = Math.max(1, Math.round(source.width * scale));
+  const height = Math.max(1, Math.round(source.height * scale));
+  const canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Could not resize export canvas.');
+  }
+  context.drawImage(source, 0, 0, width, height);
+  return canvas;
+}
+
 function buildPreviewLevels(sourceCanvas: OffscreenCanvas, displayScaleFactor = 1): StoredPreview[] {
   const shouldInclude4096 = displayScaleFactor > 1 || Math.max(sourceCanvas.width, sourceCanvas.height) > 4096;
   const previews = PREVIEW_LEVELS
@@ -1089,7 +1111,22 @@ async function handleExport(payload: ExportRequest) {
   );
   ctx.putImageData(imageData, 0, 0);
 
-  const blob = await transformed.canvas.convertToBlob({
+  const exportCanvas = resizeCanvasForExport(transformed.canvas, payload.options.targetMaxDimension);
+
+  if (payload.options.format === 'image/tiff') {
+    const exportContext = exportCanvas.getContext('2d', { willReadFrequently: true });
+    if (!exportContext) {
+      throw new Error('Could not create TIFF export canvas.');
+    }
+    const exportImage = exportContext.getImageData(0, 0, exportCanvas.width, exportCanvas.height);
+    const encoded = UTIF.encodeImage(exportImage.data, exportCanvas.width, exportCanvas.height);
+    return {
+      blob: new Blob([encoded], { type: 'image/tiff' }),
+      filename,
+    } satisfies ExportResult;
+  }
+
+  const blob = await exportCanvas.convertToBlob({
     type: payload.options.format,
     quality: payload.options.format === 'image/png' ? undefined : payload.options.quality,
   });

@@ -204,7 +204,12 @@ describe('PresetsPane', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /custom/i }));
 
-    expect(screen.getByText('Kodak Portra 400 · Flatbed · B&W · RAW')).toBeInTheDocument();
+    expect(screen.getByText('Film stock')).toBeInTheDocument();
+    expect(screen.getByText('Kodak Portra 400')).toBeInTheDocument();
+    expect(screen.getByText('Scanner')).toBeInTheDocument();
+    expect(screen.getByText('Flatbed')).toBeInTheDocument();
+    expect(screen.getByText('B&W')).toBeInTheDocument();
+    expect(screen.getByText('RAW')).toBeInTheDocument();
   });
 
   it('renders smartphone metadata labels for custom presets', () => {
@@ -232,7 +237,12 @@ describe('PresetsPane', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /custom/i }));
 
-    expect(screen.getByText('Kodak Gold 200 · Smartphone · Color · Non-RAW')).toBeInTheDocument();
+    expect(screen.getByText('Film stock')).toBeInTheDocument();
+    expect(screen.getByText('Kodak Gold 200')).toBeInTheDocument();
+    expect(screen.getByText('Scanner')).toBeInTheDocument();
+    expect(screen.getByText('Smartphone')).toBeInTheDocument();
+    expect(screen.getByText('Color')).toBeInTheDocument();
+    expect(screen.getByText('Non-RAW')).toBeInTheDocument();
   });
 
   it('groups built-in stocks by category and labels slide profiles', () => {

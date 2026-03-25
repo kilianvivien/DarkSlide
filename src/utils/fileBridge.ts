@@ -21,6 +21,7 @@ const EXPORT_FILTERS: Record<ExportFormat, { name: string; extensions: string[] 
   'image/jpeg': { name: 'JPEG Image', extensions: ['jpg', 'jpeg'] },
   'image/png': { name: 'PNG Image', extensions: ['png'] },
   'image/webp': { name: 'WebP Image', extensions: ['webp'] },
+  'image/tiff': { name: 'TIFF Image', extensions: ['tif', 'tiff'] },
 };
 
 const PRESET_FILTER = {
@@ -88,6 +89,11 @@ export interface OpenInExternalEditorResult {
 
 interface SaveBlobToDirectoryResult {
   savedPath: string;
+}
+
+export interface SaveExportResult {
+  status: 'saved' | 'cancelled';
+  path: string | null;
 }
 
 async function openDesktopFile(path: string): Promise<NativeOpenFileResult> {
@@ -191,7 +197,7 @@ export async function openImageFileByPath(path: string): Promise<NativeOpenFileR
   };
 }
 
-export async function saveExportBlob(blob: Blob, filename: string, format: ExportFormat) {
+export async function saveExportBlobDetailed(blob: Blob, filename: string, format: ExportFormat): Promise<SaveExportResult> {
   if (isDesktopShell()) {
     const [{ save }, { writeFile }] = await Promise.all([
       import('@tauri-apps/plugin-dialog'),
@@ -205,16 +211,21 @@ export async function saveExportBlob(blob: Blob, filename: string, format: Expor
     });
 
     if (!selected) {
-      return 'cancelled' as const;
+      return { status: 'cancelled', path: null };
     }
 
     const bytes = new Uint8Array(await blob.arrayBuffer());
     await writeFile(selected, bytes);
-    return 'saved' as const;
+    return { status: 'saved', path: selected };
   }
 
   triggerBrowserDownload(blob, filename);
-  return 'saved' as const;
+  return { status: 'saved', path: filename };
+}
+
+export async function saveExportBlob(blob: Blob, filename: string, format: ExportFormat) {
+  const result = await saveExportBlobDetailed(blob, filename, format);
+  return result.status;
 }
 
 export async function openDirectory(): Promise<string | null> {
@@ -398,6 +409,23 @@ export async function openPresetBackupFile(): Promise<{ content: string; fileNam
     content: await readTextFile(selected),
     fileName: getFileName(selected),
   };
+}
+
+export async function readTextFileByPath(path: string): Promise<string> {
+  if (isDesktopShell()) {
+    return invoke<string>('read_text_file_by_path', { path });
+  }
+
+  throw new Error('Reading text files by path requires the desktop app.');
+}
+
+export async function writeTextFileByPath(path: string, content: string): Promise<void> {
+  if (isDesktopShell()) {
+    await invoke('write_text_file_by_path', { path, content });
+    return;
+  }
+
+  throw new Error('Writing text files by path requires the desktop app.');
 }
 
 export async function openInExternalEditor(

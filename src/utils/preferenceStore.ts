@@ -1,10 +1,10 @@
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
-import { CropTab, ExportOptions, NotificationSettings } from '../types';
+import { CropTab, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
 
 export interface UserPreferences {
-  version: 4;
+  version: 6;
   lastProfileId: string;
   exportOptions: ExportOptions;
   notificationSettings: NotificationSettings;
@@ -17,16 +17,24 @@ export interface UserPreferences {
   externalEditorPath: string | null;
   externalEditorName: string | null;
   openInEditorOutputPath: string | null;
+  defaultExportPath: string | null;
   batchOutputPath: string | null;
   contactSheetOutputPath: string | null;
+  scanningWatchPath: string | null;
+  scanningAutoExport: boolean;
+  scanningAutoExportPath: string | null;
+  updateChannel: UpdateChannel;
 }
+
+type PreferencesV5 = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 5 };
+type PreferencesV6Base = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>;
 
 function isValidPreferences(value: unknown): value is UserPreferences {
   if (!value || typeof value !== 'object') return false;
   const prefs = value as Partial<UserPreferences>;
   const exportOptions = prefs.exportOptions as Partial<ExportOptions> | undefined;
   return (
-    prefs.version === 4 &&
+    prefs.version === 6 &&
     typeof prefs.notificationSettings === 'object' &&
     prefs.notificationSettings !== null &&
     typeof prefs.lastProfileId === 'string' &&
@@ -37,17 +45,24 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     (exportOptions.embedMetadata === undefined || typeof exportOptions.embedMetadata === 'boolean') &&
     (exportOptions.outputProfileId === undefined || ['srgb', 'display-p3', 'adobe-rgb'].includes(exportOptions.outputProfileId)) &&
     (exportOptions.embedOutputProfile === undefined || typeof exportOptions.embedOutputProfile === 'boolean') &&
+    (exportOptions.saveSidecar === undefined || typeof exportOptions.saveSidecar === 'boolean') &&
+    (exportOptions.targetMaxDimension === undefined || exportOptions.targetMaxDimension === null || typeof exportOptions.targetMaxDimension === 'number') &&
     typeof prefs.sidebarTab === 'string' &&
     (prefs.cropTab === undefined || ['Film', 'Print', 'Social', 'Digital'].includes(prefs.cropTab)) &&
     typeof prefs.isLeftPaneOpen === 'boolean' &&
     typeof prefs.isRightPaneOpen === 'boolean' &&
-    (prefs.gpuRendering === undefined || typeof prefs.gpuRendering === 'boolean') &&
-    (prefs.ultraSmoothDrag === undefined || typeof prefs.ultraSmoothDrag === 'boolean') &&
-    (prefs.externalEditorPath === undefined || prefs.externalEditorPath === null || typeof prefs.externalEditorPath === 'string') &&
-    (prefs.externalEditorName === undefined || prefs.externalEditorName === null || typeof prefs.externalEditorName === 'string') &&
-    (prefs.openInEditorOutputPath === undefined || prefs.openInEditorOutputPath === null || typeof prefs.openInEditorOutputPath === 'string') &&
-    (prefs.batchOutputPath === undefined || prefs.batchOutputPath === null || typeof prefs.batchOutputPath === 'string') &&
-    (prefs.contactSheetOutputPath === undefined || prefs.contactSheetOutputPath === null || typeof prefs.contactSheetOutputPath === 'string') &&
+    typeof prefs.gpuRendering === 'boolean' &&
+    typeof prefs.ultraSmoothDrag === 'boolean' &&
+    (prefs.externalEditorPath === null || typeof prefs.externalEditorPath === 'string') &&
+    (prefs.externalEditorName === null || typeof prefs.externalEditorName === 'string') &&
+    (prefs.openInEditorOutputPath === null || typeof prefs.openInEditorOutputPath === 'string') &&
+    (prefs.defaultExportPath === null || typeof prefs.defaultExportPath === 'string') &&
+    (prefs.batchOutputPath === null || typeof prefs.batchOutputPath === 'string') &&
+    (prefs.contactSheetOutputPath === null || typeof prefs.contactSheetOutputPath === 'string') &&
+    (prefs.scanningWatchPath === null || typeof prefs.scanningWatchPath === 'string') &&
+    typeof prefs.scanningAutoExport === 'boolean' &&
+    (prefs.scanningAutoExportPath === null || typeof prefs.scanningAutoExportPath === 'string') &&
+    (prefs.updateChannel === 'stable' || prefs.updateChannel === 'beta') &&
     (prefs.notificationSettings.enabled === undefined || typeof prefs.notificationSettings.enabled === 'boolean') &&
     (prefs.notificationSettings.exportComplete === undefined || typeof prefs.notificationSettings.exportComplete === 'boolean') &&
     (prefs.notificationSettings.batchComplete === undefined || typeof prefs.notificationSettings.batchComplete === 'boolean') &&
@@ -77,7 +92,7 @@ function isLegacyPreferences(value: unknown): value is {
   return prefs.version === 1 && typeof prefs.exportOptions === 'object' && prefs.exportOptions !== null;
 }
 
-function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'openInEditorOutputPath' | 'notificationSettings'> & { version: 2 } {
+function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'openInEditorOutputPath' | 'notificationSettings' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 2 } {
   if (!value || typeof value !== 'object') return false;
   const prefs = value as Partial<{
     version: number;
@@ -106,14 +121,45 @@ function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, '
   );
 }
 
-function isVersion3Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'notificationSettings'> & { version: 3 } {
+function isVersion3Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'notificationSettings' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 3 } {
   if (!value || typeof value !== 'object') return false;
-  const prefs = value as Partial<Omit<UserPreferences, 'version' | 'notificationSettings'> & { version: 3 }>;
+  const prefs = value as Partial<Omit<UserPreferences, 'version' | 'notificationSettings' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 3 }>;
   return prefs.version === 3
     && typeof prefs.lastProfileId === 'string'
     && typeof prefs.sidebarTab === 'string'
     && typeof prefs.isLeftPaneOpen === 'boolean'
     && typeof prefs.isRightPaneOpen === 'boolean';
+}
+
+function isVersion4Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'defaultExportPath' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 4 } {
+  if (!value || typeof value !== 'object') return false;
+  const prefs = value as Partial<Omit<UserPreferences, 'version' | 'defaultExportPath' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 4 }>;
+  return prefs.version === 4
+    && typeof prefs.lastProfileId === 'string'
+    && typeof prefs.sidebarTab === 'string'
+    && typeof prefs.isLeftPaneOpen === 'boolean'
+    && typeof prefs.isRightPaneOpen === 'boolean';
+}
+
+function isVersion5Preferences(value: unknown): value is PreferencesV5 {
+  if (!value || typeof value !== 'object') return false;
+  const prefs = value as Partial<PreferencesV5>;
+  return prefs.version === 5
+    && typeof prefs.lastProfileId === 'string'
+    && typeof prefs.sidebarTab === 'string'
+    && typeof prefs.isLeftPaneOpen === 'boolean'
+    && typeof prefs.isRightPaneOpen === 'boolean';
+}
+
+function withV6Defaults(base: PreferencesV6Base): UserPreferences {
+  return {
+    version: 6,
+    scanningWatchPath: null,
+    scanningAutoExport: false,
+    scanningAutoExportPath: null,
+    updateChannel: 'stable',
+    ...base,
+  };
 }
 
 function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPreferences | null {
@@ -137,8 +183,7 @@ function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPr
     return null;
   }
 
-  return {
-    version: 4,
+  return withV6Defaults({
     lastProfileId: legacy.lastProfileId,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
@@ -159,9 +204,10 @@ function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPr
     externalEditorPath: null,
     externalEditorName: null,
     openInEditorOutputPath: null,
+    defaultExportPath: null,
     batchOutputPath: null,
     contactSheetOutputPath: null,
-  };
+  });
 }
 
 function migrateVersion2Preferences(legacy: ReturnType<typeof JSON.parse>): UserPreferences | null {
@@ -169,8 +215,7 @@ function migrateVersion2Preferences(legacy: ReturnType<typeof JSON.parse>): User
     return null;
   }
 
-  return {
-    version: 4,
+  return withV6Defaults({
     lastProfileId: legacy.lastProfileId,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
@@ -186,9 +231,10 @@ function migrateVersion2Preferences(legacy: ReturnType<typeof JSON.parse>): User
     externalEditorPath: legacy.externalEditorPath ?? null,
     externalEditorName: legacy.externalEditorName ?? null,
     openInEditorOutputPath: null,
+    defaultExportPath: null,
     batchOutputPath: null,
     contactSheetOutputPath: null,
-  };
+  });
 }
 
 function migrateVersion3Preferences(legacy: ReturnType<typeof JSON.parse>): UserPreferences | null {
@@ -196,8 +242,7 @@ function migrateVersion3Preferences(legacy: ReturnType<typeof JSON.parse>): User
     return null;
   }
 
-  return {
-    version: 4,
+  return withV6Defaults({
     lastProfileId: legacy.lastProfileId,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
@@ -213,9 +258,70 @@ function migrateVersion3Preferences(legacy: ReturnType<typeof JSON.parse>): User
     externalEditorPath: legacy.externalEditorPath ?? null,
     externalEditorName: legacy.externalEditorName ?? null,
     openInEditorOutputPath: legacy.openInEditorOutputPath ?? null,
+    defaultExportPath: null,
     batchOutputPath: null,
     contactSheetOutputPath: null,
-  };
+  });
+}
+
+function migrateVersion4Preferences(legacy: ReturnType<typeof JSON.parse>): UserPreferences | null {
+  if (!isVersion4Preferences(legacy)) {
+    return null;
+  }
+
+  return withV6Defaults({
+    lastProfileId: legacy.lastProfileId,
+    exportOptions: {
+      ...DEFAULT_EXPORT_OPTIONS,
+      ...legacy.exportOptions,
+    },
+    notificationSettings: {
+      ...DEFAULT_NOTIFICATION_SETTINGS,
+      ...legacy.notificationSettings,
+    },
+    sidebarTab: legacy.sidebarTab,
+    cropTab: legacy.cropTab ?? 'Film',
+    isLeftPaneOpen: legacy.isLeftPaneOpen,
+    isRightPaneOpen: legacy.isRightPaneOpen,
+    gpuRendering: legacy.gpuRendering ?? true,
+    ultraSmoothDrag: legacy.ultraSmoothDrag ?? false,
+    externalEditorPath: legacy.externalEditorPath ?? null,
+    externalEditorName: legacy.externalEditorName ?? null,
+    openInEditorOutputPath: legacy.openInEditorOutputPath ?? null,
+    defaultExportPath: null,
+    batchOutputPath: legacy.batchOutputPath ?? null,
+    contactSheetOutputPath: legacy.contactSheetOutputPath ?? null,
+  });
+}
+
+function migrateVersion5Preferences(legacy: ReturnType<typeof JSON.parse>): UserPreferences | null {
+  if (!isVersion5Preferences(legacy)) {
+    return null;
+  }
+
+  return withV6Defaults({
+    lastProfileId: legacy.lastProfileId,
+    exportOptions: {
+      ...DEFAULT_EXPORT_OPTIONS,
+      ...legacy.exportOptions,
+    },
+    notificationSettings: {
+      ...DEFAULT_NOTIFICATION_SETTINGS,
+      ...legacy.notificationSettings,
+    },
+    sidebarTab: legacy.sidebarTab,
+    cropTab: legacy.cropTab ?? 'Film',
+    isLeftPaneOpen: legacy.isLeftPaneOpen,
+    isRightPaneOpen: legacy.isRightPaneOpen,
+    gpuRendering: legacy.gpuRendering ?? true,
+    ultraSmoothDrag: legacy.ultraSmoothDrag ?? false,
+    externalEditorPath: legacy.externalEditorPath ?? null,
+    externalEditorName: legacy.externalEditorName ?? null,
+    openInEditorOutputPath: legacy.openInEditorOutputPath ?? null,
+    defaultExportPath: legacy.defaultExportPath ?? null,
+    batchOutputPath: legacy.batchOutputPath ?? null,
+    contactSheetOutputPath: legacy.contactSheetOutputPath ?? null,
+  });
 }
 
 export function loadPreferences(): UserPreferences | null {
@@ -224,19 +330,16 @@ export function loadPreferences(): UserPreferences | null {
 
   try {
     const parsed = JSON.parse(raw);
-    if (isLegacyPreferences(parsed)) {
-      return migrateLegacyPreferences(parsed);
-    }
-    if (isVersion2Preferences(parsed)) {
-      return migrateVersion2Preferences(parsed);
-    }
-    if (isVersion3Preferences(parsed)) {
-      return migrateVersion3Preferences(parsed);
-    }
+    if (isLegacyPreferences(parsed)) return migrateLegacyPreferences(parsed);
+    if (isVersion2Preferences(parsed)) return migrateVersion2Preferences(parsed);
+    if (isVersion3Preferences(parsed)) return migrateVersion3Preferences(parsed);
+    if (isVersion4Preferences(parsed)) return migrateVersion4Preferences(parsed);
+    if (isVersion5Preferences(parsed)) return migrateVersion5Preferences(parsed);
     if (!isValidPreferences(parsed)) return null;
+
     return {
       ...parsed,
-      version: 4,
+      version: 6,
       exportOptions: {
         ...DEFAULT_EXPORT_OPTIONS,
         ...parsed.exportOptions,
@@ -251,8 +354,13 @@ export function loadPreferences(): UserPreferences | null {
       externalEditorPath: parsed.externalEditorPath ?? null,
       externalEditorName: parsed.externalEditorName ?? null,
       openInEditorOutputPath: parsed.openInEditorOutputPath ?? null,
+      defaultExportPath: parsed.defaultExportPath ?? null,
       batchOutputPath: parsed.batchOutputPath ?? null,
       contactSheetOutputPath: parsed.contactSheetOutputPath ?? null,
+      scanningWatchPath: parsed.scanningWatchPath ?? null,
+      scanningAutoExport: parsed.scanningAutoExport ?? false,
+      scanningAutoExportPath: parsed.scanningAutoExportPath ?? null,
+      updateChannel: parsed.updateChannel ?? 'stable',
     };
   } catch {
     return null;
@@ -260,5 +368,12 @@ export function loadPreferences(): UserPreferences | null {
 }
 
 export function savePreferences(prefs: UserPreferences): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    ...prefs,
+    version: 6,
+    exportOptions: {
+      ...DEFAULT_EXPORT_OPTIONS,
+      ...prefs.exportOptions,
+    },
+  }));
 }

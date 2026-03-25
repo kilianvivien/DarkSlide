@@ -7,6 +7,7 @@ export type ColorProfileId = 'srgb' | 'display-p3' | 'adobe-rgb';
 export type FilmProfileType = 'negative' | 'slide';
 export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'Lomography' | 'Foma' | 'Rollei' | 'Generic';
 export type CropSource = 'auto' | 'manual';
+export type UpdateChannel = 'stable' | 'beta';
 
 export interface CurvePoint {
   x: number;
@@ -46,7 +47,7 @@ export interface ExifMetadata {
   iccProfileName?: string;
 }
 
-export type ExportFormat = 'image/jpeg' | 'image/png' | 'image/webp';
+export type ExportFormat = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/tiff';
 export type TileSourceKind = 'preview' | 'source';
 export type PreviewMode = 'draft' | 'settled';
 export type RenderBackendMode = 'gpu-preview' | 'gpu-tiled-render' | 'cpu-worker';
@@ -165,6 +166,64 @@ export interface ExportOptions {
   embedMetadata: boolean;
   outputProfileId: ColorProfileId;
   embedOutputProfile: boolean;
+  saveSidecar: boolean;
+  targetMaxDimension: number | null;
+}
+
+export interface QuickExportPreset {
+  id: string;
+  name: string;
+  format: ExportFormat;
+  quality: number;
+  outputProfileId: ColorProfileId;
+  embedMetadata: boolean;
+  embedOutputProfile: boolean;
+  maxDimension: number | null;
+  suffix: string;
+  cropToSquare: boolean;
+  saveSidecar: boolean;
+  isBuiltIn: boolean;
+}
+
+export interface Roll {
+  id: string;
+  name: string;
+  filmStock: string | null;
+  profileId: string | null;
+  camera: string | null;
+  date: string | null;
+  notes: string;
+  filmBaseSample: FilmBaseSample | null;
+  createdAt: number;
+  directory: string | null;
+}
+
+export interface SidecarFile {
+  version: 1;
+  generator: string;
+  createdAt: string;
+  sourceFile: {
+    name: string;
+    size: number;
+    dimensions: { width: number; height: number };
+    hash?: string;
+  };
+  settings: ConversionSettings;
+  profileId: string;
+  profileName: string;
+  isColor: boolean;
+  colorManagement: ColorManagementSettings;
+  exportOptions: ExportOptions;
+  roll?: {
+    name: string;
+    filmStock: string | null;
+    camera: string | null;
+    date: string | null;
+    notes: string;
+  };
+  flatFieldProfileId?: string;
+  lightSourceProfileId?: string;
+  labStyleId?: string;
 }
 
 export interface FilmProfile {
@@ -231,6 +290,7 @@ export interface SourceMetadata {
   decoderColorProfileName?: string | null;
   decoderColorProfileId?: ColorProfileId | null;
   unsupportedColorProfileName?: string | null;
+  nativePath?: string | null;
 }
 
 export interface DecodedImage {
@@ -260,6 +320,7 @@ export interface WorkspaceDocument {
   rawImportProfile?: FilmProfile | null;
   profileId: string;
   labStyleId: string | null;
+  rollId: string | null;
   exportOptions: ExportOptions;
   histogram: HistogramData | null;
   renderRevision: number;
@@ -276,6 +337,7 @@ export interface DocumentHistoryEntry {
 export interface DocumentTab {
   id: string;
   document: WorkspaceDocument;
+  rollId: string | null;
   historyStack: DocumentHistoryEntry[];
   historyIndex: number;
   zoom: ZoomLevel;

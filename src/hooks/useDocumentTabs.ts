@@ -19,6 +19,7 @@ function createDocumentTab(document: WorkspaceDocument): DocumentTab {
   return {
     id: document.id,
     document,
+    rollId: document.rollId,
     historyStack: [createHistoryEntry(document)],
     historyIndex: 0,
     zoom: 'fit',
@@ -64,7 +65,7 @@ export function useDocumentTabs() {
         ? nextState(tab.document)
         : nextState;
 
-      return resolved ? { ...tab, document: resolved } : tab;
+      return resolved ? { ...tab, document: resolved, rollId: resolved.rollId } : tab;
     }));
   }, [activeTabId]);
 
@@ -75,7 +76,10 @@ export function useDocumentTabs() {
 
     setTabs((previous) => previous.map((tab) => (
       tab.id === activeTabId
-        ? { ...tab, document: updater(tab.document) }
+        ? (() => {
+          const nextDocument = updater(tab.document);
+          return { ...tab, document: nextDocument, rollId: nextDocument.rollId };
+        })()
         : tab
     )));
   }, [activeTabId]);
@@ -147,6 +151,7 @@ export function useDocumentTabs() {
     updateTabById(documentId, (tab) => ({
       ...tab,
       document: nextDocument,
+      rollId: nextDocument.rollId,
       historyStack: [createHistoryEntry(nextDocument)],
       historyIndex: 0,
     }));
@@ -252,6 +257,7 @@ export function useDocumentTabs() {
           labStyleId: previousState.labStyleId,
           dirty: true,
         } : tab.document,
+        rollId: tab.document.rollId,
       };
     }));
   }, [activeTabId]);
@@ -275,6 +281,7 @@ export function useDocumentTabs() {
           labStyleId: nextState.labStyleId,
           dirty: true,
         } : tab.document,
+        rollId: tab.document.rollId,
       };
     }));
   }, [activeTabId]);

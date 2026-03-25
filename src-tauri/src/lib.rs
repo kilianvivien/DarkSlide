@@ -1,6 +1,9 @@
+mod watcher;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 use rawler::analyze::{analyze_metadata, AnalyzerData};
 use rawler::imgop::develop::{ProcessingStep, RawDevelop};
@@ -8,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
 use tauri::Manager;
+use tauri_plugin_updater::UpdaterExt;
 
 const GITHUB_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 
@@ -25,6 +29,56 @@ struct RawDecodeResult {
 #[serde(rename_all = "camelCase")]
 struct SavedFileResult {
     saved_path: String,
+}
+
+#[derive(Default)]
+struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdaterStatus {
+    enabled: bool,
+    reason: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateCheckResult {
+    version: String,
+    current_version: String,
+    release_notes: Option<String>,
+}
+
+fn updater_enabled() -> bool {
+    matches!(option_env!("DARKSLIDE_ENABLE_UPDATER"), Some("1") | Some("true") | Some("TRUE"))
+}
+
+fn updater_disabled_reason() -> Option<String> {
+    if !updater_enabled() {
+        return Some("Desktop updates are fully wired, but disabled for this build.".to_string());
+    }
+
+    if option_env!("DARKSLIDE_UPDATER_PUBKEY").is_none() {
+        return Some("Updater is enabled, but DARKSLIDE_UPDATER_PUBKEY is missing.".to_string());
+    }
+
+    if option_env!("DARKSLIDE_UPDATER_STABLE_ENDPOINT").is_none() {
+        return Some("Updater is enabled, but DARKSLIDE_UPDATER_STABLE_ENDPOINT is missing.".to_string());
+    }
+
+    None
+}
+
+fn updater_endpoint(channel: &str) -> Result<String, String> {
+    match channel {
+        "beta" => option_env!("DARKSLIDE_UPDATER_BETA_ENDPOINT")
+            .or(option_env!("DARKSLIDE_UPDATER_STABLE_ENDPOINT"))
+            .map(|value| value.to_string())
+            .ok_or_else(|| "Updater beta endpoint is not configured for this build.".to_string()),
+        _ => option_env!("DARKSLIDE_UPDATER_STABLE_ENDPOINT")
+            .map(|value| value.to_string())
+            .ok_or_else(|| "Updater stable endpoint is not configured for this build.".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -261,10 +315,20 @@ fn read_file_by_path(path: String) -> Result<tauri::ipc::Response, String> {
 }
 
 #[tauri::command]
+fn read_text_file_by_path(path: String) -> Result<String, String> {
+    fs::read_to_string(&path).map_err(|error| format!("Failed to read {path}: {error}"))
+}
+
+#[tauri::command]
 fn file_size_by_path(path: String) -> Result<u64, String> {
     fs::metadata(&path)
         .map(|m| m.len())
         .map_err(|error| format!("Failed to stat {path}: {error}"))
+}
+
+#[tauri::command]
+fn write_text_file_by_path(path: String, content: String) -> Result<(), String> {
+    fs::write(&path, content).map_err(|error| format!("Failed to write {path}: {error}"))
 }
 
 #[derive(Deserialize)]
@@ -276,6 +340,8 @@ struct RecentMenuEntry {
 struct RecentMenuState {
     submenu: std::sync::Mutex<tauri::menu::Submenu<tauri::Wry>>,
 }
+
+struct WatcherState(Mutex<Option<watcher::FolderWatcher>>);
 
 #[tauri::command]
 fn update_recent_files_menu(
@@ -316,6 +382,36 @@ fn update_recent_files_menu(
 }
 
 #[tauri::command]
+async fn start_watching(
+    path: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WatcherState>,
+) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|error| error.to_string())?;
+    if let Some(existing) = guard.take() {
+        existing.stop()?;
+    }
+
+    let watcher = watcher::FolderWatcher::start(app, path)?;
+    *guard = Some(watcher);
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_watching(state: tauri::State<'_, WatcherState>) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|error| error.to_string())?;
+    if let Some(existing) = guard.take() {
+        existing.stop()?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn is_watching(state: tauri::State<'_, WatcherState>) -> bool {
+    state.0.lock().map(|guard| guard.is_some()).unwrap_or(false)
+}
+
+#[tauri::command]
 #[cfg(target_os = "macos")]
 fn open_saved_file_in_editor(path: String, editor_path: Option<String>) -> Result<(), String> {
     let command = build_open_saved_file_command(&path, editor_path.as_deref());
@@ -328,21 +424,103 @@ fn open_saved_file_in_editor(_path: String, _editor_path: Option<String>) -> Res
     Err("Open in Editor is currently only supported on macOS.".to_string())
 }
 
+#[tauri::command]
+fn get_updater_status() -> UpdaterStatus {
+    UpdaterStatus {
+        enabled: updater_disabled_reason().is_none(),
+        reason: updater_disabled_reason(),
+    }
+}
+
+#[tauri::command]
+async fn check_for_update(
+    app: tauri::AppHandle,
+    pending_update: tauri::State<'_, PendingUpdate>,
+    channel: Option<String>,
+) -> Result<Option<UpdateCheckResult>, String> {
+    if let Some(reason) = updater_disabled_reason() {
+        return Err(reason);
+    }
+
+    let endpoint = updater_endpoint(channel.as_deref().unwrap_or("stable"))?;
+    let pubkey = option_env!("DARKSLIDE_UPDATER_PUBKEY")
+        .ok_or_else(|| "Updater public key is not configured for this build.".to_string())?;
+
+    let update = app
+        .updater_builder()
+        .pubkey(pubkey)
+        .endpoints(vec![endpoint.parse().map_err(|error| format!("Invalid updater endpoint: {error}"))?])
+        .map_err(|error| error.to_string())?
+        .build()
+        .map_err(|error| error.to_string())?
+        .check()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let payload = update.as_ref().map(|update| UpdateCheckResult {
+        version: update.version.clone(),
+        current_version: update.current_version.clone(),
+        release_notes: update.body.clone(),
+    });
+
+    *pending_update.0.lock().map_err(|error| error.to_string())? = update;
+
+    Ok(payload)
+}
+
+#[tauri::command]
+async fn install_update_and_restart(
+    app: tauri::AppHandle,
+    pending_update: tauri::State<'_, PendingUpdate>,
+) -> Result<(), String> {
+    if let Some(reason) = updater_disabled_reason() {
+        return Err(reason);
+    }
+
+    let update = pending_update
+        .0
+        .lock()
+        .map_err(|error| error.to_string())?
+        .take()
+        .ok_or_else(|| "No pending update is available to install.".to_string())?;
+
+    update
+        .download_and_install(
+            |_chunk_length, _content_length| {},
+            || {},
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    app.restart();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             decode_raw,
             save_blob_to_directory,
             open_saved_file_in_editor,
             read_file_by_path,
+            read_text_file_by_path,
             file_size_by_path,
-            update_recent_files_menu
+            write_text_file_by_path,
+            update_recent_files_menu,
+            start_watching,
+            stop_watching,
+            is_watching,
+            get_updater_status,
+            check_for_update,
+            install_update_and_restart
         ])
         .setup(|app| {
+            app.manage(PendingUpdate::default());
+            app.manage(WatcherState(Mutex::new(None)));
             let import_item = MenuItemBuilder::with_id("open", "Import...")
                 .accelerator("CmdOrCtrl+O")
                 .build(app)?;
@@ -369,6 +547,8 @@ pub fn run() {
                 .build(app)?;
             let copy_debug_info_help_item =
                 MenuItemBuilder::with_id("copy-debug-info", "Copy Debug Info").build(app)?;
+            let check_for_updates_help_item =
+                MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(app)?;
             let github_repo_help_item =
                 MenuItemBuilder::with_id("open-github-repo", "GitHub Repository").build(app)?;
             let toggle_compare_item = MenuItemBuilder::with_id("toggle-comparison", "Toggle Before/After")
@@ -385,6 +565,14 @@ pub fn run() {
             let toggle_profiles_item =
                 MenuItemBuilder::with_id("toggle-profiles-pane", "Toggle Profiles Pane")
                     .accelerator("CmdOrCtrl+Shift+\\")
+                    .build(app)?;
+            let scan_session_item =
+                MenuItemBuilder::with_id("scan-session-toggle", "Scanning Session")
+                    .accelerator("CmdOrCtrl+Shift+W")
+                    .build(app)?;
+            let toggle_roll_filmstrip_item =
+                MenuItemBuilder::with_id("toggle-roll-filmstrip", "Toggle Filmstrip")
+                    .accelerator("CmdOrCtrl+Shift+F")
                     .build(app)?;
             let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
                 .accelerator("CmdOrCtrl+0")
@@ -434,6 +622,9 @@ pub fn run() {
                 .item(&toggle_compare_item)
                 .item(&toggle_crop_item)
                 .separator()
+                .item(&scan_session_item)
+                .item(&toggle_roll_filmstrip_item)
+                .separator()
                 .item(&toggle_adjustments_item)
                 .item(&toggle_profiles_item)
                 .separator()
@@ -454,6 +645,8 @@ pub fn run() {
                 .build()?;
 
             let help_menu = SubmenuBuilder::new(app, "Help")
+                .item(&check_for_updates_help_item)
+                .separator()
                 .item(&github_repo_help_item)
                 .separator()
                 .item(&copy_debug_info_help_item)

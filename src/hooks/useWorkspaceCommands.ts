@@ -11,6 +11,9 @@ import {
   openImageFile,
   openInExternalEditor,
   saveExportBlob,
+  saveExportBlobDetailed,
+  saveToDirectory,
+  writeTextFileByPath,
 } from '../utils/fileBridge';
 import { getCanvas2dContext, getNativePathFromFile, getOpenInEditorErrorContext, getResolvedInputProfileId, TransientNoticeState, waitForNextPaint } from '../utils/appHelpers';
 import { savePreferences, UserPreferences } from '../utils/preferenceStore';
@@ -36,7 +39,11 @@ import {
   ScannerType,
   TonalCharacter,
   WorkspaceDocument,
+  QuickExportPreset,
+  Roll,
 } from '../types';
+import { buildSidecarFile, getSidecarPathForExport, serializeSidecar } from '../utils/sidecarSettings';
+import { getExtensionFromFormat, sanitizeFilenameBase } from '../utils/imagePipeline';
 
 function createHistoryEntry(
   settings: ConversionSettings,
@@ -45,6 +52,18 @@ function createHistoryEntry(
   return {
     settings: structuredClone(settings),
     labStyleId,
+  };
+}
+
+function buildQuickExportCrop(crop: ConversionSettings['crop']) {
+  const squareSize = Math.min(crop.width, crop.height);
+  return {
+    ...crop,
+    x: crop.x + ((crop.width - squareSize) / 2),
+    y: crop.y + ((crop.height - squareSize) / 2),
+    width: squareSize,
+    height: squareSize,
+    aspectRatio: 1,
   };
 }
 
@@ -152,6 +171,7 @@ type UseWorkspaceCommandsOptions = {
   setExternalEditorPath: SetState<string | null>;
   setExternalEditorName: SetState<string | null>;
   setOpenInEditorOutputPath: SetState<string | null>;
+  setDefaultExportPath: SetState<string | null>;
   setBatchOutputPath: SetState<string | null>;
   setContactSheetOutputPath: SetState<string | null>;
   setShowTabSwitchOverlay: SetState<boolean>;
@@ -168,6 +188,8 @@ type UseWorkspaceCommandsOptions = {
   ) => ColorManagementSettings;
   formatError: (error: unknown, options?: { preservePrefix?: boolean }) => string;
   getErrorCode: (error: unknown) => string | null;
+  resolveRollId: (nativePath: string | null | undefined, fileName: string) => string | null;
+  getRollById: (rollId: string | null) => Roll | null;
 };
 
 export function useWorkspaceCommands({
@@ -249,6 +271,7 @@ export function useWorkspaceCommands({
   setExternalEditorPath,
   setExternalEditorName,
   setOpenInEditorOutputPath,
+  setDefaultExportPath,
   setBatchOutputPath,
   setContactSheetOutputPath,
   setShowTabSwitchOverlay,
@@ -264,6 +287,8 @@ export function useWorkspaceCommands({
   createDocumentColorManagement,
   formatError,
   getErrorCode,
+  resolveRollId,
+  getRollById,
   isPickingFilmBase,
   activePointPicker,
 }: UseWorkspaceCommandsOptions) {
@@ -360,6 +385,7 @@ export function useWorkspaceCommands({
     setBlockingOverlay,
     setError,
     setTransientNotice,
+    resolveRollId,
   });
 
   const handleSettingsChange = useCallback((newSettings: Partial<ConversionSettings>) => {
@@ -839,9 +865,17 @@ export function useWorkspaceCommands({
     }));
   }, [activeProfile.defaultSettings, documentState, pushHistoryEntry, updateDocument]);
 
-  const handleDownload = useCallback(async () => {
+  const runExport = useCallback(async (params?: {
+    settings?: ConversionSettings;
+    exportOptions?: WorkspaceDocument['exportOptions'];
+    outputPath?: string | null;
+    showNotice?: boolean;
+  }) => {
     const worker = workerClientRef.current;
     if (!worker || !documentState) return;
+
+    const exportSettings = params?.settings ?? documentState.settings;
+    const exportOptions = params?.exportOptions ?? documentState.exportOptions;
 
     setDocumentState((current) => current ? { ...current, status: 'exporting' } : current);
     try {
@@ -853,12 +887,12 @@ export function useWorkspaceCommands({
       const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
       const result = await worker.export({
         documentId: documentState.id,
-        settings: documentState.settings,
-        isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+        settings: exportSettings,
+        isColor: activeProfile.type === 'color' && !exportSettings.blackAndWhite.enabled,
         filmType: activeProfile.filmType,
         inputProfileId,
-        outputProfileId: documentState.exportOptions.outputProfileId,
-        options: documentState.exportOptions,
+        outputProfileId: exportOptions.outputProfileId,
+        options: exportOptions,
         sourceExif: documentState.source.exif,
         flareFloor: documentState.estimatedFlare,
         lightSourceBias,
@@ -873,17 +907,59 @@ export function useWorkspaceCommands({
         highlightDensityEstimate,
       });
 
-      const saveResult = await saveExportBlob(result.blob, result.filename, documentState.exportOptions.format);
-      if (saveResult === 'saved') {
-        appendDiagnostic({ level: 'info', code: 'EXPORT_SUCCESS', message: result.filename, context: { format: documentState.exportOptions.format } });
+      const saved = params?.outputPath
+        ? { status: 'saved' as const, path: await saveToDirectory(result.blob, result.filename, params.outputPath) }
+        : exportOptions.saveSidecar
+          ? await saveExportBlobDetailed(result.blob, result.filename, exportOptions.format)
+          : { status: await saveExportBlob(result.blob, result.filename, exportOptions.format), path: null };
+
+      if (saved.status === 'saved') {
+        if (exportOptions.saveSidecar && saved.path && isDesktopShell()) {
+          const roll = getRollById(documentState.rollId);
+          const sidecar = buildSidecarFile({
+            sourceFile: {
+              name: documentState.source.name,
+              size: documentState.source.size,
+              dimensions: {
+                width: documentState.source.width,
+                height: documentState.source.height,
+              },
+            },
+            settings: structuredClone(exportSettings),
+            profileId: activeProfile.id,
+            profileName: activeProfile.name,
+            isColor: activeProfile.type === 'color' && !exportSettings.blackAndWhite.enabled,
+            colorManagement: structuredClone(documentState.colorManagement),
+            exportOptions: {
+              ...exportOptions,
+              filenameBase: sanitizeFilenameBase(result.filename),
+            },
+            roll: roll ? {
+              name: roll.name,
+              filmStock: roll.filmStock,
+              camera: roll.camera,
+              date: roll.date,
+              notes: roll.notes,
+            } : undefined,
+            lightSourceProfileId: documentState.lightSourceId ?? undefined,
+            labStyleId: documentState.labStyleId ?? undefined,
+          });
+          await writeTextFileByPath(getSidecarPathForExport(saved.path), serializeSidecar(sidecar));
+        }
+
+        appendDiagnostic({ level: 'info', code: 'EXPORT_SUCCESS', message: result.filename, context: { format: exportOptions.format } });
         if (notificationSettings.enabled && notificationSettings.exportComplete) {
           await notifyExportFinished({ kind: 'export', filename: result.filename });
         }
+        if (params?.showNotice) {
+          showTransientNotice(`Exported ${result.filename}`, 'success');
+        }
       } else {
-        appendDiagnostic({ level: 'info', code: 'EXPORT_CANCELLED', message: result.filename, context: { format: documentState.exportOptions.format } });
+        appendDiagnostic({ level: 'info', code: 'EXPORT_CANCELLED', message: result.filename, context: { format: exportOptions.format } });
       }
       setDocumentState((current) => current ? { ...current, status: 'ready' } : current);
       void refreshRenderBackendDiagnostics();
+      return saved;
     } catch (exportError) {
       const message = formatError(exportError);
       appendDiagnostic({ level: 'error', code: 'EXPORT_FAILED', message });
@@ -896,11 +972,48 @@ export function useWorkspaceCommands({
       }, 3000);
       void refreshRenderBackendDiagnostics();
     }
-  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, workerClientRef]);
+    return null;
+  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.name, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, getRollById, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, showTransientNotice, workerClientRef]);
+
+  const handleDownload = useCallback(async () => {
+    await runExport();
+  }, [runExport]);
 
   const handleExportClick = useCallback(() => {
     void handleDownload();
   }, [handleDownload]);
+
+  const handleQuickExport = useCallback(async (preset: QuickExportPreset) => {
+    if (!documentState) {
+      return;
+    }
+
+    const nextSettings = preset.cropToSquare
+      ? {
+        ...structuredClone(documentState.settings),
+        crop: buildQuickExportCrop(documentState.settings.crop),
+      }
+      : structuredClone(documentState.settings);
+
+    const nextExportOptions = {
+      ...documentState.exportOptions,
+      format: preset.format,
+      quality: preset.quality,
+      outputProfileId: preset.outputProfileId,
+      embedMetadata: preset.embedMetadata,
+      embedOutputProfile: preset.embedOutputProfile,
+      saveSidecar: preset.saveSidecar,
+      targetMaxDimension: preset.maxDimension,
+      filenameBase: `${sanitizeFilenameBase(documentState.source.name)}${preset.suffix}`,
+    } satisfies WorkspaceDocument['exportOptions'];
+
+    await runExport({
+      settings: nextSettings,
+      exportOptions: nextExportOptions,
+      outputPath: prefsSnapshotRef.current.defaultExportPath,
+      showNotice: true,
+    });
+  }, [documentState, prefsSnapshotRef, runExport]);
 
   const handleOpenInEditor = useCallback(async () => {
     const worker = workerClientRef.current;
@@ -1056,6 +1169,23 @@ export function useWorkspaceCommands({
     setOpenInEditorOutputPath(null);
     savePreferences({ ...prefsSnapshotRef.current, openInEditorOutputPath: null });
   }, [prefsSnapshotRef, setOpenInEditorOutputPath]);
+
+  const handleChooseDefaultExportPath = useCallback(async () => {
+    try {
+      const selected = await openDirectory();
+      if (!selected) return;
+      setDefaultExportPath(selected);
+      savePreferences({ ...prefsSnapshotRef.current, defaultExportPath: selected });
+    } catch (pathError) {
+      const message = formatError(pathError, { preservePrefix: true });
+      setError(`Could not choose a default export folder. ${message}`);
+    }
+  }, [formatError, prefsSnapshotRef, setDefaultExportPath, setError]);
+
+  const handleUseDownloadsForExport = useCallback(() => {
+    setDefaultExportPath(null);
+    savePreferences({ ...prefsSnapshotRef.current, defaultExportPath: null });
+  }, [prefsSnapshotRef, setDefaultExportPath]);
 
   const handleChooseBatchOutputPath = useCallback(async () => {
     try {
@@ -1278,10 +1408,13 @@ export function useWorkspaceCommands({
     handleDownload,
     handleExportClick,
     handleOpenInEditor,
+    handleQuickExport,
     handleChooseExternalEditor,
     handleClearExternalEditor,
     handleChooseOpenInEditorOutputPath,
     handleUseDownloadsForOpenInEditor,
+    handleChooseDefaultExportPath,
+    handleUseDownloadsForExport,
     handleChooseBatchOutputPath,
     handleUseDownloadsForBatch,
     handleChooseContactSheetOutputPath,

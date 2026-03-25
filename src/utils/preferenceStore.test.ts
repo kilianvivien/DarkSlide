@@ -3,7 +3,7 @@ import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../consta
 import { loadPreferences, savePreferences, UserPreferences } from './preferenceStore';
 
 const VALID_PREFS: UserPreferences = {
-  version: 4,
+  version: 6,
   notificationSettings: {
     enabled: false,
     exportComplete: true,
@@ -18,6 +18,8 @@ const VALID_PREFS: UserPreferences = {
     embedMetadata: false,
     outputProfileId: 'display-p3',
     embedOutputProfile: false,
+    saveSidecar: true,
+    targetMaxDimension: 2048,
   },
   sidebarTab: 'export',
   cropTab: 'Social',
@@ -28,8 +30,13 @@ const VALID_PREFS: UserPreferences = {
   externalEditorPath: null,
   externalEditorName: null,
   openInEditorOutputPath: null,
+  defaultExportPath: null,
   batchOutputPath: null,
   contactSheetOutputPath: null,
+  scanningWatchPath: null,
+  scanningAutoExport: false,
+  scanningAutoExportPath: null,
+  updateChannel: 'stable',
 };
 
 beforeEach(() => {
@@ -51,7 +58,7 @@ describe('loadPreferences', () => {
   });
 
   it('returns null for wrong version', () => {
-    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({ version: 5, lastProfileId: 'x' }));
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({ version: 7, lastProfileId: 'x' }));
     expect(loadPreferences()).toBeNull();
   });
 
@@ -137,7 +144,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     const loaded = loadPreferences();
 
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(4);
+    expect(loaded!.version).toBe(6);
     expect(loaded!.lastProfileId).toBe('portra-400');
     expect(loaded!.sidebarTab).toBe('export');
     expect(loaded!.cropTab).toBe('Social');
@@ -168,20 +175,21 @@ describe('savePreferences + loadPreferences round-trip', () => {
     expect(loaded!.sidebarTab).toBe('curves');
   });
 
-  it('migrates version 2 preferences to version 4 with Downloads mode', () => {
+  it('migrates version 2 preferences to version 6 with Downloads mode', () => {
     localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
       ...VALID_PREFS,
       version: 2,
     }));
 
     expect(loadPreferences()).toMatchObject({
-      version: 4,
+      version: 6,
       openInEditorOutputPath: null,
       notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+      updateChannel: 'stable',
     });
   });
 
-  it('migrates version 3 preferences to version 4 with default notification settings', () => {
+  it('migrates version 3 preferences to version 6 with default notification settings', () => {
     localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
       ...VALID_PREFS,
       version: 3,
@@ -189,7 +197,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
     }));
 
     expect(loadPreferences()).toMatchObject({
-      version: 4,
+      version: 6,
       notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     });
   });

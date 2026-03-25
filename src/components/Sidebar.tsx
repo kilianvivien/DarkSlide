@@ -12,9 +12,10 @@ import {
   Settings,
   Settings2,
   SlidersHorizontal,
+  Trash2,
   Wand2,
 } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, QuickExportPreset, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
@@ -110,9 +111,16 @@ function computeAutoBalance(data: HistogramData, isColor: boolean): Curves {
   };
 }
 
+function formatQuickExportSummary(preset: QuickExportPreset) {
+  const formatLabel = preset.format.replace('image/', '').toUpperCase();
+  const sizeLabel = preset.maxDimension ? `${preset.maxDimension}px` : 'Full size';
+  return `${formatLabel} · ${sizeLabel} · ${getColorProfileDescription(preset.outputProfileId)}`;
+}
+
 interface SidebarProps {
   settings: ConversionSettings;
   exportOptions: ExportOptions;
+  quickExportPresets: QuickExportPreset[];
   colorManagement: ColorManagementSettings;
   sourceMetadata: SourceMetadata | null;
   cropImageWidth: number;
@@ -135,6 +143,9 @@ interface SidebarProps {
   isPickingFilmBase: boolean;
   onTogglePicker: () => void;
   onExport: () => void;
+  onQuickExport: (preset: QuickExportPreset) => void;
+  onSaveQuickExportPreset: () => void;
+  onDeleteQuickExportPreset: (presetId: string) => void;
   onOpenBatchExport: () => void;
   isExporting: boolean;
   contentScrollTop?: number;
@@ -157,6 +168,7 @@ interface SidebarProps {
 export const Sidebar = memo(function Sidebar({
   settings,
   exportOptions,
+  quickExportPresets,
   colorManagement,
   sourceMetadata,
   cropImageWidth,
@@ -179,6 +191,9 @@ export const Sidebar = memo(function Sidebar({
   isPickingFilmBase,
   onTogglePicker,
   onExport,
+  onQuickExport,
+  onSaveQuickExportPreset,
+  onDeleteQuickExportPreset,
   isExporting,
   activeTab,
   onTabChange,
@@ -365,6 +380,7 @@ export const Sidebar = memo(function Sidebar({
   }, [onLightSourceChange]);
 
   const isWebpExport = exportOptions.format === 'image/webp';
+  const showQualityControl = exportOptions.format !== 'image/png' && exportOptions.format !== 'image/tiff';
 
   return (
     <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden">
@@ -723,14 +739,53 @@ export const Sidebar = memo(function Sidebar({
               >
                 <section>
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
-                    <Download size={12} /> Export Settings
+                    <Download size={12} /> Quick Export
+                  </h2>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {quickExportPresets.map((preset) => (
+                      <div key={preset.id} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => onQuickExport(preset)}
+                          className="flex h-full w-full flex-col items-start gap-1 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-3 text-left transition-all hover:border-zinc-700 hover:bg-zinc-800"
+                        >
+                          <span className="text-xs font-semibold text-zinc-100">{preset.name}</span>
+                          <span className="text-[11px] leading-snug text-zinc-500">{formatQuickExportSummary(preset)}</span>
+                        </button>
+                        {!preset.isBuiltIn && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteQuickExportPreset(preset.id)}
+                            className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-950 hover:text-zinc-200"
+                            aria-label={`Delete ${preset.name}`}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+
+                    <button
+                      type="button"
+                      onClick={onSaveQuickExportPreset}
+                      className="flex min-h-[76px] items-center justify-center rounded-xl border border-dashed border-zinc-700 bg-zinc-950 px-3 py-3 text-sm font-medium text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200"
+                    >
+                      Save Current As Preset
+                    </button>
+                  </div>
+                </section>
+
+                <section className="border-t border-zinc-800/70 pt-8">
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                    <Settings2 size={12} /> Custom Export
                   </h2>
 
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Format</label>
                       <div className="grid grid-cols-3 gap-2">
-                        {(['image/jpeg', 'image/png', 'image/webp'] as ExportFormat[]).map((format) => (
+                        {(['image/jpeg', 'image/png', 'image/webp', 'image/tiff'] as ExportFormat[]).map((format) => (
                           <button
                             key={format}
                             onClick={() => onExportOptionsChange({ format })}
@@ -760,7 +815,7 @@ export const Sidebar = memo(function Sidebar({
                       />
                     </div>
 
-                    {exportOptions.format !== 'image/png' && (
+                    {showQualityControl && (
                       <Slider
                         label="Quality"
                         value={Math.round(exportOptions.quality * 100)}
@@ -782,6 +837,16 @@ export const Sidebar = memo(function Sidebar({
                         className="rounded border-zinc-600 bg-zinc-800"
                       />
                       Embed metadata
+                    </label>
+
+                    <label className="flex items-center gap-2 text-xs text-zinc-400">
+                      <input
+                        type="checkbox"
+                        checked={exportOptions.saveSidecar}
+                        onChange={(event) => onExportOptionsChange({ saveSidecar: event.target.checked })}
+                        className="rounded border-zinc-600 bg-zinc-800"
+                      />
+                      Save settings sidecar
                     </label>
 
                     <div className="space-y-3">

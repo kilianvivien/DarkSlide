@@ -35,6 +35,8 @@ export function getExtensionFromFormat(format: ExportFormat) {
       return 'png';
     case 'image/webp':
       return 'webp';
+    case 'image/tiff':
+      return 'tiff';
     default:
       return 'jpg';
   }

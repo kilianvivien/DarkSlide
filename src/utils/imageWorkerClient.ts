@@ -29,6 +29,7 @@ import {
   TileSourceKind,
   WorkerMemoryDiagnostics,
 } from '../types';
+import UTIF from 'utif';
 import { appendDiagnostic } from './diagnostics';
 import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
@@ -798,14 +799,59 @@ export class ImageWorkerClient {
     imageData: ImageData,
     format: ExportRequest['options']['format'],
     quality: number,
+    targetMaxDimension: number | null,
   ) {
+    const longestEdge = Math.max(imageData.width, imageData.height);
+    const scale = targetMaxDimension && targetMaxDimension < longestEdge
+      ? targetMaxDimension / longestEdge
+      : 1;
+    const targetWidth = Math.max(1, Math.round(imageData.width * scale));
+    const targetHeight = Math.max(1, Math.round(imageData.height * scale));
+
+    if (format === 'image/tiff') {
+      const sourceCanvas = typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(imageData.width, imageData.height)
+        : document.createElement('canvas');
+      sourceCanvas.width = imageData.width;
+      sourceCanvas.height = imageData.height;
+      const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+      if (!sourceContext) {
+        throw new Error('Could not create TIFF export canvas.');
+      }
+      sourceContext.putImageData(imageData, 0, 0);
+
+      const resizedCanvas = typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(targetWidth, targetHeight)
+        : document.createElement('canvas');
+      resizedCanvas.width = targetWidth;
+      resizedCanvas.height = targetHeight;
+      const resizedContext = resizedCanvas.getContext('2d', { willReadFrequently: true });
+      if (!resizedContext) {
+        throw new Error('Could not create TIFF resize canvas.');
+      }
+      resizedContext.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight);
+      const resizedImageData = resizedContext.getImageData(0, 0, targetWidth, targetHeight);
+      const encoded = UTIF.encodeImage(resizedImageData.data, targetWidth, targetHeight);
+      return new Blob([encoded], { type: 'image/tiff' });
+    }
+
     if (typeof OffscreenCanvas !== 'undefined') {
-      const canvas = new OffscreenCanvas(imageData.width, imageData.height);
+      const canvas = new OffscreenCanvas(targetWidth, targetHeight);
       const context = canvas.getContext('2d', { willReadFrequently: true });
       if (!context) {
         throw new Error('Could not create export canvas.');
       }
-      context.putImageData(imageData, 0, 0);
+      if (scale === 1) {
+        context.putImageData(imageData, 0, 0);
+      } else {
+        const sourceCanvas = new OffscreenCanvas(imageData.width, imageData.height);
+        const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+        if (!sourceContext) {
+          throw new Error('Could not create source export canvas.');
+        }
+        sourceContext.putImageData(imageData, 0, 0);
+        context.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight);
+      }
       return canvas.convertToBlob({
         type: format,
         quality: format === 'image/png' ? undefined : quality,
@@ -817,13 +863,25 @@ export class ImageWorkerClient {
     }
 
     const canvas = document.createElement('canvas');
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) {
       throw new Error('Could not create export canvas.');
     }
-    context.putImageData(imageData, 0, 0);
+    if (scale === 1) {
+      context.putImageData(imageData, 0, 0);
+    } else {
+      const sourceCanvas = document.createElement('canvas');
+      sourceCanvas.width = imageData.width;
+      sourceCanvas.height = imageData.height;
+      const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+      if (!sourceContext) {
+        throw new Error('Could not create source export canvas.');
+      }
+      sourceContext.putImageData(imageData, 0, 0);
+      context.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight);
+    }
 
     return new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((blob) => {
@@ -1318,6 +1376,7 @@ export class ImageWorkerClient {
         assembled.imageData,
         payload.options.format,
         payload.options.quality,
+        payload.options.targetMaxDimension,
       );
       const jobDurationMs = Math.round(performance.now() - startedAt);
       const snapshot = createJobSnapshot(

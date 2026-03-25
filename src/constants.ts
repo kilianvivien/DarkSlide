@@ -1,4 +1,4 @@
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings, TonalCharacter } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -22,7 +22,68 @@ export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   embedMetadata: true,
   outputProfileId: 'srgb',
   embedOutputProfile: true,
+  saveSidecar: false,
+  targetMaxDimension: null,
 };
+
+export const BUILTIN_QUICK_EXPORT_PRESETS: QuickExportPreset[] = [
+  {
+    id: 'quick-web',
+    name: 'Web',
+    format: 'image/jpeg',
+    quality: 0.85,
+    outputProfileId: 'srgb',
+    embedMetadata: true,
+    embedOutputProfile: true,
+    maxDimension: 2048,
+    suffix: '_web',
+    cropToSquare: false,
+    saveSidecar: false,
+    isBuiltIn: true,
+  },
+  {
+    id: 'quick-archive',
+    name: 'Archive',
+    format: 'image/tiff',
+    quality: 1,
+    outputProfileId: 'adobe-rgb',
+    embedMetadata: true,
+    embedOutputProfile: true,
+    maxDimension: null,
+    suffix: '',
+    cropToSquare: false,
+    saveSidecar: true,
+    isBuiltIn: true,
+  },
+  {
+    id: 'quick-instagram',
+    name: 'Instagram',
+    format: 'image/jpeg',
+    quality: 0.9,
+    outputProfileId: 'srgb',
+    embedMetadata: false,
+    embedOutputProfile: false,
+    maxDimension: 1080,
+    suffix: '_ig',
+    cropToSquare: true,
+    saveSidecar: false,
+    isBuiltIn: true,
+  },
+  {
+    id: 'quick-print',
+    name: 'Print',
+    format: 'image/tiff',
+    quality: 1,
+    outputProfileId: 'adobe-rgb',
+    embedMetadata: true,
+    embedOutputProfile: true,
+    maxDimension: null,
+    suffix: '_print',
+    cropToSquare: false,
+    saveSidecar: true,
+    isBuiltIn: true,
+  },
+];
 
 export const DEFAULT_COLOR_MANAGEMENT: ColorManagementSettings = {
   inputMode: 'auto',
