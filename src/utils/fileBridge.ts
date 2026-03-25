@@ -514,6 +514,38 @@ export async function confirmDeletePreset(name: string): Promise<boolean> {
   return window.confirm(message);
 }
 
+export async function confirmSyncSettings(sourceName: string, frameCount: number, rollName: string): Promise<boolean> {
+  const message = `Apply settings from ${sourceName} to ${frameCount} other frame(s) in ${rollName}?`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Sync Settings',
+      kind: 'info',
+      okLabel: 'Apply',
+      cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
+}
+
+export async function confirmSyncFilmBase(rollName: string): Promise<boolean> {
+  const message = `Apply sampled film base to all frames in ${rollName}?`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Sync Film Base',
+      kind: 'info',
+      okLabel: 'Apply',
+      cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
+}
+
 export async function confirmDeleteRoll(name: string, frameInfo: string): Promise<boolean> {
   const message = `Delete roll "${name}"?${frameInfo}`;
 

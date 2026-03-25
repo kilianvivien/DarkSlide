@@ -17,7 +17,7 @@ import { useRolls } from './hooks/useRolls';
 import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
-import { confirmDeleteRoll, confirmReplacePresetLibrary, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
+import { confirmDeleteRoll, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
@@ -1830,7 +1830,7 @@ const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
     setActiveRollInfoId(null);
   }, [updateRoll]);
 
-  const handleSyncRollSettings = useCallback((tabId: string, rollId: string) => {
+  const handleSyncRollSettings = useCallback(async (tabId: string, rollId: string) => {
     const tab = tabsRef.current.find((candidate) => candidate.id === tabId) ?? null;
     const roll = getRollById(rollId);
     const rollTabs = tabsRef.current.filter((candidate) => candidate.rollId === rollId);
@@ -1838,21 +1838,23 @@ const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
       return;
     }
 
-    if (typeof window !== 'undefined' && !window.confirm(`Apply settings from ${tab.document.source.name} to ${rollTabs.length - 1} other frame(s) in ${roll.name}?`)) {
-      return;
-    }
+    const confirmed = await confirmSyncSettings(tab.document.source.name, rollTabs.length - 1, roll.name);
+    if (!confirmed) return;
 
     syncSettingsToRoll(tabId, rollId);
     showTransientNotice(`Synced ${roll.name} from ${tab.document.source.name}.`, 'success');
   }, [getRollById, showTransientNotice, syncSettingsToRoll, tabsRef]);
 
-  const handleApplyRollFilmBase = useCallback((rollId: string) => {
+  const handleApplyRollFilmBase = useCallback(async (rollId: string) => {
     const sourceDocument = tabsRef.current.find((tab) => tab.rollId === rollId && tab.document.settings.filmBaseSample)?.document ?? null;
     const roll = getRollById(rollId);
     if (!sourceDocument?.settings.filmBaseSample || !roll) {
       showTransientNotice('Sample a film base on one frame before syncing it to the roll.');
       return;
     }
+
+    const confirmed = await confirmSyncFilmBase(roll.name);
+    if (!confirmed) return;
 
     applyFilmBaseToRoll(sourceDocument.settings.filmBaseSample, rollId);
     showTransientNotice(`Applied ${roll.name} film base to the full roll.`, 'success');
