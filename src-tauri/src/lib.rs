@@ -570,11 +570,7 @@ pub fn run() {
                 MenuItemBuilder::with_id("scan-session-toggle", "Scanning Session")
                     .accelerator("CmdOrCtrl+Shift+W")
                     .build(app)?;
-            let toggle_roll_filmstrip_item =
-                MenuItemBuilder::with_id("toggle-roll-filmstrip", "Toggle Filmstrip")
-                    .accelerator("CmdOrCtrl+Shift+F")
-                    .build(app)?;
-            let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
+let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
                 .accelerator("CmdOrCtrl+0")
                 .build(app)?;
             let zoom_actual_item = MenuItemBuilder::with_id("zoom-100", "Actual Size")
@@ -623,8 +619,7 @@ pub fn run() {
                 .item(&toggle_crop_item)
                 .separator()
                 .item(&scan_session_item)
-                .item(&toggle_roll_filmstrip_item)
-                .separator()
+.separator()
                 .item(&toggle_adjustments_item)
                 .item(&toggle_profiles_item)
                 .separator()

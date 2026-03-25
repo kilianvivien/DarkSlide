@@ -32,7 +32,6 @@ import { ZoomBar } from './ZoomBar';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
 import { ErrorBoundary } from './ErrorBoundary';
-import { RollFilmstrip } from './RollFilmstrip';
 import { DEFAULT_COLOR_MANAGEMENT } from '../constants';
 import {
   BatchJobEntry,
@@ -135,8 +134,8 @@ type AppShellProps = {
   updateError: string | null;
   isCheckingForUpdates: boolean;
   activeRoll: Roll | null;
+  rolls: Map<string, Roll>;
   filmstripTabs: DocumentTab[];
-  showRollFilmstrip: boolean;
   getRollById: (rollId: string | null) => Roll | null;
   profilesById: Map<string, FilmProfile>;
   lightSourceProfilesById: Map<string, LightSourceProfile>;
@@ -177,6 +176,8 @@ type AppShellProps = {
   onApplyRollFilmBase: (rollId: string) => void;
   onRemoveFromRoll: (tabId: string) => void;
   onOpenRollInfo: (rollId: string) => void;
+  onCreateRollFromTabs: () => void;
+  onToggleScanningSession: () => void;
   onOpenContactSheet: (payload: {
     entries: BatchJobEntry[];
     sharedSettings: ConversionSettings;
@@ -338,8 +339,8 @@ export function AppShell({
   updateError,
   isCheckingForUpdates,
   activeRoll,
+  rolls,
   filmstripTabs,
-  showRollFilmstrip,
   getRollById,
   profilesById,
   lightSourceProfilesById,
@@ -380,6 +381,8 @@ export function AppShell({
   onApplyRollFilmBase,
   onRemoveFromRoll,
   onOpenRollInfo,
+  onCreateRollFromTabs,
+  onToggleScanningSession,
   onOpenContactSheet,
   defaultExportOptions,
   onSettingsChange,
@@ -870,24 +873,7 @@ export function AppShell({
                       </div>
                     </div>
 
-                    {showRollFilmstrip && filmstripTabs.length > 0 && (
-                      <RollFilmstrip
-                        workerClient={workerClient}
-                        tabs={filmstripTabs}
-                        activeTabId={activeTabId}
-                        activeRoll={activeRoll}
-                        profilesById={profilesById}
-                        lightSourceProfilesById={lightSourceProfilesById}
-                        onSelectTab={onSelectTab}
-                        onOpenRollInfo={() => {
-                          if (activeRoll) {
-                            onOpenRollInfo(activeRoll.id);
-                          }
-                        }}
-                      />
-                    )}
-
-                    <div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-3">
+<div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-3">
                       <div className="flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 shadow-2xl backdrop-blur-md">
                         <span className="px-2 text-[10px] font-mono uppercase tracking-widest text-zinc-500">{activeProfile.name}</span>
@@ -1019,6 +1005,20 @@ export function AppShell({
                   onDeleteFolder={onDeleteFolder}
                   onMovePresetToFolder={onMovePresetToFolder}
                   onError={onSetError}
+                  rolls={rolls}
+                  activeRoll={activeRoll}
+                  activeTabId={activeTabId}
+                  filmstripTabs={filmstripTabs}
+                  activeDocument={documentState}
+                  onSelectTab={onSelectTab}
+                  onOpenRollInfo={onOpenRollInfo}
+                  onSyncRollSettings={onSyncRollSettings}
+                  onApplyRollFilmBase={onApplyRollFilmBase}
+                  onRemoveFromRoll={onRemoveFromRoll}
+                  onCreateRollFromTabs={onCreateRollFromTabs}
+                  onToggleScanningSession={onToggleScanningSession}
+                  usesNativeFileDialogs={usesNativeFileDialogs}
+                  tabs={tabs}
                 />
               </ErrorBoundary>
             </motion.div>

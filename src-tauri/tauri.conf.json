@@ -28,6 +28,13 @@
       "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'"
     }
   },
+  "plugins": {
+    "updater": {
+      "active": false,
+      "pubkey": "",
+      "endpoints": []
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

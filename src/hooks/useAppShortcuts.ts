@@ -31,8 +31,7 @@ type UseAppShortcutsOptions = {
   onToggleCropOverlay: () => void;
   onToggleLeftPane: () => void;
   onToggleRightPane: () => void;
-  onToggleRollFilmstrip: () => void;
-  onToggleScanningSession: () => void;
+onToggleScanningSession: () => void;
   onCheckForUpdates: () => void;
   zoomToFit: () => void;
   zoomTo100: () => void;
@@ -67,8 +66,7 @@ export function useAppShortcuts({
   onToggleCropOverlay,
   onToggleLeftPane,
   onToggleRightPane,
-  onToggleRollFilmstrip,
-  onToggleScanningSession,
+onToggleScanningSession,
   onCheckForUpdates,
   zoomToFit,
   zoomTo100,
@@ -95,8 +93,7 @@ export function useAppShortcuts({
       autoAdjust: { key: 'a', meta: true, shift: true, when: () => documentStatePresent, handler: onAutoAdjust },
       batchExport: { key: 'e', meta: true, shift: true, handler: () => setShowBatchModal(true) },
       toggleScanningSession: { key: 'w', meta: true, shift: true, when: () => usesNativeFileDialogs, handler: onToggleScanningSession },
-      toggleRollFilmstrip: { key: 'f', meta: true, shift: true, when: () => tabs.length > 0, handler: onToggleRollFilmstrip },
-      previousTab: {
+previousTab: {
         key: '[',
         meta: true,
         shift: true,
@@ -174,10 +171,7 @@ export function useAppShortcuts({
         case 'scan-session-toggle':
           setShowScanningSessionPanel((current) => !current);
           break;
-        case 'toggle-roll-filmstrip':
-          onToggleRollFilmstrip();
-          break;
-        case 'check-for-updates':
+case 'check-for-updates':
           onCheckForUpdates();
           break;
         case 'clear-recent-files':

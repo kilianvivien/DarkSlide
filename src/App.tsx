@@ -96,8 +96,7 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [showContactSheetModal, setShowContactSheetModal] = useState(false);
-  const [showRollFilmstrip, setShowRollFilmstrip] = useState(false);
-  const [showScanningSessionPanel, setShowScanningSessionPanel] = useState(false);
+const [showScanningSessionPanel, setShowScanningSessionPanel] = useState(false);
   const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
   const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
   const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
@@ -299,6 +298,7 @@ export default function App() {
   const calibration = useCalibration(workerClientRef, workerReadyVersion);
   const {
     rolls,
+    createRoll,
     updateRoll,
     assignToRoll,
     getDocumentsInRoll,
@@ -1863,11 +1863,18 @@ export default function App() {
     showTransientNotice('Removed frame from its roll.', 'success');
   }, [assignToRoll, showTransientNotice]);
 
-  const handleToggleRollFilmstrip = useCallback(() => {
-    setShowRollFilmstrip((current) => !current);
-  }, []);
+  const handleCreateRollFromTabs = useCallback(() => {
+    const unrolledTabs = tabsRef.current.filter((tab) => !tab.rollId);
+    if (unrolledTabs.length === 0) {
+      showTransientNotice('All open tabs are already in a roll.');
+      return;
+    }
+    const roll = createRoll('Untitled Roll');
+    assignToRoll(unrolledTabs.map((tab) => tab.id), roll.id);
+    showTransientNotice(`Created roll with ${unrolledTabs.length} frame${unrolledTabs.length === 1 ? '' : 's'}.`, 'success');
+  }, [assignToRoll, createRoll, showTransientNotice, tabsRef]);
 
-  const handleToggleScanningSessionPanel = useCallback(() => {
+const handleToggleScanningSessionPanel = useCallback(() => {
     setShowScanningSessionPanel((current) => !current);
   }, []);
 
@@ -2091,8 +2098,7 @@ export default function App() {
     onToggleCropOverlay: handleToggleCropOverlay,
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleRightPane,
-    onToggleRollFilmstrip: handleToggleRollFilmstrip,
-    onToggleScanningSession: handleToggleScanningSessionPanel,
+onToggleScanningSession: handleToggleScanningSessionPanel,
     onCheckForUpdates: () => { void checkForUpdatesNow(); },
     zoomToFit: zoomToFitWithDraft,
     zoomTo100: zoomTo100WithDraft,
@@ -2180,8 +2186,8 @@ export default function App() {
       updateError={updateState.error}
       isCheckingForUpdates={updateState.isChecking}
       activeRoll={activeRoll}
+      rolls={rolls}
       filmstripTabs={filmstripTabs}
-      showRollFilmstrip={showRollFilmstrip}
       getRollById={getRollById}
       profilesById={profilesById}
       lightSourceProfilesById={lightSourceProfilesById}
@@ -2222,6 +2228,8 @@ export default function App() {
       onApplyRollFilmBase={handleApplyRollFilmBase}
       onRemoveFromRoll={handleRemoveFromRoll}
       onOpenRollInfo={handleOpenRollInfo}
+      onCreateRollFromTabs={handleCreateRollFromTabs}
+      onToggleScanningSession={handleToggleScanningSessionPanel}
       onOpenContactSheet={handleOpenContactSheet}
       onSettingsChange={handleSettingsChange}
       defaultExportOptions={defaultExportOptions}

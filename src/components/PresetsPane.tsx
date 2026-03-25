@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowDownUp, Check, ChevronDown, Download, Film, FolderOpen, FolderPlus, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
+import { ArrowDownUp, Check, ChevronDown, Copy, Download, Droplets, Film, FolderOpen, FolderPlus, Info, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Unlink2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from '../constants';
 import { confirmDeletePreset, isDesktopShell, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
-import { DarkslidePresetFile, FilmProfile, FilmProfileCategory, PresetFolder, ScannerType } from '../types';
+import { getRollAccent } from '../utils/rolls';
+import { DarkslidePresetFile, DocumentTab, FilmProfile, FilmProfileCategory, PresetFolder, Roll, ScannerType, WorkspaceDocument } from '../types';
 
 const GENERIC_IDS = new Set(['generic-bw', 'generic-color']);
 
@@ -146,6 +147,20 @@ interface PresetsPaneProps {
   onDeleteFolder?: (id: string) => void;
   onMovePresetToFolder?: (presetId: string, folderId: string | null) => void;
   onError?: (message: string | null) => void;
+  rolls?: Map<string, Roll>;
+  activeRoll?: Roll | null;
+  activeTabId?: string | null;
+  filmstripTabs?: DocumentTab[];
+  activeDocument?: WorkspaceDocument | null;
+  onSelectTab?: (tabId: string) => void;
+  onOpenRollInfo?: (rollId: string) => void;
+  onSyncRollSettings?: (tabId: string, rollId: string) => void;
+  onApplyRollFilmBase?: (rollId: string) => void;
+  onRemoveFromRoll?: (tabId: string) => void;
+  onCreateRollFromTabs?: () => void;
+  onToggleScanningSession?: () => void;
+  usesNativeFileDialogs?: boolean;
+  tabs?: DocumentTab[];
 }
 
 export const PresetsPane: React.FC<PresetsPaneProps> = ({
@@ -164,12 +179,26 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   onDeleteFolder,
   onMovePresetToFolder,
   onError,
+  rolls,
+  activeRoll,
+  activeTabId,
+  filmstripTabs = [],
+  activeDocument,
+  onSelectTab,
+  onOpenRollInfo,
+  onSyncRollSettings,
+  onApplyRollFilmBase,
+  onRemoveFromRoll,
+  onCreateRollFromTabs,
+  onToggleScanningSession,
+  usesNativeFileDialogs,
+  tabs = [],
 }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [saveFilmStock, setSaveFilmStock] = useState('');
   const [saveScannerType, setSaveScannerType] = useState<ScannerType | null>(null);
-  const [presetTab, setPresetTab] = useState<'builtin' | 'custom'>('builtin');
+  const [presetTab, setPresetTab] = useState<'builtin' | 'custom' | 'rolls'>('builtin');
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [importConflict, setImportConflict] = useState<ImportConflictState | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -720,7 +749,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
           </div>
         </div>
         <div className="flex gap-4">
-          {(['builtin', 'custom'] as const).map((tab) => (
+          {(['builtin', 'custom', 'rolls'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setPresetTab(tab)}
@@ -728,7 +757,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                 presetTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
               }`}
             >
-              {tab === 'builtin' ? 'Built-in' : 'Custom'}
+              {tab === 'builtin' ? 'Built-in' : tab === 'custom' ? 'Custom' : 'Rolls'}
             </button>
           ))}
         </div>
@@ -980,7 +1009,149 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
           </div>
         )}
 
-        {presetTab === 'custom' ? (
+        {presetTab === 'rolls' ? (
+          <div className="space-y-5">
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={onCreateRollFromTabs}
+                disabled={tabs.length < 2 || tabs.every((t) => Boolean(t.rollId))}
+                className="flex w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Plus size={14} className="shrink-0" />
+                Group open tabs into a roll
+              </button>
+              <button
+                type="button"
+                onClick={onToggleScanningSession}
+                disabled={!usesNativeFileDialogs}
+                className="flex w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Film size={14} className="shrink-0" />
+                Scanning Session
+                {!usesNativeFileDialogs && <span className="ml-auto text-[10px] text-zinc-600">Desktop only</span>}
+              </button>
+            </div>
+
+            {activeRoll ? (
+              <>
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${getRollAccent(activeRoll.id).dot}`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-zinc-100">{activeRoll.name}</p>
+                      <p className="truncate text-[11px] text-zinc-500">
+                        {filmstripTabs.length} frame{filmstripTabs.length === 1 ? '' : 's'}
+                        {activeRoll.filmStock ? ` · ${activeRoll.filmStock}` : ''}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpenRollInfo?.(activeRoll.id)}
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+                    >
+                      <Info size={12} />
+                      Edit Info
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => activeTabId && onSyncRollSettings?.(activeTabId, activeRoll.id)}
+                      disabled={!activeTabId || filmstripTabs.length < 2}
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Copy size={12} />
+                      Sync Settings
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onApplyRollFilmBase?.(activeRoll.id)}
+                      disabled={!activeDocument?.settings.filmBaseSample}
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Droplets size={12} />
+                      Sync Film Base
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                    Frames
+                  </h3>
+                  <div className="space-y-1.5">
+                    {filmstripTabs.map((tab, index) => {
+                      const isActive = tab.id === activeTabId;
+                      const accent = getRollAccent(activeRoll.id);
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => onSelectTab?.(tab.id)}
+                          className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-all ${
+                            isActive
+                              ? `${accent.border} border bg-zinc-900 text-zinc-100`
+                              : 'border border-transparent text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+                          }`}
+                        >
+                          <span className="w-5 shrink-0 text-center text-[10px] font-mono text-zinc-600">{index + 1}</span>
+                          <span className="min-w-0 flex-1 truncate text-[13px]">{tab.document.source.name}</span>
+                          {isActive && onRemoveFromRoll && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); onRemoveFromRoll(tab.id); }}
+                              className="shrink-0 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-zinc-300 group-hover:opacity-100"
+                              aria-label="Remove from roll"
+                            >
+                              <Unlink2 size={12} />
+                            </button>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : rolls && rolls.size > 0 ? (
+              <div>
+                <h3 className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                  All Rolls
+                </h3>
+                <div className="space-y-2">
+                  {Array.from(rolls!.values())
+                    .sort((a: Roll, b: Roll) => b.createdAt - a.createdAt)
+                    .map((roll: Roll) => {
+                      const accent = getRollAccent(roll.id);
+                      return (
+                        <button
+                          key={roll.id}
+                          type="button"
+                          onClick={() => onOpenRollInfo?.(roll.id)}
+                          className="flex w-full items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2.5 text-left transition-colors hover:bg-zinc-900"
+                        >
+                          <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-zinc-200">{roll.name}</p>
+                            <p className="truncate text-[10px] text-zinc-600">
+                              {roll.filmStock || 'No film stock set'}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <Film size={24} className="mb-2 text-zinc-700" />
+                <p className="text-[11px] leading-relaxed text-zinc-600 max-w-[200px]">
+                  Group frames from the same film roll to sync settings and film base across all frames.
+                </p>
+              </div>
+            )}
+          </div>
+        ) : presetTab === 'custom' ? (
           <div
             className="space-y-6"
             onDragOver={(event) => {
