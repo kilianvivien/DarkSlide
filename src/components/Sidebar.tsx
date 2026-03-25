@@ -865,7 +865,10 @@ export const Sidebar = memo(function Sidebar({
                         Embed metadata
                       </label>
 
-                      <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+                      <label
+                        className="flex items-center gap-2 text-[11px] text-zinc-400"
+                        data-tip="Save a .darkslide JSON file alongside the export with all conversion settings, so you can re-import and restore them later."
+                      >
                         <input
                           type="checkbox"
                           checked={exportOptions.saveSidecar}

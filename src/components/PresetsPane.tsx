@@ -157,6 +157,7 @@ interface PresetsPaneProps {
   onSyncRollSettings?: (tabId: string, rollId: string) => void;
   onApplyRollFilmBase?: (rollId: string) => void;
   onRemoveFromRoll?: (tabId: string) => void;
+  onDeleteRoll?: (rollId: string) => void;
   onCreateRollFromTabs?: () => void;
   onToggleScanningSession?: () => void;
   usesNativeFileDialogs?: boolean;
@@ -189,6 +190,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   onSyncRollSettings,
   onApplyRollFilmBase,
   onRemoveFromRoll,
+  onDeleteRoll,
   onCreateRollFromTabs,
   onToggleScanningSession,
   usesNativeFileDialogs,
@@ -1016,6 +1018,13 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                 type="button"
                 onClick={onCreateRollFromTabs}
                 disabled={tabs.length < 2 || tabs.every((t) => Boolean(t.rollId))}
+                data-tip={
+                  tabs.length < 2
+                    ? 'Open at least 2 images to group them into a roll'
+                    : tabs.every((t) => Boolean(t.rollId))
+                      ? 'All open tabs are already assigned to a roll'
+                      : 'Create a new roll from all unassigned tabs'
+                }
                 className="flex w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Plus size={14} className="shrink-0" />
@@ -1025,6 +1034,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                 type="button"
                 onClick={onToggleScanningSession}
                 disabled={!usesNativeFileDialogs}
+                data-tip="Watch a folder for new scans and automatically import them into a roll as they appear"
                 className="flex w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Film size={14} className="shrink-0" />
@@ -1073,6 +1083,16 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                       <Droplets size={12} />
                       Sync Film Base
                     </button>
+                    {onDeleteRoll && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteRoll(activeRoll.id)}
+                        className="flex items-center gap-1.5 rounded-lg border border-red-900/50 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-red-400 transition-colors hover:border-red-800 hover:bg-red-950/30"
+                      >
+                        <Trash2 size={12} />
+                        Delete Roll
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1103,6 +1123,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                               onClick={(e) => { e.stopPropagation(); onRemoveFromRoll(tab.id); }}
                               className="shrink-0 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-zinc-300 group-hover:opacity-100"
                               aria-label="Remove from roll"
+                              data-tip="Remove this frame from the roll (the image stays open)"
                             >
                               <Unlink2 size={12} />
                             </button>
@@ -1124,20 +1145,34 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                     .map((roll: Roll) => {
                       const accent = getRollAccent(roll.id);
                       return (
-                        <button
+                        <div
                           key={roll.id}
-                          type="button"
-                          onClick={() => onOpenRollInfo?.(roll.id)}
-                          className="flex w-full items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2.5 text-left transition-colors hover:bg-zinc-900"
+                          className="group flex w-full items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2.5 text-left transition-colors hover:bg-zinc-900"
                         >
-                          <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium text-zinc-200">{roll.name}</p>
-                            <p className="truncate text-[10px] text-zinc-600">
-                              {roll.filmStock || 'No film stock set'}
-                            </p>
-                          </div>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => onOpenRollInfo?.(roll.id)}
+                            className="flex min-w-0 flex-1 items-center gap-3"
+                          >
+                            <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-medium text-zinc-200">{roll.name}</p>
+                              <p className="truncate text-[10px] text-zinc-600">
+                                {roll.filmStock || 'No film stock set'}
+                              </p>
+                            </div>
+                          </button>
+                          {onDeleteRoll && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); onDeleteRoll(roll.id); }}
+                              className="shrink-0 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-red-400 group-hover:opacity-100"
+                              aria-label={`Delete roll ${roll.name}`}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
                       );
                     })}
                 </div>

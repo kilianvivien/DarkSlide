@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { X } from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
+import { FILM_PROFILES } from '../constants';
 import { Roll, WorkspaceDocument } from '../types';
 
 type RollInfoModalProps = {
@@ -12,6 +13,7 @@ type RollInfoModalProps = {
   onSave: (rollId: string, updates: Partial<Roll>) => void;
   onSyncSettings: (rollId: string) => void;
   onApplyFilmBase: (rollId: string) => void;
+  onDeleteRoll: (rollId: string) => void;
 };
 
 export function RollInfoModal({
@@ -23,8 +25,14 @@ export function RollInfoModal({
   onSave,
   onSyncSettings,
   onApplyFilmBase,
+  onDeleteRoll,
 }: RollInfoModalProps) {
   const [draft, setDraft] = useState<Partial<Roll>>({});
+
+  const filmStockSuggestions = useMemo(
+    () => [...new Set(FILM_PROFILES.map((p) => p.name))].sort((a, b) => a.localeCompare(b)),
+    [],
+  );
 
   useEffect(() => {
     if (!roll) {
@@ -89,11 +97,17 @@ export function RollInfoModal({
                 <label className="space-y-2">
                   <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Film Stock</span>
                   <input
+                    list="roll-film-stock-suggestions"
                     value={draft.filmStock ?? ''}
                     onChange={(event) => setDraft((current) => ({ ...current, filmStock: event.target.value || null }))}
                     placeholder="Portra 400"
                     className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors focus:border-zinc-600"
                   />
+                  <datalist id="roll-film-stock-suggestions">
+                    {filmStockSuggestions.map((name) => (
+                      <option key={name} value={name} />
+                    ))}
+                  </datalist>
                 </label>
                 <label className="space-y-2">
                   <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Camera</span>
@@ -125,7 +139,7 @@ export function RollInfoModal({
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 px-5 py-4">
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() => onSyncSettings(roll.id)}
@@ -140,6 +154,14 @@ export function RollInfoModal({
                     className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Apply Film Base To Roll
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteRoll(roll.id)}
+                    className="rounded-xl border border-red-900/50 bg-zinc-900 px-3 py-2 text-sm text-red-400 transition-colors hover:border-red-800 hover:bg-red-950/30"
+                    aria-label="Delete roll"
+                  >
+                    <Trash2 size={14} />
                   </button>
                 </div>
                 <button

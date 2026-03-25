@@ -514,6 +514,22 @@ export async function confirmDeletePreset(name: string): Promise<boolean> {
   return window.confirm(message);
 }
 
+export async function confirmDeleteRoll(name: string, frameInfo: string): Promise<boolean> {
+  const message = `Delete roll "${name}"?${frameInfo}`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'DarkSlide',
+      kind: 'warning',
+      okLabel: 'Delete',
+      cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
+}
+
 export async function confirmReplacePresetLibrary(): Promise<boolean> {
   const message = 'Importing a preset backup will replace all existing custom presets and folders. Continue?';
 

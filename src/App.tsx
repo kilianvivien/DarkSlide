@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from './constants';
 import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
-import { ScanningSessionPanel } from './components/ScanningSessionPanel';
+import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
 import { UpdateBanner } from './components/UpdateBanner';
 import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
@@ -17,7 +17,7 @@ import { useRolls } from './hooks/useRolls';
 import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
-import { confirmReplacePresetLibrary, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
+import { confirmDeleteRoll, confirmReplacePresetLibrary, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
@@ -96,8 +96,7 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [showContactSheetModal, setShowContactSheetModal] = useState(false);
-const [showScanningSessionPanel, setShowScanningSessionPanel] = useState(false);
-  const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
+const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
   const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
   const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
   const [contactSheetSharedProfile, setContactSheetSharedProfile] = useState<FilmProfile | null>(null);
@@ -300,6 +299,7 @@ const [showScanningSessionPanel, setShowScanningSessionPanel] = useState(false);
     rolls,
     createRoll,
     updateRoll,
+    deleteRoll,
     assignToRoll,
     getDocumentsInRoll,
     syncSettingsToRoll,
@@ -1874,11 +1874,27 @@ const [showScanningSessionPanel, setShowScanningSessionPanel] = useState(false);
     showTransientNotice(`Created roll with ${unrolledTabs.length} frame${unrolledTabs.length === 1 ? '' : 's'}.`, 'success');
   }, [assignToRoll, createRoll, showTransientNotice, tabsRef]);
 
-const handleToggleScanningSessionPanel = useCallback(() => {
-    setShowScanningSessionPanel((current) => !current);
-  }, []);
+  const handleDeleteRoll = useCallback(async (rollId: string) => {
+    const roll = rolls.get(rollId);
+    if (!roll) return;
 
-  const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
+    const docIds = getDocumentsInRoll(rollId);
+    const frameInfo = docIds.length > 0
+      ? `\n\n${docIds.length} frame${docIds.length === 1 ? '' : 's'} will be unlinked from this roll (images won't be deleted).`
+      : '';
+
+    const confirmed = await confirmDeleteRoll(roll.name, frameInfo);
+    if (!confirmed) return;
+
+    if (docIds.length > 0) {
+      assignToRoll(docIds, null);
+    }
+
+    deleteRoll(rollId);
+    setActiveRollInfoId(null);
+  }, [assignToRoll, deleteRoll, getDocumentsInRoll, rolls]);
+
+const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     const worker = workerClientRef.current;
     const tab = tabsRef.current.find((candidate) => candidate.id === documentId) ?? null;
     if (!worker || !tab) {
@@ -2066,6 +2082,16 @@ const handleToggleScanningSessionPanel = useCallback(() => {
     savePreferences({ ...prefsSnapshotRef.current, scanningAutoExport: enabled });
   }, [configureScanningAutoExport, scanningAutoExportPath]);
 
+  const { toggleScanningWindow } = useScanningSessionWindow({
+    session: scanningSession,
+    onPickWatchPath: () => { void handleChooseScanningWatchPath(); },
+    onToggleWatching: () => { void handleToggleScanningWatcher(); },
+    onToggleAutoExport: handleScanningAutoExportChange,
+    onPickAutoExportPath: () => { void handleChooseScanningAutoExportPath(); },
+    onSelectTab: handleSelectTab,
+    onClearQueue: clearScanningQueue,
+  });
+
   const handleUpdateChannelChange = useCallback((channel: UpdateChannel) => {
     setUpdateChannel(channel);
     savePreferences({ ...prefsSnapshotRef.current, updateChannel: channel });
@@ -2080,7 +2106,6 @@ const handleToggleScanningSessionPanel = useCallback(() => {
     usesNativeFileDialogs,
     setShowBatchModal,
     setShowSettingsModal,
-    setShowScanningSessionPanel,
     setIsSpaceHeld,
     onUndo: handleUndo,
     onRedo: handleRedo,
@@ -2098,7 +2123,7 @@ const handleToggleScanningSessionPanel = useCallback(() => {
     onToggleCropOverlay: handleToggleCropOverlay,
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleRightPane,
-onToggleScanningSession: handleToggleScanningSessionPanel,
+onToggleScanningSession: toggleScanningWindow,
     onCheckForUpdates: () => { void checkForUpdatesNow(); },
     zoomToFit: zoomToFitWithDraft,
     zoomTo100: zoomTo100WithDraft,
@@ -2228,8 +2253,9 @@ onToggleScanningSession: handleToggleScanningSessionPanel,
       onApplyRollFilmBase={handleApplyRollFilmBase}
       onRemoveFromRoll={handleRemoveFromRoll}
       onOpenRollInfo={handleOpenRollInfo}
+      onDeleteRoll={handleDeleteRoll}
       onCreateRollFromTabs={handleCreateRollFromTabs}
-      onToggleScanningSession={handleToggleScanningSessionPanel}
+      onToggleScanningSession={toggleScanningWindow}
       onOpenContactSheet={handleOpenContactSheet}
       onSettingsChange={handleSettingsChange}
       defaultExportOptions={defaultExportOptions}
@@ -2320,26 +2346,6 @@ onToggleScanningSession: handleToggleScanningSessionPanel,
         </div>
       )}
 
-      <ScanningSessionPanel
-        isDesktop={usesNativeFileDialogs}
-        isOpen={showScanningSessionPanel}
-        watchPath={scanningSession.watchPath}
-        isWatching={scanningSession.isWatching}
-        autoExport={scanningSession.autoExport}
-        autoExportPath={scanningSession.autoExportPath}
-        queue={scanningSession.queue}
-        workerClient={workerClientRef.current}
-        tabs={tabs}
-        profilesById={profilesById}
-        lightSourceProfilesById={lightSourceProfilesById}
-        onClose={handleToggleScanningSessionPanel}
-        onPickWatchPath={() => { void handleChooseScanningWatchPath(); }}
-        onToggleWatching={() => { void handleToggleScanningWatcher(); }}
-        onToggleAutoExport={handleScanningAutoExportChange}
-        onPickAutoExportPath={() => { void handleChooseScanningAutoExportPath(); }}
-        onSelectTab={handleSelectTab}
-        onClearQueue={clearScanningQueue}
-      />
 
       <RollInfoModal
         isOpen={Boolean(activeRollInfoId)}
@@ -2354,6 +2360,7 @@ onToggleScanningSession: handleToggleScanningSessionPanel,
           }
         }}
         onApplyFilmBase={handleApplyRollFilmBase}
+        onDeleteRoll={handleDeleteRoll}
       />
     </>
   );

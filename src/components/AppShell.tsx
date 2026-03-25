@@ -176,6 +176,7 @@ type AppShellProps = {
   onApplyRollFilmBase: (rollId: string) => void;
   onRemoveFromRoll: (tabId: string) => void;
   onOpenRollInfo: (rollId: string) => void;
+  onDeleteRoll: (rollId: string) => void;
   onCreateRollFromTabs: () => void;
   onToggleScanningSession: () => void;
   onOpenContactSheet: (payload: {
@@ -381,6 +382,7 @@ export function AppShell({
   onApplyRollFilmBase,
   onRemoveFromRoll,
   onOpenRollInfo,
+  onDeleteRoll,
   onCreateRollFromTabs,
   onToggleScanningSession,
   onOpenContactSheet,
@@ -1015,6 +1017,7 @@ export function AppShell({
                   onSyncRollSettings={onSyncRollSettings}
                   onApplyRollFilmBase={onApplyRollFilmBase}
                   onRemoveFromRoll={onRemoveFromRoll}
+                  onDeleteRoll={onDeleteRoll}
                   onCreateRollFromTabs={onCreateRollFromTabs}
                   onToggleScanningSession={onToggleScanningSession}
                   usesNativeFileDialogs={usesNativeFileDialogs}

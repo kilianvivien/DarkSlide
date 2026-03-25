@@ -13,7 +13,6 @@ type UseAppShortcutsOptions = {
   usesNativeFileDialogs: boolean;
   setShowBatchModal: Dispatch<SetStateAction<boolean>>;
   setShowSettingsModal: Dispatch<SetStateAction<boolean>>;
-  setShowScanningSessionPanel: Dispatch<SetStateAction<boolean>>;
   setIsSpaceHeld: Dispatch<SetStateAction<boolean>>;
   onUndo: () => void;
   onRedo: () => void;
@@ -48,7 +47,6 @@ export function useAppShortcuts({
   usesNativeFileDialogs,
   setShowBatchModal,
   setShowSettingsModal,
-  setShowScanningSessionPanel,
   setIsSpaceHeld,
   onUndo,
   onRedo,
@@ -169,7 +167,7 @@ previousTab: {
           setShowSettingsModal(true);
           break;
         case 'scan-session-toggle':
-          setShowScanningSessionPanel((current) => !current);
+          onToggleScanningSession();
           break;
 case 'check-for-updates':
           onCheckForUpdates();
