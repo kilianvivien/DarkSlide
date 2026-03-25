@@ -7,13 +7,17 @@ import {
   Download,
   Eraser,
   Focus,
+  FolderOutput,
+  Image,
   Info,
   Pipette,
+  Plus,
   Settings,
   Settings2,
   SlidersHorizontal,
   Trash2,
   Wand2,
+  Zap,
 } from 'lucide-react';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, QuickExportPreset, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
@@ -470,7 +474,7 @@ export const Sidebar = memo(function Sidebar({
                 )}
 
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                     <Settings2 size={12} /> Scanning Corrections
                     <button
                       data-tip="Correct for light source color cast, lab-specific color shifts, and lens flare from the scanner or enlarger."
@@ -581,7 +585,7 @@ export const Sidebar = memo(function Sidebar({
 
                 {isColor && (
                   <section>
-                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                       <Settings2 size={12} /> Color Balance
                     </h2>
                     <Slider label="Red Balance" value={settings.redBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.redBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
@@ -663,7 +667,7 @@ export const Sidebar = memo(function Sidebar({
                 className="space-y-6"
               >
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                     <Activity size={12} /> RGB Curves
                   </h2>
                   <CurvesControl curves={settings.curves} onChange={handleCurvesChange} isColor={isColor} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
@@ -735,61 +739,82 @@ export const Sidebar = memo(function Sidebar({
                 initial={VERTICAL_PANE_INITIAL}
                 animate={VERTICAL_PANE_ANIMATE}
                 exit={VERTICAL_PANE_EXIT}
-                className="space-y-8"
+                className="space-y-6"
               >
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
-                    <Download size={12} /> Quick Export
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                    <Zap size={12} /> Quick Export
                   </h2>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    {quickExportPresets.map((preset) => (
-                      <div key={preset.id} className="relative">
-                        <button
-                          type="button"
-                          onClick={() => onQuickExport(preset)}
-                          className="flex h-full w-full flex-col items-start gap-1 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-3 text-left transition-all hover:border-zinc-700 hover:bg-zinc-800"
-                        >
-                          <span className="text-xs font-semibold text-zinc-100">{preset.name}</span>
-                          <span className="text-[11px] leading-snug text-zinc-500">{formatQuickExportSummary(preset)}</span>
-                        </button>
-                        {!preset.isBuiltIn && (
+                  <div className="space-y-1">
+                    {quickExportPresets.map((preset) => {
+                      const formatLabel = preset.format.replace('image/', '').toUpperCase();
+                      return (
+                        <div key={preset.id} className="group relative">
                           <button
                             type="button"
-                            onClick={() => onDeleteQuickExportPreset(preset.id)}
-                            className="absolute right-2 top-2 rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-950 hover:text-zinc-200"
-                            aria-label={`Delete ${preset.name}`}
+                            onClick={() => onQuickExport(preset)}
+                            className="flex w-full items-center gap-2.5 rounded-lg border border-zinc-800/60 bg-zinc-900/80 px-2.5 py-2 text-left transition-all hover:border-zinc-600 hover:bg-zinc-800/80 active:scale-[0.98]"
                           >
-                            <Trash2 size={12} />
+                            <span className="flex h-6 w-7 shrink-0 items-center justify-center rounded bg-zinc-800 text-[8px] font-black tracking-tight text-zinc-400">
+                              {formatLabel}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <span className="block truncate text-[11px] font-semibold text-zinc-200">{preset.name}</span>
+                              <span className="block truncate text-[10px] leading-tight text-zinc-500">
+                                {preset.maxDimension ? `${preset.maxDimension}px` : 'Full size'} · {getColorProfileDescription(preset.outputProfileId)}
+                              </span>
+                            </div>
+                            <Download size={12} className="shrink-0 text-zinc-600 transition-colors group-hover:text-zinc-400" />
                           </button>
-                        )}
-                      </div>
-                    ))}
+                          {!preset.isBuiltIn && (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteQuickExportPreset(preset.id)}
+                              className="absolute right-8 top-1/2 -translate-y-1/2 rounded-md p-1 text-zinc-600 opacity-0 transition-all group-hover:opacity-100 hover:text-red-400"
+                              aria-label={`Delete ${preset.name}`}
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
 
                     <button
                       type="button"
                       onClick={onSaveQuickExportPreset}
-                      className="flex min-h-[76px] items-center justify-center rounded-xl border border-dashed border-zinc-700 bg-zinc-950 px-3 py-3 text-sm font-medium text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200"
+                      className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-700/60 px-2.5 py-1.5 text-[10px] font-medium text-zinc-500 transition-all hover:border-zinc-500 hover:text-zinc-300"
                     >
-                      Save Current As Preset
+                      <Plus size={11} />
+                      Save Current Settings
                     </button>
                   </div>
                 </section>
 
-                <section className="border-t border-zinc-800/70 pt-8">
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenBatchExport}
+                  className="w-full flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-[11px] font-medium text-zinc-400 transition-all hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-200"
+                >
+                  <FolderOutput size={13} />
+                  Batch Export…
+                </button>
+
+                <section className="border-t border-zinc-800/70 pt-6">
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                     <Settings2 size={12} /> Custom Export
                   </h2>
 
-                  <div className="space-y-4">
-                    <div className="space-y-2">
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
                       <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Format</label>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-4 gap-1.5">
                         {(['image/jpeg', 'image/png', 'image/webp', 'image/tiff'] as ExportFormat[]).map((format) => (
                           <button
                             key={format}
                             onClick={() => onExportOptionsChange({ format })}
-                            className={`px-2 py-2 rounded-lg text-[10px] font-bold uppercase tracking-tighter transition-all border ${
+                            className={`px-1.5 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-tighter transition-all border ${
                               exportOptions.format === format
                                 ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
                                 : 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-300'
@@ -801,13 +826,13 @@ export const Sidebar = memo(function Sidebar({
                       </div>
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Filename</label>
                       <input
                         type="text"
                         value={exportOptions.filenameBase}
                         onChange={handleFilenameChange}
-                        className="w-full select-text px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 outline-none focus:border-zinc-600"
+                        className="w-full select-text px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-200 outline-none focus:border-zinc-600"
                         placeholder="darkslide-converted"
                         spellCheck={false}
                         autoCapitalize="off"
@@ -826,33 +851,35 @@ export const Sidebar = memo(function Sidebar({
                       />
                     )}
 
-                    <label
-                      className="flex items-center gap-2 text-xs text-zinc-400"
-                      data-tip="Include camera info, date, and a DarkSlide software tag in the exported file. Disable for privacy."
-                    >
-                      <input
-                        type="checkbox"
-                        checked={exportOptions.embedMetadata}
-                        onChange={handleEmbedMetadataChange}
-                        className="rounded border-zinc-600 bg-zinc-800"
-                      />
-                      Embed metadata
-                    </label>
+                    <div className="space-y-2">
+                      <label
+                        className="flex items-center gap-2 text-[11px] text-zinc-400"
+                        data-tip="Include camera info, date, and a DarkSlide software tag in the exported file. Disable for privacy."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={exportOptions.embedMetadata}
+                          onChange={handleEmbedMetadataChange}
+                          className="rounded border-zinc-600 bg-zinc-800"
+                        />
+                        Embed metadata
+                      </label>
 
-                    <label className="flex items-center gap-2 text-xs text-zinc-400">
-                      <input
-                        type="checkbox"
-                        checked={exportOptions.saveSidecar}
-                        onChange={(event) => onExportOptionsChange({ saveSidecar: event.target.checked })}
-                        className="rounded border-zinc-600 bg-zinc-800"
-                      />
-                      Save settings sidecar
-                    </label>
+                      <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+                        <input
+                          type="checkbox"
+                          checked={exportOptions.saveSidecar}
+                          onChange={(event) => onExportOptionsChange({ saveSidecar: event.target.checked })}
+                          className="rounded border-zinc-600 bg-zinc-800"
+                        />
+                        Save settings sidecar
+                      </label>
+                    </div>
 
-                    <div className="space-y-3">
+                    <div className="space-y-2">
                       <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Output Profile</label>
                       {COLOR_PROFILE_IDS.map((profileId) => (
-                        <label key={profileId} className={`flex items-center gap-2 text-xs ${isWebpExport && profileId !== 'srgb' ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                        <label key={profileId} className={`flex items-center gap-2 text-[11px] ${isWebpExport && profileId !== 'srgb' ? 'text-zinc-600' : 'text-zinc-400'}`}>
                           <input
                             type="radio"
                             checked={colorManagement.outputProfileId === profileId}
@@ -863,7 +890,7 @@ export const Sidebar = memo(function Sidebar({
                           {getColorProfileDescription(profileId)}
                         </label>
                       ))}
-                      <label className="flex items-center gap-2 text-xs text-zinc-400">
+                      <label className="flex items-center gap-2 text-[11px] text-zinc-400">
                         <input
                           type="checkbox"
                           checked={colorManagement.embedOutputProfile}
@@ -873,42 +900,32 @@ export const Sidebar = memo(function Sidebar({
                         Embed ICC profile
                       </label>
                       {isWebpExport && (
-                        <p className="text-[11px] text-zinc-500">
-                          WebP export is limited to sRGB for now.
+                        <p className="text-[10px] text-zinc-500">
+                          WebP export is limited to sRGB.
                         </p>
                       )}
                     </div>
                   </div>
                 </section>
 
-                <div className="space-y-3">
-                  <button
-                    onClick={onExport}
-                    disabled={isExporting}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-950 rounded-xl text-sm font-semibold hover:bg-white transition-all shadow-lg shadow-black/20 disabled:opacity-50"
-                  >
-                    {isExporting ? (
-                      <>
-                        <Download size={16} className="animate-bounce" />
-                        Exporting…
-                      </>
-                    ) : (
-                      <>
-                        <Download size={16} />
-                        Export Image
-                      </>
-                    )}
-                  </button>
+                <button
+                  onClick={onExport}
+                  disabled={isExporting}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-100 text-zinc-950 rounded-xl text-sm font-semibold hover:bg-white transition-all shadow-lg shadow-black/20 disabled:opacity-50"
+                >
+                  {isExporting ? (
+                    <>
+                      <Download size={15} className="animate-bounce" />
+                      Exporting…
+                    </>
+                  ) : (
+                    <>
+                      <Download size={15} />
+                      Export Image
+                    </>
+                  )}
+                </button>
 
-                  <button
-                    type="button"
-                    onClick={onOpenBatchExport}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm font-medium text-zinc-200 transition-all hover:bg-zinc-800"
-                  >
-                    Batch Export…
-                  </button>
-
-                </div>
               </motion.div>
             )}
           </AnimatePresence>

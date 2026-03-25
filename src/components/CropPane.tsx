@@ -269,7 +269,7 @@ export const CropPane = memo(function CropPane({
   return (
     <div className="space-y-8">
       <section>
-        <h2 className="mb-6 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+        <h2 className="mb-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
           <RotateCw size={12} /> Orientation
         </h2>
         <button
@@ -306,7 +306,7 @@ export const CropPane = memo(function CropPane({
       </section>
 
       <section>
-        <h2 className="mb-6 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+        <h2 className="mb-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
           <CropIcon size={12} /> Aspect Ratio Presets
         </h2>
 
