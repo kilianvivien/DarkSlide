@@ -1,4 +1,4 @@
-import React, { memo, useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { HistogramData } from '../types';
 
 const BLEND_SCREEN = { mixBlendMode: 'screen' as const };
@@ -11,7 +11,6 @@ export const Histogram = memo(function Histogram({ data }: HistogramProps) {
   const paths = useMemo(() => {
     if (!data) return null;
 
-    const width = 256;
     const height = 80;
     
     // Find max value across all channels for normalization

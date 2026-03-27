@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as React from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { appendDiagnostic } from '../utils/diagnostics';
@@ -47,7 +46,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   };
 
   render() {
-    const { error, resetKey } = this.state;
+    const { error } = this.state;
     const { children, fallback } = this.props;
 
     if (error) {

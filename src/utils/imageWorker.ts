@@ -1119,7 +1119,7 @@ async function handleExport(payload: ExportRequest) {
       throw new Error('Could not create TIFF export canvas.');
     }
     const exportImage = exportContext.getImageData(0, 0, exportCanvas.width, exportCanvas.height);
-    const encoded = UTIF.encodeImage(exportImage.data, exportCanvas.width, exportCanvas.height);
+    const encoded = UTIF.encodeImage(new Uint8Array(exportImage.data), exportCanvas.width, exportCanvas.height);
     return {
       blob: new Blob([encoded], { type: 'image/tiff' }),
       filename,

@@ -4,7 +4,6 @@ import {
   ColorProfileId,
   ContactSheetRequest,
   ContactSheetResult,
-  CancelTileJobRequest,
   ConversionSettings,
   DecodeRequest,
   DecodedImage,
@@ -47,6 +46,7 @@ type ImageWorkerClientOptions = {
 type PendingResolver = {
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
+  timeoutId: number | null;
 };
 
 type CachedDecodeRequest = {
@@ -63,6 +63,24 @@ type ActiveFlatFieldState = {
 
 const MISSING_DOCUMENT_MESSAGE = 'The image document is no longer available.';
 const DECODE_CACHE_TTL_MS = 60_000;
+const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
+  decode: 15_000,
+  render: 10_000,
+  'auto-analyze': 10_000,
+  'prepare-tile-job': 10_000,
+  'read-tile': 10_000,
+  'cancel-job': 5_000,
+  'sample-film-base': 10_000,
+  'detect-frame': 10_000,
+  'compute-flare': 10_000,
+  'load-flat-field': 10_000,
+  'clear-flat-field': 5_000,
+  export: 30_000,
+  'contact-sheet': 30_000,
+  diagnostics: 5_000,
+  dispose: 5_000,
+  'evict-previews': 5_000,
+};
 
 function trimTileImageData(tile: ReadTileResult) {
   const { imageData, haloLeft, haloTop, haloRight, haloBottom } = tile;
@@ -158,6 +176,20 @@ export class FatalImageWorkerError extends Error {
     super(message);
     this.name = 'FatalImageWorkerError';
     this.code = 'WORKER_FATAL';
+  }
+}
+
+export class WorkerRequestTimeoutError extends FatalImageWorkerError {
+  requestType: WorkerRequest['type'];
+
+  timeoutMs: number;
+
+  constructor(requestType: WorkerRequest['type'], timeoutMs: number) {
+    super(`The image worker timed out after ${Math.round(timeoutMs / 1000)}s while processing "${requestType}" and was restarted.`);
+    this.name = 'WorkerRequestTimeoutError';
+    this.code = 'WORKER_TIMEOUT';
+    this.requestType = requestType;
+    this.timeoutMs = timeoutMs;
   }
 }
 
@@ -264,6 +296,9 @@ export class ImageWorkerClient {
       const entry = this.pending.get(response.id);
       if (!entry) return;
       this.pending.delete(response.id);
+      if (entry.timeoutId !== null) {
+        window.clearTimeout(entry.timeoutId);
+      }
 
       if (response.ok === false) {
         entry.reject(new Error(`${response.error.code}: ${response.error.message}`));
@@ -301,7 +336,12 @@ export class ImageWorkerClient {
   }
 
   private rejectPending(error: Error) {
-    this.pending.forEach((entry) => entry.reject(error));
+    this.pending.forEach((entry) => {
+      if (entry.timeoutId !== null) {
+        window.clearTimeout(entry.timeoutId);
+      }
+      entry.reject(error);
+    });
     this.pending.clear();
   }
 
@@ -328,14 +368,45 @@ export class ImageWorkerClient {
     }
 
     const id = `${type}-${crypto.randomUUID()}`;
+    const timeoutMs = WORKER_REQUEST_TIMEOUT_MS[type];
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.worker?.postMessage({
-        id,
-        epoch: this.workerEpoch,
-        type,
-        payload,
-      } as WorkerMessage, transfer);
+      const timeoutId = window.setTimeout(() => {
+        if (!this.pending.has(id)) {
+          return;
+        }
+
+        appendDiagnostic({
+          level: 'error',
+          code: 'WORKER_REQUEST_TIMEOUT',
+          message: type,
+          context: {
+            requestId: id,
+            requestType: type,
+            timeoutMs,
+          },
+        });
+
+        this.handleWorkerFailure(new WorkerRequestTimeoutError(type, timeoutMs));
+      }, timeoutMs);
+
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as T),
+        reject,
+        timeoutId,
+      });
+
+      try {
+        this.worker?.postMessage({
+          id,
+          epoch: this.workerEpoch,
+          type,
+          payload,
+        } as WorkerMessage, transfer);
+      } catch (error) {
+        window.clearTimeout(timeoutId);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -831,7 +902,7 @@ export class ImageWorkerClient {
       }
       resizedContext.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight);
       const resizedImageData = resizedContext.getImageData(0, 0, targetWidth, targetHeight);
-      const encoded = UTIF.encodeImage(resizedImageData.data, targetWidth, targetHeight);
+      const encoded = UTIF.encodeImage(new Uint8Array(resizedImageData.data), targetWidth, targetHeight);
       return new Blob([encoded], { type: 'image/tiff' });
     }
 
@@ -968,7 +1039,7 @@ export class ImageWorkerClient {
     return result;
   }
 
-  private async renderInternal(payload: RenderRequest, allowRecovery: boolean) {
+  private async renderInternal(payload: RenderRequest, allowRecovery: boolean): Promise<RenderResult> {
     const activePreviewJobId = this.activePreviewJobIds.get(payload.documentId) ?? null;
     await this.cancelTileJob(payload.documentId, activePreviewJobId, true);
 
@@ -1298,7 +1369,7 @@ export class ImageWorkerClient {
     return finalizeExportBlob(result, payload.exportOptions);
   }
 
-  private async exportInternal(payload: ExportRequest, allowRecovery: boolean) {
+  private async exportInternal(payload: ExportRequest, allowRecovery: boolean): Promise<ExportResult> {
     if (!this.canAttemptGPU()) {
       this.markCpuWorkerBackend('source');
       return this.requestWithDocumentRecovery(

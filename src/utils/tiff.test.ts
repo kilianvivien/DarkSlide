@@ -9,7 +9,7 @@ describe('decodeTiffRaster', () => {
         { t256: [10], t257: [10] },
         { t256: [4], t257: [3] },
       ],
-      decodeImage: (_buffer: ArrayBuffer, frame: { width?: number; height?: number; t256?: number[]; t257?: number[] }) => {
+      decodeImage: (_buffer: ArrayBuffer, frame: { width?: number; height?: number; t256?: ArrayLike<number>; t257?: ArrayLike<number> }) => {
         frame.width = frame.width ?? frame.t256?.[0];
         frame.height = frame.height ?? frame.t257?.[0];
         if (frame.width === 10) {

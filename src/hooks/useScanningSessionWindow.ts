@@ -123,7 +123,7 @@ export function useScanningSessionWindow({
     }
 
     // Create a new scanning session window.
-    const _webview = new WebviewWindow('scanning', {
+    void new WebviewWindow('scanning', {
       url: '/?window=scanning',
       title: 'Scanning Session',
       width: 420,

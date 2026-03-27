@@ -12,7 +12,6 @@ import {
   buildCurveLutBuffer,
   buildProcessingUniforms,
 } from '../imagePipeline';
-import { clamp } from '../math';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
 const PROCESSING_UNIFORM_BYTES = 68 * 4;
@@ -272,7 +271,12 @@ export class WebGPUPipeline {
       return null;
     }
 
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    const gpu = navigator.gpu;
+    if (!gpu) {
+      return null;
+    }
+
+    const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) {
       return null;
     }

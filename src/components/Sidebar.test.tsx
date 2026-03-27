@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, FILM_PROFILES } from '../constants';
+import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES } from '../constants';
 
 vi.mock('motion/react', async () => {
   const ReactModule = await import('react');
@@ -46,14 +46,8 @@ describe('Sidebar', () => {
     render(
       <Sidebar
         settings={createDefaultSettings()}
-        exportOptions={{
-          format: 'image/jpeg',
-          quality: 0.92,
-          filenameBase: 'test',
-          embedMetadata: true,
-          outputProfileId: 'srgb',
-          embedOutputProfile: true,
-        }}
+        exportOptions={{ ...DEFAULT_EXPORT_OPTIONS, filenameBase: 'test' }}
+        quickExportPresets={[]}
         colorManagement={DEFAULT_COLOR_MANAGEMENT}
         sourceMetadata={null}
         cropImageWidth={4032}
@@ -67,6 +61,9 @@ describe('Sidebar', () => {
         isPickingFilmBase={false}
         onTogglePicker={vi.fn()}
         onExport={vi.fn()}
+        onQuickExport={vi.fn()}
+        onSaveQuickExportPreset={vi.fn()}
+        onDeleteQuickExportPreset={vi.fn()}
         onOpenBatchExport={vi.fn()}
         isExporting={false}
         activeTab="adjust"
@@ -99,14 +96,8 @@ describe('Sidebar', () => {
             tone: 0,
           },
         })}
-        exportOptions={{
-          format: 'image/jpeg',
-          quality: 0.92,
-          filenameBase: 'test',
-          embedMetadata: true,
-          outputProfileId: 'srgb',
-          embedOutputProfile: true,
-        }}
+        exportOptions={{ ...DEFAULT_EXPORT_OPTIONS, filenameBase: 'test' }}
+        quickExportPresets={[]}
         colorManagement={DEFAULT_COLOR_MANAGEMENT}
         sourceMetadata={null}
         cropImageWidth={4032}
@@ -120,6 +111,9 @@ describe('Sidebar', () => {
         isPickingFilmBase={false}
         onTogglePicker={vi.fn()}
         onExport={vi.fn()}
+        onQuickExport={vi.fn()}
+        onSaveQuickExportPreset={vi.fn()}
+        onDeleteQuickExportPreset={vi.fn()}
         onOpenBatchExport={vi.fn()}
         isExporting={false}
         activeTab="adjust"

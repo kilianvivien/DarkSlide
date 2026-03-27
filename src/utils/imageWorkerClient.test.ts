@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type WorkerMessage = { id: string; type: string; payload: unknown };
+type MockLostInfo = { reason?: string; message?: string } | null;
 
 const gpuState = vi.hoisted(() => ({
   create: vi.fn(),
@@ -14,7 +15,7 @@ const gpuState = vi.hoisted(() => ({
     processTile: vi.fn(),
     destroy: vi.fn(),
     isLost: vi.fn(() => false),
-    getLostInfo: vi.fn(() => null),
+    getLostInfo: vi.fn<() => MockLostInfo>(() => null),
   },
 }));
 
@@ -48,6 +49,54 @@ async function flushAsyncWork(iterations = 4) {
   for (let index = 0; index < iterations; index += 1) {
     await Promise.resolve();
   }
+}
+
+function createRenderPayload() {
+  return {
+    documentId: 'doc-1',
+    settings: {
+      exposure: 0,
+      contrast: 0,
+      saturation: 100,
+      temperature: 0,
+      tint: 0,
+      redBalance: 1,
+      greenBalance: 1,
+      blueBalance: 1,
+      blackPoint: 0,
+      whitePoint: 255,
+      highlightProtection: 0,
+      curves: {
+        rgb: [],
+        red: [],
+        green: [],
+        blue: [],
+      },
+      rotation: 0,
+      levelAngle: 0,
+      crop: {
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        aspectRatio: null,
+      },
+      filmBaseSample: null,
+      blackAndWhite: {
+        enabled: false,
+        redMix: 0,
+        greenMix: 0,
+        blueMix: 0,
+        tone: 0,
+      },
+      sharpen: { enabled: false, radius: 1.0, amount: 50 },
+      noiseReduction: { enabled: false, luminanceStrength: 0 },
+    },
+    isColor: true,
+    revision: 1,
+    targetMaxDimension: 1024,
+    comparisonMode: 'processed' as const,
+  };
 }
 
 Object.defineProperty(globalThis, 'Worker', {
@@ -149,56 +198,28 @@ describe('ImageWorkerClient', () => {
     const client = new ImageWorkerClient();
     const firstWorker = MockWorker.instances[0];
 
-    const pending = client.render({
-      documentId: 'doc-1',
-      settings: {
-        exposure: 0,
-        contrast: 0,
-        saturation: 100,
-        temperature: 0,
-        tint: 0,
-        redBalance: 1,
-        greenBalance: 1,
-        blueBalance: 1,
-        blackPoint: 0,
-        whitePoint: 255,
-        highlightProtection: 0,
-        curves: {
-          rgb: [],
-          red: [],
-          green: [],
-          blue: [],
-        },
-        rotation: 0,
-        levelAngle: 0,
-        crop: {
-          x: 0,
-          y: 0,
-          width: 1,
-          height: 1,
-          aspectRatio: null,
-        },
-        filmBaseSample: null,
-        blackAndWhite: {
-          enabled: false,
-          redMix: 0,
-          greenMix: 0,
-          blueMix: 0,
-          tone: 0,
-        },
-        sharpen: { enabled: false, radius: 1.0, amount: 50 },
-        noiseReduction: { enabled: false, luminanceStrength: 0 },
-      },
-      isColor: true,
-      revision: 1,
-      targetMaxDimension: 1024,
-      comparisonMode: 'processed',
-    });
+    const pending = client.render(createRenderPayload());
 
     await flushAsyncWork(8);
     firstWorker.onmessageerror?.({} as MessageEvent);
 
     await expect(pending).rejects.toBeInstanceOf(FatalImageWorkerError);
+    expect(MockWorker.instances).toHaveLength(2);
+  });
+
+  it('times out hung worker requests, rejects the caller, and recreates the worker', async () => {
+    vi.useFakeTimers();
+    const { ImageWorkerClient, WorkerRequestTimeoutError } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const firstWorker = MockWorker.instances[0];
+
+    const pending = client.render(createRenderPayload());
+    const rejection = expect(pending).rejects.toBeInstanceOf(WorkerRequestTimeoutError);
+    await flushAsyncWork(8);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await rejection;
+    expect(firstWorker.terminate).toHaveBeenCalledTimes(1);
     expect(MockWorker.instances).toHaveLength(2);
   });
 

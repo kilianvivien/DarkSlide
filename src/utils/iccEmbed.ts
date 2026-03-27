@@ -221,7 +221,7 @@ export async function embedIccInPng(pngBlob: Blob, iccProfile: Uint8Array, profi
     return pngBlob;
   }
 
-  let offset = PNG_SIGNATURE.length;
+  const offset = PNG_SIGNATURE.length;
   if (offset + 12 > sourceBytes.length) {
     return pngBlob;
   }

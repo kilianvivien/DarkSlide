@@ -195,11 +195,7 @@ export function BatchModal({
   }, [exportOptions.format, exportOptions.outputProfileId]);
 
   if (!isOpen) {
-    return (
-      <AnimatePresence>
-        {false && null}
-      </AnimatePresence>
-    );
+    return <AnimatePresence />;
   }
 
   const addFiles = (files: Array<{ file: File; nativePath?: string; nativeSize?: number }>) => {

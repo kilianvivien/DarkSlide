@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LAB_STYLE_PROFILES_MAP } from '../constants';
 import { FilmProfile, LightSourceProfile, WorkspaceDocument } from '../types';
 import { getResolvedInputProfileId } from '../utils/appHelpers';

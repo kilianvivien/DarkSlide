@@ -61,7 +61,18 @@ export function useRenderQueue<T>({
 
   const scheduleDrain = useEvent((priority: RenderPriority) => {
     clearScheduled();
-    void drainQueue();
+    if (priority === 'draft') {
+      draftFrameRef.current = window.requestAnimationFrame(() => {
+        draftFrameRef.current = null;
+        void drainQueue();
+      });
+      return;
+    }
+
+    settledTimerRef.current = window.setTimeout(() => {
+      settledTimerRef.current = null;
+      void drainQueue();
+    }, 0);
   });
 
   const enqueueRender = useCallback((request: T, priority: RenderPriority) => {

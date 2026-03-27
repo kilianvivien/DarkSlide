@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2022",
+      "WebWorker"
+    ]
+  },
+  "include": [
+    "src/utils/imageWorker.ts",
+    "src/piexifjs.d.ts",
+    "src/webgpu.d.ts",
+    "src/wgsl.d.ts"
+  ],
+  "exclude": [
+    "dist",
+    "coverage",
+    "src-tauri/target"
+  ]
+}

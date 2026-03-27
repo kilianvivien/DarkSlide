@@ -1,4 +1,3 @@
-import React from 'react';
 import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings } from '../constants';
@@ -54,7 +53,7 @@ describe('useCustomPresets', () => {
       folders: [initialFolder],
     });
 
-    let hookValue: ReturnType<typeof useCustomPresets> | null = null;
+    let hookValue: ReturnType<typeof useCustomPresets> | undefined;
     function Harness() {
       hookValue = useCustomPresets();
       return null;
@@ -63,6 +62,7 @@ describe('useCustomPresets', () => {
     render(<Harness />);
 
     await waitFor(() => {
+      expect(hookValue).toBeDefined();
       expect(hookValue?.customPresets).toHaveLength(1);
       expect(hookValue?.folders).toHaveLength(1);
     });
@@ -103,7 +103,7 @@ describe('useCustomPresets', () => {
       folders: [initialFolder],
     });
 
-    let hookValue: ReturnType<typeof useCustomPresets> | null = null;
+    let hookValue: ReturnType<typeof useCustomPresets> | undefined;
     function Harness() {
       hookValue = useCustomPresets();
       return null;
@@ -112,6 +112,7 @@ describe('useCustomPresets', () => {
     render(<Harness />);
 
     await waitFor(() => {
+      expect(hookValue).toBeDefined();
       expect(hookValue?.customPresets).toHaveLength(1);
       expect(hookValue?.folders).toHaveLength(1);
     });

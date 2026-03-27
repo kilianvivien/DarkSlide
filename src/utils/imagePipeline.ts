@@ -214,7 +214,7 @@ function applyColorMatrix(
   ];
 }
 
-function applyTonalCharacter(value: number, highlightProtection: number, character?: TonalCharacter) {
+function applyTonalCharacter(value: number, character?: TonalCharacter) {
   let next = value;
 
   if (character && character.shadowLift > 0 && next < 0.5) {
@@ -230,24 +230,13 @@ function applyTonalCharacter(value: number, highlightProtection: number, charact
   return clamp(next, 0, 1);
 }
 
-function applyHighlightRolloff(value: number, anchor: number, strength: number) {
-  if (value <= anchor || strength <= 0) {
-    return value;
-  }
-
-  const safeAnchor = clamp(anchor, 0, 0.99);
-  const excess = (value - safeAnchor) / (1 - safeAnchor);
-  const compressed = Math.pow(clamp(excess, 0, 1), 1 + strength);
-  return safeAnchor + compressed * (1 - safeAnchor);
-}
-
 function applyAdaptiveHighlightRecovery(
   value: number,
   highlightProtection: number,
   highlightDensityEstimate = 0,
   character?: TonalCharacter,
 ) {
-  const toned = applyTonalCharacter(value, 0, character);
+  const toned = applyTonalCharacter(value, character);
   const threshold = 200 / 255;
   const effectiveRolloff = (character?.highlightRolloff ?? 0.5) * (1 + clamp(highlightDensityEstimate, 0, 1) * 0.5);
   if (highlightProtection <= 0 || toned <= threshold) {
@@ -694,13 +683,14 @@ export function processImageData(
   const fusedB = new Float32Array(256);
   const histogram = buildEmptyHistogram();
   const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
-  const contrastFactor = (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast));
+  const safeContrast = clamp(effectiveSettings.contrast, -255, 258);
+  const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
   const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;
   const temperatureShift = clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1);
-  const tintShift = effectiveSettings.tint / 255;
+  const tintShift = clamp(effectiveSettings.tint / 255, -1, 1);
   const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
   const flareStrength = (effectiveSettings.flareCorrection ?? 50) / 100;
   const flareFloorNormalized: [number, number, number] = flareFloor

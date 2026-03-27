@@ -73,7 +73,7 @@ export async function listFlatFieldProfiles(): Promise<string[]> {
   }
 
   const db = await openCalibrationDb();
-  const names = await withRequest<unknown[]>(
+  const names = await withRequest<IDBValidKey[]>(
     db.transaction(STORE_NAME, 'readonly')
       .objectStore(STORE_NAME)
       .getAllKeys(),

@@ -1,4 +1,3 @@
-import React from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useScanningSessionWindow } from './useScanningSessionWindow';
@@ -58,7 +57,7 @@ describe('useScanningSessionWindow', () => {
   it('creates the scanning window when it is not open yet', async () => {
     webviewWindowState.getByLabel.mockResolvedValue(null);
 
-    let hookValue: ReturnType<typeof useScanningSessionWindow> | null = null;
+    let hookValue: ReturnType<typeof useScanningSessionWindow> | undefined;
 
     function Harness() {
       hookValue = useScanningSessionWindow({
@@ -75,6 +74,7 @@ describe('useScanningSessionWindow', () => {
 
     render(<Harness />);
 
+    expect(hookValue).toBeDefined();
     hookValue?.toggleScanningWindow();
 
     await waitFor(() => {
@@ -94,7 +94,7 @@ describe('useScanningSessionWindow', () => {
     const close = vi.fn().mockResolvedValue(undefined);
     webviewWindowState.getByLabel.mockResolvedValue({ close });
 
-    let hookValue: ReturnType<typeof useScanningSessionWindow> | null = null;
+    let hookValue: ReturnType<typeof useScanningSessionWindow> | undefined;
 
     function Harness() {
       hookValue = useScanningSessionWindow({
@@ -111,6 +111,7 @@ describe('useScanningSessionWindow', () => {
 
     render(<Harness />);
 
+    expect(hookValue).toBeDefined();
     hookValue?.toggleScanningWindow();
 
     await waitFor(() => {

@@ -16,18 +16,17 @@ import { useViewportZoom } from './hooks/useViewportZoom';
 import { useRolls } from './hooks/useRolls';
 import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
-import { appendDiagnostic, getDiagnosticsReport } from './utils/diagnostics';
+import { appendDiagnostic } from './utils/diagnostics';
 import { confirmDeleteRoll, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
-import { clamp } from './utils/math';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
 import { syncRecentFilesToMenu } from './utils/recentFilesStore';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
-import { loadMaxResidentDocs, MaxResidentDocs, saveMaxResidentDocs } from './utils/residentDocsStore';
+import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore';
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
@@ -96,7 +95,7 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [showContactSheetModal, setShowContactSheetModal] = useState(false);
-const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
+  const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
   const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
   const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
   const [contactSheetSharedProfile, setContactSheetSharedProfile] = useState<FilmProfile | null>(null);
@@ -288,7 +287,6 @@ const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
       ? [documentState.rawImportProfile, ...FILM_PROFILES]
       : FILM_PROFILES
   ), [documentState?.rawImportProfile]);
-  const allProfiles = useMemo(() => [...builtinProfiles, ...customPresets], [builtinProfiles, customPresets]);
   const allLightSourceProfiles = useMemo(() => [...LIGHT_SOURCE_PROFILES, ...customLightSources], [customLightSources]);
   const lightSourceProfilesById = useMemo(() => {
     const map = new Map(allLightSourceProfiles.map((profile) => [profile.id, profile] as const));
@@ -1218,7 +1216,7 @@ const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
     const profileMaskTuning = activeProfile.maskTuning;
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
-    const profileFilmType = activeProfile.filmType;
+    const profileFilmType = activeProfile.filmType ?? 'negative';
     const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const flareFloor = documentState.estimatedFlare;

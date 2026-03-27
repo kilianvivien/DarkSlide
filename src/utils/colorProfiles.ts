@@ -487,14 +487,22 @@ export function supportsDisplayP3Canvas() {
     return displayP3Support;
   }
 
-  if (typeof document === 'undefined') {
+  const globalScope = globalThis as typeof globalThis & {
+    document?: {
+      createElement: (tagName: 'canvas') => {
+        getContext: (contextId: '2d', options?: { colorSpace?: string }) => unknown;
+      };
+    };
+  };
+
+  if (!globalScope.document) {
     displayP3Support = false;
     return displayP3Support;
   }
 
   try {
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d', { colorSpace: 'display-p3' } as CanvasRenderingContext2DSettings);
+    const canvas = globalScope.document.createElement('canvas');
+    const context = canvas.getContext('2d', { colorSpace: 'display-p3' });
     displayP3Support = context !== null;
   } catch {
     displayP3Support = false;
@@ -504,11 +512,15 @@ export function supportsDisplayP3Canvas() {
 }
 
 export function getPreferredPreviewDisplayProfile() {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+  const globalScope = globalThis as typeof globalThis & {
+    matchMedia?: (query: string) => { matches: boolean };
+  };
+
+  if (typeof globalScope.matchMedia !== 'function') {
     return 'srgb' as const;
   }
 
-  return window.matchMedia('(color-gamut: p3)').matches && supportsDisplayP3Canvas()
+  return globalScope.matchMedia('(color-gamut: p3)').matches && supportsDisplayP3Canvas()
     ? 'display-p3'
     : 'srgb';
 }

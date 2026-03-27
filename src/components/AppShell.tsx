@@ -461,6 +461,9 @@ export function AppShell({
   setZoomLevel,
 }: AppShellProps) {
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
+  void isAdjustingCrop;
+  void profilesById;
+  void lightSourceProfilesById;
 
   useEffect(() => {
     const element = previewContainerRef.current;

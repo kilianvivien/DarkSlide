@@ -158,7 +158,7 @@ export async function* runBatch(
         entrySettings.levelAngle = entry.detectedFrame.angle;
       }
 
-      const flareFloor = options.flareMode === 'first-frame'
+      const flareFloor: [number, number, number] | null = options.flareMode === 'first-frame'
         ? (rollFlare ?? entry.estimatedFlare ?? null)
         : (entry.estimatedFlare ?? null);
       if (options.flareMode === 'first-frame' && !rollFlare && flareFloor) {
@@ -168,7 +168,7 @@ export async function* runBatch(
       const inputProfileId = resolveBatchInputProfileId(sourceMetadata, sharedColorManagement);
 
       if ((options.autoMode ?? 'off') !== 'off') {
-        const autoResult = (options.autoMode === 'first-frame' && rollAutoAnalysis)
+        const autoResult: Awaited<ReturnType<typeof workerClient.autoAnalyze>> = (options.autoMode === 'first-frame' && rollAutoAnalysis)
           ? rollAutoAnalysis
           : await workerClient.autoAnalyze({
             documentId,

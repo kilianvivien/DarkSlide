@@ -9,10 +9,10 @@ type TiffFrame = {
   t34675?: ArrayLike<number>;
 };
 
-type TiffDecoder = {
-  decode: (buffer: ArrayBuffer) => TiffFrame[];
-  decodeImage: (buffer: ArrayBuffer, ifd: TiffFrame) => void;
-  toRGBA8: (ifd: TiffFrame) => ArrayLike<number>;
+type TiffDecoder<TFrame extends TiffFrame = TiffFrame> = {
+  decode: (buffer: ArrayBuffer) => TFrame[];
+  decodeImage: (buffer: ArrayBuffer, ifd: TFrame) => void;
+  toRGBA8: (ifd: TFrame) => ArrayLike<number>;
 };
 
 export class TiffDecodeError extends Error {
@@ -75,11 +75,14 @@ function getFrameDimension(frame: TiffFrame | undefined, key: 'width' | 'height'
 function isUsableFrame(frame: TiffFrame | undefined) {
   const width = getFrameDimension(frame, 'width');
   const height = getFrameDimension(frame, 'height');
-  return Number.isFinite(width) && Number.isFinite(height) && width >= 1 && height >= 1;
+  return width !== null && height !== null && width >= 1 && height >= 1;
 }
 
-export function decodeTiffRaster(buffer: ArrayBuffer, decoder: TiffDecoder = UTIF): DecodedTiffRaster {
-  let frames: TiffFrame[];
+export function decodeTiffRaster<TFrame extends TiffFrame>(
+  buffer: ArrayBuffer,
+  decoder: TiffDecoder<TFrame> = UTIF as unknown as TiffDecoder<TFrame>,
+): DecodedTiffRaster {
+  let frames: TFrame[];
 
   try {
     frames = decoder.decode(buffer);

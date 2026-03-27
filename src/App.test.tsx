@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_FILE_SIZE_BYTES } from './constants';
 
@@ -141,8 +141,8 @@ vi.mock('./components/Sidebar', () => ({
     onExport: () => void;
     onTogglePicker: () => void;
   }) => {
-    const [exposure, setExposure] = React.useState(0);
-    const [blackAndWhiteEnabled, setBlackAndWhiteEnabled] = React.useState(false);
+    const [, setExposure] = React.useState(0);
+    const [, setBlackAndWhiteEnabled] = React.useState(false);
 
     return (
       <div data-testid="sidebar">

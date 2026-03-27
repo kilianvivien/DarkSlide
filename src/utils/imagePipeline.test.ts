@@ -196,6 +196,12 @@ describe('contrast slider', () => {
     processImageData(pixel, { ...neutralSettings, contrast: 0 }, true, 'processed');
     expect(midpointDeviation(pixel)).toBeLessThanOrEqual(2);
   });
+
+  it('keeps pixels finite when contrast exceeds the unsafe formula bound', () => {
+    const pixel = createPixel(127, 127, 127);
+    processImageData(pixel, { ...neutralSettings, contrast: 259 }, true, 'processed');
+    expect(Array.from(pixel.data).every(Number.isFinite)).toBe(true);
+  });
 });
 
 describe('shadowRecovery and midtoneContrast sliders', () => {
@@ -310,6 +316,16 @@ describe('temperature and tint sliders', () => {
     processImageData(tinted, { ...neutralSettings, tint: 15 }, true, 'processed');
 
     expect(tinted.data[1]).toBeGreaterThan(neutral.data[1]); // green up
+  });
+
+  it('clamps extreme tint values to the same result as the supported range', () => {
+    const clamped = createPixel(127, 127, 127);
+    const extreme = createPixel(127, 127, 127);
+
+    processImageData(clamped, { ...neutralSettings, tint: 255 }, true, 'processed');
+    processImageData(extreme, { ...neutralSettings, tint: 999 }, true, 'processed');
+
+    expect(Array.from(extreme.data)).toEqual(Array.from(clamped.data));
   });
 });
 

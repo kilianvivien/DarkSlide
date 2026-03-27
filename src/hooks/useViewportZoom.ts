@@ -1,10 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
+import type { ZoomLevel } from '../types';
 
 function clampZoom(z: number): number {
   return Math.min(8, Math.max(0.1, z));
 }
-
-export type ZoomLevel = number | 'fit';
 
 export interface PanGeometry {
   imageWidth: number;

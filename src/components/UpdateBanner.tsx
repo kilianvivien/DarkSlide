@@ -1,4 +1,3 @@
-import React from 'react';
 import { Download, RefreshCw, X } from 'lucide-react';
 
 type UpdateBannerProps = {

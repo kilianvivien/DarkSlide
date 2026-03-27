@@ -1,6 +1,6 @@
 import piexif from 'piexifjs';
 import { ColorProfileId, ExifMetadata, ExportOptions, ExportResult } from '../types';
-import { getColorProfileDescription, getColorProfileIcc, getColorProfileIdFromName, identifyIccProfile } from './colorProfiles';
+import { getColorProfileDescription, getColorProfileIcc, identifyIccProfile } from './colorProfiles';
 import { embedIccInBlob } from './iccEmbed';
 
 const PNG_SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);

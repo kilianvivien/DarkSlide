@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Clock } from 'lucide-react';
 import { isDesktopShell, openImageFileByPath } from '../utils/fileBridge';
 import { clearRecentFiles, loadRecentFiles, RecentFileEntry } from '../utils/recentFilesStore';

@@ -171,31 +171,6 @@ function FlatFieldPreview({
   );
 }
 
-function getRenderBackendLabel(diagnostics: RenderBackendDiagnostics) {
-  if (!diagnostics.gpuAvailable) {
-    return 'Unavailable — your browser does not support WebGPU';
-  }
-  if (diagnostics.gpuActive) {
-    if (diagnostics.backendMode === 'gpu-preview') {
-      return diagnostics.gpuAdapterName
-        ? `Active — GPU preview on ${diagnostics.gpuAdapterName}`
-        : 'Active — GPU preview';
-    }
-    if (diagnostics.backendMode === 'gpu-tiled-render') {
-      return diagnostics.gpuAdapterName
-        ? `Active — GPU tiled render on ${diagnostics.gpuAdapterName}`
-        : 'Active — GPU tiled render';
-    }
-    return diagnostics.gpuAdapterName
-      ? `Active — GPU (WebGPU) on ${diagnostics.gpuAdapterName}`
-      : 'Active — GPU (WebGPU)';
-  }
-  if (!diagnostics.gpuEnabled) {
-    return 'Active — CPU (GPU disabled in settings)';
-  }
-  return 'Active — CPU';
-}
-
 function getRenderBackendDetail(diagnostics: RenderBackendDiagnostics) {
   if (diagnostics.gpuDisabledReason === 'user') {
     return 'GPU acceleration is disabled by preference.';

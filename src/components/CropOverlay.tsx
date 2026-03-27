@@ -72,7 +72,7 @@ export const CropOverlay = memo(function CropOverlay({
       const dx = (event.clientX - dragState.startX) / rect.width;
       const dy = (event.clientY - dragState.startY) / rect.height;
       const aspectRatio = dragState.origin.aspectRatio;
-      let next = { ...dragState.origin };
+      const next = { ...dragState.origin };
 
       if (dragState.mode === 'move') {
         next.x = clamp(dragState.origin.x + dx, 0, 1 - dragState.origin.width);

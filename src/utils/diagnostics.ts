@@ -43,7 +43,9 @@ function scheduleFlush() {
   }
 
   if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent)) {
-    bufferedEntries.length > 0 && flushDiagnostics();
+    if (bufferedEntries.length > 0) {
+      flushDiagnostics();
+    }
     return;
   }
 

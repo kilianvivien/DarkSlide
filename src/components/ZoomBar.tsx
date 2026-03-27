@@ -1,6 +1,6 @@
 import React from 'react';
 import { Maximize, ZoomIn, ZoomOut } from 'lucide-react';
-import type { ZoomLevel } from '../hooks/useViewportZoom';
+import type { ZoomLevel } from '../types';
 
 interface ZoomBarProps {
   zoom: ZoomLevel;
@@ -21,10 +21,7 @@ export const ZoomBar: React.FC<ZoomBarProps> = ({
   onZoomOut,
   onSetZoom,
 }) => {
-  const displayPercent = zoom === 'fit'
-    ? Math.round(fitScale * 100)
-    : Math.round(zoom * 100);
-
+  const zoomLabel = `${Math.round((zoom === 'fit' ? fitScale : zoom) * 100)}%`;
   const btnClass = (active: boolean) =>
     `px-2 py-1 text-[10px] font-mono uppercase tracking-wider rounded-lg transition-all ${
       active
@@ -63,7 +60,7 @@ export const ZoomBar: React.FC<ZoomBarProps> = ({
       <div className="absolute inset-y-0 right-0 flex w-[36px] shrink-0 items-center justify-center">
         <button
           type="button"
-          aria-label="Zoom controls"
+          aria-label={`Zoom controls (${zoomLabel})`}
           className="flex items-center justify-center rounded-xl bg-zinc-900/80 p-1.5 text-zinc-200 transition-colors hover:bg-zinc-800/90 group-focus-within:bg-zinc-800/90"
         >
           <ZoomIn size={13} />

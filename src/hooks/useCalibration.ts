@@ -1,5 +1,4 @@
 import { MutableRefObject, useCallback, useEffect, useState } from 'react';
-import UTIF from 'utif';
 import { decodeTiffRaster } from '../utils/tiff';
 import {
   ACTIVE_FLAT_FIELD_PROFILE_KEY,
@@ -169,7 +168,7 @@ async function decodeReferenceFile(file: File) {
   const extension = file.name.toLowerCase();
   if (extension.endsWith('.tif') || extension.endsWith('.tiff')) {
     const buffer = await file.arrayBuffer();
-    const decoded = decodeTiffRaster(buffer, UTIF);
+    const decoded = decodeTiffRaster(buffer);
     return {
       width: decoded.width,
       height: decoded.height,

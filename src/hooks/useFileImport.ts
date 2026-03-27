@@ -25,7 +25,6 @@ import {
   createRawImportProfile,
   decodeDesktopRawForWorker,
   estimateFilmBaseSample,
-  isRawExtension,
   rotationFromExifOrientation,
 } from '../utils/rawImport';
 import { isDesktopShell } from '../utils/fileBridge';
@@ -391,6 +390,7 @@ export function useFileImport({
       const shouldRestoreSidecar = restoredSidecar
         ? window.confirm(`Settings sidecar found for "${file.name}". Restore those settings?`)
         : false;
+      const activeSidecar = shouldRestoreSidecar ? restoredSidecar : null;
 
       if (restoredSidecar && !shouldRestoreSidecar && nativePath) {
         ignoredSidecarsRef.current.add(nativePath);
@@ -404,23 +404,23 @@ export function useFileImport({
           nativePath: nativePath ?? null,
         },
         previewLevels: decoded.previewLevels,
-        settings: shouldRestoreSidecar
-          ? structuredClone(restoredSidecar.settings)
+        settings: activeSidecar
+          ? structuredClone(activeSidecar.settings)
           : initialSettings,
         colorManagement: createDocumentColorManagement(decoded.metadata, {
           ...DEFAULT_EXPORT_OPTIONS,
-          ...(shouldRestoreSidecar ? restoredSidecar.exportOptions : savedExportOptions),
+          ...(activeSidecar?.exportOptions ?? savedExportOptions),
         }),
         estimatedFlare: decoded.estimatedFlare,
         lightSourceId: resolveLightSourceIdForProfile(resolvedProfile, savedLightSourceId),
         cropSource: null,
         rawImportProfile,
-        profileId: shouldRestoreSidecar ? restoredSidecar.profileId : resolvedProfile.id,
-        labStyleId: shouldRestoreSidecar ? (restoredSidecar.labStyleId ?? null) : null,
+        profileId: activeSidecar?.profileId ?? resolvedProfile.id,
+        labStyleId: activeSidecar?.labStyleId ?? null,
         rollId,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
-          ...(shouldRestoreSidecar ? restoredSidecar.exportOptions : savedExportOptions),
+          ...(activeSidecar?.exportOptions ?? savedExportOptions),
           filenameBase: sanitizeFilenameBase(file.name),
         },
         histogram: null,
@@ -429,12 +429,12 @@ export function useFileImport({
         dirty: false,
       };
 
-      if (shouldRestoreSidecar) {
+      if (activeSidecar) {
         nextDocument.colorManagement = {
           ...nextDocument.colorManagement,
-          ...restoredSidecar.colorManagement,
+          ...activeSidecar.colorManagement,
         };
-        nextDocument.lightSourceId = restoredSidecar.lightSourceProfileId ?? nextDocument.lightSourceId;
+        nextDocument.lightSourceId = activeSidecar.lightSourceProfileId ?? nextDocument.lightSourceId;
       }
 
       tabsApi.replaceDocument(documentId, nextDocument);

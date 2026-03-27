@@ -43,7 +43,7 @@ import {
   Roll,
 } from '../types';
 import { buildSidecarFile, getSidecarPathForExport, serializeSidecar } from '../utils/sidecarSettings';
-import { getExtensionFromFormat, sanitizeFilenameBase } from '../utils/imagePipeline';
+import { sanitizeFilenameBase } from '../utils/imagePipeline';
 
 function createHistoryEntry(
   settings: ConversionSettings,
@@ -292,6 +292,8 @@ export function useWorkspaceCommands({
   isPickingFilmBase,
   activePointPicker,
 }: UseWorkspaceCommandsOptions) {
+  void tabs;
+  void transientNoticeTimeoutRef;
   const getLightSourceProfile = useCallback((lightSourceId: string | null) => (
     lightSourceProfiles.find((profile) => profile.id === (lightSourceId ?? 'auto'))
       ?? lightSourceProfiles[0]
@@ -883,7 +885,7 @@ export function useWorkspaceCommands({
         await primeExportNotificationsPermission();
       }
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
-      const lightSourceBias = getLightSourceProfile(documentState.lightSourceId).spectralBias;
+      const lightSourceBias = getLightSourceProfile(documentState.lightSourceId ?? null).spectralBias;
       const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
       const result = await worker.export({
         documentId: documentState.id,
@@ -1022,7 +1024,7 @@ export function useWorkspaceCommands({
     setDocumentState((current) => current ? { ...current, status: 'exporting' } : current);
     try {
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
-      const lightSourceBias = getLightSourceProfile(documentState.lightSourceId).spectralBias;
+      const lightSourceBias = getLightSourceProfile(documentState.lightSourceId ?? null).spectralBias;
       const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
       const result = await worker.export({
         documentId: documentState.id,
@@ -1083,7 +1085,7 @@ export function useWorkspaceCommands({
 
   const handleLightSourceChange = useCallback((lightSourceId: string | null) => {
     updateDocument((current) => {
-      const previousDefault = getDefaultFlareStrength(current.lightSourceId);
+      const previousDefault = getDefaultFlareStrength(current.lightSourceId ?? null);
       const nextDefault = getDefaultFlareStrength(lightSourceId);
       const shouldUpdateFlare = current.settings.flareCorrection === previousDefault;
 

@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Activity,
@@ -8,7 +8,6 @@ import {
   Eraser,
   Focus,
   FolderOutput,
-  Image,
   Info,
   Pipette,
   Plus,
@@ -115,12 +114,6 @@ function computeAutoBalance(data: HistogramData, isColor: boolean): Curves {
   };
 }
 
-function formatQuickExportSummary(preset: QuickExportPreset) {
-  const formatLabel = preset.format.replace('image/', '').toUpperCase();
-  const sizeLabel = preset.maxDimension ? `${preset.maxDimension}px` : 'Full size';
-  return `${formatLabel} · ${sizeLabel} · ${getColorProfileDescription(preset.outputProfileId)}`;
-}
-
 interface SidebarProps {
   settings: ConversionSettings;
   exportOptions: ExportOptions;
@@ -215,9 +208,11 @@ export const Sidebar = memo(function Sidebar({
   onOpenBatchExport,
   contentScrollTop = 0,
   onContentScrollTopChange,
-  }: SidebarProps) {
+}: SidebarProps) {
   const isColor = activeProfile?.type === 'color';
   const contentRef = useRef<HTMLDivElement>(null);
+  void sourceMetadata;
+  void estimatedFlare;
   const filmBaseInstruction = isPickingFilmBase
     ? 'Click an unexposed film-base area…'
     : 'Sample Film Base';
@@ -514,7 +509,7 @@ export const Sidebar = memo(function Sidebar({
 
                     <Slider
                       label="Flare Correction"
-                      value={settings.flareCorrection}
+                      value={settings.flareCorrection ?? 50}
                       min={0}
                       max={100}
                       onChange={(value) => onSettingsChange({ flareCorrection: value })}

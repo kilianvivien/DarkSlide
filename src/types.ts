@@ -1,5 +1,3 @@
-import type { ZoomLevel } from './hooks/useViewportZoom';
-
 export type FilmType = 'color' | 'bw';
 export type CropTab = 'Film' | 'Print' | 'Social' | 'Digital';
 export type ScannerType = 'flatbed' | 'camera' | 'dedicated' | 'smartphone';
@@ -8,6 +6,7 @@ export type FilmProfileType = 'negative' | 'slide';
 export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'Lomography' | 'Foma' | 'Rollei' | 'Generic';
 export type CropSource = 'auto' | 'manual';
 export type UpdateChannel = 'stable' | 'beta';
+export type ZoomLevel = number | 'fit';
 
 export interface CurvePoint {
   x: number;

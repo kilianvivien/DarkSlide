@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ConversionSettings, DocumentHistoryEntry, DocumentTab, WorkspaceDocument } from '../types';
-import { ZoomLevel } from './useViewportZoom';
+import { DocumentHistoryEntry, DocumentTab, WorkspaceDocument, ZoomLevel } from '../types';
 
 const HISTORY_LIMIT = 50;
 
