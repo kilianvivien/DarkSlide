@@ -667,6 +667,39 @@ describe('ImageWorkerClient', () => {
     expect(gpuState.instance.processPreviewImage).toHaveBeenCalledTimes(1);
   });
 
+  it('requests large preview bitmaps from the worker and returns the transferred bitmap', async () => {
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const bitmap = {
+      width: 4000,
+      height: 3000,
+      close: vi.fn(),
+    } as unknown as ImageBitmap;
+
+    const pending = client.preparePreviewBitmap(
+      'doc-1',
+      9,
+      new ImageData(new Uint8ClampedArray(4), 1, 1),
+    );
+
+    const request = worker.postedMessages[0];
+    expect(request?.type).toBe('prepare-preview-bitmap');
+    worker.onmessage?.({
+      data: {
+        id: request?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 9,
+          imageBitmap: bitmap,
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toBe(bitmap);
+  });
+
   it('keeps processed GPU preview histogram generation on the output image while using GPU display conversion', async () => {
     Object.defineProperty(navigator, 'gpu', {
       configurable: true,

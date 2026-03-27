@@ -35,6 +35,7 @@ const workerState = vi.hoisted(() => ({
   trimResidentDocuments: vi.fn(async () => ({ evicted: true })),
   cancelActivePreviewRender: vi.fn(async () => undefined),
   noteCoalescedPreviewRequest: vi.fn(),
+  preparePreviewBitmap: vi.fn(),
   recordPreviewPresentationTimings: vi.fn(),
   setGPUEnabled: vi.fn(),
   getGPUDiagnostics: vi.fn(async () => ({
@@ -404,6 +405,10 @@ vi.mock('./utils/imageWorkerClient', () => ({
       return workerState.noteCoalescedPreviewRequest(...args);
     }
 
+    preparePreviewBitmap(...args: Parameters<typeof workerState.preparePreviewBitmap>) {
+      return workerState.preparePreviewBitmap(...args);
+    }
+
     recordPreviewPresentationTimings(...args: Parameters<typeof workerState.recordPreviewPresentationTimings>) {
       return workerState.recordPreviewPresentationTimings(...args);
     }
@@ -545,6 +550,7 @@ describe('App import and preview pipeline', () => {
     workerState.trimResidentDocuments.mockClear();
     workerState.cancelActivePreviewRender.mockReset();
     workerState.noteCoalescedPreviewRequest.mockClear();
+    workerState.preparePreviewBitmap.mockReset();
     workerState.recordPreviewPresentationTimings.mockClear();
     workerState.setGPUEnabled.mockReset();
     workerState.getGPUDiagnostics.mockClear();
@@ -572,6 +578,9 @@ describe('App import and preview pipeline', () => {
     vi.stubGlobal('createImageBitmap', vi.fn(async (source: ImageData | { width: number; height: number }) => (
       new MockImageBitmap(source.width, source.height)
     )));
+    workerState.preparePreviewBitmap.mockImplementation(async (_documentId: string, _revision: number, imageData: ImageData) => (
+      new MockImageBitmap(imageData.width, imageData.height)
+    ));
     fileBridgeState.openInExternalEditor.mockResolvedValue({
       savedPath: '/Users/tester/Downloads/scan.jpg',
       destinationDirectory: '/Users/tester/Downloads',
@@ -1731,6 +1740,102 @@ describe('App import and preview pipeline', () => {
     expect(screen.queryByText('Rendering...')).not.toBeInTheDocument();
   });
 
+  it('uses worker-prepared bitmaps for large settled previews instead of main-thread createImageBitmap', async () => {
+    const createImageBitmapMock = vi.mocked(globalThis.createImageBitmap);
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 4000, 3000)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('large-worker-bitmap.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.preparePreviewBitmap).toHaveBeenCalledTimes(1);
+    expect(createImageBitmapMock).not.toHaveBeenCalled();
+    expect(workerState.recordPreviewPresentationTimings).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Number),
+      expect.objectContaining({
+        workerBitmapPrepMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it('keeps smaller settled previews on the main-thread createImageBitmap path', async () => {
+    const createImageBitmapMock = vi.mocked(globalThis.createImageBitmap);
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 2048, 1365)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('small-main-thread-bitmap.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.preparePreviewBitmap).not.toHaveBeenCalled();
+    expect(createImageBitmapMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to main-thread createImageBitmap when worker bitmap preparation fails', async () => {
+    const createImageBitmapMock = vi.mocked(globalThis.createImageBitmap);
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.preparePreviewBitmap.mockRejectedValueOnce(new Error('bitmap prep unavailable'));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 4000, 3000)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('worker-bitmap-fallback.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.preparePreviewBitmap).toHaveBeenCalledTimes(1);
+    expect(createImageBitmapMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains preview image data for redraws after a worker-prepared bitmap render', async () => {
+    const context = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      putImageData: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => context);
+
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 4000, 3000)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('worker-bitmap-redraw.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(context.drawImage).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-tip="Toggle Before/After"]') as Element);
+    });
+    await flushMicrotasks();
+
+    expect(context.putImageData).toHaveBeenCalled();
+  });
+
   it('does not redraw a closed document when an in-flight render finishes late', async () => {
     const drawImage = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
@@ -1762,6 +1867,51 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(screen.getByText('Drop your negatives here')).toBeInTheDocument();
+    expect(drawImage).not.toHaveBeenCalled();
+  });
+
+  it('closes worker-prepared bitmaps when a large preview result becomes stale after the document closes', async () => {
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
+      clearRect: vi.fn(),
+      drawImage,
+      putImageData: vi.fn(),
+    }) as unknown as CanvasRenderingContext2D);
+
+    const preparePreviewBitmapRequest = deferred<ImageBitmap>();
+    const close = vi.fn();
+    const preparedBitmap = {
+      width: 4000,
+      height: 3000,
+      close,
+    } as unknown as ImageBitmap;
+    workerState.preparePreviewBitmap.mockReturnValueOnce(preparePreviewBitmapRequest.promise);
+
+    const renderRequest = deferred<ReturnType<typeof createRenderResult>>();
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockReturnValueOnce(renderRequest.promise);
+
+    render(<App />);
+    await uploadFile(createFile('close-large-worker-bitmap.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const [payload] = workerState.render.mock.calls[0];
+    renderRequest.resolve(createRenderResult(payload.documentId, payload.revision, 4000, 3000));
+    await flushMicrotasks();
+    expect(workerState.preparePreviewBitmap).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-tip="Close Image"]') as Element);
+    });
+    preparePreviewBitmapRequest.resolve(preparedBitmap);
+    await flushMicrotasks();
+
+    expect(screen.getByText('Drop your negatives here')).toBeInTheDocument();
+    expect(close).toHaveBeenCalledTimes(1);
     expect(drawImage).not.toHaveBeenCalled();
   });
 

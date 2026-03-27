@@ -14,6 +14,8 @@ import {
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  PreparePreviewBitmapRequest,
+  PreparedPreviewBitmapResult,
   PreparedTileJobResult,
   PreviewLevel,
   PrepareTileJobRequest,
@@ -100,6 +102,7 @@ const tileJobs = new Map<string, StoredTileJob>();
 const cancelledJobs = new Map<string, number>();
 let rotateCanvas: OffscreenCanvas | null = null;
 let outputCanvas: OffscreenCanvas | null = null;
+let previewPresentationCanvas: OffscreenCanvas | null = null;
 let activeFlatField: LoadedFlatField | null = null;
 const TILE_SIZE = 1024;
 const CANCELLED_JOB_TTL_MS = 2_000;
@@ -533,6 +536,10 @@ function handleDispose(documentId: string) {
       releaseCanvas(outputCanvas);
       outputCanvas = null;
     }
+    if (previewPresentationCanvas) {
+      releaseCanvas(previewPresentationCanvas);
+      previewPresentationCanvas = null;
+    }
     releaseScratchBuffers();
   }
 
@@ -655,6 +662,30 @@ function handleLoadFlatField(name: string, size: number, data: Float32Array) {
 function handleClearFlatField() {
   activeFlatField = null;
   return { cleared: true } as const;
+}
+
+function handlePreparePreviewBitmap(payload: PreparePreviewBitmapRequest) {
+  previewPresentationCanvas = ensureCanvas(
+    previewPresentationCanvas,
+    payload.imageData.width,
+    payload.imageData.height,
+  );
+  const context = previewPresentationCanvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw createError('PREVIEW_BITMAP_PREP_FAILED', 'Could not create preview presentation canvas.');
+  }
+
+  context.putImageData(payload.imageData, 0, 0);
+
+  if (typeof previewPresentationCanvas.transferToImageBitmap !== 'function') {
+    throw createError('PREVIEW_BITMAP_UNSUPPORTED', 'Worker preview bitmap preparation is unavailable.');
+  }
+
+  return {
+    documentId: payload.documentId,
+    revision: payload.revision,
+    imageBitmap: previewPresentationCanvas.transferToImageBitmap(),
+  } satisfies PreparedPreviewBitmapResult;
 }
 
 function applyActiveFlatFieldIfNeeded(imageData: ImageData, enabled: boolean | undefined) {
@@ -1260,6 +1291,11 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       case 'prepare-tile-job':
         reply(request, handlePrepareTileJob(request.payload));
         return;
+      case 'prepare-preview-bitmap': {
+        const result = handlePreparePreviewBitmap(request.payload);
+        reply(request, result, [result.imageBitmap]);
+        return;
+      }
       case 'read-tile': {
         const result = handleReadTile(request.payload);
         reply(request, result, [result.imageData.data.buffer]);

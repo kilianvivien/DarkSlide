@@ -394,6 +394,18 @@ export interface RenderResult {
   highlightDensity: number;
 }
 
+export interface PreparePreviewBitmapRequest {
+  documentId: string;
+  revision: number;
+  imageData: ImageData;
+}
+
+export interface PreparedPreviewBitmapResult {
+  documentId: string;
+  revision: number;
+  imageBitmap: ImageBitmap;
+}
+
 export interface ExportRequest {
   documentId: string;
   settings: ConversionSettings;
@@ -539,6 +551,7 @@ export interface RenderPhaseTimings {
   gpuProcessReadbackMs: number | null;
   histogramBuildMs: number | null;
   previewDisplayColorConversionMs: number | null;
+  workerBitmapPrepMs: number | null;
   createImageBitmapMs: number | null;
   canvasDrawMs: number | null;
   endToEndDurationMs: number | null;

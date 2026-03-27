@@ -39,6 +39,7 @@ function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings'
 export default function App() {
   const RENDER_INDICATOR_DELAY_MS = 450;
   const HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD = 0.01;
+  const LARGE_SETTLED_PREVIEW_BITMAP_PIXELS = 8_000_000;
   const WORKER_MEMORY_EVICT_HIGH_WATERMARK_BYTES = 768 * 1024 * 1024;
   const WORKER_MEMORY_EVICT_LOW_WATERMARK_BYTES = 640 * 1024 * 1024;
   const SETTLED_RENDER_DEBOUNCE_MS = {
@@ -1170,15 +1171,41 @@ export default function App() {
       }
 
       const normalizedImageData = normalizePreviewImageData(result.imageData, result.width, result.height);
-      const createImageBitmapStartedAt = performance.now();
-      const imageBitmap = typeof createImageBitmap === 'function'
-        ? await createImageBitmap(normalizedImageData).catch(() => null)
-        : null;
-      const createImageBitmapMs = typeof createImageBitmap === 'function'
-        ? Math.max(0, Math.round(performance.now() - createImageBitmapStartedAt))
-        : null;
-      if (createImageBitmapMs !== null) {
-        worker.recordPreviewPresentationTimings(result.documentId, result.revision, { createImageBitmapMs });
+      const shouldUseWorkerPreparedBitmap = previewMode === 'settled'
+        && interactionQuality === null
+        && normalizedImageData.width * normalizedImageData.height >= LARGE_SETTLED_PREVIEW_BITMAP_PIXELS;
+      let imageBitmap: ImageBitmap | null = null;
+
+      if (shouldUseWorkerPreparedBitmap) {
+        const workerBitmapPrepStartedAt = performance.now();
+        imageBitmap = await worker.preparePreviewBitmap(result.documentId, result.revision, normalizedImageData)
+          .catch(() => null);
+        if (imageBitmap) {
+          worker.recordPreviewPresentationTimings(result.documentId, result.revision, {
+            workerBitmapPrepMs: Math.max(0, Math.round(performance.now() - workerBitmapPrepStartedAt)),
+          });
+        }
+      }
+
+      if (!imageBitmap) {
+        const createImageBitmapStartedAt = performance.now();
+        imageBitmap = typeof createImageBitmap === 'function'
+          ? await createImageBitmap(normalizedImageData).catch(() => null)
+          : null;
+        const createImageBitmapMs = typeof createImageBitmap === 'function'
+          ? Math.max(0, Math.round(performance.now() - createImageBitmapStartedAt))
+          : null;
+        if (createImageBitmapMs !== null) {
+          worker.recordPreviewPresentationTimings(result.documentId, result.revision, { createImageBitmapMs });
+        }
+      }
+
+      const isStillLatestResult = activeDocumentIdRef.current === result.documentId
+        && activeRenderRequestRef.current?.documentId === result.documentId
+        && activeRenderRequestRef.current?.revision === result.revision;
+      if (!isStillLatestResult) {
+        imageBitmap?.close();
+        return;
       }
 
       pendingPreviewRef.current?.imageBitmap?.close();
@@ -1282,7 +1309,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, drawPreview, flushPendingPreview, getSettledAdaptiveState, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility]);
+  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, drawPreview, flushPendingPreview, getSettledAdaptiveState, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility]);
 
   const {
     enqueueRender: enqueuePreviewRender,

@@ -14,6 +14,7 @@ import {
   HistogramData,
   HistogramMode,
   InteractionQuality,
+  PreparedPreviewBitmapResult,
   PrepareTileJobRequest,
   PreparedTileJobResult,
   PreviewMode,
@@ -69,6 +70,7 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   render: 10_000,
   'auto-analyze': 10_000,
   'prepare-tile-job': 10_000,
+  'prepare-preview-bitmap': 10_000,
   'read-tile': 10_000,
   'cancel-job': 5_000,
   'sample-film-base': 10_000,
@@ -178,6 +180,7 @@ function createEmptyPhaseTimings(): RenderPhaseTimings {
     gpuProcessReadbackMs: null,
     histogramBuildMs: null,
     previewDisplayColorConversionMs: null,
+    workerBitmapPrepMs: null,
     createImageBitmapMs: null,
     canvasDrawMs: null,
     endToEndDurationMs: null,
@@ -634,7 +637,7 @@ export class ImageWorkerClient {
   recordPreviewPresentationTimings(
     documentId: string,
     revision: number,
-    update: Partial<Pick<RenderPhaseTimings, 'createImageBitmapMs' | 'canvasDrawMs'>>,
+    update: Partial<Pick<RenderPhaseTimings, 'workerBitmapPrepMs' | 'createImageBitmapMs' | 'canvasDrawMs'>>,
   ) {
     const pending = this.pendingPreviewPresentation;
     if (!pending || pending.documentId !== documentId || pending.revision !== revision) {
@@ -1139,6 +1142,19 @@ export class ImageWorkerClient {
   async render(payload: RenderRequest) {
     await this.ensureDocumentLoaded(payload.documentId);
     return this.renderInternal(payload, true);
+  }
+
+  async preparePreviewBitmap(
+    documentId: string,
+    revision: number,
+    imageData: ImageData,
+  ) {
+    const result = await this.request<PreparedPreviewBitmapResult>('prepare-preview-bitmap', {
+      documentId,
+      revision,
+      imageData,
+    });
+    return result.imageBitmap;
   }
 
   private async renderPreviewWithCpuWorker(

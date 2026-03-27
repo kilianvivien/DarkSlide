@@ -10,6 +10,8 @@ import type {
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  PreparePreviewBitmapRequest,
+  PreparedPreviewBitmapResult,
   PrepareTileJobRequest,
   PreparedTileJobResult,
   RawExportResult,
@@ -55,6 +57,7 @@ export type WorkerRequest =
   | { type: 'render'; payload: RenderRequest }
   | { type: 'auto-analyze'; payload: AutoAnalyzeRequest }
   | { type: 'prepare-tile-job'; payload: PrepareTileJobRequest }
+  | { type: 'prepare-preview-bitmap'; payload: PreparePreviewBitmapRequest }
   | { type: 'read-tile'; payload: ReadTileRequest }
   | { type: 'cancel-job'; payload: CancelTileJobRequest }
   | { type: 'sample-film-base'; payload: SampleRequest }
@@ -73,6 +76,7 @@ export type WorkerSuccessPayload =
   | RenderResult
   | AutoAnalyzeResult
   | PreparedTileJobResult
+  | PreparedPreviewBitmapResult
   | ReadTileResult
   | ExportResult
   | RawExportResult
