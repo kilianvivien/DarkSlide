@@ -9,21 +9,36 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
+## What's New in v0.6.0
+
+- **Roll management** — group frames into rolls, name them with film stock info, and browse them in a filmstrip panel inside the sidebar
+- **Scanning sessions** — open a dedicated session window that watches a folder and imports new frames automatically as your scanner writes them
+- **Expanded film profile library** — 15 new built-in profiles including Ektachrome E100, Kodak Double-X 5222, Fujifilm 200, Astia 100F, XP2 Super, Delta 100/400, SFX 200, Fomapan 100/200/400, and Rollei RPX 25/100/400
+- **Preset folders** — organize custom presets into named, collapsible folders; move presets between them via the hover menu
+- **Film stock autocomplete** — the film stock field suggests names from built-in profiles, your custom presets, and your history
+- **Preset sorting** — sort by last added, color/B&W, RAW/non-RAW, or film stock
+- **Preset detail expansion** — click a preset to see its scanner, light source, lab style, and tags at a glance
+- **Default export folders** — set separate output paths for editor saves, batch exports, and contact sheets in Settings
+- **Auto-update banner** — the desktop app notifies you when a new version is available
+- **IndexedDB preset storage** — presets now survive storage limits that affected localStorage
+
 ## Features
 
 ### Convert & Edit
 - **Instant negative-to-positive conversion** with real-time preview
-- **Film stock profiles** — built-in color and black & white stocks to match the look of popular films
+- **Film stock profiles** — 40+ built-in color and black & white stocks to match the look of popular films
 - **Full editing controls** — exposure, contrast, saturation, temperature, tint, curves, black & white points, and highlight protection
 - **Black & white mode** with per-channel luminance mixing for fine-tuned tonal control
 - **Sharpening & noise reduction** to clean up your scans
 
 ### Organize & Export
+- **Roll management** — group frames into rolls with film stock metadata and a sidebar filmstrip
+- **Scanning sessions** — live folder watch that imports frames as your scanner writes them (desktop only)
 - **Work on multiple images at once** with tabbed documents
 - **Batch export** — convert a whole roll with one click, optionally applying a preset to every frame
 - **Contact sheet generation** — create a grid overview of your scans
-- **Save and share presets** — create custom looks and export/import them as `.darkslide` files
-- **Searchable preset browser** for quick access
+- **Save and share presets** — create custom looks, organize them in folders, and export/import as `.darkslide` files
+- **Searchable preset browser** with sorting and tag display
 
 ### Crop & Compose
 - **Non-destructive crop** with common film format ratios (3:2, 4:5, 1:1, 6x7, etc.)
@@ -35,8 +50,9 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **RAW file support** — open DNG, CR3, NEF, ARW, RAF, and RW2 files directly (desktop only)
 - **Native file dialogs** for a smoother experience
 - **Open in external editor** — send your image to Photoshop, Affinity Photo, or any other app
+- **Auto-update notifications** — get notified when a new version is available
 
-> DarkSlide also works entirely in the browser — no install needed. The desktop app adds RAW support and native OS integration.
+> DarkSlide also works entirely in the browser — no install needed. The desktop app adds RAW support, scanning sessions, and native OS integration.
 
 ## macOS Installation Note
 
