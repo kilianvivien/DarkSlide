@@ -12,6 +12,7 @@ const gpuState = vi.hoisted(() => ({
       maxBufferSize: 1024 * 1024 * 1024,
     },
     processPreviewImage: vi.fn(),
+    convertImageColorProfile: vi.fn(),
     processTile: vi.fn(),
     destroy: vi.fn(),
     isLost: vi.fn(() => false),
@@ -124,6 +125,8 @@ describe('ImageWorkerClient', () => {
     gpuState.create.mockResolvedValue(null);
     gpuState.instance.processPreviewImage.mockReset();
     gpuState.instance.processPreviewImage.mockResolvedValue(new ImageData(new Uint8ClampedArray(4), 1, 1));
+    gpuState.instance.convertImageColorProfile.mockReset();
+    gpuState.instance.convertImageColorProfile.mockImplementation(async (imageData: ImageData) => imageData);
     gpuState.instance.processTile.mockReset();
     gpuState.instance.processTile.mockResolvedValue(new ImageData(new Uint8ClampedArray(4), 1, 1));
     gpuState.instance.destroy.mockReset();
@@ -662,6 +665,94 @@ describe('ImageWorkerClient', () => {
       imageData: expect.any(ImageData),
     });
     expect(gpuState.instance.processPreviewImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps processed GPU preview histogram generation on the output image while using GPU display conversion', async () => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+    gpuState.instance.processPreviewImage.mockResolvedValueOnce(
+      new ImageData(new Uint8ClampedArray([20, 40, 60, 255]), 1, 1),
+    );
+    gpuState.instance.convertImageColorProfile.mockResolvedValueOnce(
+      new ImageData(new Uint8ClampedArray([25, 45, 65, 255]), 1, 1),
+    );
+
+    const colorProfiles = await import('./colorProfiles');
+    const convertSpy = vi.spyOn(colorProfiles, 'convertImageDataColorProfile');
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const pending = client.render({
+      ...createRenderPayload(),
+      outputProfileId: 'adobe-rgb',
+    });
+
+    await flushAsyncWork();
+
+    const prepareRequest = worker.postedMessages[0];
+    worker.onmessage?.({
+      data: {
+        id: prepareRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:1:preview',
+          sourceKind: 'preview',
+          width: 1,
+          height: 1,
+          previewLevelId: 'preview-1024',
+          tileSize: 1024,
+          halo: 0,
+          geometryCacheHit: true,
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const tileRequest = worker.postedMessages[1];
+    worker.onmessage?.({
+      data: {
+        id: tileRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:1:preview',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          haloLeft: 0,
+          haloTop: 0,
+          haloRight: 0,
+          haloBottom: 0,
+          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const cancelRequest = worker.postedMessages[2];
+    worker.onmessage?.({
+      data: {
+        id: cancelRequest?.id,
+        ok: true,
+        payload: {
+          cancelled: true,
+        },
+      },
+    } as MessageEvent);
+
+    const result = await pending;
+    expect(result.imageData.data[0]).toBe(25);
+    expect(result.histogram.r[20]).toBe(1);
+    expect(gpuState.instance.convertImageColorProfile).toHaveBeenCalledTimes(1);
+    expect(convertSpy).not.toHaveBeenCalled();
   });
 
   it('throttles ultra smooth draft histograms and suppresses per-frame draft diagnostics', async () => {

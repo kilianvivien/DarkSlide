@@ -30,7 +30,7 @@ export function useRenderQueue<T>({
 
   const clearScheduled = useCallback(() => {
     if (draftFrameRef.current !== null) {
-      window.cancelAnimationFrame(draftFrameRef.current);
+      window.clearTimeout(draftFrameRef.current);
       draftFrameRef.current = null;
     }
     if (settledTimerRef.current !== null) {
@@ -62,10 +62,10 @@ export function useRenderQueue<T>({
   const scheduleDrain = useEvent((priority: RenderPriority) => {
     clearScheduled();
     if (priority === 'draft') {
-      draftFrameRef.current = window.requestAnimationFrame(() => {
+      draftFrameRef.current = window.setTimeout(() => {
         draftFrameRef.current = null;
         void drainQueue();
-      });
+      }, 0) as unknown as number;
       return;
     }
 

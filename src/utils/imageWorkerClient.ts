@@ -22,6 +22,7 @@ import {
   RenderBackendMode,
   RenderBackendDiagnostics,
   RenderJobDiagnosticsSnapshot,
+  RenderPhaseTimings,
   RenderRequest,
   RenderResult,
   SampleRequest,
@@ -150,6 +151,7 @@ function createJobSnapshot(
   fallbackReason: string | null,
   jobDurationMs: number | null,
   geometryCacheHit: boolean | null,
+  phaseTimings: RenderPhaseTimings | null,
 ): RenderJobDiagnosticsSnapshot {
   return {
     backendMode,
@@ -166,6 +168,19 @@ function createJobSnapshot(
     fallbackReason,
     jobDurationMs,
     geometryCacheHit,
+    phaseTimings,
+  };
+}
+
+function createEmptyPhaseTimings(): RenderPhaseTimings {
+  return {
+    geometryPrepareMs: null,
+    gpuProcessReadbackMs: null,
+    histogramBuildMs: null,
+    previewDisplayColorConversionMs: null,
+    createImageBitmapMs: null,
+    canvasDrawMs: null,
+    endToEndDurationMs: null,
   };
 }
 
@@ -258,6 +273,8 @@ export class ImageWorkerClient {
 
   private geometryCacheHit: boolean | null = null;
 
+  private phaseTimings: RenderPhaseTimings | null = null;
+
   private coalescedPreviewRequests = 0;
 
   private cancelledPreviewJobs = 0;
@@ -275,6 +292,13 @@ export class ImageWorkerClient {
   private lastDraftHistogramAt = 0;
 
   private lastDraftHistogramDocumentId: string | null = null;
+
+  private pendingPreviewPresentation: {
+    documentId: string;
+    revision: number;
+    startedAt: number;
+    phaseTimings: RenderPhaseTimings;
+  } | null = null;
 
   constructor(options: ImageWorkerClientOptions = {}) {
     this.gpuEnabled = options.gpuEnabled ?? true;
@@ -529,6 +553,7 @@ export class ImageWorkerClient {
       fallbackReason: this.fallbackReason,
       jobDurationMs: this.jobDurationMs,
       geometryCacheHit: this.geometryCacheHit,
+      phaseTimings: this.phaseTimings,
       coalescedPreviewRequests: this.coalescedPreviewRequests,
       cancelledPreviewJobs: this.cancelledPreviewJobs,
       previewBackend: this.previewBackend,
@@ -564,6 +589,7 @@ export class ImageWorkerClient {
     | 'fallbackReason'
     | 'jobDurationMs'
     | 'geometryCacheHit'
+    | 'phaseTimings'
   >>) {
     if (update.backendMode !== undefined) this.backendMode = update.backendMode;
     if (update.sourceKind !== undefined) this.sourceKind = update.sourceKind;
@@ -579,7 +605,55 @@ export class ImageWorkerClient {
     if (update.fallbackReason !== undefined) this.fallbackReason = update.fallbackReason;
     if (update.jobDurationMs !== undefined) this.jobDurationMs = update.jobDurationMs;
     if (update.geometryCacheHit !== undefined) this.geometryCacheHit = update.geometryCacheHit;
+    if (update.phaseTimings !== undefined) this.phaseTimings = update.phaseTimings;
     this.emitBackendDiagnosticsChange();
+  }
+
+  private setPendingPreviewPresentation(
+    documentId: string,
+    revision: number,
+    startedAt: number,
+    phaseTimings: RenderPhaseTimings,
+  ) {
+    this.pendingPreviewPresentation = {
+      documentId,
+      revision,
+      startedAt,
+      phaseTimings: { ...phaseTimings },
+    };
+    this.updateBackendState({ phaseTimings: { ...phaseTimings } });
+    if (this.lastPreviewJob) {
+      this.lastPreviewJob = {
+        ...this.lastPreviewJob,
+        phaseTimings: { ...phaseTimings },
+      };
+      this.emitBackendDiagnosticsChange();
+    }
+  }
+
+  recordPreviewPresentationTimings(
+    documentId: string,
+    revision: number,
+    update: Partial<Pick<RenderPhaseTimings, 'createImageBitmapMs' | 'canvasDrawMs'>>,
+  ) {
+    const pending = this.pendingPreviewPresentation;
+    if (!pending || pending.documentId !== documentId || pending.revision !== revision) {
+      return;
+    }
+
+    pending.phaseTimings = {
+      ...pending.phaseTimings,
+      ...update,
+      endToEndDurationMs: Math.max(0, Math.round(performance.now() - pending.startedAt)),
+    };
+    this.updateBackendState({ phaseTimings: { ...pending.phaseTimings } });
+    if (this.lastPreviewJob) {
+      this.lastPreviewJob = {
+        ...this.lastPreviewJob,
+        phaseTimings: { ...pending.phaseTimings },
+      };
+      this.emitBackendDiagnosticsChange();
+    }
   }
 
   private async ensureGPU() {
@@ -791,6 +865,7 @@ export class ImageWorkerClient {
     histogramMode: HistogramMode,
     inputProfileId: ColorProfileId,
     outputProfileId: ColorProfileId,
+    displayProfileId: ColorProfileId,
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
@@ -804,6 +879,7 @@ export class ImageWorkerClient {
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
+    const phaseTimings = createEmptyPhaseTimings();
     const rawPreview = await this.readTile({
       documentId: prepared.documentId,
       jobId: prepared.jobId,
@@ -813,8 +889,12 @@ export class ImageWorkerClient {
       height: prepared.height,
     });
 
-    const imageData = comparisonMode === 'processed' && this.gpuPipeline
-      ? await this.gpuPipeline.processPreviewImage(
+    let histogramSourceImageData: ImageData;
+    let imageData: ImageData;
+
+    if (comparisonMode === 'processed' && this.gpuPipeline) {
+      const gpuStartedAt = performance.now();
+      const processedImage = await this.gpuPipeline.processPreviewImage(
         rawPreview.imageData,
         settings,
         isColor,
@@ -833,14 +913,36 @@ export class ImageWorkerClient {
         filmType,
         flareFloor,
         lightSourceBias,
-      )
-      : trimTileImageData(rawPreview);
-
-    if (comparisonMode !== 'processed') {
-      convertImageDataColorProfile(imageData, inputProfileId, outputProfileId);
+      );
+      phaseTimings.gpuProcessReadbackMs = Math.round(performance.now() - gpuStartedAt);
+      histogramSourceImageData = processedImage;
+      imageData = processedImage;
+      if (displayProfileId !== outputProfileId) {
+        const displayConversionStartedAt = performance.now();
+        imageData = await this.gpuPipeline.convertImageColorProfile(
+          processedImage,
+          settings,
+          outputProfileId,
+          displayProfileId,
+        );
+        phaseTimings.previewDisplayColorConversionMs = Math.round(performance.now() - displayConversionStartedAt);
+      }
+    } else {
+      imageData = trimTileImageData(rawPreview);
+      if (comparisonMode !== 'processed') {
+        convertImageDataColorProfile(imageData, inputProfileId, outputProfileId);
+      }
+      histogramSourceImageData = imageData;
+      if (displayProfileId !== outputProfileId) {
+        const displayConversionStartedAt = performance.now();
+        imageData = new ImageData(new Uint8ClampedArray(histogramSourceImageData.data), histogramSourceImageData.width, histogramSourceImageData.height);
+        convertImageDataColorProfile(imageData, outputProfileId, displayProfileId);
+        phaseTimings.previewDisplayColorConversionMs = Math.round(performance.now() - displayConversionStartedAt);
+      }
     }
 
     let histogram: HistogramData;
+    const histogramStartedAt = performance.now();
     if (
       histogramMode === 'throttled'
       && this.lastDraftHistogram
@@ -850,19 +952,21 @@ export class ImageWorkerClient {
       histogram = cloneHistogram(this.lastDraftHistogram);
     } else {
       histogram = buildEmptyHistogram();
-      accumulateHistogram(histogram, imageData.data);
+      accumulateHistogram(histogram, histogramSourceImageData.data);
       if (histogramMode === 'throttled') {
         this.lastDraftHistogram = cloneHistogram(histogram);
         this.lastDraftHistogramAt = performance.now();
         this.lastDraftHistogramDocumentId = prepared.documentId;
       }
     }
+    phaseTimings.histogramBuildMs = Math.round(performance.now() - histogramStartedAt);
 
     return {
       imageData,
       histogram,
       highlightDensity: computeHighlightDensity(histogram),
       tileCount: 1,
+      phaseTimings,
     };
   }
 
@@ -981,6 +1085,7 @@ export class ImageWorkerClient {
       fallbackReason,
       jobDurationMs: null,
       geometryCacheHit: null,
+      phaseTimings: null,
     });
   }
 
@@ -1033,9 +1138,65 @@ export class ImageWorkerClient {
 
   async render(payload: RenderRequest) {
     await this.ensureDocumentLoaded(payload.documentId);
-    const result = await this.renderInternal(payload, true);
+    return this.renderInternal(payload, true);
+  }
+
+  private async renderPreviewWithCpuWorker(
+    payload: RenderRequest,
+    allowRecovery: boolean,
+    usedCpuFallback: boolean,
+    fallbackReason: string | null,
+  ) {
+    const startedAt = performance.now();
+    const result = await this.requestWithDocumentRecovery(
+      payload.documentId,
+      () => this.request<RenderResult>('render', payload),
+      allowRecovery,
+    );
+    const phaseTimings = createEmptyPhaseTimings();
     const displayProfileId = getPreferredPreviewDisplayProfile();
+    const displayConversionStartedAt = performance.now();
     convertImageDataColorProfile(result.imageData, payload.outputProfileId ?? 'srgb', displayProfileId);
+    phaseTimings.previewDisplayColorConversionMs = Math.round(performance.now() - displayConversionStartedAt);
+
+    const jobDurationMs = Math.round(performance.now() - startedAt);
+    const snapshot = createJobSnapshot(
+      'cpu-worker',
+      'preview',
+      payload.previewMode ?? 'settled',
+      result.previewLevelId,
+      payload.interactionQuality ?? null,
+      payload.histogramMode ?? 'full',
+      null,
+      null,
+      null,
+      null,
+      usedCpuFallback,
+      fallbackReason,
+      jobDurationMs,
+      null,
+      phaseTimings,
+    );
+    this.updateBackendState({
+      backendMode: 'cpu-worker',
+      sourceKind: 'preview',
+      previewMode: payload.previewMode ?? 'settled',
+      previewLevelId: result.previewLevelId,
+      interactionQuality: payload.interactionQuality ?? null,
+      histogramMode: payload.histogramMode ?? 'full',
+      tileSize: null,
+      halo: null,
+      tileCount: null,
+      intermediateFormat: null,
+      usedCpuFallback,
+      fallbackReason,
+      jobDurationMs,
+      geometryCacheHit: null,
+      phaseTimings,
+    });
+    this.previewBackend = 'cpu-worker';
+    this.lastPreviewJob = snapshot;
+    this.setPendingPreviewPresentation(payload.documentId, payload.revision, startedAt, phaseTimings);
     return result;
   }
 
@@ -1065,16 +1226,13 @@ export class ImageWorkerClient {
           null,
           null,
           null,
+          null,
         );
         this.emitBackendDiagnosticsChange();
         if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
           this.activePreviewJobIds.delete(payload.documentId);
         }
-        return this.requestWithDocumentRecovery(
-          payload.documentId,
-          () => this.request<RenderResult>('render', payload),
-          allowRecovery,
-        );
+        return this.renderPreviewWithCpuWorker(payload, allowRecovery, false, null);
       }
 
       const gpu = await this.ensureGPU();
@@ -1096,6 +1254,7 @@ export class ImageWorkerClient {
           this.lastGPUError ?? 'WebGPU unavailable.',
           null,
           null,
+          null,
         );
         this.emitBackendDiagnosticsChange();
         if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
@@ -1112,15 +1271,13 @@ export class ImageWorkerClient {
             sourceKind: 'preview',
           },
         });
-        return this.requestWithDocumentRecovery(
-          payload.documentId,
-          () => this.request<RenderResult>('render', payload),
-          allowRecovery,
-        );
+        return this.renderPreviewWithCpuWorker(payload, allowRecovery, true, this.lastGPUError ?? 'WebGPU unavailable.');
       }
     }
 
     const startedAt = performance.now();
+    const phaseTimings = createEmptyPhaseTimings();
+    const displayProfileId = getPreferredPreviewDisplayProfile();
     const shouldLogDraftFrameDiagnostics = !(payload.previewMode === 'draft' && payload.interactionQuality !== null);
     if (shouldLogDraftFrameDiagnostics) {
       appendDiagnostic({
@@ -1137,6 +1294,7 @@ export class ImageWorkerClient {
     }
 
     try {
+      const prepareStartedAt = performance.now();
       const prepared = await this.prepareTileJob({
         documentId: payload.documentId,
         jobId,
@@ -1146,6 +1304,7 @@ export class ImageWorkerClient {
         flatFieldHandledInWorker: false,
         targetMaxDimension: payload.targetMaxDimension,
       });
+      phaseTimings.geometryPrepareMs = Math.round(performance.now() - prepareStartedAt);
 
       const assembled = await this.assemblePreviewJob(
         prepared,
@@ -1155,6 +1314,7 @@ export class ImageWorkerClient {
         payload.histogramMode ?? 'full',
         payload.inputProfileId ?? 'srgb',
         payload.outputProfileId ?? 'srgb',
+        displayProfileId,
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
@@ -1168,6 +1328,9 @@ export class ImageWorkerClient {
         payload.flareFloor,
         payload.lightSourceBias,
       );
+      phaseTimings.gpuProcessReadbackMs = assembled.phaseTimings.gpuProcessReadbackMs;
+      phaseTimings.histogramBuildMs = assembled.phaseTimings.histogramBuildMs;
+      phaseTimings.previewDisplayColorConversionMs = assembled.phaseTimings.previewDisplayColorConversionMs;
       await this.cancelTileJob(payload.documentId, jobId);
       if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
         this.activePreviewJobIds.delete(payload.documentId);
@@ -1190,6 +1353,7 @@ export class ImageWorkerClient {
         null,
         jobDurationMs,
         prepared.geometryCacheHit,
+        phaseTimings,
       );
       this.updateBackendState({
         backendMode,
@@ -1206,10 +1370,11 @@ export class ImageWorkerClient {
         fallbackReason: null,
         jobDurationMs,
         geometryCacheHit: prepared.geometryCacheHit,
+        phaseTimings,
       });
       this.previewBackend = backendMode;
       this.lastPreviewJob = snapshot;
-      this.emitBackendDiagnosticsChange();
+      this.setPendingPreviewPresentation(payload.documentId, payload.revision, startedAt, phaseTimings);
 
       if (shouldLogDraftFrameDiagnostics) {
         appendDiagnostic({
@@ -1274,6 +1439,7 @@ export class ImageWorkerClient {
         message,
         null,
         null,
+        null,
       );
       this.emitBackendDiagnosticsChange();
       appendDiagnostic({
@@ -1291,11 +1457,7 @@ export class ImageWorkerClient {
       if (this.activePreviewJobIds.get(payload.documentId) === jobId) {
         this.activePreviewJobIds.delete(payload.documentId);
       }
-      return this.requestWithDocumentRecovery(
-        payload.documentId,
-        () => this.request<RenderResult>('render', payload),
-        false,
-      );
+      return this.renderPreviewWithCpuWorker(payload, false, true, message);
     }
   }
 
@@ -1465,6 +1627,7 @@ export class ImageWorkerClient {
         null,
         jobDurationMs,
         prepared.geometryCacheHit,
+        null,
       );
       this.updateBackendState({
         backendMode: 'gpu-tiled-render',
@@ -1481,6 +1644,7 @@ export class ImageWorkerClient {
         fallbackReason: null,
         jobDurationMs,
         geometryCacheHit: prepared.geometryCacheHit,
+        phaseTimings: null,
       });
       this.lastExportJob = snapshot;
       this.emitBackendDiagnosticsChange();
@@ -1527,6 +1691,7 @@ export class ImageWorkerClient {
         null,
         true,
         message,
+        null,
         null,
         null,
       );

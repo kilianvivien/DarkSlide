@@ -53,6 +53,7 @@ describe('SettingsModal', () => {
       fallbackReason: null,
       jobDurationMs: null,
       geometryCacheHit: null,
+      phaseTimings: null,
       coalescedPreviewRequests: 0,
       cancelledPreviewJobs: 0,
       previewBackend: null,

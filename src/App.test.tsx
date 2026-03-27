@@ -28,9 +28,14 @@ const workerState = vi.hoisted(() => ({
   render: vi.fn(),
   autoAnalyze: vi.fn(),
   export: vi.fn(),
+  contactSheet: vi.fn(),
   sampleFilmBase: vi.fn(),
   disposeDocument: vi.fn(async () => ({ disposed: true })),
+  evictPreviews: vi.fn(async () => ({ evicted: true })),
+  trimResidentDocuments: vi.fn(async () => ({ evicted: true })),
   cancelActivePreviewRender: vi.fn(async () => undefined),
+  noteCoalescedPreviewRequest: vi.fn(),
+  recordPreviewPresentationTimings: vi.fn(),
   setGPUEnabled: vi.fn(),
   getGPUDiagnostics: vi.fn(async () => ({
     gpuAvailable: false,
@@ -51,6 +56,7 @@ const workerState = vi.hoisted(() => ({
     fallbackReason: null,
     jobDurationMs: null,
     geometryCacheHit: null,
+    phaseTimings: null,
     coalescedPreviewRequests: 0,
     cancelledPreviewJobs: 0,
     previewBackend: null,
@@ -65,10 +71,21 @@ const workerState = vi.hoisted(() => ({
     oldestActiveBlobUrlAgeMs: null,
   })),
   constructorOptions: [] as Array<Record<string, unknown>>,
+  terminate: vi.fn(),
 }));
 
 const coreState = vi.hoisted(() => ({
   invoke: vi.fn(),
+}));
+
+const tauriEventState = vi.hoisted(() => ({
+  emit: vi.fn().mockResolvedValue(undefined),
+  listen: vi.fn().mockResolvedValue(vi.fn()),
+}));
+
+const webviewWindowState = vi.hoisted(() => ({
+  getByLabel: vi.fn(),
+  constructorCalls: [] as Array<{ label: string; options: unknown }>,
 }));
 
 const fileBridgeState = vi.hoisted(() => ({
@@ -114,6 +131,23 @@ vi.mock('motion/react', async () => {
     }),
   };
 });
+
+vi.mock('@tauri-apps/api/event', () => ({
+  emit: tauriEventState.emit,
+  listen: tauriEventState.listen,
+}));
+
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  WebviewWindow: class MockWebviewWindow {
+    constructor(label: string, options: unknown) {
+      webviewWindowState.constructorCalls.push({ label, options });
+    }
+
+    static getByLabel(label: string) {
+      return webviewWindowState.getByLabel(label);
+    }
+  },
+}));
 
 vi.mock('./components/Sidebar', () => ({
   Sidebar: ({
@@ -318,35 +352,69 @@ vi.mock('./utils/imageWorkerClient', () => ({
       workerState.constructorOptions.push(options);
     }
 
-    decode = workerState.decode;
+    decode(...args: Parameters<typeof workerState.decode>) {
+      return workerState.decode(...args);
+    }
 
-    detectFrame = workerState.detectFrame;
+    detectFrame(...args: Parameters<typeof workerState.detectFrame>) {
+      return workerState.detectFrame(...args);
+    }
 
-    render = workerState.render;
+    render(...args: Parameters<typeof workerState.render>) {
+      return workerState.render(...args);
+    }
 
-    autoAnalyze = workerState.autoAnalyze;
+    autoAnalyze(...args: Parameters<typeof workerState.autoAnalyze>) {
+      return workerState.autoAnalyze(...args);
+    }
 
-    export = workerState.export;
+    export(...args: Parameters<typeof workerState.export>) {
+      return workerState.export(...args);
+    }
 
-    contactSheet = vi.fn();
+    contactSheet(...args: Parameters<typeof workerState.contactSheet>) {
+      return workerState.contactSheet(...args);
+    }
 
-    sampleFilmBase = workerState.sampleFilmBase;
+    sampleFilmBase(...args: Parameters<typeof workerState.sampleFilmBase>) {
+      return workerState.sampleFilmBase(...args);
+    }
 
-    disposeDocument = workerState.disposeDocument;
+    disposeDocument(...args: Parameters<typeof workerState.disposeDocument>) {
+      return workerState.disposeDocument(...args);
+    }
 
-    evictPreviews = vi.fn(async () => ({ evicted: true }));
+    evictPreviews(...args: Parameters<typeof workerState.evictPreviews>) {
+      return workerState.evictPreviews(...args);
+    }
 
-    trimResidentDocuments = vi.fn(async () => ({ evicted: true }));
+    trimResidentDocuments(...args: Parameters<typeof workerState.trimResidentDocuments>) {
+      return workerState.trimResidentDocuments(...args);
+    }
 
-    setGPUEnabled = workerState.setGPUEnabled;
+    setGPUEnabled(...args: Parameters<typeof workerState.setGPUEnabled>) {
+      return workerState.setGPUEnabled(...args);
+    }
 
-    getGPUDiagnostics = workerState.getGPUDiagnostics;
+    getGPUDiagnostics(...args: Parameters<typeof workerState.getGPUDiagnostics>) {
+      return workerState.getGPUDiagnostics(...args);
+    }
 
-    noteCoalescedPreviewRequest = vi.fn();
+    noteCoalescedPreviewRequest(...args: Parameters<typeof workerState.noteCoalescedPreviewRequest>) {
+      return workerState.noteCoalescedPreviewRequest(...args);
+    }
 
-    cancelActivePreviewRender = workerState.cancelActivePreviewRender;
+    recordPreviewPresentationTimings(...args: Parameters<typeof workerState.recordPreviewPresentationTimings>) {
+      return workerState.recordPreviewPresentationTimings(...args);
+    }
 
-    terminate = vi.fn();
+    cancelActivePreviewRender(...args: Parameters<typeof workerState.cancelActivePreviewRender>) {
+      return workerState.cancelActivePreviewRender(...args);
+    }
+
+    terminate(...args: Parameters<typeof workerState.terminate>) {
+      return workerState.terminate(...args);
+    }
   },
 }));
 
@@ -461,16 +529,26 @@ describe('App import and preview pipeline', () => {
     customPresetState.presets = [];
     customPresetState.folders = [];
     coreState.invoke.mockReset();
+    tauriEventState.emit.mockClear();
+    tauriEventState.listen.mockClear();
+    webviewWindowState.getByLabel.mockReset();
+    webviewWindowState.constructorCalls.length = 0;
     workerState.decode.mockReset();
     workerState.detectFrame.mockReset();
     workerState.render.mockReset();
     workerState.autoAnalyze.mockReset();
     workerState.export.mockReset();
+    workerState.contactSheet.mockReset();
     workerState.sampleFilmBase.mockReset();
     workerState.disposeDocument.mockClear();
+    workerState.evictPreviews.mockClear();
+    workerState.trimResidentDocuments.mockClear();
     workerState.cancelActivePreviewRender.mockReset();
+    workerState.noteCoalescedPreviewRequest.mockClear();
+    workerState.recordPreviewPresentationTimings.mockClear();
     workerState.setGPUEnabled.mockReset();
     workerState.getGPUDiagnostics.mockClear();
+    workerState.terminate.mockClear();
     workerState.constructorOptions = [];
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     fileBridgeState.openImageFile.mockReset();
@@ -1323,6 +1401,8 @@ describe('App import and preview pipeline', () => {
 
     await act(async () => {
       vi.advanceTimersByTime(16);
+      vi.runOnlyPendingTimers();
+      vi.runOnlyPendingTimers();
     });
     await flushMicrotasks();
 
@@ -1336,6 +1416,10 @@ describe('App import and preview pipeline', () => {
 
     await act(async () => {
       fireEvent.click(screen.getByText('End Drag'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.advanceTimersByTime(140);
       vi.runOnlyPendingTimers();
     });
     await flushMicrotasks();
@@ -1393,6 +1477,8 @@ describe('App import and preview pipeline', () => {
     await act(async () => {
       fireEvent.click(screen.getByText('Nudge Exposure'));
       vi.advanceTimersByTime(16);
+      vi.runOnlyPendingTimers();
+      vi.runOnlyPendingTimers();
     });
     await flushMicrotasks();
 
@@ -1403,6 +1489,125 @@ describe('App import and preview pipeline', () => {
       histogramMode: 'throttled',
       targetMaxDimension: 512,
     });
+  });
+
+  it('does not enqueue a second settled render when only histogram state changes', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+    }) => {
+      const result = createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension);
+      result.histogram.l[250] = 10;
+      result.highlightDensity = 0;
+      return result;
+    });
+
+    render(<App />);
+    await uploadFile(createFile('settled-once.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs at most one settled highlight-density follow-up for the same stable preview input', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+      highlightDensityEstimate?: number;
+    }) => {
+      const result = createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension);
+      if (payload.revision === 1) {
+        expect(payload.highlightDensityEstimate ?? 0).toBe(0);
+        result.highlightDensity = 0.25;
+      } else if (payload.revision === 2) {
+        expect(payload.highlightDensityEstimate).toBeCloseTo(0.25, 5);
+        result.highlightDensity = 0.25;
+      }
+      return result;
+    });
+
+    render(<App />);
+    await uploadFile(createFile('settled-follow-up.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(2);
+    expect(workerState.render.mock.calls[1]?.[0]).toMatchObject({
+      previewMode: 'settled',
+      interactionQuality: null,
+    });
+  });
+
+  it('evicts inactive document previews when worker memory crosses the high-water mark', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+    }) => createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension));
+
+    render(<App />);
+    await uploadFile(createFile('first-memory.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const firstDocumentId = workerState.render.mock.calls[0]?.[0]?.documentId as string;
+
+    await uploadFile(createFile('second-memory.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const baseDiagnostics = await workerState.getGPUDiagnostics.mock.results[0]?.value;
+    const onBackendDiagnosticsChange = workerState.constructorOptions[0]?.onBackendDiagnosticsChange as
+      | ((diagnostics: Record<string, unknown>) => void)
+      | undefined;
+
+    await act(async () => {
+      onBackendDiagnosticsChange?.({
+        ...baseDiagnostics,
+        workerMemory: {
+          documentCount: 2,
+          totalPreviewCanvases: 10,
+          tileJobCount: 0,
+          cancelledJobCount: 0,
+          estimatedMemoryBytes: 800 * 1024 * 1024,
+        },
+      });
+    });
+    await flushMicrotasks();
+
+    expect(workerState.evictPreviews).toHaveBeenCalledWith(firstDocumentId);
+    const secondDocumentId = workerState.render.mock.calls.at(-1)?.[0]?.documentId as string;
+    expect(workerState.evictPreviews).not.toHaveBeenCalledWith(secondDocumentId);
   });
 
   it('attaches wheel zoom after an image loads and commits a settled zoom render', async () => {

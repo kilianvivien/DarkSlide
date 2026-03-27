@@ -503,11 +503,11 @@ export class WebGPUPipeline {
     return result;
   }
 
-  private async processImageData(
+  private async runImagePipeline(
     imageData: ImageData,
     settings: ConversionSettings,
     isColor: boolean,
-    comparisonMode: 'processed' | 'original',
+    applyProcessing: boolean,
     maskTuning?: MaskTuning,
     colorMatrix?: ColorMatrix,
     tonalCharacter?: TonalCharacter,
@@ -524,10 +524,6 @@ export class WebGPUPipeline {
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
     this.assertUsable();
-
-    if (comparisonMode === 'original') {
-      return copyWholeImage(imageData.data, imageData.width, imageData.height);
-    }
 
     const expandedWidth = imageData.width;
     const expandedHeight = imageData.height;
@@ -569,7 +565,7 @@ export class WebGPUPipeline {
     const processingUniforms = buildProcessingUniforms(
       settings,
       isColor,
-      comparisonMode,
+      applyProcessing ? 'processed' : 'original',
       maskTuning,
       colorMatrix,
       tonalCharacter,
@@ -617,7 +613,7 @@ export class WebGPUPipeline {
 
     let currentView = this.workTextureAView;
 
-    if (settings.noiseReduction.enabled && settings.noiseReduction.luminanceStrength > 0) {
+    if (applyProcessing && settings.noiseReduction.enabled && settings.noiseReduction.luminanceStrength > 0) {
       this.writeBlurParams(1.5, 0);
       this.renderSingleInput(
         encoder,
@@ -648,7 +644,7 @@ export class WebGPUPipeline {
       currentView = this.workTextureBView;
     }
 
-    if (settings.sharpen.enabled && settings.sharpen.amount > 0) {
+    if (applyProcessing && settings.sharpen.enabled && settings.sharpen.amount > 0) {
       this.writeBlurParams(settings.sharpen.radius, 0);
       this.renderSingleInput(
         encoder,
@@ -704,6 +700,52 @@ export class WebGPUPipeline {
     return copyWholeImage(pixels, expandedWidth, expandedHeight);
   }
 
+  private async processImageData(
+    imageData: ImageData,
+    settings: ConversionSettings,
+    isColor: boolean,
+    comparisonMode: 'processed' | 'original',
+    maskTuning?: MaskTuning,
+    colorMatrix?: ColorMatrix,
+    tonalCharacter?: TonalCharacter,
+    labStyleToneCurve?: CurvePoint[],
+    labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] },
+    labTonalCharacterOverride?: Partial<TonalCharacter>,
+    labSaturationBias = 0,
+    labTemperatureBias = 0,
+    highlightDensityEstimate = 0,
+    inputProfileId: ColorProfileId = 'srgb',
+    outputProfileId: ColorProfileId = 'srgb',
+    filmType: FilmProfileType = 'negative',
+    flareFloor: [number, number, number] | null = null,
+    lightSourceBias: [number, number, number] = [1, 1, 1],
+  ) {
+    if (comparisonMode === 'original') {
+      return copyWholeImage(imageData.data, imageData.width, imageData.height);
+    }
+
+    return this.runImagePipeline(
+      imageData,
+      settings,
+      isColor,
+      true,
+      maskTuning,
+      colorMatrix,
+      tonalCharacter,
+      labStyleToneCurve,
+      labStyleChannelCurves,
+      labTonalCharacterOverride,
+      labSaturationBias,
+      labTemperatureBias,
+      highlightDensityEstimate,
+      inputProfileId,
+      outputProfileId,
+      filmType,
+      flareFloor,
+      lightSourceBias,
+    );
+  }
+
   async processPreviewImage(
     imageData: ImageData,
     settings: ConversionSettings,
@@ -743,6 +785,38 @@ export class WebGPUPipeline {
       filmType,
       flareFloor,
       lightSourceBias,
+    );
+  }
+
+  async convertImageColorProfile(
+    imageData: ImageData,
+    settings: ConversionSettings,
+    inputProfileId: ColorProfileId,
+    outputProfileId: ColorProfileId,
+  ) {
+    if (inputProfileId === outputProfileId) {
+      return copyWholeImage(imageData.data, imageData.width, imageData.height);
+    }
+
+    return this.runImagePipeline(
+      imageData,
+      settings,
+      true,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      0,
+      0,
+      inputProfileId,
+      outputProfileId,
+      'negative',
+      null,
+      [1, 1, 1],
     );
   }
 

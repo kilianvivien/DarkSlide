@@ -38,6 +38,9 @@ function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings'
 
 export default function App() {
   const RENDER_INDICATOR_DELAY_MS = 450;
+  const HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD = 0.01;
+  const WORKER_MEMORY_EVICT_HIGH_WATERMARK_BYTES = 768 * 1024 * 1024;
+  const WORKER_MEMORY_EVICT_LOW_WATERMARK_BYTES = 640 * 1024 * 1024;
   const SETTLED_RENDER_DEBOUNCE_MS = {
     zoom: 320,
     pan: 240,
@@ -141,6 +144,7 @@ export default function App() {
     fallbackReason: null,
     jobDurationMs: null,
     geometryCacheHit: null,
+    phaseTimings: null,
     coalescedPreviewRequests: 0,
     cancelledPreviewJobs: 0,
     previewBackend: null,
@@ -172,6 +176,7 @@ export default function App() {
   const hasVisiblePreviewRef = useRef(false);
   const pendingPreviewRef = useRef<{
     documentId: string;
+    revision: number;
     angle: number;
     imageData: ImageData;
     imageBitmap: ImageBitmap | null;
@@ -186,6 +191,13 @@ export default function App() {
   const renderIndicatorTimeoutRef = useRef<number | null>(null);
   const renderIndicatorRequestRef = useRef<{ documentId: string; revision: number } | null>(null);
   const lastCompletedSettledRenderKeyRef = useRef<string | null>(null);
+  const settledAdaptiveStateRef = useRef(new Map<string, {
+    committedHighlightDensity: number;
+    lastSettledKey: string | null;
+    followUpCompletedForKey: string | null;
+  }>());
+  const enqueuePreviewRenderRef = useRef<((request: QueuedPreviewRender, priority: 'draft' | 'settled') => void) | null>(null);
+  const workerMemoryPressureActiveRef = useRef(false);
   const fullRenderTargetSelectionRef = useRef<{ previewLevelId: string; targetDimension: number } | null>(null);
   const tabSwitchDraftRef = useRef<string | null>(null);
   const transientNoticeTimeoutRef = useRef<number | null>(null);
@@ -227,10 +239,24 @@ export default function App() {
     labTonalCharacterOverride?: Partial<TonalCharacter>;
     labSaturationBias?: number;
     labTemperatureBias?: number;
-    highlightDensityEstimate?: number;
     flareFloor?: [number, number, number] | null;
     lightSourceBias?: [number, number, number];
   }) => JSON.stringify(payload), []);
+
+  const getSettledAdaptiveState = useCallback((documentId: string) => {
+    const existing = settledAdaptiveStateRef.current.get(documentId);
+    if (existing) {
+      return existing;
+    }
+
+    const initial = {
+      committedHighlightDensity: 0,
+      lastSettledKey: null,
+      followUpCompletedForKey: null,
+    };
+    settledAdaptiveStateRef.current.set(documentId, initial);
+    return initial;
+  }, []);
 
   const clearRenderIndicator = useCallback(() => {
     if (renderIndicatorTimeoutRef.current !== null) {
@@ -764,6 +790,57 @@ export default function App() {
   }, [activeTabId, maxResidentDocs, refreshRenderBackendDiagnostics, tabs.length]);
 
   useEffect(() => {
+    const activeIds = new Set(tabs.map((tab) => tab.id));
+    for (const documentId of settledAdaptiveStateRef.current.keys()) {
+      if (!activeIds.has(documentId)) {
+        settledAdaptiveStateRef.current.delete(documentId);
+      }
+    }
+  }, [tabs]);
+
+  useEffect(() => {
+    const worker = workerClientRef.current;
+    const estimatedMemoryBytes = renderBackendDiagnostics.workerMemory?.estimatedMemoryBytes ?? null;
+    if (!worker || estimatedMemoryBytes === null) {
+      return;
+    }
+
+    if (estimatedMemoryBytes < WORKER_MEMORY_EVICT_LOW_WATERMARK_BYTES) {
+      workerMemoryPressureActiveRef.current = false;
+      return;
+    }
+
+    if (
+      workerMemoryPressureActiveRef.current
+      || estimatedMemoryBytes < WORKER_MEMORY_EVICT_HIGH_WATERMARK_BYTES
+    ) {
+      return;
+    }
+
+    const inactiveDocumentIds = tabs
+      .map((tab) => tab.id)
+      .filter((documentId) => documentId !== activeTabId);
+    if (inactiveDocumentIds.length === 0) {
+      workerMemoryPressureActiveRef.current = true;
+      return;
+    }
+
+    workerMemoryPressureActiveRef.current = true;
+    void Promise.allSettled(inactiveDocumentIds.map((documentId) => worker.evictPreviews(documentId)))
+      .then(() => refreshRenderBackendDiagnostics())
+      .catch(() => {
+        // Ignore memory-pressure eviction failures and keep the editor responsive.
+      });
+  }, [
+    activeTabId,
+    refreshRenderBackendDiagnostics,
+    renderBackendDiagnostics.workerMemory?.estimatedMemoryBytes,
+    tabs,
+    WORKER_MEMORY_EVICT_HIGH_WATERMARK_BYTES,
+    WORKER_MEMORY_EVICT_LOW_WATERMARK_BYTES,
+  ]);
+
+  useEffect(() => {
     if (!showSettingsModal) return;
     void refreshRenderBackendDiagnostics();
   }, [refreshRenderBackendDiagnostics, showSettingsModal]);
@@ -834,12 +911,13 @@ export default function App() {
 
   const drawPreview = useCallback((imageData: ImageData, imageBitmap: ImageBitmap | null) => {
     const canvas = displayCanvasRef.current;
-    if (!canvas) return false;
+    if (!canvas) return null;
 
+    const startedAt = performance.now();
     canvas.width = imageData.width;
     canvas.height = imageData.height;
     const ctx = getCanvas2dContext(canvas);
-    if (!ctx) return false;
+    if (!ctx) return null;
     ctx.imageSmoothingQuality = 'high';
     if (imageBitmap) {
       ctx.clearRect(0, 0, imageData.width, imageData.height);
@@ -850,7 +928,7 @@ export default function App() {
     }
     currentPreviewImageDataRef.current = imageData;
     setCanvasSize({ width: imageData.width, height: imageData.height });
-    return true;
+    return Math.max(0, Math.round(performance.now() - startedAt));
   }, []);
 
   const cancelPendingPreviewRetry = useCallback(() => {
@@ -874,10 +952,16 @@ export default function App() {
       return;
     }
 
-    if (drawPreview(pendingPreview.imageData, pendingPreview.imageBitmap)) {
+    const canvasDrawMs = drawPreview(pendingPreview.imageData, pendingPreview.imageBitmap);
+    if (canvasDrawMs !== null) {
       pendingPreviewRef.current = null;
       setRenderedPreviewAngle(pendingPreview.angle);
       setPreviewVisibility(true);
+      workerClientRef.current?.recordPreviewPresentationTimings(
+        pendingPreview.documentId,
+        pendingPreview.revision,
+        { canvasDrawMs },
+      );
       previewRetryFrameRef.current = null;
       return;
     }
@@ -983,8 +1067,12 @@ export default function App() {
       ? getResolvedInputProfileId(activeTabDocument.source, activeTabDocument.colorManagement)
       : 'srgb';
     const outputProfileId = activeTabDocument?.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
-    activeRenderRequestRef.current = { documentId, revision };
     const shouldTrackHeavyRenderIndicator = previewMode === 'settled' && interactionQuality === null;
+    const adaptiveState = getSettledAdaptiveState(documentId);
+    const resolvedHighlightDensityEstimate = shouldTrackHeavyRenderIndicator && nextComparisonMode === 'processed'
+      ? (highlightDensityEstimate ?? adaptiveState.committedHighlightDensity)
+      : highlightDensityEstimate;
+    activeRenderRequestRef.current = { documentId, revision };
     const renderKey = createPreviewRenderKey({
       documentId,
       settings,
@@ -1002,10 +1090,13 @@ export default function App() {
       labTonalCharacterOverride,
       labSaturationBias,
       labTemperatureBias,
-      highlightDensityEstimate,
       flareFloor,
       lightSourceBias,
     });
+    if (shouldTrackHeavyRenderIndicator && adaptiveState.lastSettledKey !== renderKey) {
+      adaptiveState.lastSettledKey = renderKey;
+      adaptiveState.followUpCompletedForKey = null;
+    }
 
     const shouldLogInteractiveDraftDiagnostics = !(previewMode === 'draft' && interactionQuality !== null);
     if (shouldLogInteractiveDraftDiagnostics) {
@@ -1052,7 +1143,7 @@ export default function App() {
         labTonalCharacterOverride,
         labSaturationBias,
         labTemperatureBias,
-        highlightDensityEstimate,
+        highlightDensityEstimate: resolvedHighlightDensityEstimate,
         flareFloor,
         lightSourceBias,
       });
@@ -1079,13 +1170,21 @@ export default function App() {
       }
 
       const normalizedImageData = normalizePreviewImageData(result.imageData, result.width, result.height);
+      const createImageBitmapStartedAt = performance.now();
       const imageBitmap = typeof createImageBitmap === 'function'
         ? await createImageBitmap(normalizedImageData).catch(() => null)
         : null;
+      const createImageBitmapMs = typeof createImageBitmap === 'function'
+        ? Math.max(0, Math.round(performance.now() - createImageBitmapStartedAt))
+        : null;
+      if (createImageBitmapMs !== null) {
+        worker.recordPreviewPresentationTimings(result.documentId, result.revision, { createImageBitmapMs });
+      }
 
       pendingPreviewRef.current?.imageBitmap?.close();
       pendingPreviewRef.current = {
         documentId: result.documentId,
+        revision: result.revision,
         angle: settings.rotation + settings.levelAngle,
         imageData: normalizedImageData,
         imageBitmap,
@@ -1118,6 +1217,37 @@ export default function App() {
       });
       if (shouldTrackHeavyRenderIndicator) {
         lastCompletedSettledRenderKeyRef.current = renderKey;
+        adaptiveState.committedHighlightDensity = result.highlightDensity;
+        if (
+          nextComparisonMode === 'processed'
+          && adaptiveState.lastSettledKey === renderKey
+          && adaptiveState.followUpCompletedForKey !== renderKey
+          && Math.abs(result.highlightDensity - (resolvedHighlightDensityEstimate ?? 0)) > HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD
+        ) {
+          adaptiveState.followUpCompletedForKey = renderKey;
+          enqueuePreviewRenderRef.current?.({
+            documentId,
+            settings,
+            isColor,
+            filmType,
+            comparisonMode: nextComparisonMode,
+            targetMaxDimension: nextTargetMaxDimension,
+            previewMode: 'settled',
+            interactionQuality: null,
+            histogramMode,
+            maskTuning,
+            colorMatrix,
+            tonalCharacter,
+            labStyleToneCurve,
+            labStyleChannelCurves,
+            labTonalCharacterOverride,
+            labSaturationBias,
+            labTemperatureBias,
+            highlightDensityEstimate: result.highlightDensity,
+            flareFloor,
+            lightSourceBias,
+          }, 'settled');
+        }
       }
       if (shouldLogInteractiveDraftDiagnostics) {
         void refreshRenderBackendDiagnostics();
@@ -1152,7 +1282,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, drawPreview, flushPendingPreview, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility]);
+  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, drawPreview, flushPendingPreview, getSettledAdaptiveState, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility]);
 
   const {
     enqueueRender: enqueuePreviewRender,
@@ -1190,6 +1320,15 @@ export default function App() {
     },
   });
 
+  useEffect(() => {
+    enqueuePreviewRenderRef.current = enqueuePreviewRender;
+    return () => {
+      if (enqueuePreviewRenderRef.current === enqueuePreviewRender) {
+        enqueuePreviewRenderRef.current = null;
+      }
+    };
+  }, [enqueuePreviewRender]);
+
   const handlePanStart = useCallback((clientX: number, clientY: number) => {
     clearRenderIndicator();
     interactionJustEndedRef.current = false;
@@ -1217,7 +1356,7 @@ export default function App() {
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
     const profileFilmType = activeProfile.filmType ?? 'negative';
-    const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
+    const highlightDensityEstimate = getSettledAdaptiveState(documentId).committedHighlightDensity;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const flareFloor = documentState.estimatedFlare;
     const previewMode = isDraftPreview ? 'draft' : 'settled';
@@ -1275,7 +1414,6 @@ export default function App() {
         labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
         labSaturationBias: activeLabStyle?.saturationBias ?? 0,
         labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
-        highlightDensityEstimate,
         flareFloor,
         lightSourceBias,
       })
@@ -1390,13 +1528,13 @@ export default function App() {
     documentState?.id,
     documentState?.colorManagement,
     documentState?.estimatedFlare,
-    documentState?.histogram,
     documentState?.lightSourceId,
     documentState?.previewLevels.length,
     documentState?.source,
     enqueuePreviewRender,
     executePreviewRender,
     fullRenderTargetDimension,
+    getSettledAdaptiveState,
     createPreviewRenderKey,
     clearRenderIndicator,
     isDraftPreview,

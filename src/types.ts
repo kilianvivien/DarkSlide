@@ -531,6 +531,17 @@ export interface RenderJobDiagnosticsSnapshot {
   fallbackReason: string | null;
   jobDurationMs: number | null;
   geometryCacheHit: boolean | null;
+  phaseTimings: RenderPhaseTimings | null;
+}
+
+export interface RenderPhaseTimings {
+  geometryPrepareMs: number | null;
+  gpuProcessReadbackMs: number | null;
+  histogramBuildMs: number | null;
+  previewDisplayColorConversionMs: number | null;
+  createImageBitmapMs: number | null;
+  canvasDrawMs: number | null;
+  endToEndDurationMs: number | null;
 }
 
 export interface RenderBackendDiagnostics {
@@ -552,6 +563,7 @@ export interface RenderBackendDiagnostics {
   fallbackReason: string | null;
   jobDurationMs: number | null;
   geometryCacheHit: boolean | null;
+  phaseTimings: RenderPhaseTimings | null;
   coalescedPreviewRequests: number;
   cancelledPreviewJobs: number;
   previewBackend: RenderBackendMode | null;
