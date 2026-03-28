@@ -46,11 +46,15 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **Before/after comparison** to see your edits side by side
 - **Live histogram** with per-channel display
 
-### Desktop App (macOS)
+### Desktop App
 - **RAW file support** — open DNG, CR3, NEF, ARW, RAF, and RW2 files directly (desktop only)
 - **Native file dialogs** for a smoother experience
 - **Open in external editor** — send your image to Photoshop, Affinity Photo, or any other app
 - **Auto-update notifications** — get notified when a new version is available
+
+**macOS** builds are universal binaries — native on both Apple Silicon and Intel Macs.
+
+**Windows & Linux** experimental builds are available starting with v0.6.0. Unsigned and not yet production-tested — feedback welcome.
 
 > DarkSlide also works entirely in the browser — no install needed. The desktop app adds RAW support, scanning sessions, and native OS integration.
 
