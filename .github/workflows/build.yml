@@ -42,11 +42,13 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workdir: src-tauri
+          workspaces: src-tauri
 
       - name: Install Linux system dependencies
         if: matrix.os == 'linux'
@@ -64,7 +66,7 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
-        run: npm run tauri:build
+        run: npm run tauri:build${{ matrix.os == 'macos' && ' -- --target universal-apple-darwin' || '' }}
 
       # ── Resolve the release tag (tag push or manual input) ────────────────
       - name: Resolve release tag
@@ -85,7 +87,7 @@ jobs:
         shell: bash
         run: |
           gh release upload "${{ steps.release.outputs.tag }}" \
-            src-tauri/target/release/bundle/dmg/*.dmg \
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg \
             --clobber
         env:
           GH_TOKEN: ${{ github.token }}
@@ -120,7 +122,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: darkslide-macos
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
       - name: Save Linux build artifacts
