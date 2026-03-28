@@ -2,11 +2,18 @@ name: Build
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Upload artifacts to this existing release tag (e.g. v0.6.0). Leave blank to skip release upload."
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -59,17 +66,64 @@ jobs:
       - name: Build Tauri app
         run: npm run tauri:build
 
-      - name: Upload macOS artifacts
+      # ── Resolve the release tag (tag push or manual input) ────────────────
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.release_tag }}" ]]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── macOS: upload .dmg to release ─────────────────────────────────────
+      - name: Upload macOS artifacts to release
+        if: matrix.os == 'macos' && steps.release.outputs.tag != ''
+        shell: bash
+        run: |
+          gh release upload "${{ steps.release.outputs.tag }}" \
+            src-tauri/target/release/bundle/dmg/*.dmg \
+            --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # ── Linux: upload .deb and .AppImage to release ───────────────────────
+      - name: Upload Linux artifacts to release
+        if: matrix.os == 'linux' && steps.release.outputs.tag != ''
+        shell: bash
+        run: |
+          gh release upload "${{ steps.release.outputs.tag }}" \
+            src-tauri/target/release/bundle/deb/*.deb \
+            src-tauri/target/release/bundle/appimage/*.AppImage \
+            --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # ── Windows: upload .msi and NSIS .exe to release ────────────────────
+      - name: Upload Windows artifacts to release
+        if: matrix.os == 'windows' && steps.release.outputs.tag != ''
+        shell: bash
+        run: |
+          gh release upload "${{ steps.release.outputs.tag }}" \
+            src-tauri/target/release/bundle/msi/*.msi \
+            src-tauri/target/release/bundle/nsis/*.exe \
+            --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # ── Keep workflow artifacts as a fallback ─────────────────────────────
+      - name: Save macOS build artifacts
         if: matrix.os == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: darkslide-macos
-          path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app
+          path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
-      - name: Upload Linux artifacts
+      - name: Save Linux build artifacts
         if: matrix.os == 'linux'
         uses: actions/upload-artifact@v4
         with:
@@ -79,7 +133,7 @@ jobs:
             src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
-      - name: Upload Windows artifacts
+      - name: Save Windows build artifacts
         if: matrix.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
