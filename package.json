@@ -20,6 +20,8 @@
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
     "@tauri-apps/plugin-notification": "^2.3.3",
+    "@testing-library/dom": "^10.4.1",
+    "@vercel/analytics": "^2.0.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "piexifjs": "^1.0.6",
@@ -38,6 +40,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/utif": "^3.0.6",
+    "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
     "eslint": "^9.39.4",
     "eslint-plugin-jsx-a11y": "^6.10.2",
@@ -48,7 +51,6 @@
     "typescript": "~5.8.2",
     "typescript-eslint": "^8.57.2",
     "vite": "^6.2.0",
-    "@vitejs/plugin-react": "^5.0.4",
     "vitest": "^4.0.18"
   }
 }

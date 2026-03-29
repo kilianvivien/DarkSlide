@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from './constants';
 import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
@@ -2527,6 +2528,7 @@ onToggleScanningSession: toggleScanningWindow,
         onApplyFilmBase={handleApplyRollFilmBase}
         onDeleteRoll={handleDeleteRoll}
       />
+      <Analytics />
     </>
   );
 }
