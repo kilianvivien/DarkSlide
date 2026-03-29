@@ -2,6 +2,7 @@
 
 <div align="center">
   <p>Turn your film negatives into beautiful positives — right in your browser or as a desktop app.</p>
+  <p><strong><a href="https://darkslide.vercel.app">Try the live demo →</a></strong> — no install required</p>
   <img src="./.github/assets/screenshot.png" alt="DarkSlide Screenshot" width="800" />
 </div>
 
