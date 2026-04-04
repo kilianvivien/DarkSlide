@@ -979,30 +979,31 @@ export function AppShell({
 
               {suggestionNotice && (
                 <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 20 }}
-                  className="absolute bottom-44 right-8 z-50 flex max-w-lg items-center gap-3 rounded-xl border border-sky-800/60 bg-sky-950/60 px-4 py-3 text-sm text-sky-100 shadow-2xl backdrop-blur-xl"
+                  initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                  transition={{ type: 'spring', bounce: 0.2, duration: 0.35 }}
+                  className="absolute bottom-20 right-8 z-50 flex max-w-md items-center gap-3 rounded-2xl border border-zinc-700/70 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-200 shadow-2xl shadow-black/50 backdrop-blur-xl"
                 >
-                  <ImageIcon size={18} className="shrink-0 text-sky-300" />
-                  <span className="min-w-0 flex-1">{suggestionNotice.message}</span>
+                  <ImageIcon size={16} className="shrink-0 text-zinc-400" />
+                  <span className="min-w-0 flex-1 leading-snug text-zinc-300">{suggestionNotice.message}</span>
                   <button
                     type="button"
                     onClick={() => {
                       suggestionNotice.onAction();
                       onSetSuggestionNotice(null);
                     }}
-                    className="shrink-0 rounded-lg bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-950 transition-colors hover:bg-white"
+                    className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
                   >
                     {suggestionNotice.actionLabel}
                   </button>
                   <button
                     type="button"
                     onClick={() => onSetSuggestionNotice(null)}
-                    className="ml-1 shrink-0 opacity-60 transition-opacity hover:opacity-100"
+                    className="shrink-0 text-zinc-600 transition-colors hover:text-zinc-300"
                     aria-label="Dismiss suggestion"
                   >
-                    <X size={14} />
+                    <X size={13} />
                   </button>
                 </motion.div>
               )}
