@@ -10,7 +10,6 @@ import {
   InversionMethod,
   InteractionQuality,
   MaskTuning,
-  RollCalibration,
   SourceMetadata,
   TonalCharacter,
 } from '../types';
@@ -153,7 +152,6 @@ export function getResolvedInversionPipelineSummary(
     filmType?: FilmProfile['filmType'];
     advancedInversion?: AdvancedInversionProfile | null;
     estimatedFilmBaseSample?: ConversionSettings['filmBaseSample'] | null;
-    rollCalibration?: RollCalibration | null;
   },
 ) {
   const isColor = options.profileType === 'color' && !settings.blackAndWhite.enabled;
@@ -197,8 +195,6 @@ export function getResolvedInversionPipelineSummary(
     advancedSupportedByProfile: Boolean(options.advancedInversion),
     usedEstimatedFilmBaseSample: advancedActive && !settings.filmBaseSample && Boolean(options.estimatedFilmBaseSample),
     baseSampleSource,
-    rollCalibrationPresent: Boolean(options.rollCalibration),
-    rollCalibrationApplied: advancedActive && Boolean(options.rollCalibration?.enabled),
     reason,
   };
 }
@@ -266,7 +262,6 @@ export type QueuedPreviewRender = {
   labSaturationBias?: number;
   labTemperatureBias?: number;
   highlightDensityEstimate?: number;
-  rollCalibration?: RollCalibration | null;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
 };

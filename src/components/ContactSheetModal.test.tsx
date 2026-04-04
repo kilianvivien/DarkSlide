@@ -108,6 +108,7 @@ function renderModal({
   entries,
   workerClient = createWorkerClient(),
   onClose = vi.fn(),
+  sharedLightSourceBias = null,
 }: {
   entries: Array<{
     id: string;
@@ -121,6 +122,7 @@ function renderModal({
   }>;
   workerClient?: ReturnType<typeof createWorkerClient>;
   onClose?: () => void;
+  sharedLightSourceBias?: [number, number, number] | null;
 }) {
   render(
     <ContactSheetModal
@@ -130,6 +132,7 @@ function renderModal({
       sharedSettings={createDefaultSettings()}
       sharedProfile={FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0]}
       sharedColorManagement={DEFAULT_COLOR_MANAGEMENT}
+      sharedLightSourceBias={sharedLightSourceBias}
       notificationSettings={DEFAULT_NOTIFICATION_SETTINGS}
       workerClient={workerClient as unknown as ImageWorkerClient}
     />,
@@ -306,5 +309,34 @@ describe('ContactSheetModal', () => {
 
     expect(exportNotificationState.notifyExportFinished).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('forwards the shared light source bias into preview renders and sheet generation', async () => {
+    const sharedLightSourceBias: [number, number, number] = [0.92, 0.96, 1];
+    const { workerClient } = renderModal({
+      entries: [{
+        id: 'open-tab-entry',
+        kind: 'open-tab',
+        documentId: 'open-tab-entry',
+        filename: 'open-scan.tiff',
+        size: 4,
+        status: 'pending',
+      }],
+      sharedLightSourceBias,
+    });
+
+    await waitFor(() => {
+      expect(workerClient.render).toHaveBeenCalledWith(expect.objectContaining({
+        lightSourceBias: sharedLightSourceBias,
+      }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Sheet' }));
+
+    await waitFor(() => {
+      expect(workerClient.contactSheet).toHaveBeenCalledWith(expect.objectContaining({
+        lightSourceBiasPerCell: [sharedLightSourceBias],
+      }));
+    });
   });
 });

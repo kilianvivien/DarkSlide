@@ -1254,6 +1254,78 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.blueBalance).toBeCloseTo((255 - 151) / (255 - 134));
   });
 
+  it('keeps advanced inversion auto mode and applies the film-base picker as a standard color-balance correction', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      settings: {
+        exposure: number;
+        inversionMethod: string;
+      };
+      advancedInversion?: unknown;
+    }) => createRenderResult(payload.documentId, payload.revision, 300, 200));
+    workerState.sampleFilmBase.mockResolvedValue({ r: 168, g: 151, b: 134 });
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Color' }));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Advanced inversion'), { target: { value: 'advanced-hd' } });
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    await uploadFile(createFile('advanced-film-base-sample.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByText('Toggle Film Base Picker'));
+
+    const canvas = document.querySelector('canvas');
+    expect(canvas).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(canvas as HTMLCanvasElement, { clientX: 100, clientY: 50 });
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        inversionMethod: string;
+        temperature: number;
+        tint: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        filmBaseSample: null;
+      };
+      advancedInversion?: unknown;
+    };
+
+    expect(latestRenderCall.settings.inversionMethod).toBe('advanced-hd');
+    expect(latestRenderCall.advancedInversion).toEqual(expect.any(Object));
+    expect(latestRenderCall.settings.exposure).toBe(0);
+    expect(latestRenderCall.settings.temperature).toBe(0);
+    expect(latestRenderCall.settings.tint).toBe(0);
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo((255 - 151) / (255 - 168));
+    expect(latestRenderCall.settings.greenBalance).toBe(1);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo((255 - 151) / (255 - 134));
+  });
+
   it('applies worker auto-analysis results from the Auto button', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; settings: { exposure: number; blackPoint: number; whitePoint: number; temperature: number; tint: number } }) => (

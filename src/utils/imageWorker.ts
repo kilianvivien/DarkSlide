@@ -1007,9 +1007,6 @@ function applyAutoWhiteBalanceAnalysisStage(
     payload.advancedInversion ?? null,
     estimatedFilmBaseSample,
   );
-  const rollCalibration = advancedHd.enabled && payload.rollCalibration?.enabled
-    ? payload.rollCalibration
-    : null;
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -1025,22 +1022,16 @@ function applyAutoWhiteBalanceAnalysisStage(
         r,
         advancedHd.baseDensity[0],
         advancedHd.gamma[0],
-        rollCalibration?.slopes[0] ?? 1,
-        rollCalibration?.offsets[0] ?? 0,
       ) * payload.settings.redBalance;
       g = applyAdvancedHdInversion(
         g,
         advancedHd.baseDensity[1],
         advancedHd.gamma[1],
-        rollCalibration?.slopes[1] ?? 1,
-        rollCalibration?.offsets[1] ?? 0,
       ) * payload.settings.greenBalance;
       b = applyAdvancedHdInversion(
         b,
         advancedHd.baseDensity[2],
         advancedHd.gamma[2],
-        rollCalibration?.slopes[2] ?? 1,
-        rollCalibration?.offsets[2] ?? 0,
       ) * payload.settings.blueBalance;
     } else {
       if (filmType !== 'slide') {
@@ -1090,7 +1081,6 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.filmType ?? 'negative',
     payload.advancedInversion ?? null,
     document.estimatedFilmBaseSample,
-    payload.rollCalibration ?? null,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
@@ -1137,7 +1127,6 @@ function handleRender(payload: RenderRequest) {
       payload.filmType ?? 'negative',
       payload.advancedInversion ?? null,
       document.estimatedFilmBaseSample,
-      payload.rollCalibration ?? null,
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
     );
@@ -1207,7 +1196,6 @@ async function handleExport(payload: ExportRequest) {
     payload.filmType ?? 'negative',
     payload.advancedInversion ?? null,
     document.estimatedFilmBaseSample,
-    payload.rollCalibration ?? null,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
@@ -1296,7 +1284,6 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       profile.filmType ?? 'negative',
       profile.advancedInversion ?? null,
       payload.estimatedFilmBaseSamplePerCell?.[index] ?? document.estimatedFilmBaseSample,
-      payload.rollCalibrationPerCell?.[index] ?? null,
       payload.flareFloorPerCell?.[index] ?? null,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
     );

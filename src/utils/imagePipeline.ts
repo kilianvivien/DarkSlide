@@ -11,7 +11,6 @@ import {
   HistogramData,
   MaskTuning,
   PreviewLevel,
-  RollCalibration,
   TonalCharacter,
 } from '../types';
 import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
@@ -471,7 +470,6 @@ export function buildProcessingUniforms(
   filmType: FilmProfileType = 'negative',
   advancedInversion?: AdvancedInversionProfile | null,
   estimatedFilmBaseSample?: FilmBaseSample | null,
-  rollCalibration?: RollCalibration | null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
 ) {
@@ -491,13 +489,6 @@ export function buildProcessingUniforms(
     advancedInversion,
     estimatedFilmBaseSample,
   );
-  const calibrationEnabled = advancedHd.enabled && Boolean(rollCalibration?.enabled);
-  const calibrationSlopes = calibrationEnabled
-    ? rollCalibration?.slopes ?? [1, 1, 1]
-    : [1, 1, 1];
-  const calibrationOffsets = calibrationEnabled
-    ? rollCalibration?.offsets ?? [0, 0, 0]
-    : [0, 0, 0];
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
   const flareCorrection = effectiveSettings.flareCorrection ?? 50;
   const normalizedFlareFloor: [number, number, number] = flareFloor
@@ -598,16 +589,16 @@ export function buildProcessingUniforms(
     advancedHd.baseDensity[0],
     advancedHd.baseDensity[1],
     advancedHd.baseDensity[2],
-    calibrationEnabled ? 1 : 0,
-
-    calibrationSlopes[0],
-    calibrationSlopes[1],
-    calibrationSlopes[2],
     0,
 
-    calibrationOffsets[0],
-    calibrationOffsets[1],
-    calibrationOffsets[2],
+    1,
+    1,
+    1,
+    0,
+
+    0,
+    0,
+    0,
     0,
   ]);
 }
@@ -769,7 +760,6 @@ export function processImageData(
   filmType: FilmProfileType = 'negative',
   advancedInversion?: AdvancedInversionProfile | null,
   estimatedFilmBaseSample?: FilmBaseSample | null,
-  rollCalibration?: RollCalibration | null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
 ): HistogramData {
@@ -800,13 +790,6 @@ export function processImageData(
     advancedInversion,
     estimatedFilmBaseSample,
   );
-  const calibrationEnabled = advancedHd.enabled && Boolean(rollCalibration?.enabled);
-  const calibrationSlopes = calibrationEnabled
-    ? rollCalibration?.slopes ?? [1, 1, 1]
-    : [1, 1, 1];
-  const calibrationOffsets = calibrationEnabled
-    ? rollCalibration?.offsets ?? [0, 0, 0]
-    : [0, 0, 0];
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;
   const temperatureShift = clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1);
@@ -840,9 +823,9 @@ export function processImageData(
       b = applyLightSourceCorrection(b, lightSourceBias[2]);
 
       if (advancedHd.enabled) {
-        r = applyAdvancedHdInversion(r, advancedHd.baseDensity[0], advancedHd.gamma[0], calibrationSlopes[0], calibrationOffsets[0]);
-        g = applyAdvancedHdInversion(g, advancedHd.baseDensity[1], advancedHd.gamma[1], calibrationSlopes[1], calibrationOffsets[1]);
-        b = applyAdvancedHdInversion(b, advancedHd.baseDensity[2], advancedHd.gamma[2], calibrationSlopes[2], calibrationOffsets[2]);
+        r = applyAdvancedHdInversion(r, advancedHd.baseDensity[0], advancedHd.gamma[0]);
+        g = applyAdvancedHdInversion(g, advancedHd.baseDensity[1], advancedHd.gamma[1]);
+        b = applyAdvancedHdInversion(b, advancedHd.baseDensity[2], advancedHd.gamma[2]);
       } else {
         if (filmType !== 'slide') {
           r = 1 - r;

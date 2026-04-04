@@ -179,17 +179,10 @@ describe('runBatch auto-analysis', () => {
     });
   });
 
-  it('forwards shared roll calibration into auto-analysis and export', async () => {
-    const sharedSettings = createDefaultSettings();
+  it('forwards the shared light source bias into auto-analysis and export', async () => {
+    const sharedSettings = createDefaultSettings({ inversionMethod: 'advanced-hd' });
     const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
-    const sharedRollCalibration = {
-      enabled: true,
-      baseSample: { r: 245, g: 245, b: 245 },
-      neutralSamples: [],
-      slopes: [1.1, 1, 0.9] as [number, number, number],
-      offsets: [0.05, 0, -0.03] as [number, number, number],
-      updatedAt: Date.now(),
-    };
+    const sharedLightSourceBias: [number, number, number] = [0.92, 0.96, 1];
     const workerClient = {
       detectFrame: vi.fn(async () => null),
       computeFlare: vi.fn(async () => null),
@@ -222,7 +215,7 @@ describe('runBatch auto-analysis', () => {
       profile,
       null,
       DEFAULT_COLOR_MANAGEMENT,
-      sharedRollCalibration,
+      sharedLightSourceBias,
       DEFAULT_EXPORT_OPTIONS,
       null,
       { cancelled: false },
@@ -230,10 +223,11 @@ describe('runBatch auto-analysis', () => {
     ));
 
     expect(workerClient.autoAnalyze).toHaveBeenCalledWith(expect.objectContaining({
-      rollCalibration: sharedRollCalibration,
+      lightSourceBias: sharedLightSourceBias,
     }));
     expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
-      rollCalibration: sharedRollCalibration,
+      lightSourceBias: sharedLightSourceBias,
     }));
   });
+
 });

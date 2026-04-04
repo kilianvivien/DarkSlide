@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowDownUp, Check, ChevronDown, Copy, Download, Droplets, Film, FolderOpen, FolderPlus, Info, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Unlink2, Upload, X } from 'lucide-react';
+import { ArrowDownUp, Check, ChevronDown, Copy, Download, Film, FolderOpen, FolderPlus, Info, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Unlink2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from '../constants';
 import { confirmDeletePreset, isDesktopShell, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { validateDarkslideFile } from '../utils/presetStore';
@@ -151,12 +151,9 @@ interface PresetsPaneProps {
   activeRoll?: Roll | null;
   activeTabId?: string | null;
   filmstripTabs?: DocumentTab[];
-  canApplyRollFilmBase?: boolean;
   onSelectTab?: (tabId: string) => void;
   onOpenRollInfo?: (rollId: string) => void;
   onSyncRollSettings?: (tabId: string, rollId: string) => void;
-  onApplyRollFilmBase?: (rollId: string) => void;
-  onOpenRollCalibration?: (rollId: string) => void;
   onRemoveFromRoll?: (tabId: string) => void;
   onDeleteRoll?: (rollId: string) => void;
   onCreateRollFromTabs?: () => void;
@@ -185,12 +182,9 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   activeRoll,
   activeTabId,
   filmstripTabs = [],
-  canApplyRollFilmBase = false,
   onSelectTab,
   onOpenRollInfo,
   onSyncRollSettings,
-  onApplyRollFilmBase,
-  onOpenRollCalibration,
   onRemoveFromRoll,
   onDeleteRoll,
   onCreateRollFromTabs,
@@ -1075,24 +1069,6 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                     >
                       <Copy size={12} />
                       Sync Settings
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onApplyRollFilmBase?.(activeRoll.id)}
-                      disabled={!canApplyRollFilmBase}
-                      title={canApplyRollFilmBase ? 'Copy the stored film-base sample to the whole roll' : 'Sample or load a film-base value on any frame in this roll first'}
-                      className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <Droplets size={12} />
-                      Apply Stored Film Base
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onOpenRollCalibration?.(activeRoll.id)}
-                      className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
-                    >
-                      <SlidersHorizontal size={12} />
-                      Roll Calibration
                     </button>
                   </div>
                   {onDeleteRoll && (

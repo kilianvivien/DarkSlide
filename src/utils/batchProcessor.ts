@@ -1,4 +1,4 @@
-import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, ExportOptions, FilmProfile, LabStyleProfile, RollCalibration, SourceMetadata } from '../types';
+import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, ExportOptions, FilmProfile, LabStyleProfile, SourceMetadata } from '../types';
 import { ImageWorkerClient } from './imageWorkerClient';
 import { getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
 import { decodeDesktopRawForWorker, isRawExtension } from './rawImport';
@@ -69,7 +69,7 @@ export async function* runBatch(
   sharedProfile: FilmProfile,
   sharedLabStyle: LabStyleProfile | null,
   sharedColorManagement: ColorManagementSettings,
-  sharedRollCalibration: RollCalibration | null,
+  sharedLightSourceBias: [number, number, number] | null,
   exportOptions: ExportOptions,
   outputPath: string | null,
   cancelToken: { cancelled: boolean },
@@ -179,7 +179,6 @@ export async function* runBatch(
             advancedInversion: sharedProfile.advancedInversion ?? null,
             inputProfileId,
             outputProfileId: exportOptions.outputProfileId,
-            rollCalibration: sharedRollCalibration,
             targetMaxDimension: 1024,
             maskTuning: sharedProfile.maskTuning,
             colorMatrix: sharedProfile.colorMatrix,
@@ -190,6 +189,7 @@ export async function* runBatch(
             labSaturationBias: sharedLabStyle?.saturationBias ?? 0,
             labTemperatureBias: sharedLabStyle?.temperatureBias ?? 0,
             flareFloor,
+            lightSourceBias: sharedLightSourceBias ?? [1, 1, 1],
           });
 
         if (options.autoMode === 'first-frame' && !rollAutoAnalysis) {
@@ -214,7 +214,6 @@ export async function* runBatch(
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
         options: exportOptions,
-        rollCalibration: sharedRollCalibration,
         flareFloor,
         maskTuning: sharedProfile.maskTuning,
         colorMatrix: sharedProfile.colorMatrix,
@@ -224,6 +223,7 @@ export async function* runBatch(
         labTonalCharacterOverride: sharedLabStyle?.tonalCharacterOverride,
         labSaturationBias: sharedLabStyle?.saturationBias ?? 0,
         labTemperatureBias: sharedLabStyle?.temperatureBias ?? 0,
+        lightSourceBias: sharedLightSourceBias ?? [1, 1, 1],
       });
       yield { type: 'progress', entryId: entry.id, progress: 0.85 };
 

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, ChevronDown, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, NotificationSettings, RollCalibration } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, NotificationSettings } from '../types';
 import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
 import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
@@ -21,14 +21,14 @@ interface BatchModalProps {
     sharedSettings: ConversionSettings;
     sharedProfile: FilmProfile;
     sharedColorManagement: ColorManagementSettings;
-    sharedRollCalibration: RollCalibration | null;
+    sharedLightSourceBias: [number, number, number] | null;
   }) => void;
   workerClient: ImageWorkerClient | null;
   currentSettings: ConversionSettings | null;
   currentProfile: FilmProfile | null;
   currentLabStyle: LabStyleProfile | null;
   currentColorManagement: ColorManagementSettings | null;
-  currentRollCalibration?: RollCalibration | null;
+  currentLightSourceBias?: [number, number, number] | null;
   notificationSettings: NotificationSettings;
   customProfiles: FilmProfile[];
   openTabs: DocumentTab[];
@@ -100,7 +100,7 @@ export function BatchModal({
   currentProfile,
   currentLabStyle,
   currentColorManagement,
-  currentRollCalibration = null,
+  currentLightSourceBias = null,
   notificationSettings,
   customProfiles,
   openTabs,
@@ -268,7 +268,7 @@ export function BatchModal({
     ? currentProfile
     : (settingsSource === 'builtin' ? selectedBuiltinProfile : selectedCustomProfile);
   const sharedLabStyle = settingsSource === 'current' ? currentLabStyle : null;
-  const sharedRollCalibration = settingsSource === 'current' ? currentRollCalibration ?? null : null;
+  const sharedLightSourceBias = settingsSource === 'current' ? currentLightSourceBias : null;
   const sharedSettings = settingsSource === 'current'
     ? currentSettings
     : (sharedProfile
@@ -337,7 +337,7 @@ export function BatchModal({
           outputProfileId: exportOptions.outputProfileId,
           embedOutputProfile: exportOptions.embedOutputProfile,
         },
-        sharedRollCalibration,
+        sharedLightSourceBias,
         exportOptions,
         resolvedOutputPath,
         cancelTokenRef.current,
@@ -824,7 +824,7 @@ export function BatchModal({
                         outputProfileId: exportOptions.outputProfileId,
                         embedOutputProfile: exportOptions.embedOutputProfile,
                       },
-                      sharedRollCalibration,
+                      sharedLightSourceBias,
                     });
                   }}
                   disabled={!canOpenContactSheet || isRunning}

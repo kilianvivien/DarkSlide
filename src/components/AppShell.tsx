@@ -55,7 +55,6 @@ import {
   QuickExportPreset,
   RenderBackendDiagnostics,
   Roll,
-  RollCalibration,
   ScannerType,
   WorkspaceDocument,
 } from '../types';
@@ -153,7 +152,7 @@ type AppShellProps = {
   contactSheetSharedSettings: ConversionSettings | null;
   contactSheetSharedProfile: FilmProfile | null;
   contactSheetSharedColorManagement: ColorManagementSettings | null;
-  contactSheetSharedRollCalibration: RollCalibration | null;
+  contactSheetSharedLightSourceBias: [number, number, number] | null;
   onSetIsPanDragging: React.Dispatch<React.SetStateAction<boolean>>;
   onSetIsDragActive: React.Dispatch<React.SetStateAction<boolean>>;
   onSetComparisonMode: React.Dispatch<React.SetStateAction<'processed' | 'original'>>;
@@ -188,7 +187,7 @@ type AppShellProps = {
     sharedSettings: ConversionSettings;
     sharedProfile: FilmProfile;
     sharedColorManagement: ColorManagementSettings;
-    sharedRollCalibration: RollCalibration | null;
+    sharedLightSourceBias: [number, number, number] | null;
   }) => void;
   defaultExportOptions: WorkspaceDocument['exportOptions'];
   onSettingsChange: (newSettings: Partial<ConversionSettings>) => void;
@@ -210,7 +209,6 @@ type AppShellProps = {
   onCropDone: () => void;
   onResetCrop: () => void;
   onSetActivePointPicker: React.Dispatch<React.SetStateAction<PointPickerMode | null>>;
-  onOpenRollCalibration: (rollId: string) => void;
   onOpenSettingsModal: () => void;
   onLightSourceChange: (lightSourceId: string | null) => void;
   onLabStyleChange: (labStyleId: string | null) => void;
@@ -364,7 +362,7 @@ export function AppShell({
   contactSheetSharedSettings,
   contactSheetSharedProfile,
   contactSheetSharedColorManagement,
-  contactSheetSharedRollCalibration,
+  contactSheetSharedLightSourceBias,
   onSetIsPanDragging,
   onSetIsDragActive,
   onSetComparisonMode,
@@ -415,7 +413,6 @@ export function AppShell({
   onCropDone,
   onResetCrop,
   onSetActivePointPicker,
-  onOpenRollCalibration,
   onOpenSettingsModal,
   onLightSourceChange,
   onLabStyleChange,
@@ -1025,12 +1022,9 @@ export function AppShell({
                   activeRoll={activeRoll}
                   activeTabId={activeTabId}
                   filmstripTabs={filmstripTabs}
-                  activeDocument={documentState}
                   onSelectTab={onSelectTab}
                   onOpenRollInfo={onOpenRollInfo}
                   onSyncRollSettings={onSyncRollSettings}
-                  onApplyRollFilmBase={onApplyRollFilmBase}
-                  onOpenRollCalibration={onOpenRollCalibration}
                   onRemoveFromRoll={onRemoveFromRoll}
                   onDeleteRoll={onDeleteRoll}
                   onCreateRollFromTabs={onCreateRollFromTabs}
@@ -1130,6 +1124,7 @@ export function AppShell({
           currentProfile={documentState ? activeProfile : null}
           currentLabStyle={documentState ? activeLabStyle : null}
           currentColorManagement={documentState?.colorManagement ?? null}
+          currentLightSourceBias={documentState ? (lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1]) : null}
           notificationSettings={notificationSettings}
           customProfiles={customPresets}
           openTabs={tabs}
@@ -1144,7 +1139,7 @@ export function AppShell({
           sharedSettings={contactSheetSharedSettings}
           sharedProfile={contactSheetSharedProfile}
           sharedColorManagement={contactSheetSharedColorManagement}
-          sharedRollCalibration={contactSheetSharedRollCalibration}
+          sharedLightSourceBias={contactSheetSharedLightSourceBias}
           notificationSettings={notificationSettings}
           workerClient={workerClient}
           defaultOutputPath={contactSheetOutputPath}

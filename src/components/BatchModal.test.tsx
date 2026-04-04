@@ -96,18 +96,21 @@ function renderModal({
   customProfiles,
   currentSettings = null,
   currentProfile = null,
+  currentLightSourceBias = null,
   notificationSettings = DEFAULT_NOTIFICATION_SETTINGS,
   onOpenContactSheet = vi.fn(),
 }: {
   customProfiles: FilmProfile[];
   currentSettings?: WorkspaceDocument['settings'] | null;
   currentProfile?: FilmProfile | null;
+  currentLightSourceBias?: [number, number, number] | null;
   notificationSettings?: typeof DEFAULT_NOTIFICATION_SETTINGS;
   onOpenContactSheet?: (payload: {
     entries: Array<{ id: string }>;
     sharedSettings: WorkspaceDocument['settings'];
     sharedProfile: FilmProfile;
     sharedColorManagement: typeof DEFAULT_COLOR_MANAGEMENT;
+    sharedLightSourceBias: [number, number, number] | null;
   }) => void;
 }) {
   const profile = FILM_PROFILES.find((item) => item.id === 'generic-color') ?? FILM_PROFILES[0];
@@ -122,6 +125,7 @@ function renderModal({
       currentProfile={currentProfile}
       currentLabStyle={null}
       currentColorManagement={DEFAULT_COLOR_MANAGEMENT}
+      currentLightSourceBias={currentLightSourceBias}
       notificationSettings={notificationSettings}
       customProfiles={customProfiles}
       openTabs={[createOpenTab(profile)]}
@@ -302,7 +306,7 @@ describe('BatchModal', () => {
     });
 
     expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
-    expect(runBatchState.runBatch.mock.calls[0]?.[7]).toBe('/Users/tester/Pictures/DarkSlide');
+    expect(runBatchState.runBatch.mock.calls[0]?.[8]).toBe('/Users/tester/Pictures/DarkSlide');
   });
 
   it('keeps the batch stopped when the desktop destination prompt is cancelled', async () => {
@@ -343,7 +347,7 @@ describe('BatchModal', () => {
 
     expect(fileBridgeState.getDesktopDownloadsDirectory).toHaveBeenCalledTimes(1);
     expect(fileBridgeState.openDirectory).not.toHaveBeenCalled();
-    expect(runBatchState.runBatch.mock.calls[0]?.[7]).toBe('/Users/tester/Downloads');
+    expect(runBatchState.runBatch.mock.calls[0]?.[8]).toBe('/Users/tester/Downloads');
   });
 
   it('does not re-prompt when a desktop destination is already selected', async () => {
@@ -366,7 +370,37 @@ describe('BatchModal', () => {
     });
 
     expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
-    expect(runBatchState.runBatch.mock.calls[0]?.[7]).toBe('/Users/tester/Exports');
+    expect(runBatchState.runBatch.mock.calls[0]?.[8]).toBe('/Users/tester/Exports');
+  });
+
+  it('forwards the current light source bias to batch export and contact sheet flows', async () => {
+    const currentProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
+    const currentSettings = createDefaultSettings({ inversionMethod: 'advanced-hd' });
+    const currentLightSourceBias: [number, number, number] = [0.92, 0.96, 1];
+    const onOpenContactSheet = vi.fn();
+
+    renderModal({
+      customProfiles: [],
+      currentSettings,
+      currentProfile,
+      currentLightSourceBias,
+      onOpenContactSheet,
+    });
+
+    await screen.findByText('open-scan.tiff');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+
+    await waitFor(() => {
+      expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
+    });
+
+    expect(runBatchState.runBatch.mock.calls[0]?.[6]).toEqual(currentLightSourceBias);
+
+    fireEvent.click(screen.getByRole('button', { name: /contact sheet/i }));
+    expect(onOpenContactSheet).toHaveBeenCalledWith(expect.objectContaining({
+      sharedLightSourceBias: currentLightSourceBias,
+    }));
   });
 
   it('sends one completion notification when the batch succeeds', async () => {
