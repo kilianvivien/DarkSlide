@@ -466,6 +466,11 @@ export interface ContactSheetRequest {
   settingsPerCell: ConversionSettings[];
   profilePerCell: FilmProfile[];
   colorManagementPerCell: ColorManagementSettings[];
+  labStyleToneCurvePerCell?: Array<CurvePoint[] | undefined>;
+  labStyleChannelCurvesPerCell?: Array<{ r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] } | undefined>;
+  labTonalCharacterOverridePerCell?: Array<Partial<TonalCharacter> | undefined>;
+  labSaturationBiasPerCell?: number[];
+  labTemperatureBiasPerCell?: number[];
   estimatedFilmBaseSamplePerCell?: Array<FilmBaseSample | null>;
   flareFloorPerCell?: Array<[number, number, number] | null>;
   lightSourceBiasPerCell?: Array<[number, number, number]>;

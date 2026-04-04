@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, ChevronDown, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
-import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, NotificationSettings } from '../types';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings } from '../types';
 import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFolder, openMultipleImageFiles } from '../utils/fileBridge';
 import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
@@ -20,6 +20,7 @@ interface BatchModalProps {
     entries: BatchJobEntry[];
     sharedSettings: ConversionSettings;
     sharedProfile: FilmProfile;
+    sharedLabStyle: LabStyleProfile | null;
     sharedColorManagement: ColorManagementSettings;
     sharedLightSourceBias: [number, number, number] | null;
   }) => void;
@@ -29,6 +30,7 @@ interface BatchModalProps {
   currentLabStyle: LabStyleProfile | null;
   currentColorManagement: ColorManagementSettings | null;
   currentLightSourceBias?: [number, number, number] | null;
+  lightSourceProfiles: LightSourceProfile[];
   notificationSettings: NotificationSettings;
   customProfiles: FilmProfile[];
   openTabs: DocumentTab[];
@@ -101,6 +103,7 @@ export function BatchModal({
   currentLabStyle,
   currentColorManagement,
   currentLightSourceBias = null,
+  lightSourceProfiles,
   notificationSettings,
   customProfiles,
   openTabs,
@@ -280,8 +283,14 @@ export function BatchModal({
   const sharedProfile = settingsSource === 'current'
     ? currentProfile
     : (settingsSource === 'builtin' ? selectedBuiltinProfile : selectedCustomProfile);
-  const sharedLabStyle = settingsSource === 'current' ? currentLabStyle : null;
-  const sharedLightSourceBias = settingsSource === 'current' ? currentLightSourceBias : null;
+  const sharedLabStyle = settingsSource === 'current'
+    ? currentLabStyle
+    : (sharedProfile?.labStyleId ? LAB_STYLE_PROFILES_MAP[sharedProfile.labStyleId] ?? null : null);
+  const sharedLightSourceBias = settingsSource === 'current'
+    ? currentLightSourceBias
+    : (sharedProfile?.lightSourceId
+      ? (lightSourceProfiles.find((profile) => profile.id === sharedProfile.lightSourceId)?.spectralBias ?? null)
+      : null);
   const sharedSettings = settingsSource === 'current'
     ? currentSettings
     : (sharedProfile
@@ -637,31 +646,6 @@ export function BatchModal({
                         <CheckOption checked={batchAutoCrop} disabled={isRunning} onChange={setBatchAutoCrop}>
                           Auto-crop each scan after decode
                         </CheckOption>
-                        <div className="space-y-2">
-                          <p className="text-xs text-zinc-500">Flare estimation</p>
-                          <div className="space-y-2">
-                            <RadioOption checked={batchFlareMode === 'per-image'} disabled={isRunning} onChange={() => setBatchFlareMode('per-image')}>
-                              Per image
-                            </RadioOption>
-                            <RadioOption checked={batchFlareMode === 'first-frame'} disabled={isRunning} onChange={() => setBatchFlareMode('first-frame')}>
-                              First frame (roll)
-                            </RadioOption>
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <p className="text-xs text-zinc-500">Auto analysis</p>
-                          <div className="space-y-2">
-                            <RadioOption checked={batchAutoMode === 'off'} disabled={isRunning} onChange={() => setBatchAutoMode('off')}>
-                              Off
-                            </RadioOption>
-                            <RadioOption checked={batchAutoMode === 'per-image'} disabled={isRunning} onChange={() => setBatchAutoMode('per-image')}>
-                              Per image
-                            </RadioOption>
-                            <RadioOption checked={batchAutoMode === 'first-frame'} disabled={isRunning} onChange={() => setBatchAutoMode('first-frame')}>
-                              First frame (roll)
-                            </RadioOption>
-                          </div>
-                        </div>
                       </div>
                     </section>
 
@@ -855,6 +839,7 @@ export function BatchModal({
                       entries,
                       sharedSettings: structuredClone(sharedSettings),
                       sharedProfile,
+                      sharedLabStyle,
                       sharedColorManagement: {
                         ...colorManagement,
                         outputProfileId: exportOptions.outputProfileId,

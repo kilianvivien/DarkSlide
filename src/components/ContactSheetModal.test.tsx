@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, createDefaultSettings } from '../constants';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, MAX_FILE_SIZE_BYTES, createDefaultSettings } from '../constants';
 import { ContactSheetModal } from './ContactSheetModal';
 import type { ImageWorkerClient } from '../utils/imageWorkerClient';
 
@@ -108,6 +108,7 @@ function renderModal({
   entries,
   workerClient = createWorkerClient(),
   onClose = vi.fn(),
+  sharedLabStyle = null,
   sharedLightSourceBias = null,
 }: {
   entries: Array<{
@@ -122,6 +123,7 @@ function renderModal({
   }>;
   workerClient?: ReturnType<typeof createWorkerClient>;
   onClose?: () => void;
+  sharedLabStyle?: (typeof LAB_STYLE_PROFILES_MAP)[keyof typeof LAB_STYLE_PROFILES_MAP] | null;
   sharedLightSourceBias?: [number, number, number] | null;
 }) {
   render(
@@ -131,6 +133,7 @@ function renderModal({
       entries={entries}
       sharedSettings={createDefaultSettings()}
       sharedProfile={FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0]}
+      sharedLabStyle={sharedLabStyle}
       sharedColorManagement={DEFAULT_COLOR_MANAGEMENT}
       sharedLightSourceBias={sharedLightSourceBias}
       notificationSettings={DEFAULT_NOTIFICATION_SETTINGS}
@@ -336,6 +339,56 @@ describe('ContactSheetModal', () => {
     await waitFor(() => {
       expect(workerClient.contactSheet).toHaveBeenCalledWith(expect.objectContaining({
         lightSourceBiasPerCell: [sharedLightSourceBias],
+      }));
+    });
+  });
+
+  it('forwards the shared lab style into preview renders and sheet generation', async () => {
+    const sharedLabStyle = LAB_STYLE_PROFILES_MAP['lab-frontier-modern'];
+    const workerClient = createWorkerClient();
+    workerClient.render.mockResolvedValue({
+      documentId: 'open-tab-entry',
+      revision: 0,
+      width: 2,
+      height: 1,
+      previewLevelId: 'preview-256',
+      imageData: new ImageData(2, 1),
+      histogram: { r: Array(256).fill(0), g: Array(256).fill(0), b: Array(256).fill(0), l: Array(256).fill(0) },
+      highlightDensity: 0,
+    } as never);
+
+    renderModal({
+      entries: [{
+        id: 'open-tab-entry',
+        kind: 'open-tab',
+        documentId: 'open-tab-entry',
+        filename: 'open-scan.tiff',
+        size: 4,
+        status: 'pending',
+      }],
+      workerClient,
+      sharedLabStyle,
+    });
+
+    await waitFor(() => {
+      expect(workerClient.render).toHaveBeenCalledWith(expect.objectContaining({
+        labStyleToneCurve: sharedLabStyle.toneCurve,
+        labStyleChannelCurves: sharedLabStyle.channelCurves,
+        labTonalCharacterOverride: sharedLabStyle.tonalCharacterOverride,
+        labSaturationBias: sharedLabStyle.saturationBias,
+        labTemperatureBias: sharedLabStyle.temperatureBias,
+      }));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Sheet' }));
+
+    await waitFor(() => {
+      expect(workerClient.contactSheet).toHaveBeenCalledWith(expect.objectContaining({
+        labStyleToneCurvePerCell: [sharedLabStyle.toneCurve],
+        labStyleChannelCurvesPerCell: [sharedLabStyle.channelCurves],
+        labTonalCharacterOverridePerCell: [sharedLabStyle.tonalCharacterOverride],
+        labSaturationBiasPerCell: [sharedLabStyle.saturationBias],
+        labTemperatureBiasPerCell: [sharedLabStyle.temperatureBias],
       }));
     });
   });

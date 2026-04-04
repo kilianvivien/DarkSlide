@@ -5,7 +5,7 @@ import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
 import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
 import { UpdateBanner } from './components/UpdateBanner';
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, PointPickerMode, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, LabStyleProfile, MaskTuning, NotificationSettings, PointPickerMode, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
@@ -105,6 +105,7 @@ export default function App() {
   const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
   const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
   const [contactSheetSharedProfile, setContactSheetSharedProfile] = useState<FilmProfile | null>(null);
+  const [contactSheetSharedLabStyle, setContactSheetSharedLabStyle] = useState<LabStyleProfile | null>(null);
   const [contactSheetSharedColorManagement, setContactSheetSharedColorManagement] = useState<ColorManagementSettings | null>(null);
   const [contactSheetSharedLightSourceBias, setContactSheetSharedLightSourceBias] = useState<[number, number, number] | null>(null);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
@@ -1782,6 +1783,7 @@ export default function App() {
     setContactSheetEntries,
     setContactSheetSharedSettings,
     setContactSheetSharedProfile,
+    setContactSheetSharedLabStyle,
     setContactSheetSharedColorManagement,
     setContactSheetSharedLightSourceBias,
     setGPURenderingEnabled,
@@ -2499,6 +2501,7 @@ onToggleScanningSession: toggleScanningWindow,
       contactSheetEntries={contactSheetEntries}
       contactSheetSharedSettings={contactSheetSharedSettings}
       contactSheetSharedProfile={contactSheetSharedProfile}
+      contactSheetSharedLabStyle={contactSheetSharedLabStyle}
       contactSheetSharedColorManagement={contactSheetSharedColorManagement}
       contactSheetSharedLightSourceBias={contactSheetSharedLightSourceBias}
       onSetIsPanDragging={setIsPanDragging}

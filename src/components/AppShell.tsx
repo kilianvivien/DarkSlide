@@ -153,6 +153,7 @@ type AppShellProps = {
   contactSheetEntries: BatchJobEntry[];
   contactSheetSharedSettings: ConversionSettings | null;
   contactSheetSharedProfile: FilmProfile | null;
+  contactSheetSharedLabStyle: LabStyleProfile | null;
   contactSheetSharedColorManagement: ColorManagementSettings | null;
   contactSheetSharedLightSourceBias: [number, number, number] | null;
   onSetIsPanDragging: React.Dispatch<React.SetStateAction<boolean>>;
@@ -189,6 +190,7 @@ type AppShellProps = {
     entries: BatchJobEntry[];
     sharedSettings: ConversionSettings;
     sharedProfile: FilmProfile;
+    sharedLabStyle: LabStyleProfile | null;
     sharedColorManagement: ColorManagementSettings;
     sharedLightSourceBias: [number, number, number] | null;
   }) => void;
@@ -365,6 +367,7 @@ export function AppShell({
   contactSheetEntries,
   contactSheetSharedSettings,
   contactSheetSharedProfile,
+  contactSheetSharedLabStyle,
   contactSheetSharedColorManagement,
   contactSheetSharedLightSourceBias,
   onSetIsPanDragging,
@@ -1161,6 +1164,7 @@ export function AppShell({
           currentLabStyle={documentState ? activeLabStyle : null}
           currentColorManagement={documentState?.colorManagement ?? null}
           currentLightSourceBias={documentState ? (lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1]) : null}
+          lightSourceProfiles={lightSourceProfiles}
           notificationSettings={notificationSettings}
           customProfiles={customPresets}
           openTabs={tabs}
@@ -1174,6 +1178,7 @@ export function AppShell({
           entries={contactSheetEntries}
           sharedSettings={contactSheetSharedSettings}
           sharedProfile={contactSheetSharedProfile}
+          sharedLabStyle={contactSheetSharedLabStyle}
           sharedColorManagement={contactSheetSharedColorManagement}
           sharedLightSourceBias={contactSheetSharedLightSourceBias}
           notificationSettings={notificationSettings}

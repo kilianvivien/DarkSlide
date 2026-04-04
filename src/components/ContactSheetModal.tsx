@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, X } from 'lucide-react';
 import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile, NotificationSettings } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile, LabStyleProfile, NotificationSettings } from '../types';
 import { isDesktopShell, saveExportBlob, saveToDirectory } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { BatchJobEntry } from '../utils/batchProcessor';
@@ -18,6 +18,7 @@ interface ContactSheetModalProps {
   entries: BatchJobEntry[];
   sharedSettings: ConversionSettings | null;
   sharedProfile: FilmProfile | null;
+  sharedLabStyle: LabStyleProfile | null;
   sharedColorManagement: ColorManagementSettings | null;
   sharedLightSourceBias?: [number, number, number] | null;
   notificationSettings: NotificationSettings;
@@ -68,6 +69,7 @@ export function ContactSheetModal({
   entries,
   sharedSettings,
   sharedProfile,
+  sharedLabStyle,
   sharedColorManagement,
   sharedLightSourceBias = null,
   notificationSettings,
@@ -168,6 +170,11 @@ export function ContactSheetModal({
               ? sharedColorManagement.inputProfileId
               : undefined,
             outputProfileId: 'srgb',
+            labStyleToneCurve: sharedLabStyle?.toneCurve,
+            labStyleChannelCurves: sharedLabStyle?.channelCurves,
+            labTonalCharacterOverride: sharedLabStyle?.tonalCharacterOverride,
+            labSaturationBias: sharedLabStyle?.saturationBias ?? 0,
+            labTemperatureBias: sharedLabStyle?.temperatureBias ?? 0,
             lightSourceBias: sharedLightSourceBias ?? undefined,
             revision: 0,
             targetMaxDimension: 256,
@@ -199,7 +206,7 @@ export function ContactSheetModal({
       token.cancelled = true;
       tempDocumentIds.forEach((id) => void workerClient.disposeDocument(id));
     };
-  }, [entries, isOpen, sharedColorManagement, sharedLightSourceBias, sharedProfile, sharedSettings, workerClient]);
+  }, [entries, isOpen, sharedColorManagement, sharedLabStyle, sharedLightSourceBias, sharedProfile, sharedSettings, workerClient]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -312,6 +319,11 @@ export function ContactSheetModal({
           outputProfileId,
           embedOutputProfile,
         })),
+        labStyleToneCurvePerCell: cells.map(() => sharedLabStyle?.toneCurve),
+        labStyleChannelCurvesPerCell: cells.map(() => sharedLabStyle?.channelCurves),
+        labTonalCharacterOverridePerCell: cells.map(() => sharedLabStyle?.tonalCharacterOverride),
+        labSaturationBiasPerCell: cells.map(() => sharedLabStyle?.saturationBias ?? 0),
+        labTemperatureBiasPerCell: cells.map(() => sharedLabStyle?.temperatureBias ?? 0),
         lightSourceBiasPerCell: sharedLightSourceBias
           ? cells.map(() => [...sharedLightSourceBias] as [number, number, number])
           : undefined,

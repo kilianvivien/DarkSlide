@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, createDefaultSettings } from '../constants';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES, createDefaultSettings } from '../constants';
 import { BatchModal } from './BatchModal';
 import type { DocumentTab, FilmProfile, WorkspaceDocument } from '../types';
 import type { ImageWorkerClient } from '../utils/imageWorkerClient';
@@ -111,6 +111,7 @@ function renderModal({
     entries: Array<{ id: string }>;
     sharedSettings: WorkspaceDocument['settings'];
     sharedProfile: FilmProfile;
+    sharedLabStyle: unknown;
     sharedColorManagement: typeof DEFAULT_COLOR_MANAGEMENT;
     sharedLightSourceBias: [number, number, number] | null;
   }) => void;
@@ -128,6 +129,7 @@ function renderModal({
       currentLabStyle={null}
       currentColorManagement={DEFAULT_COLOR_MANAGEMENT}
       currentLightSourceBias={currentLightSourceBias}
+      lightSourceProfiles={LIGHT_SOURCE_PROFILES}
       notificationSettings={notificationSettings}
       customProfiles={customProfiles}
       openTabs={[createOpenTab(profile)]}
@@ -428,6 +430,55 @@ describe('BatchModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /contact sheet/i }));
     expect(onOpenContactSheet).toHaveBeenCalledWith(expect.objectContaining({
       sharedLightSourceBias: currentLightSourceBias,
+    }));
+  });
+
+  it('forwards a custom preset light source bias when preset mode is selected', async () => {
+    renderModal({
+      customProfiles: [{
+        id: 'custom-cs-lite',
+        version: 1,
+        name: 'Custom CS-LITE',
+        type: 'color',
+        description: 'Custom',
+        defaultSettings: createDefaultSettings(),
+        lightSourceId: 'cs-lite-cool',
+      }],
+    });
+
+    await screen.findByText('open-scan.tiff');
+    fireEvent.click(screen.getByText('Custom'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+
+    await waitFor(() => {
+      expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
+    });
+
+    expect(runBatchState.runBatch.mock.calls[0]?.[6]).toEqual([0.82, 0.87, 1]);
+  });
+
+  it('forwards a custom preset lab style into the contact sheet flow', async () => {
+    const onOpenContactSheet = vi.fn();
+
+    renderModal({
+      customProfiles: [{
+        id: 'custom-lab-style',
+        version: 1,
+        name: 'Custom Lab Style',
+        type: 'color',
+        description: 'Custom',
+        defaultSettings: createDefaultSettings(),
+        labStyleId: 'lab-frontier-modern',
+      }],
+      onOpenContactSheet,
+    });
+
+    await screen.findByText('open-scan.tiff');
+    fireEvent.click(screen.getByText('Custom'));
+    fireEvent.click(screen.getByRole('button', { name: /contact sheet/i }));
+
+    expect(onOpenContactSheet).toHaveBeenCalledWith(expect.objectContaining({
+      sharedLabStyle: LAB_STYLE_PROFILES_MAP['lab-frontier-modern'],
     }));
   });
 
