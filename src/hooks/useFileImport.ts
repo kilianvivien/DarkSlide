@@ -9,6 +9,7 @@ import {
   WorkspaceDocument,
 } from '../types';
 import {
+  DEFAULT_COLOR_NEGATIVE_INVERSION,
   DEFAULT_COLOR_MANAGEMENT,
   DEFAULT_EXPORT_OPTIONS,
   FILM_PROFILES,
@@ -30,6 +31,7 @@ import {
 import { isDesktopShell } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getSidecarCandidatePaths, parseSidecar } from '../utils/sidecarSettings';
+import { resolveDefaultInversionMethodForProfile } from '../utils/appHelpers';
 
 type BlockingOverlayState = {
   title: string;
@@ -176,6 +178,7 @@ export function useFileImport({
     const rollId = resolveRollId?.(nativePath, file.name) ?? null;
     const rawDefaultProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? fallbackProfile;
     const parsedPrefs = loadPreferences();
+    const preferredColorNegativeInversion = parsedPrefs?.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION;
     const initialProfile = rawImport
       ? rawDefaultProfile
       : (
@@ -183,6 +186,7 @@ export function useFileImport({
           ? (persistedProfilesRef.current.find((profile) => profile.id === parsedPrefs.lastProfileId) ?? fallbackProfile)
           : fallbackProfile
       );
+    const initialInversionMethod = resolveDefaultInversionMethodForProfile(initialProfile, preferredColorNegativeInversion);
     activeDocumentIdRef.current = documentId;
 
     appendDiagnostic({
@@ -212,10 +216,12 @@ export function useFileImport({
       previewLevels: [],
       settings: {
         ...structuredClone(initialProfile.defaultSettings),
+        inversionMethod: initialInversionMethod,
         flatFieldEnabled: defaultFlatFieldEnabled,
       },
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
       estimatedFlare: null,
+      estimatedFilmBaseSample: null,
       lightSourceId: null,
       cropSource: null,
       profileId: initialProfile.id,
@@ -246,6 +252,7 @@ export function useFileImport({
       let decoded: DecodedImage;
       let initialSettings: ConversionSettings = {
         ...structuredClone(initialProfile.defaultSettings),
+        inversionMethod: initialInversionMethod,
         flatFieldEnabled: defaultFlatFieldEnabled,
       };
       let rawImportProfile: FilmProfile | null = null;
@@ -412,6 +419,7 @@ export function useFileImport({
           ...(activeSidecar?.exportOptions ?? savedExportOptions),
         }),
         estimatedFlare: decoded.estimatedFlare,
+        estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
         lightSourceId: resolveLightSourceIdForProfile(resolvedProfile, savedLightSourceId),
         cropSource: null,
         rawImportProfile,

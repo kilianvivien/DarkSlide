@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Analytics } from '@vercel/analytics/react';
-import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from './constants';
+import { DEFAULT_COLOR_NEGATIVE_INVERSION, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from './constants';
 import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
 import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
@@ -119,6 +119,7 @@ export default function App() {
   const [scanningAutoExport, setScanningAutoExport] = useState(() => initialPreferences?.scanningAutoExport ?? false);
   const [scanningAutoExportPath, setScanningAutoExportPath] = useState<string | null>(() => initialPreferences?.scanningAutoExportPath ?? null);
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => initialPreferences?.updateChannel ?? 'stable');
+  const [defaultColorNegativeInversion, setDefaultColorNegativeInversion] = useState(() => initialPreferences?.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION);
   const [defaultExportOptions, setDefaultExportOptions] = useState<ExportOptions>(() => initialPreferences?.exportOptions ?? DEFAULT_EXPORT_OPTIONS);
   const [quickExportPresets, setQuickExportPresets] = useState(() => loadQuickExportPresets());
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
@@ -342,8 +343,9 @@ export default function App() {
 
   // Snapshot of the latest preference-relevant state, updated on every render so handlers can always read fresh values
   const prefsSnapshotRef = useRef<UserPreferences>({
-    version: 6,
+    version: 7,
     lastProfileId: fallbackProfile.id,
+    defaultColorNegativeInversion: initialPreferences?.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     notificationSettings: initialPreferences?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: 'adjust',
@@ -364,8 +366,9 @@ export default function App() {
     updateChannel: initialPreferences?.updateChannel ?? 'stable',
   });
   prefsSnapshotRef.current = {
-    version: 6,
+    version: 7,
     lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
+    defaultColorNegativeInversion,
     exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
     notificationSettings,
     sidebarTab,
@@ -1597,6 +1600,7 @@ export default function App() {
     handleGPURenderingChange,
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
+    handleDefaultColorNegativeInversionChange,
     handleProfileChange,
     handleLightSourceChange,
     handleRedetectFrame,
@@ -1705,6 +1709,7 @@ export default function App() {
     setUltraSmoothDragEnabled,
     setNotificationSettings,
     setMaxResidentDocs,
+    setDefaultColorNegativeInversion,
     setExternalEditorPath,
     setExternalEditorName,
     setOpenInEditorOutputPath,
@@ -2354,6 +2359,7 @@ onToggleScanningSession: toggleScanningWindow,
       gpuRenderingEnabled={gpuRenderingEnabled}
       ultraSmoothDragEnabled={ultraSmoothDragEnabled}
       notificationSettings={notificationSettings}
+      defaultColorNegativeInversion={defaultColorNegativeInversion}
       renderBackendDiagnostics={renderBackendDiagnostics}
       defaultLightSourceId={defaultLightSourceId}
       flatFieldProfileNames={calibration.profileNames}
@@ -2462,6 +2468,7 @@ onToggleScanningSession: toggleScanningWindow,
       onToggleUltraSmoothDrag={handleUltraSmoothDragChange}
       onMaxResidentDocsChange={handleMaxResidentDocsChange}
       onNotificationSettingsChange={handleNotificationSettingsChange}
+      onDefaultColorNegativeInversionChange={handleDefaultColorNegativeInversionChange}
       onDefaultLightSourceChange={handleDefaultLightSourceChange}
       onSelectFlatFieldProfile={handleSelectFlatFieldProfile}
       onImportFlatFieldReference={handleImportFlatFieldReference}

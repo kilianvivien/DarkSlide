@@ -53,6 +53,7 @@ type PendingResolver = {
 
 type CachedDecodeRequest = {
   payload: DecodeRequest;
+  estimatedFilmBaseSample: FilmBaseSample | null;
   workerEpoch: number;
   evictionTimeout: number | null;
 };
@@ -484,6 +485,7 @@ export class ImageWorkerClient {
       .then(() => {
         this.decodeCache.set(documentId, {
           payload: cached.payload,
+          estimatedFilmBaseSample: cached.estimatedFilmBaseSample,
           workerEpoch: this.workerEpoch,
           evictionTimeout: null,
         });
@@ -804,6 +806,8 @@ export class ImageWorkerClient {
     labTemperatureBias?: RenderRequest['labTemperatureBias'],
     highlightDensityEstimate?: RenderRequest['highlightDensityEstimate'],
     filmType?: RenderRequest['filmType'],
+    advancedInversion?: RenderRequest['advancedInversion'],
+    estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
@@ -844,6 +848,8 @@ export class ImageWorkerClient {
           inputProfileId,
           outputProfileId,
           filmType,
+          advancedInversion,
+          estimatedFilmBaseSample,
           flareFloor,
           lightSourceBias,
         )
@@ -879,6 +885,8 @@ export class ImageWorkerClient {
     labTemperatureBias?: RenderRequest['labTemperatureBias'],
     highlightDensityEstimate?: RenderRequest['highlightDensityEstimate'],
     filmType?: RenderRequest['filmType'],
+    advancedInversion?: RenderRequest['advancedInversion'],
+    estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
@@ -914,6 +922,8 @@ export class ImageWorkerClient {
         inputProfileId,
         outputProfileId,
         filmType,
+        advancedInversion,
+        estimatedFilmBaseSample,
         flareFloor,
         lightSourceBias,
       );
@@ -1132,6 +1142,7 @@ export class ImageWorkerClient {
     const decoded = await this.request<DecodedImage>('decode', payload, [payload.buffer]);
     this.decodeCache.set(payload.documentId, {
       payload: cachedPayload,
+      estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
       workerEpoch: this.workerEpoch,
       evictionTimeout: null,
     });
@@ -1218,6 +1229,8 @@ export class ImageWorkerClient {
 
   private async renderInternal(payload: RenderRequest, allowRecovery: boolean): Promise<RenderResult> {
     const activePreviewJobId = this.activePreviewJobIds.get(payload.documentId) ?? null;
+    const cachedDecode = this.decodeCache.get(payload.documentId);
+    const estimatedFilmBaseSample = payload.estimatedFilmBaseSample ?? cachedDecode?.estimatedFilmBaseSample ?? null;
     await this.cancelTileJob(payload.documentId, activePreviewJobId, true);
 
     const jobId = this.createJobId(payload.documentId, payload.revision, 'preview');
@@ -1341,6 +1354,8 @@ export class ImageWorkerClient {
         payload.labTemperatureBias,
         payload.highlightDensityEstimate,
         payload.filmType,
+        payload.advancedInversion,
+        estimatedFilmBaseSample,
         payload.flareFloor,
         payload.lightSourceBias,
       );
@@ -1548,6 +1563,7 @@ export class ImageWorkerClient {
   }
 
   private async exportInternal(payload: ExportRequest, allowRecovery: boolean): Promise<ExportResult> {
+    const estimatedFilmBaseSample = this.decodeCache.get(payload.documentId)?.estimatedFilmBaseSample ?? null;
     if (!this.canAttemptGPU()) {
       this.markCpuWorkerBackend('source');
       return this.requestWithDocumentRecovery(
@@ -1616,6 +1632,8 @@ export class ImageWorkerClient {
         payload.labTemperatureBias,
         payload.highlightDensityEstimate,
         payload.filmType,
+        payload.advancedInversion,
+        estimatedFilmBaseSample,
         payload.flareFloor,
         payload.lightSourceBias,
       );

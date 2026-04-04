@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { buildProcessingUniforms, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
+import { buildProcessingUniforms, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, resolveAdvancedHdParameters, rotateCropClockwise } from './imagePipeline';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -107,11 +107,11 @@ describe('processImageData', () => {
 });
 
 describe('buildProcessingUniforms', () => {
-  it('keeps the GPU uniform payload aligned at 68 floats', () => {
-    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(68);
+  it('keeps the GPU uniform payload aligned at 76 floats', () => {
+    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(76);
   });
 
-  it('stores the flat-field flag in the final uniform slot', () => {
+  it('stores the flat-field flag in the correct slot before advanced inversion parameters', () => {
     const uniforms = buildProcessingUniforms(
       createDefaultSettings({ flatFieldEnabled: true }),
       true,
@@ -119,6 +119,94 @@ describe('buildProcessingUniforms', () => {
     );
 
     expect(uniforms[67]).toBe(1);
+  });
+
+  it('stores advanced inversion mode, gamma, and estimated base density in the uniform tail', () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
+    expect(profile?.advancedInversion).toBeDefined();
+
+    const uniforms = buildProcessingUniforms(
+      {
+        ...neutralSettings,
+        inversionMethod: 'advanced-hd',
+      },
+      true,
+      'processed',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      0,
+      0,
+      'srgb',
+      'srgb',
+      'negative',
+      profile?.advancedInversion,
+      { r: 200, g: 180, b: 150 },
+    );
+
+    expect(uniforms[68]).toBe(1);
+    expect(uniforms[69]).toBeCloseTo(profile!.advancedInversion!.gamma[0], 5);
+    expect(uniforms[70]).toBeCloseTo(profile!.advancedInversion!.gamma[1], 5);
+    expect(uniforms[71]).toBeCloseTo(profile!.advancedInversion!.gamma[2], 5);
+    expect(uniforms[72]).toBeGreaterThan(0);
+    expect(uniforms[73]).toBeGreaterThan(0);
+    expect(uniforms[74]).toBeGreaterThan(0);
+  });
+});
+
+describe('advanced H&D inversion', () => {
+  it('uses the estimated film base when available', () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
+    expect(profile?.advancedInversion).toBeDefined();
+
+    const params = resolveAdvancedHdParameters(
+      { inversionMethod: 'advanced-hd' },
+      true,
+      'negative',
+      profile?.advancedInversion,
+      { r: 200, g: 180, b: 150 },
+    );
+
+    expect(params.enabled).toBe(true);
+    expect(params.baseDensity[0]).toBeGreaterThan(0);
+    expect(params.baseDensity).not.toEqual(profile!.advancedInversion!.baseDensityFallback);
+  });
+
+  it('falls back to the profile density when auto estimation is unavailable', () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
+    expect(profile?.advancedInversion).toBeDefined();
+
+    const params = resolveAdvancedHdParameters(
+      { inversionMethod: 'advanced-hd' },
+      true,
+      'negative',
+      profile?.advancedInversion,
+      null,
+    );
+
+    expect(params.enabled).toBe(true);
+    expect(params.baseDensity).toEqual(profile!.advancedInversion!.baseDensityFallback);
+  });
+
+  it('forces standard mode semantics for unsupported film types', () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
+    expect(profile?.advancedInversion).toBeDefined();
+
+    const params = resolveAdvancedHdParameters(
+      { inversionMethod: 'advanced-hd' },
+      true,
+      'slide',
+      profile?.advancedInversion,
+      { r: 200, g: 180, b: 150 },
+    );
+
+    expect(params).toEqual({
+      enabled: false,
+      gamma: [0, 0, 0],
+      baseDensity: [0, 0, 0],
+    });
   });
 });
 

@@ -587,6 +587,12 @@ describe('App import and preview pipeline', () => {
     });
     fileBridgeState.confirmDiscard.mockResolvedValue(true);
     fileBridgeState.confirmReplacePresetLibrary.mockResolvedValue(true);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async () => undefined),
+      },
+    });
 
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
       clearRect: vi.fn(),
@@ -1497,6 +1503,142 @@ describe('App import and preview pipeline', () => {
       interactionQuality: 'ultra-smooth',
       histogramMode: 'throttled',
       targetMaxDimension: 512,
+    });
+  });
+
+  it('applies the advanced inversion preference only to future color-negative documents', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+    }) => createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Color' }));
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Advanced inversion'), { target: { value: 'advanced-hd' } });
+    });
+
+    expect(JSON.parse(localStorage.getItem('darkslide_preferences_v1') ?? '{}')).toMatchObject({
+      defaultColorNegativeInversion: 'advanced-hd',
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    await uploadFile(createFile('advanced-default.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      settings: expect.objectContaining({ inversionMethod: 'advanced-hd' }),
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Color' }));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Advanced inversion'), { target: { value: 'standard' } });
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    expect(JSON.parse(localStorage.getItem('darkslide_preferences_v1') ?? '{}')).toMatchObject({
+      defaultColorNegativeInversion: 'standard',
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Nudge Exposure'));
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      settings: expect.objectContaining({ inversionMethod: 'advanced-hd' }),
+    });
+
+    await uploadFile(createFile('standard-default.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      settings: expect.objectContaining({ inversionMethod: 'standard' }),
+    });
+  });
+
+  it('copies debug info with the resolved color inversion pipeline summary', async () => {
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(300, 200),
+      estimatedFilmBaseSample: {
+        r: 192,
+        g: 185,
+        b: 188,
+      },
+    });
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+      settings: { inversionMethod: string };
+    }) => createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Color' }));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Advanced inversion'), { target: { value: 'advanced-hd' } });
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    await uploadFile(createFile('advanced-default.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy Debug Info' }));
+    });
+
+    const writeText = vi.mocked(navigator.clipboard.writeText);
+    expect(writeText).toHaveBeenCalledTimes(1);
+
+    const report = JSON.parse(writeText.mock.calls[0]?.[0] as string);
+    expect(report.pipeline.colorInversion).toMatchObject({
+      requestedMethod: 'advanced-hd',
+      resolvedMethod: 'advanced-hd',
+      activePipeline: 'advanced-hd',
+      advancedSupportedByProfile: true,
+      baseSampleSource: 'auto-estimated-border-sample',
     });
   });
 

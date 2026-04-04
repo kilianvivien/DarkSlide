@@ -7,6 +7,7 @@ export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'L
 export type CropSource = 'auto' | 'manual';
 export type UpdateChannel = 'stable' | 'beta';
 export type ZoomLevel = number | 'fit';
+export type InversionMethod = 'standard' | 'advanced-hd';
 
 export interface CurvePoint {
   x: number;
@@ -71,6 +72,11 @@ export interface TonalCharacter {
   midtoneAnchor: number;
 }
 
+export interface AdvancedInversionProfile {
+  gamma: [number, number, number];
+  baseDensityFallback: [number, number, number];
+}
+
 export interface LabStyleProfile {
   id: string;
   name: string;
@@ -119,6 +125,7 @@ export interface LightSourceProfile {
 }
 
 export interface ConversionSettings {
+  inversionMethod: InversionMethod;
   exposure: number;
   contrast: number;
   saturation: number;
@@ -237,6 +244,7 @@ export interface FilmProfile {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  advancedInversion?: AdvancedInversionProfile;
   toneCurve?: CurvePoint[];
   isCustom?: boolean;
   tags?: string[];
@@ -296,6 +304,7 @@ export interface DecodedImage {
   metadata: SourceMetadata;
   previewLevels: PreviewLevel[];
   estimatedFlare?: [number, number, number] | null;
+  estimatedFilmBaseSample?: FilmBaseSample | null;
 }
 
 export interface RawDecodeResult {
@@ -314,6 +323,7 @@ export interface WorkspaceDocument {
   settings: ConversionSettings;
   colorManagement: ColorManagementSettings;
   estimatedFlare?: [number, number, number] | null;
+  estimatedFilmBaseSample?: FilmBaseSample | null;
   lightSourceId?: string | null;
   cropSource?: CropSource | null;
   rawImportProfile?: FilmProfile | null;
@@ -361,6 +371,8 @@ export interface RenderRequest {
   settings: ConversionSettings;
   isColor: boolean;
   filmType?: FilmProfileType;
+  advancedInversion?: AdvancedInversionProfile | null;
+  estimatedFilmBaseSample?: FilmBaseSample | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   revision: number;
@@ -411,6 +423,7 @@ export interface ExportRequest {
   settings: ConversionSettings;
   isColor: boolean;
   filmType?: FilmProfileType;
+  advancedInversion?: AdvancedInversionProfile | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   options: ExportOptions;
@@ -451,6 +464,7 @@ export interface ContactSheetRequest {
   settingsPerCell: ConversionSettings[];
   profilePerCell: FilmProfile[];
   colorManagementPerCell: ColorManagementSettings[];
+  estimatedFilmBaseSamplePerCell?: Array<FilmBaseSample | null>;
   flareFloorPerCell?: Array<[number, number, number] | null>;
   lightSourceBiasPerCell?: Array<[number, number, number]>;
 }
@@ -596,6 +610,7 @@ export interface AutoAnalyzeRequest {
   settings: ConversionSettings;
   isColor: boolean;
   filmType?: FilmProfileType;
+  advancedInversion?: AdvancedInversionProfile | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   targetMaxDimension: number;

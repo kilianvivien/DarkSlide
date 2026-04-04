@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
-import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, RAW_IMPORT_PROFILE_ID, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, RAW_IMPORT_PROFILE_ID, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 
 function createRawRgb(width: number, height: number, border: [number, number, number], center: [number, number, number]) {
   const data = new Uint8Array(width * height * 3);
@@ -27,6 +27,22 @@ describe('rawImport', () => {
       g: 151,
       b: 134,
     });
+  });
+
+  it('estimates the film base from RGBA border pixels too', () => {
+    const rgba = rgbToRgba(createRawRgb(64, 48, [168, 151, 134], [40, 60, 120]), 64, 48);
+
+    expect(estimateFilmBaseSampleFromRgba(rgba, 64, 48)).toEqual({
+      r: 168,
+      g: 151,
+      b: 134,
+    });
+  });
+
+  it('returns null when the image is too small for reliable border estimation', () => {
+    const rgb = createRawRgb(7, 7, [168, 151, 134], [40, 60, 120]);
+
+    expect(estimateFilmBaseSample(rgb, 7, 7)).toBeNull();
   });
 
   it('converts EXIF orientation values to canvas rotations', () => {

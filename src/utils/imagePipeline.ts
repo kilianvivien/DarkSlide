@@ -1,4 +1,5 @@
 import {
+  AdvancedInversionProfile,
   ColorProfileId,
   ColorMatrix,
   ConversionSettings,
@@ -19,6 +20,7 @@ import { clamp } from './math';
 const LUMA_R = 0.299;
 const LUMA_G = 0.587;
 const LUMA_B = 0.114;
+const DENSITY_EPSILON = 1e-6;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -286,6 +288,52 @@ export function applyFilmBaseCompensation(value: number, sampleValue: number) {
   return clamp((value - invertedFilmBase) / Math.max(1 / 255, 1 - invertedFilmBase), 0, 1);
 }
 
+function sampleChannelToDensity(sampleValue: number) {
+  return -Math.log10(clamp(sampleValue / 255, DENSITY_EPSILON, 1));
+}
+
+export function applyAdvancedHdInversion(value: number, baseDensity: number, gamma: number) {
+  const transmittance = clamp(value, DENSITY_EPSILON, 1);
+  const density = -Math.log10(transmittance);
+  const imageDensity = Math.max(0, density - baseDensity);
+  return clamp(1 - Math.pow(10, -imageDensity / Math.max(gamma, 0.01)), 0, 1);
+}
+
+export function resolveAdvancedHdParameters(
+  settings: Pick<ConversionSettings, 'inversionMethod'>,
+  isColor: boolean,
+  filmType: FilmProfileType,
+  advancedInversion?: AdvancedInversionProfile | null,
+  estimatedFilmBaseSample?: FilmBaseSample | null,
+) {
+  const enabled = settings.inversionMethod === 'advanced-hd'
+    && isColor
+    && filmType === 'negative'
+    && Boolean(advancedInversion);
+
+  if (!enabled || !advancedInversion) {
+    return {
+      enabled: false,
+      gamma: [0, 0, 0] as [number, number, number],
+      baseDensity: [0, 0, 0] as [number, number, number],
+    };
+  }
+
+  const baseDensity: [number, number, number] = estimatedFilmBaseSample
+    ? [
+      sampleChannelToDensity(estimatedFilmBaseSample.r),
+      sampleChannelToDensity(estimatedFilmBaseSample.g),
+      sampleChannelToDensity(estimatedFilmBaseSample.b),
+    ]
+    : [...advancedInversion.baseDensityFallback] as [number, number, number];
+
+  return {
+    enabled: true,
+    gamma: [...advancedInversion.gamma] as [number, number, number],
+    baseDensity,
+  };
+}
+
 function applyFlareCorrection(value: number, floor: number, strength: number) {
   return Math.max(0, value - floor * strength);
 }
@@ -403,6 +451,8 @@ export function buildProcessingUniforms(
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
   filmType: FilmProfileType = 'negative',
+  advancedInversion?: AdvancedInversionProfile | null,
+  estimatedFilmBaseSample?: FilmBaseSample | null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
 ) {
@@ -415,6 +465,13 @@ export function buildProcessingUniforms(
       highlightRolloff: labTonalCharacterOverride.highlightRolloff ?? 0.5,
     } : undefined);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
+  const advancedHd = resolveAdvancedHdParameters(
+    effectiveSettings,
+    isColor,
+    filmType,
+    advancedInversion,
+    estimatedFilmBaseSample,
+  );
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
   const flareCorrection = effectiveSettings.flareCorrection ?? 50;
   const normalizedFlareFloor: [number, number, number] = flareFloor
@@ -506,6 +563,16 @@ export function buildProcessingUniforms(
     lightSourceBias[1],
     lightSourceBias[2],
     settings.flatFieldEnabled ? 1 : 0,
+
+    advancedHd.enabled ? 1 : 0,
+    advancedHd.gamma[0],
+    advancedHd.gamma[1],
+    advancedHd.gamma[2],
+
+    advancedHd.baseDensity[0],
+    advancedHd.baseDensity[1],
+    advancedHd.baseDensity[2],
+    0,
   ]);
 }
 
@@ -664,6 +731,8 @@ export function processImageData(
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
   filmType: FilmProfileType = 'negative',
+  advancedInversion?: AdvancedInversionProfile | null,
+  estimatedFilmBaseSample?: FilmBaseSample | null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
 ): HistogramData {
@@ -687,6 +756,13 @@ export function processImageData(
   const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
   const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
+  const advancedHd = resolveAdvancedHdParameters(
+    effectiveSettings,
+    isColor,
+    filmType,
+    advancedInversion,
+    estimatedFilmBaseSample,
+  );
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;
   const temperatureShift = clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1);
@@ -719,15 +795,21 @@ export function processImageData(
       g = applyLightSourceCorrection(g, lightSourceBias[1]);
       b = applyLightSourceCorrection(b, lightSourceBias[2]);
 
-      if (filmType !== 'slide') {
-        r = 1 - r;
-        g = 1 - g;
-        b = 1 - b;
-      }
+      if (advancedHd.enabled) {
+        r = applyAdvancedHdInversion(r, advancedHd.baseDensity[0], advancedHd.gamma[0]);
+        g = applyAdvancedHdInversion(g, advancedHd.baseDensity[1], advancedHd.gamma[1]);
+        b = applyAdvancedHdInversion(b, advancedHd.baseDensity[2], advancedHd.gamma[2]);
+      } else {
+        if (filmType !== 'slide') {
+          r = 1 - r;
+          g = 1 - g;
+          b = 1 - b;
+        }
 
-      r = applyFilmBaseCompensation(r, filmBaseBalance.red);
-      g = applyFilmBaseCompensation(g, filmBaseBalance.green);
-      b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
+        r = applyFilmBaseCompensation(r, filmBaseBalance.red);
+        g = applyFilmBaseCompensation(g, filmBaseBalance.green);
+        b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
+      }
 
       if (colorMatrix) {
         [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);

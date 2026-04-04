@@ -30,6 +30,7 @@ import {
   WorkerMemoryDiagnostics,
 } from '../types';
 import {
+  applyAdvancedHdInversion,
   applyFilmBaseCompensation,
   applyLightSourceCorrection,
   assertSupportedDimensions,
@@ -43,6 +44,7 @@ import {
   normalizeCrop,
   processImageData,
   releaseScratchBuffers,
+  resolveAdvancedHdParameters,
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
@@ -58,6 +60,7 @@ import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
 import { clamp } from './math';
+import { estimateFilmBaseSampleFromRgba } from './rawImport';
 import {
   WorkerError,
   WorkerMessage,
@@ -76,6 +79,7 @@ interface StoredDocument {
   previews: StoredPreview[];
   rotationCache: Map<string, OffscreenCanvas>;
   cropCache: Map<string, StoredTileJob>;
+  estimatedFilmBaseSample: FilmBaseSample | null;
   lastAccessedAt: number;
 }
 
@@ -183,6 +187,16 @@ async function decodeRasterBlob(buffer: ArrayBuffer, mime: string) {
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
   return canvas;
+}
+
+function estimateCanvasFilmBase(canvas: OffscreenCanvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    return null;
+  }
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return estimateFilmBaseSampleFromRgba(imageData.data, canvas.width, canvas.height);
 }
 
 function decodeTiff(buffer: ArrayBuffer) {
@@ -715,6 +729,7 @@ async function handleDecode(payload: DecodeRequest) {
     assertSupportedDimensions(canvas.width, canvas.height);
 
     const previewStore = buildPreviewLevels(canvas, payload.displayScaleFactor);
+    const estimatedFilmBaseSample = estimateCanvasFilmBase(canvas);
     const metadata: SourceMetadata = {
       id: payload.documentId,
       name: payload.fileName,
@@ -731,6 +746,7 @@ async function handleDecode(payload: DecodeRequest) {
       previews: previewStore,
       rotationCache: new Map(),
       cropCache: new Map(),
+      estimatedFilmBaseSample,
       lastAccessedAt: Date.now(),
     });
 
@@ -740,6 +756,7 @@ async function handleDecode(payload: DecodeRequest) {
       metadata,
       previewLevels: previewStore.map((preview) => preview.level),
       estimatedFlare,
+      estimatedFilmBaseSample,
     } satisfies DecodedImage;
   }
 
@@ -790,6 +807,7 @@ async function handleDecode(payload: DecodeRequest) {
   assertSupportedDimensions(decodedCanvas.width, decodedCanvas.height);
 
   const previewStore = buildPreviewLevels(decodedCanvas, payload.displayScaleFactor);
+  const estimatedFilmBaseSample = estimateCanvasFilmBase(decodedCanvas);
   const decoderColorProfileId = payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName);
   const declaredUnsupportedColorProfileName = payload.declaredColorProfileName && !decoderColorProfileId
     ? payload.declaredColorProfileName
@@ -816,6 +834,7 @@ async function handleDecode(payload: DecodeRequest) {
     previews: previewStore,
     rotationCache: new Map(),
     cropCache: new Map(),
+    estimatedFilmBaseSample,
     lastAccessedAt: Date.now(),
   });
 
@@ -825,6 +844,7 @@ async function handleDecode(payload: DecodeRequest) {
     metadata,
     previewLevels: previewStore.map((preview) => preview.level),
     estimatedFlare,
+    estimatedFilmBaseSample,
   } satisfies DecodedImage;
 }
 
@@ -932,6 +952,7 @@ function handleCancelJob(payload: CancelTileJobRequest) {
 function applyAutoWhiteBalanceAnalysisStage(
   imageData: ImageData,
   payload: AutoAnalyzeRequest,
+  estimatedFilmBaseSample: FilmBaseSample | null,
 ) {
   applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
@@ -940,6 +961,13 @@ function applyAutoWhiteBalanceAnalysisStage(
   const filmBaseBalance = getFilmBaseBalance(payload.settings.filmBaseSample);
   const lightSourceBias = payload.lightSourceBias ?? [1, 1, 1];
   const filmType = payload.filmType ?? 'negative';
+  const advancedHd = resolveAdvancedHdParameters(
+    payload.settings,
+    payload.isColor,
+    filmType,
+    payload.advancedInversion ?? null,
+    estimatedFilmBaseSample,
+  );
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -950,15 +978,21 @@ function applyAutoWhiteBalanceAnalysisStage(
     g = applyLightSourceCorrection(g, lightSourceBias[1]);
     b = applyLightSourceCorrection(b, lightSourceBias[2]);
 
-    if (filmType !== 'slide') {
-      r = 1 - r;
-      g = 1 - g;
-      b = 1 - b;
-    }
+    if (advancedHd.enabled) {
+      r = applyAdvancedHdInversion(r, advancedHd.baseDensity[0], advancedHd.gamma[0]) * payload.settings.redBalance;
+      g = applyAdvancedHdInversion(g, advancedHd.baseDensity[1], advancedHd.gamma[1]) * payload.settings.greenBalance;
+      b = applyAdvancedHdInversion(b, advancedHd.baseDensity[2], advancedHd.gamma[2]) * payload.settings.blueBalance;
+    } else {
+      if (filmType !== 'slide') {
+        r = 1 - r;
+        g = 1 - g;
+        b = 1 - b;
+      }
 
-    r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
-    g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
-    b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
+      r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
+      g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
+      b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
+    }
 
     data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
     data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
@@ -994,12 +1028,14 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     payload.filmType ?? 'negative',
+    payload.advancedInversion ?? null,
+    document.estimatedFilmBaseSample,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
 
   const whiteBalanceImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  applyAutoWhiteBalanceAnalysisStage(whiteBalanceImageData, payload);
+  applyAutoWhiteBalanceAnalysisStage(whiteBalanceImageData, payload, document.estimatedFilmBaseSample);
 
   return {
     ...analyzeExposure(toneHistogram),
@@ -1038,6 +1074,8 @@ function handleRender(payload: RenderRequest) {
       payload.inputProfileId ?? 'srgb',
       payload.outputProfileId ?? 'srgb',
       payload.filmType ?? 'negative',
+      payload.advancedInversion ?? null,
+      document.estimatedFilmBaseSample,
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
     );
@@ -1137,6 +1175,8 @@ async function handleExport(payload: ExportRequest) {
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     payload.filmType ?? 'negative',
+    payload.advancedInversion ?? null,
+    document.estimatedFilmBaseSample,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
@@ -1223,6 +1263,8 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       resolveStoredInputProfileId(document, colorManagement?.inputMode ?? 'auto', colorManagement?.inputProfileId ?? 'srgb'),
       payload.exportOptions.outputProfileId,
       profile.filmType ?? 'negative',
+      profile.advancedInversion ?? null,
+      payload.estimatedFilmBaseSamplePerCell?.[index] ?? document.estimatedFilmBaseSample,
       payload.flareFloorPerCell?.[index] ?? null,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
     );

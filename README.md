@@ -10,18 +10,11 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v0.6.0
+## What's New in v0.7.0
 
-- **Roll management** — group frames into rolls, name them with film stock info, and browse them in a filmstrip panel inside the sidebar
-- **Scanning sessions** — open a dedicated session window that watches a folder and imports new frames automatically as your scanner writes them
-- **Expanded film profile library** — 15 new built-in profiles including Ektachrome E100, Kodak Double-X 5222, Fujifilm 200, Astia 100F, XP2 Super, Delta 100/400, SFX 200, Fomapan 100/200/400, and Rollei RPX 25/100/400
-- **Preset folders** — organize custom presets into named, collapsible folders; move presets between them via the hover menu
-- **Film stock autocomplete** — the film stock field suggests names from built-in profiles, your custom presets, and your history
-- **Preset sorting** — sort by last added, color/B&W, RAW/non-RAW, or film stock
-- **Preset detail expansion** — click a preset to see its scanner, light source, lab style, and tags at a glance
-- **Default export folders** — set separate output paths for editor saves, batch exports, and contact sheets in Settings
-- **Auto-update banner** — the desktop app notifies you when a new version is available
-- **IndexedDB preset storage** — presets now survive storage limits that affected localStorage
+- **Advanced H&D inversion** — add a density-domain inversion path for supported color negatives, with a global default in `Settings > Color`
+- **Automatic film-base estimation** — DarkSlide now samples the image borders to estimate orange mask density and reuses that data across preview, export, batch, and contact sheet rendering
+- **Safer profile fallback behavior** — unsupported stocks stay on standard inversion, while supported built-in color-negative profiles include tuned advanced inversion metadata
 
 ## Features
 

@@ -84,8 +84,13 @@ export async function decodeDesktopRawForWorker(options: DesktopRawDecodeForWork
   };
 }
 
-export function estimateFilmBaseSample(rgb: ArrayLike<number>, width: number, height: number): FilmBaseSample | null {
-  if (width < 8 || height < 8 || rgb.length < width * height * 3) {
+function estimateFilmBaseSampleWithStride(
+  pixels: ArrayLike<number>,
+  width: number,
+  height: number,
+  stride: 3 | 4,
+): FilmBaseSample | null {
+  if (width < 8 || height < 8 || pixels.length < width * height * stride) {
     return null;
   }
 
@@ -95,10 +100,10 @@ export function estimateFilmBaseSample(rgb: ArrayLike<number>, width: number, he
   const samples: Array<{ lum: number; r: number; g: number; b: number }> = [];
 
   const pushSample = (x: number, y: number) => {
-    const index = (y * width + x) * 3;
-    const r = rgb[index] ?? 0;
-    const g = rgb[index + 1] ?? 0;
-    const b = rgb[index + 2] ?? 0;
+    const index = (y * width + x) * stride;
+    const r = pixels[index] ?? 0;
+    const g = pixels[index + 1] ?? 0;
+    const b = pixels[index + 2] ?? 0;
     samples.push({
       lum: 0.299 * r + 0.587 * g + 0.114 * b,
       r,
@@ -158,6 +163,14 @@ export function estimateFilmBaseSample(rgb: ArrayLike<number>, width: number, he
     g: clamp(Math.round(average.g), 1, 255),
     b: clamp(Math.round(average.b), 1, 255),
   };
+}
+
+export function estimateFilmBaseSample(rgb: ArrayLike<number>, width: number, height: number): FilmBaseSample | null {
+  return estimateFilmBaseSampleWithStride(rgb, width, height, 3);
+}
+
+export function estimateFilmBaseSampleFromRgba(rgba: ArrayLike<number>, width: number, height: number): FilmBaseSample | null {
+  return estimateFilmBaseSampleWithStride(rgba, width, height, 4);
 }
 
 export function getFilmBaseChannelBalance(sample: FilmBaseSample | null) {

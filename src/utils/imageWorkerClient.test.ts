@@ -56,6 +56,7 @@ function createRenderPayload() {
   return {
     documentId: 'doc-1',
     settings: {
+      inversionMethod: 'standard' as const,
       exposure: 0,
       contrast: 0,
       saturation: 100,
@@ -275,6 +276,7 @@ describe('ImageWorkerClient', () => {
     const pending = client.render({
       documentId: 'doc-1',
       settings: {
+        inversionMethod: 'standard',
         exposure: 0,
         contrast: 0,
         saturation: 100,
@@ -418,6 +420,7 @@ describe('ImageWorkerClient', () => {
     const pending = client.render({
       documentId: 'doc-1',
       settings: {
+        inversionMethod: 'standard',
         exposure: 0,
         contrast: 0,
         saturation: 100,
@@ -550,6 +553,7 @@ describe('ImageWorkerClient', () => {
     const pending = client.render({
       documentId: 'doc-1',
       settings: {
+        inversionMethod: 'standard',
         exposure: 0,
         contrast: 0,
         saturation: 100,
@@ -804,6 +808,7 @@ describe('ImageWorkerClient', () => {
     const client = new ImageWorkerClient();
     const worker = MockWorker.instances[0];
     const settings = {
+      inversionMethod: 'standard' as const,
       exposure: 0,
       contrast: 0,
       saturation: 100,
@@ -976,6 +981,7 @@ describe('ImageWorkerClient', () => {
     const pending = client.render({
       documentId: 'doc-1',
       settings: {
+        inversionMethod: 'standard',
         exposure: 0,
         contrast: 0,
         saturation: 100,
@@ -1140,6 +1146,7 @@ describe('ImageWorkerClient', () => {
     const pending = client.render({
       documentId: 'doc-1',
       settings: {
+        inversionMethod: 'standard',
         exposure: 0,
         contrast: 0,
         saturation: 100,

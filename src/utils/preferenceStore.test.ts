@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
+import { DEFAULT_COLOR_NEGATIVE_INVERSION, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
 import { loadPreferences, savePreferences, UserPreferences } from './preferenceStore';
 
 const VALID_PREFS: UserPreferences = {
-  version: 6,
+  version: 7,
   notificationSettings: {
     enabled: false,
     exportComplete: true,
@@ -11,6 +11,7 @@ const VALID_PREFS: UserPreferences = {
     contactSheetComplete: true,
   },
   lastProfileId: 'portra-400',
+  defaultColorNegativeInversion: 'advanced-hd',
   exportOptions: {
     format: 'image/png',
     quality: 0.85,
@@ -93,6 +94,7 @@ describe('loadPreferences', () => {
     expect(loadPreferences()).toMatchObject({
       cropTab: 'Film',
       gpuRendering: true,
+      defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
     });
   });
 
@@ -110,6 +112,7 @@ describe('loadPreferences', () => {
     expect(loadPreferences()).toMatchObject({
       cropTab: 'Film',
       ultraSmoothDrag: false,
+      defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
     });
   });
 
@@ -134,6 +137,19 @@ describe('loadPreferences', () => {
         embedOutputProfile: true,
       }),
       notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+      defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
+    });
+  });
+
+  it('defaults the advanced inversion preference off for version 6 payloads', () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      ...VALID_PREFS,
+      version: 6,
+    }));
+
+    expect(loadPreferences()).toMatchObject({
+      version: 7,
+      defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
     });
   });
 });
@@ -144,8 +160,9 @@ describe('savePreferences + loadPreferences round-trip', () => {
     const loaded = loadPreferences();
 
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(6);
+    expect(loaded!.version).toBe(7);
     expect(loaded!.lastProfileId).toBe('portra-400');
+    expect(loaded!.defaultColorNegativeInversion).toBe('advanced-hd');
     expect(loaded!.sidebarTab).toBe('export');
     expect(loaded!.cropTab).toBe('Social');
     expect(loaded!.isLeftPaneOpen).toBe(false);
@@ -182,14 +199,15 @@ describe('savePreferences + loadPreferences round-trip', () => {
     }));
 
     expect(loadPreferences()).toMatchObject({
-      version: 6,
+      version: 7,
       openInEditorOutputPath: null,
       notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
       updateChannel: 'stable',
+      defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
     });
   });
 
-  it('migrates version 3 preferences to version 6 with default notification settings', () => {
+  it('migrates version 3 preferences to version 7 with default notification settings', () => {
     localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
       ...VALID_PREFS,
       version: 3,
@@ -197,8 +215,9 @@ describe('savePreferences + loadPreferences round-trip', () => {
     }));
 
     expect(loadPreferences()).toMatchObject({
-      version: 6,
+      version: 7,
       notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+      defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
     });
   });
 });

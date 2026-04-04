@@ -1,11 +1,13 @@
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, SUPPORTED_EXTENSIONS } from '../constants';
 import {
+  AdvancedInversionProfile,
   ColorManagementSettings,
   ColorMatrix,
   ColorProfileId,
   ConversionSettings,
   FilmProfile,
   HistogramMode,
+  InversionMethod,
   InteractionQuality,
   MaskTuning,
   SourceMetadata,
@@ -119,6 +121,78 @@ export function getPresetTags(
     settings.blackAndWhite.enabled || profileType === 'bw' ? 'bw' : 'color',
     isRawExtension(extension) ? 'raw' : 'non-raw',
   ];
+}
+
+export function resolveDefaultInversionMethodForProfile(
+  profile: Pick<FilmProfile, 'type' | 'filmType' | 'advancedInversion'>,
+  preferred: InversionMethod,
+): InversionMethod {
+  const isColorNegative = profile.type === 'color' && (profile.filmType ?? 'negative') === 'negative';
+  return isColorNegative && profile.advancedInversion ? preferred : 'standard';
+}
+
+export function canUseAdvancedInversion(
+  settings: Pick<ConversionSettings, 'inversionMethod'>,
+  options: {
+    isColor: boolean;
+    filmType?: FilmProfile['filmType'];
+    advancedInversion?: AdvancedInversionProfile | null;
+  },
+) {
+  return settings.inversionMethod === 'advanced-hd'
+    && options.isColor
+    && (options.filmType ?? 'negative') === 'negative'
+    && Boolean(options.advancedInversion);
+}
+
+export function getResolvedInversionPipelineSummary(
+  settings: Pick<ConversionSettings, 'inversionMethod' | 'blackAndWhite'>,
+  options: {
+    profileType: FilmProfile['type'];
+    filmType?: FilmProfile['filmType'];
+    advancedInversion?: AdvancedInversionProfile | null;
+    estimatedFilmBaseSample?: ConversionSettings['filmBaseSample'] | null;
+  },
+) {
+  const isColor = options.profileType === 'color' && !settings.blackAndWhite.enabled;
+  const filmType = options.filmType ?? 'negative';
+  const advancedActive = canUseAdvancedInversion(
+    { inversionMethod: settings.inversionMethod },
+    {
+      isColor,
+      filmType,
+      advancedInversion: options.advancedInversion,
+    },
+  );
+
+  const baseSampleSource = advancedActive
+    ? (options.estimatedFilmBaseSample ? 'auto-estimated-border-sample' : 'profile-fallback')
+    : null;
+
+  const reason = advancedActive
+    ? 'advanced-hd requested and supported'
+    : settings.inversionMethod === 'standard'
+      ? 'standard requested'
+      : !isColor
+        ? 'advanced-hd requested but document is not in a color-negative workflow'
+        : filmType !== 'negative'
+          ? 'advanced-hd requested but film type is not negative'
+          : !options.advancedInversion
+            ? 'advanced-hd requested but the active profile has no advanced inversion metadata'
+            : 'standard fallback';
+
+  return {
+    requestedMethod: settings.inversionMethod,
+    resolvedMethod: advancedActive ? 'advanced-hd' : 'standard',
+    activePipeline: advancedActive ? 'advanced-hd' : 'standard',
+    profileType: options.profileType,
+    filmType,
+    blackAndWhiteEnabled: settings.blackAndWhite.enabled,
+    advancedSupportedByProfile: Boolean(options.advancedInversion),
+    usedEstimatedFilmBaseSample: advancedActive && Boolean(options.estimatedFilmBaseSample),
+    baseSampleSource,
+    reason,
+  };
 }
 
 export function normalizePreviewImageData(imageData: ImageData, width: number, height: number) {

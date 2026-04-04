@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, ImagePlus, Pencil, Trash2, Upload } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ExportOptions, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
+import { ColorManagementSettings, ColorProfileId, ExportOptions, InversionMethod, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { isDesktopShell } from '../utils/fileBridge';
@@ -23,6 +23,8 @@ interface SettingsModalProps {
   onMaxResidentDocsChange: (value: MaxResidentDocs) => void;
   notificationSettings: NotificationSettings;
   onNotificationSettingsChange: (options: Partial<NotificationSettings>) => void;
+  defaultColorNegativeInversion: InversionMethod;
+  onDefaultColorNegativeInversionChange: (value: InversionMethod) => void;
   colorManagement: ColorManagementSettings;
   sourceMetadata: SourceMetadata | null;
   onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
@@ -294,6 +296,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onMaxResidentDocsChange,
   notificationSettings,
   onNotificationSettingsChange,
+  defaultColorNegativeInversion,
+  onDefaultColorNegativeInversionChange,
   colorManagement,
   sourceMetadata,
   onColorManagementChange,
@@ -971,6 +975,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {/* ── Color ── */}
                     {tab === 'color' && (
                       <div className="space-y-3">
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Advanced inversion</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              Sets the default inversion mode for future color-negative imports, resets, and profile applications. Open images keep their current method.
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <label htmlFor="default-color-negative-inversion" className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
+                              Color-negative default
+                            </label>
+                            <select
+                              id="default-color-negative-inversion"
+                              aria-label="Advanced inversion"
+                              value={defaultColorNegativeInversion}
+                              onChange={(event) => onDefaultColorNegativeInversionChange(event.target.value as InversionMethod)}
+                              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
+                            >
+                              <option value="standard">Standard inversion</option>
+                              <option value="advanced-hd">Advanced H&amp;D inversion</option>
+                            </select>
+                            <p className="text-[11px] leading-relaxed text-zinc-500">
+                              Advanced H&amp;D uses automatic border-based film-base estimation when supported, then falls back to the film profile defaults.
+                            </p>
+                          </div>
+                        </div>
+
                         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
                           <div>
                             <p className="text-[13px] font-semibold text-zinc-100">Source Color Profile</p>

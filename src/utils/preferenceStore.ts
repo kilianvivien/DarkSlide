@@ -1,11 +1,13 @@
-import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
+import { DEFAULT_COLOR_NEGATIVE_INVERSION, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
+import { InversionMethod } from '../types';
 import { CropTab, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
 
 export interface UserPreferences {
-  version: 6;
+  version: 7;
   lastProfileId: string;
+  defaultColorNegativeInversion: InversionMethod;
   exportOptions: ExportOptions;
   notificationSettings: NotificationSettings;
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'export';
@@ -26,18 +28,21 @@ export interface UserPreferences {
   updateChannel: UpdateChannel;
 }
 
-type PreferencesV5 = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 5 };
-type PreferencesV6Base = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>;
+type PreferencesV5 = Omit<UserPreferences, 'version' | 'defaultColorNegativeInversion' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 5 };
+type PreferencesV6 = Omit<UserPreferences, 'version' | 'defaultColorNegativeInversion'> & { version: 6 };
+type PreferencesV6Base = Omit<UserPreferences, 'version' | 'defaultColorNegativeInversion' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>
+  & Partial<Pick<UserPreferences, 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>>;
 
 function isValidPreferences(value: unknown): value is UserPreferences {
   if (!value || typeof value !== 'object') return false;
   const prefs = value as Partial<UserPreferences>;
   const exportOptions = prefs.exportOptions as Partial<ExportOptions> | undefined;
   return (
-    prefs.version === 6 &&
+    prefs.version === 7 &&
     typeof prefs.notificationSettings === 'object' &&
     prefs.notificationSettings !== null &&
     typeof prefs.lastProfileId === 'string' &&
+    (prefs.defaultColorNegativeInversion === 'standard' || prefs.defaultColorNegativeInversion === 'advanced-hd') &&
     exportOptions !== undefined &&
     typeof exportOptions.format === 'string' &&
     typeof exportOptions.quality === 'number' &&
@@ -152,13 +157,24 @@ function isVersion5Preferences(value: unknown): value is PreferencesV5 {
 }
 
 function withV6Defaults(base: PreferencesV6Base): UserPreferences {
+  const {
+    version: _version,
+    defaultColorNegativeInversion: _defaultColorNegativeInversion,
+    scanningWatchPath,
+    scanningAutoExport,
+    scanningAutoExportPath,
+    updateChannel,
+    ...rest
+  } = base as PreferencesV6Base & Partial<Pick<UserPreferences, 'version' | 'defaultColorNegativeInversion'>>;
+
   return {
-    version: 6,
-    scanningWatchPath: null,
-    scanningAutoExport: false,
-    scanningAutoExportPath: null,
-    updateChannel: 'stable',
-    ...base,
+    version: 7,
+    defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
+    ...rest,
+    scanningWatchPath: scanningWatchPath ?? null,
+    scanningAutoExport: scanningAutoExport ?? false,
+    scanningAutoExportPath: scanningAutoExportPath ?? null,
+    updateChannel: updateChannel ?? 'stable',
   };
 }
 
@@ -324,6 +340,16 @@ function migrateVersion5Preferences(legacy: ReturnType<typeof JSON.parse>): User
   });
 }
 
+function isVersion6Preferences(value: unknown): value is PreferencesV6 {
+  if (!value || typeof value !== 'object') return false;
+  const prefs = value as Partial<PreferencesV6>;
+  return prefs.version === 6
+    && typeof prefs.lastProfileId === 'string'
+    && typeof prefs.sidebarTab === 'string'
+    && typeof prefs.isLeftPaneOpen === 'boolean'
+    && typeof prefs.isRightPaneOpen === 'boolean';
+}
+
 export function loadPreferences(): UserPreferences | null {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
@@ -335,11 +361,14 @@ export function loadPreferences(): UserPreferences | null {
     if (isVersion3Preferences(parsed)) return migrateVersion3Preferences(parsed);
     if (isVersion4Preferences(parsed)) return migrateVersion4Preferences(parsed);
     if (isVersion5Preferences(parsed)) return migrateVersion5Preferences(parsed);
+    if (isVersion6Preferences(parsed)) {
+      return withV6Defaults(parsed);
+    }
     if (!isValidPreferences(parsed)) return null;
 
     return {
       ...parsed,
-      version: 6,
+      version: 7,
       exportOptions: {
         ...DEFAULT_EXPORT_OPTIONS,
         ...parsed.exportOptions,
@@ -361,6 +390,7 @@ export function loadPreferences(): UserPreferences | null {
       scanningAutoExport: parsed.scanningAutoExport ?? false,
       scanningAutoExportPath: parsed.scanningAutoExportPath ?? null,
       updateChannel: parsed.updateChannel ?? 'stable',
+      defaultColorNegativeInversion: parsed.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION,
     };
   } catch {
     return null;
@@ -370,7 +400,7 @@ export function loadPreferences(): UserPreferences | null {
 export function savePreferences(prefs: UserPreferences): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     ...prefs,
-    version: 6,
+    version: 7,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
       ...prefs.exportOptions,

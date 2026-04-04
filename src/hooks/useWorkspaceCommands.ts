@@ -15,7 +15,8 @@ import {
   saveToDirectory,
   writeTextFileByPath,
 } from '../utils/fileBridge';
-import { getCanvas2dContext, getNativePathFromFile, getOpenInEditorErrorContext, getResolvedInputProfileId, TransientNoticeState, waitForNextPaint } from '../utils/appHelpers';
+import { getCanvas2dContext, getNativePathFromFile, getOpenInEditorErrorContext, getResolvedInversionPipelineSummary, getResolvedInputProfileId, TransientNoticeState, waitForNextPaint } from '../utils/appHelpers';
+import { resolveDefaultInversionMethodForProfile } from '../utils/appHelpers';
 import { savePreferences, UserPreferences } from '../utils/preferenceStore';
 import { saveMaxResidentDocs, MaxResidentDocs } from '../utils/residentDocsStore';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
@@ -168,6 +169,7 @@ type UseWorkspaceCommandsOptions = {
   setUltraSmoothDragEnabled: SetState<boolean>;
   setNotificationSettings: SetState<NotificationSettings>;
   setMaxResidentDocs: SetState<MaxResidentDocs>;
+  setDefaultColorNegativeInversion: SetState<'standard' | 'advanced-hd'>;
   setExternalEditorPath: SetState<string | null>;
   setExternalEditorName: SetState<string | null>;
   setOpenInEditorOutputPath: SetState<string | null>;
@@ -268,6 +270,7 @@ export function useWorkspaceCommands({
   setUltraSmoothDragEnabled,
   setNotificationSettings,
   setMaxResidentDocs,
+  setDefaultColorNegativeInversion,
   setExternalEditorPath,
   setExternalEditorName,
   setOpenInEditorOutputPath,
@@ -782,6 +785,11 @@ export function useWorkspaceCommands({
     });
   }, [activeTabId, refreshRenderBackendDiagnostics, setMaxResidentDocs, workerClientRef]);
 
+  const handleDefaultColorNegativeInversionChange = useCallback((value: 'standard' | 'advanced-hd') => {
+    setDefaultColorNegativeInversion(value);
+    savePreferences({ ...prefsSnapshotRef.current, defaultColorNegativeInversion: value });
+  }, [prefsSnapshotRef, setDefaultColorNegativeInversion]);
+
   const handleProfileChange = useCallback((profile: FilmProfile) => {
     const nextLightSourceId = Object.prototype.hasOwnProperty.call(profile, 'lightSourceId')
       ? (profile.lightSourceId ?? null)
@@ -797,12 +805,18 @@ export function useWorkspaceCommands({
       lightSourceId: nextLightSourceId !== undefined
         ? nextLightSourceId
         : resolveLightSourceIdForProfile(profile, current.lightSourceId),
-      settings: structuredClone(profile.defaultSettings),
+      settings: {
+        ...structuredClone(profile.defaultSettings),
+        inversionMethod: resolveDefaultInversionMethodForProfile(profile, prefsSnapshotRef.current.defaultColorNegativeInversion),
+      },
       ...(nextLabStyleId !== undefined ? { labStyleId: nextLabStyleId } : {}),
       dirty: true,
     }));
     const resolvedLabStyleId = nextLabStyleId !== undefined ? nextLabStyleId : (documentState?.labStyleId ?? null);
-    resetHistory(createHistoryEntry(profile.defaultSettings, resolvedLabStyleId));
+    resetHistory(createHistoryEntry({
+      ...structuredClone(profile.defaultSettings),
+      inversionMethod: resolveDefaultInversionMethodForProfile(profile, prefsSnapshotRef.current.defaultColorNegativeInversion),
+    }, resolvedLabStyleId));
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [documentState?.labStyleId, prefsSnapshotRef, resetHistory, updateDocument]);
 
@@ -862,10 +876,13 @@ export function useWorkspaceCommands({
     pushHistoryEntry(createHistoryEntry(documentState.settings, documentState.labStyleId));
     updateDocument((current) => ({
       ...current,
-      settings: structuredClone(activeProfile.defaultSettings),
+      settings: {
+        ...structuredClone(activeProfile.defaultSettings),
+        inversionMethod: resolveDefaultInversionMethodForProfile(activeProfile, prefsSnapshotRef.current.defaultColorNegativeInversion),
+      },
       dirty: false,
     }));
-  }, [activeProfile.defaultSettings, documentState, pushHistoryEntry, updateDocument]);
+  }, [activeProfile, documentState, prefsSnapshotRef, pushHistoryEntry, updateDocument]);
 
   const runExport = useCallback(async (params?: {
     settings?: ConversionSettings;
@@ -1336,6 +1353,12 @@ export function useWorkspaceCommands({
         activeDocumentId: activeDocumentIdRef.current,
         activeImportSession: importSessionRef.current,
         activeRenderRequest: activeRenderRequestRef.current,
+        colorInversion: documentState ? getResolvedInversionPipelineSummary(documentState.settings, {
+          profileType: activeProfile.type,
+          filmType: activeProfile.filmType,
+          advancedInversion: activeProfile.advancedInversion ?? null,
+          estimatedFilmBaseSample: documentState.estimatedFilmBaseSample ?? null,
+        }) : null,
         fitScale,
         targetMaxDimension,
         effectiveRenderTarget: fullRenderTargetDimension,
@@ -1400,6 +1423,7 @@ export function useWorkspaceCommands({
     handleGPURenderingChange,
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
+    handleDefaultColorNegativeInversionChange,
     handleProfileChange,
     handleLightSourceChange,
     handleRedetectFrame,
