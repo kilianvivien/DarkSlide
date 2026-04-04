@@ -28,6 +28,19 @@ function createSourceMetadata(id: string) {
   };
 }
 
+function createHistogramWithHighlightRatio(ratio: number) {
+  const total = 1000;
+  const highlightCount = Math.round(total * ratio);
+  const shadowCount = total - highlightCount;
+
+  return {
+    r: Array.from({ length: 256 }, (_, index) => (index >= 240 ? Math.round(highlightCount / 16) : index === 0 ? shadowCount : 0)),
+    g: Array.from({ length: 256 }, (_, index) => (index >= 240 ? Math.round(highlightCount / 16) : index === 0 ? shadowCount : 0)),
+    b: Array.from({ length: 256 }, (_, index) => (index >= 240 ? Math.round(highlightCount / 16) : index === 0 ? shadowCount : 0)),
+    l: Array.from({ length: 256 }, (_, index) => (index >= 240 ? Math.round(highlightCount / 16) : index === 0 ? shadowCount : 0)),
+  };
+}
+
 async function collectEvents(generator: AsyncGenerator<BatchProgressEvent>) {
   const events: BatchProgressEvent[] = [];
   for await (const event of generator) {
@@ -227,6 +240,121 @@ describe('runBatch auto-analysis', () => {
     }));
     expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
       lightSourceBias: sharedLightSourceBias,
+    }));
+  });
+
+  it('reuses the open tab flare and highlight density for batch export', async () => {
+    const sharedSettings = createDefaultSettings();
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    const estimatedFlare: [number, number, number] = [12, 8, 4];
+    const histogram = createHistogramWithHighlightRatio(0.24);
+    const workerClient = {
+      detectFrame: vi.fn(async () => null),
+      computeFlare: vi.fn(async () => [0, 0, 0] as [number, number, number]),
+      autoAnalyze: vi.fn(async () => ({
+        exposure: 0,
+        blackPoint: 0,
+        whitePoint: 255,
+        temperature: 0,
+        tint: 0,
+      })),
+      export: vi.fn(async () => ({
+        blob: new Blob(['ok'], { type: 'image/jpeg' }),
+        filename: 'frame.jpg',
+      })),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+    } as const;
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'doc-1',
+        kind: 'open-tab',
+        documentId: 'doc-1',
+        sourceMetadata: createSourceMetadata('doc-1'),
+        filename: 'doc-1.tiff',
+        size: 1,
+        status: 'pending',
+        histogram,
+        estimatedFlare,
+      }],
+      sharedSettings,
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoCrop: false },
+    ));
+
+    expect(workerClient.computeFlare).not.toHaveBeenCalled();
+    expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
+      flareFloor: estimatedFlare,
+      highlightDensityEstimate: expect.closeTo(0.24, 2),
+    }));
+  });
+
+  it('runs highlight analysis for file entries before export', async () => {
+    const sharedSettings = createDefaultSettings();
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    const workerClient = {
+      decode: vi.fn(async () => ({
+        metadata: createSourceMetadata('decoded-1'),
+        estimatedFlare: [0, 0, 0] as [number, number, number],
+      })),
+      render: vi.fn(async () => ({
+        documentId: 'doc-1',
+        revision: 1,
+        width: 100,
+        height: 100,
+        previewLevelId: 'preview-1024',
+        imageData: new ImageData(1, 1),
+        histogram: createHistogramWithHighlightRatio(0.31),
+        highlightDensity: 0.31,
+      })),
+      detectFrame: vi.fn(async () => null),
+      computeFlare: vi.fn(async () => [0, 0, 0] as [number, number, number]),
+      autoAnalyze: vi.fn(async () => ({
+        exposure: 0,
+        blackPoint: 0,
+        whitePoint: 255,
+        temperature: 0,
+        tint: 0,
+      })),
+      export: vi.fn(async () => ({
+        blob: new Blob(['ok'], { type: 'image/jpeg' }),
+        filename: 'frame.jpg',
+      })),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+      disposeDocument: vi.fn(async () => ({ disposed: true })),
+    } as const;
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'doc-1',
+        kind: 'file',
+        file: new File(['abc'], 'doc-1.tiff', { type: 'image/tiff' }),
+        filename: 'doc-1.tiff',
+        size: 3,
+        status: 'pending',
+      }],
+      sharedSettings,
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoCrop: false },
+    ));
+
+    expect(workerClient.render).toHaveBeenCalled();
+    expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
+      highlightDensityEstimate: expect.closeTo(0.31, 2),
     }));
   });
 

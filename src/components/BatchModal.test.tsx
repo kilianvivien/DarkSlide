@@ -10,6 +10,7 @@ const fileBridgeState = vi.hoisted(() => ({
   getDesktopDownloadsDirectory: vi.fn(),
   isDesktopShell: vi.fn(() => false),
   openDirectory: vi.fn(),
+  openImageFolder: vi.fn(),
   openMultipleImageFiles: vi.fn(),
 }));
 
@@ -43,6 +44,7 @@ vi.mock('../utils/fileBridge', () => ({
   getDesktopDownloadsDirectory: fileBridgeState.getDesktopDownloadsDirectory,
   isDesktopShell: fileBridgeState.isDesktopShell,
   openDirectory: fileBridgeState.openDirectory,
+  openImageFolder: fileBridgeState.openImageFolder,
   openMultipleImageFiles: fileBridgeState.openMultipleImageFiles,
 }));
 
@@ -140,6 +142,7 @@ describe('BatchModal', () => {
     fileBridgeState.getDesktopDownloadsDirectory.mockReset();
     fileBridgeState.isDesktopShell.mockReset();
     fileBridgeState.openDirectory.mockReset();
+    fileBridgeState.openImageFolder.mockReset();
     fileBridgeState.openMultipleImageFiles.mockReset();
     runBatchState.runBatch.mockReset();
     exportNotificationState.notifyExportFinished.mockReset();
@@ -373,6 +376,31 @@ describe('BatchModal', () => {
     expect(runBatchState.runBatch.mock.calls[0]?.[8]).toBe('/Users/tester/Exports');
   });
 
+  it('adds files from a selected desktop folder', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFolder.mockResolvedValue([
+      {
+        file: new File(['a'], 'roll-01.tiff', { type: 'image/tiff' }),
+        path: '/Users/tester/Scans/Roll A/roll-01.tiff',
+        size: 1,
+      },
+      {
+        file: new File(['b'], 'roll-02.tiff', { type: 'image/tiff' }),
+        path: '/Users/tester/Scans/Roll A/roll-02.tiff',
+        size: 1,
+      },
+    ]);
+
+    renderModal({ customProfiles: [] });
+    await screen.findByText('open-scan.tiff');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Folder' }));
+
+    await screen.findByText('roll-01.tiff');
+    expect(screen.getByText('roll-02.tiff')).toBeInTheDocument();
+    expect(fileBridgeState.openImageFolder).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards the current light source bias to batch export and contact sheet flows', async () => {
     const currentProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
     const currentSettings = createDefaultSettings({ inversionMethod: 'advanced-hd' });
@@ -422,6 +450,10 @@ describe('BatchModal', () => {
         failureCount: 0,
         cancelled: false,
       });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('open-scan.tiff')).not.toBeInTheDocument();
     });
   });
 

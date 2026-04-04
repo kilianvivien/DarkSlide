@@ -47,6 +47,16 @@ function getFileName(path: string) {
   return path.split(/[\\/]/).pop() ?? 'darkslide-import';
 }
 
+function joinPath(parent: string, child: string) {
+  return parent.endsWith('/') ? `${parent}${child}` : `${parent}/${child}`;
+}
+
+function isSupportedImportPath(path: string) {
+  const extension = getFileExtension(path).toLowerCase();
+  return SUPPORTED_EXTENSIONS.includes(extension as typeof SUPPORTED_EXTENSIONS[number])
+    || RAW_EXTENSIONS.includes(extension as typeof RAW_EXTENSIONS[number]);
+}
+
 function triggerBrowserDownload(blob: Blob, filename: string) {
   const url = trackCreateObjectURL(blob);
   const link = document.createElement('a');
@@ -169,6 +179,67 @@ export async function openMultipleImageFiles(): Promise<NativeOpenFileResult[]> 
   }
 
   return Promise.all(selected.map((path) => openDesktopFile(path)));
+}
+
+export async function openImageFolder(): Promise<NativeOpenFileResult[]> {
+  if (!isDesktopShell()) {
+    return [];
+  }
+
+  const [{ open }, { readDir, readFile, stat }] = await Promise.all([
+    import('@tauri-apps/plugin-dialog'),
+    import('@tauri-apps/plugin-fs'),
+  ]);
+
+  const selected = await open({
+    title: 'Open Folder of Scans',
+    directory: true,
+    multiple: false,
+  });
+
+  if (!selected || Array.isArray(selected)) {
+    return [];
+  }
+
+  const collectPaths = async (dirPath: string): Promise<string[]> => {
+    const entries = await readDir(dirPath);
+    const nestedPaths = await Promise.all(entries.map(async (entry) => {
+      if (!entry.name) {
+        return [] as string[];
+      }
+
+      const entryPath = joinPath(dirPath, entry.name);
+      if (entry.isDirectory) {
+        return collectPaths(entryPath);
+      }
+
+      return isSupportedImportPath(entryPath) ? [entryPath] : [];
+    }));
+
+    return nestedPaths.flat();
+  };
+
+  const filePaths = (await collectPaths(selected)).sort((left, right) => left.localeCompare(right));
+  return Promise.all(filePaths.map(async (path) => {
+    const fileName = getFileName(path);
+    const extension = getFileExtension(fileName);
+
+    if (isRawExtension(extension)) {
+      const metadata = await stat(path);
+      return {
+        file: new File([], fileName, { type: 'application/octet-stream' }),
+        path,
+        size: typeof metadata.size === 'number' ? metadata.size : 0,
+      } satisfies NativeOpenFileResult;
+    }
+
+    const bytes = await readFile(path);
+    return {
+      file: new File([bytes], fileName, { type: getMimeTypeForFile(fileName) }),
+      path,
+      size: bytes.byteLength,
+    } satisfies NativeOpenFileResult;
+  }));
 }
 
 export async function openImageFileByPath(path: string): Promise<NativeOpenFileResult | null> {

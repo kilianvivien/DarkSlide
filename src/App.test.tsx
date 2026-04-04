@@ -93,6 +93,7 @@ const fileBridgeState = vi.hoisted(() => ({
   isDesktopShell: vi.fn(() => false),
   openImageFile: vi.fn(),
   openImageFileByPath: vi.fn(),
+  openImageFolder: vi.fn(),
   openMultipleImageFiles: vi.fn(),
   openPresetBackupFile: vi.fn(),
   openDirectory: vi.fn(),
@@ -448,6 +449,7 @@ vi.mock('./utils/fileBridge', () => ({
   isDesktopShell: fileBridgeState.isDesktopShell,
   openImageFile: fileBridgeState.openImageFile,
   openImageFileByPath: fileBridgeState.openImageFileByPath,
+  openImageFolder: fileBridgeState.openImageFolder,
   openMultipleImageFiles: fileBridgeState.openMultipleImageFiles,
   openPresetBackupFile: fileBridgeState.openPresetBackupFile,
   openDirectory: fileBridgeState.openDirectory,
@@ -599,6 +601,7 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     fileBridgeState.openImageFile.mockReset();
     fileBridgeState.openImageFileByPath.mockReset();
+    fileBridgeState.openImageFolder.mockReset();
     fileBridgeState.openMultipleImageFiles.mockReset();
     fileBridgeState.openPresetBackupFile.mockReset();
     fileBridgeState.openDirectory.mockReset();

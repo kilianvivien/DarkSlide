@@ -10,7 +10,7 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v0.7.0
+## What's New in v0.7.1
 
 - **Advanced H&D inversion** — add a density-domain inversion path for supported color negatives, with a global default in `Settings > Color`
 - **Automatic film-base estimation** — DarkSlide now samples the image borders to estimate orange mask density and reuses that data across preview, export, batch, and contact sheet rendering

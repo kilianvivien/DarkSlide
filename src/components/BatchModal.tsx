@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Check, ChevronDown, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, NotificationSettings } from '../types';
-import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openMultipleImageFiles } from '../utils/fileBridge';
+import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFolder, openMultipleImageFiles } from '../utils/fileBridge';
 import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getColorProfileDescription } from '../utils/colorProfiles';
@@ -182,6 +182,8 @@ export function BatchModal({
         status: existingEntry?.status ?? 'pending',
         errorMessage: existingEntry?.errorMessage,
         progress: existingEntry?.progress,
+        histogram: tab.document.histogram,
+        estimatedFlare: tab.document.estimatedFlare,
         };
       });
 
@@ -229,6 +231,17 @@ export function BatchModal({
 
     try {
       const nativeFiles = await openMultipleImageFiles();
+      if (nativeFiles.length > 0) {
+        addFiles(nativeFiles.map((entry) => ({ file: entry.file, nativePath: entry.path, nativeSize: entry.size })));
+      }
+    } catch (addError) {
+      setError(addError instanceof Error ? addError.message : String(addError));
+    }
+  };
+
+  const handleAddFolder = async () => {
+    try {
+      const nativeFiles = await openImageFolder();
       if (nativeFiles.length > 0) {
         addFiles(nativeFiles.map((entry) => ({ file: entry.file, nativePath: entry.path, nativeSize: entry.size })));
       }
@@ -325,6 +338,7 @@ export function BatchModal({
     try {
       let successCount = 0;
       let failureCount = 0;
+      const shouldClearEntriesAfterSuccess = runnableEntries.length === entries.length;
 
       for await (const event of runBatch(
         workerClient,
@@ -380,6 +394,15 @@ export function BatchModal({
               return entry;
           }
         }));
+      }
+
+      if (
+        shouldClearEntriesAfterSuccess
+        && !cancelTokenRef.current.cancelled
+        && failureCount === 0
+        && successCount === runnableEntries.length
+      ) {
+        setEntries([]);
       }
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : String(runError));
@@ -440,15 +463,28 @@ export function BatchModal({
                 <div className="flex min-h-0 flex-col border-r border-zinc-800/80">
                   <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-3">
                     <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Files</h3>
-                    <button
-                      type="button"
-                      onClick={() => void handleAddFiles()}
-                      disabled={isRunning}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-100 disabled:opacity-50"
-                    >
-                      <Plus size={12} />
-                      Add Files
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {desktopShell && (
+                        <button
+                          type="button"
+                          onClick={() => void handleAddFolder()}
+                          disabled={isRunning}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-100 disabled:opacity-50"
+                        >
+                          <FolderOpen size={12} />
+                          Add Folder
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void handleAddFiles()}
+                        disabled={isRunning}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-100 disabled:opacity-50"
+                      >
+                        <Plus size={12} />
+                        Add Files
+                      </button>
+                    </div>
                   </div>
 
                   <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">

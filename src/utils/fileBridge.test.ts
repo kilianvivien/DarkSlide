@@ -12,6 +12,7 @@ const dialogState = vi.hoisted(() => ({
 }));
 
 const fsState = vi.hoisted(() => ({
+  readDir: vi.fn(),
   readFile: vi.fn(),
   stat: vi.fn(),
   writeFile: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
+  readDir: fsState.readDir,
   readFile: fsState.readFile,
   stat: fsState.stat,
   writeFile: fsState.writeFile,
@@ -46,7 +48,7 @@ vi.mock('@tauri-apps/api/path', () => ({
   downloadDir: pathState.downloadDir,
 }));
 
-import { confirmDeletePreset, confirmReplacePresetLibrary, getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFile, openInExternalEditor, openPresetBackupFile, openPresetFile, saveExportBlob, savePresetBackupFile, savePresetFile, saveToDirectory } from './fileBridge';
+import { confirmDeletePreset, confirmReplacePresetLibrary, getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFile, openImageFolder, openInExternalEditor, openPresetBackupFile, openPresetFile, saveExportBlob, savePresetBackupFile, savePresetFile, saveToDirectory } from './fileBridge';
 
 describe('fileBridge', () => {
   beforeEach(() => {
@@ -54,6 +56,7 @@ describe('fileBridge', () => {
     dialogState.open.mockReset();
     dialogState.save.mockReset();
     dialogState.ask.mockReset();
+    fsState.readDir.mockReset();
     fsState.readFile.mockReset();
     fsState.stat.mockReset();
     fsState.writeFile.mockReset();
@@ -109,6 +112,42 @@ describe('fileBridge', () => {
     expect(result?.file.name).toBe('scan.nef');
     expect(result?.file.size).toBe(0);
     expect(result?.size).toBe(30_955_119);
+  });
+
+  it('opens a desktop folder of scans recursively', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.open.mockResolvedValue('/Users/tester/Desktop/Scans');
+    fsState.readDir.mockImplementation(async (path: string) => {
+      if (path === '/Users/tester/Desktop/Scans') {
+        return [
+          { name: 'roll-a', isDirectory: true },
+          { name: 'notes.txt', isDirectory: false },
+        ];
+      }
+
+      if (path === '/Users/tester/Desktop/Scans/roll-a') {
+        return [
+          { name: 'frame-01.tiff', isDirectory: false },
+          { name: 'frame-02.jpg', isDirectory: false },
+        ];
+      }
+
+      return [];
+    });
+    fsState.readFile.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    const result = await openImageFolder();
+
+    expect(dialogState.open).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Open Folder of Scans',
+      directory: true,
+      multiple: false,
+    }));
+    expect(fsState.readDir).toHaveBeenCalledWith('/Users/tester/Desktop/Scans');
+    expect(fsState.readDir).toHaveBeenCalledWith('/Users/tester/Desktop/Scans/roll-a');
+    expect(result.map((entry) => entry.path)).toEqual([
+      '/Users/tester/Desktop/Scans/roll-a/frame-01.tiff',
+      '/Users/tester/Desktop/Scans/roll-a/frame-02.jpg',
+    ]);
   });
 
   it('downloads blobs in the browser build', async () => {
