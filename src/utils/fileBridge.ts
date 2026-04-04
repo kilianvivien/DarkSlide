@@ -577,3 +577,72 @@ export async function confirmReplacePresetLibrary(): Promise<boolean> {
 
   return window.confirm(message);
 }
+
+export async function confirmDeleteFlatFieldProfile(name: string): Promise<boolean> {
+  const message = `Delete "${name}"?`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Delete Flat-Field Profile',
+      kind: 'warning',
+      okLabel: 'Delete',
+      cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
+}
+
+export async function confirmRestoreSidecar(filename: string): Promise<boolean> {
+  const message = `Settings sidecar found for "${filename}". Restore those settings?`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Restore Settings',
+      kind: 'info',
+      okLabel: 'Restore',
+      cancelLabel: 'Skip',
+    });
+  }
+
+  return window.confirm(message);
+}
+
+export async function confirmDuplicateImport(filename: string): Promise<boolean> {
+  const message = `Import another copy of ${filename}?`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Duplicate Import',
+      kind: 'info',
+      okLabel: 'Import',
+      cancelLabel: 'Skip',
+    });
+  }
+
+  return window.confirm(message);
+}
+
+export async function confirmOverwriteAutoAdjust(): Promise<boolean> {
+  const message = 'Auto will overwrite your manual adjustments. Continue?';
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Auto Adjust',
+      kind: 'warning',
+      okLabel: 'Continue',
+      cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
+}
+
+// Tauri has no native text-input dialog; this wraps window.prompt for a consistent call site.
+export function promptText(message: string, defaultValue: string): string | null {
+  return window.prompt(message, defaultValue);
+}

@@ -166,9 +166,9 @@ function withV6Defaults(base: PreferencesV6Base): UserPreferences {
   } = base;
 
   return {
+    ...rest,
     version: 7,
     defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
-    ...rest,
     scanningWatchPath: scanningWatchPath ?? null,
     scanningAutoExport: scanningAutoExport ?? false,
     scanningAutoExportPath: scanningAutoExportPath ?? null,

@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CurvePoint, Curves } from '../types';
 import { clamp } from '../utils/math';
 
@@ -46,7 +46,7 @@ export const CurvesControl = memo(function CurvesControl({
     setDraggingPoint(index);
   };
 
-  const handleMouseMove = (e: React.MouseEvent | MouseEvent) => {
+  const handleMouseMove = useCallback((e: React.MouseEvent | MouseEvent) => {
     if (draggingPoint === null || !svgRef.current) return;
 
     const rect = svgRef.current.getBoundingClientRect();
@@ -75,12 +75,12 @@ export const CurvesControl = memo(function CurvesControl({
     }
 
     onChange({ ...curves, [activeChannel]: newPoints });
-  };
+  }, [draggingPoint, points, activeChannel, curves, onChange, svgRef]);
 
-  const handleMouseUp = () => {
+  const handleMouseUp = useCallback(() => {
     setDraggingPoint(null);
     onInteractionEnd?.();
-  };
+  }, [onInteractionEnd]);
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     if (!svgRef.current) return;
@@ -119,8 +119,9 @@ export const CurvesControl = memo(function CurvesControl({
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      if (draggingPoint !== null) onInteractionEnd?.();
     };
-  }, [draggingPoint, points, activeChannel]);
+  }, [draggingPoint, handleMouseMove, handleMouseUp, onInteractionEnd]);
 
   const pathData = useMemo(() => buildPath(points, size), [points, size]);
 

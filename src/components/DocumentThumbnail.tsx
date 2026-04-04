@@ -89,7 +89,21 @@ export function DocumentThumbnail({
     return () => {
       cancelled = true;
     };
-  }, [document, lightSource, profile, size, workerClient]);
+  }, [
+    document.status,
+    document.id,
+    document.labStyleId,
+    document.settings,
+    document.source,
+    document.colorManagement,
+    document.renderRevision,
+    document.histogram,
+    document.estimatedFlare,
+    lightSource,
+    profile,
+    size,
+    workerClient,
+  ]);
 
   return (
     <div className={`relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 ${className}`}>

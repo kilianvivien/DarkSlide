@@ -4,7 +4,7 @@ import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Key
 import { ColorManagementSettings, ColorProfileId, ExportOptions, InversionMethod, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
-import { isDesktopShell } from '../utils/fileBridge';
+import { confirmDeleteFlatFieldProfile, isDesktopShell, promptText } from '../utils/fileBridge';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { MAX_RESIDENT_DOC_OPTIONS, MaxResidentDocs } from '../utils/residentDocsStore';
 
@@ -415,7 +415,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleCalibrationDelete = async () => {
-    if (!activeFlatFieldProfileName || !window.confirm(`Delete "${activeFlatFieldProfileName}"?`)) {
+    if (!activeFlatFieldProfileName || !await confirmDeleteFlatFieldProfile(activeFlatFieldProfileName)) {
       return;
     }
 
@@ -432,7 +432,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return;
     }
 
-    const nextName = window.prompt('Rename flat-field profile', activeFlatFieldProfileName);
+    const nextName = promptText('Rename flat-field profile', activeFlatFieldProfileName);
     if (!nextName) {
       return;
     }

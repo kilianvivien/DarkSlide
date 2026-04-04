@@ -18,7 +18,7 @@ import { useRolls } from './hooks/useRolls';
 import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic } from './utils/diagnostics';
-import { confirmDeleteRoll, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
+import { confirmDeleteRoll, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
@@ -1915,7 +1915,7 @@ export default function App() {
 
   const handleSaveQuickExportPreset = useCallback(() => {
     const baseOptions = documentState?.exportOptions ?? defaultExportOptions;
-    const name = window.prompt('Save current export settings as a quick preset', 'Custom Export');
+    const name = promptText('Save current export settings as a quick preset', 'Custom Export');
     if (!name) {
       return;
     }
@@ -2002,7 +2002,7 @@ export default function App() {
       || documentState.settings.blackPoint !== defaults.blackPoint
       || documentState.settings.whitePoint !== defaults.whitePoint;
 
-    if (hasManualAdjustments && typeof window !== 'undefined' && !window.confirm('Auto will overwrite your manual adjustments. Continue?')) {
+    if (hasManualAdjustments && !await confirmOverwriteAutoAdjust()) {
       return;
     }
 

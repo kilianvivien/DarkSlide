@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { isDesktopShell } from '../utils/fileBridge';
+import { confirmDuplicateImport, isDesktopShell } from '../utils/fileBridge';
 
 export type ScanQueueEntry = {
   path: string;
@@ -99,10 +99,10 @@ export function useScanningSession({
           return;
         }
 
-        unlisten = await listen<{ path: string; filename: string }>('darkslide://new-scan', (event) => {
+        unlisten = await listen<{ path: string; filename: string }>('darkslide://new-scan', async (event) => {
           const basename = event.payload.filename.toLowerCase();
           if (seenBasenamesRef.current.has(basename)) {
-            if (typeof window !== 'undefined' && !window.confirm(`Import another copy of ${event.payload.filename}?`)) {
+            if (!await confirmDuplicateImport(event.payload.filename)) {
               return;
             }
           }

@@ -21,7 +21,7 @@ import { appendDiagnostic } from '../utils/diagnostics';
 import { addRecentFile } from '../utils/recentFilesStore';
 import { getFileExtension, sanitizeFilenameBase } from '../utils/imagePipeline';
 import { loadPreferences } from '../utils/preferenceStore';
-import { readTextFileByPath } from '../utils/fileBridge';
+import { confirmRestoreSidecar, isDesktopShell, readTextFileByPath } from '../utils/fileBridge';
 import {
   buildRawInitialSettings,
   createRawImportProfile,
@@ -29,7 +29,6 @@ import {
   estimateFilmBaseSample,
   rotationFromExifOrientation,
 } from '../utils/rawImport';
-import { isDesktopShell } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getSidecarCandidatePaths, parseSidecar } from '../utils/sidecarSettings';
 import { resolveDefaultInversionMethodForProfile } from '../utils/appHelpers';
@@ -404,7 +403,7 @@ export function useFileImport({
       }
 
       const shouldRestoreSidecar = restoredSidecar
-        ? window.confirm(`Settings sidecar found for "${file.name}". Restore those settings?`)
+        ? await confirmRestoreSidecar(file.name)
         : false;
       const activeSidecar = shouldRestoreSidecar ? restoredSidecar : null;
 
