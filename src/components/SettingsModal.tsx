@@ -994,7 +994,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
                             >
                               <option value="standard">Standard inversion</option>
-                              <option value="advanced-hd">Advanced H&amp;D inversion</option>
+                              <option value="advanced-hd">Advanced H&amp;D inversion (Experimental)</option>
                             </select>
                             <p className="text-[11px] leading-relaxed text-zinc-500">
                               Advanced H&amp;D uses automatic border-based film-base estimation when supported, then falls back to the film profile defaults.
