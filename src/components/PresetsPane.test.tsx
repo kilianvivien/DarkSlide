@@ -299,4 +299,43 @@ describe('PresetsPane', () => {
     expect(screen.getByText('Slide · Color')).toBeInTheDocument();
     expect(screen.getByText('Negative · Color')).toBeInTheDocument();
   });
+
+  it('opens roll calibration from a single button on the active roll card', () => {
+    const onOpenRollCalibration = vi.fn();
+    const activeRoll = {
+      id: 'roll-1',
+      name: 'Untitled Roll',
+      filmStock: null,
+      profileId: null,
+      camera: null,
+      date: null,
+      notes: '',
+      filmBaseSample: null,
+      calibration: null,
+      createdAt: Date.now(),
+      directory: null,
+    };
+
+    render(
+      <PresetsPane
+        activeStockId="generic-color"
+        onStockChange={vi.fn()}
+        customPresets={[]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+        rolls={new Map([[activeRoll.id, activeRoll]])}
+        activeRoll={activeRoll}
+        filmstripTabs={[]}
+        onOpenRollCalibration={onOpenRollCalibration}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^rolls$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /roll calibration/i }));
+
+    expect(onOpenRollCalibration).toHaveBeenCalledWith('roll-1');
+    expect(screen.queryByRole('button', { name: /pick neutral/i })).not.toBeInTheDocument();
+  });
 });

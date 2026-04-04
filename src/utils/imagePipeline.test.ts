@@ -107,8 +107,8 @@ describe('processImageData', () => {
 });
 
 describe('buildProcessingUniforms', () => {
-  it('keeps the GPU uniform payload aligned at 76 floats', () => {
-    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(76);
+  it('keeps the GPU uniform payload aligned at 84 floats', () => {
+    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(84);
   });
 
   it('stores the flat-field flag in the correct slot before advanced inversion parameters', () => {
@@ -162,7 +162,7 @@ describe('advanced H&D inversion', () => {
     expect(profile?.advancedInversion).toBeDefined();
 
     const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd' },
+      { inversionMethod: 'advanced-hd', filmBaseSample: null },
       true,
       'negative',
       profile?.advancedInversion,
@@ -179,7 +179,7 @@ describe('advanced H&D inversion', () => {
     expect(profile?.advancedInversion).toBeDefined();
 
     const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd' },
+      { inversionMethod: 'advanced-hd', filmBaseSample: null },
       true,
       'negative',
       profile?.advancedInversion,
@@ -190,12 +190,29 @@ describe('advanced H&D inversion', () => {
     expect(params.baseDensity).toEqual(profile!.advancedInversion!.baseDensityFallback);
   });
 
+  it('prefers a manual film-base sample over the estimated one', () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
+    expect(profile?.advancedInversion).toBeDefined();
+
+    const params = resolveAdvancedHdParameters(
+      { inversionMethod: 'advanced-hd', filmBaseSample: { r: 240, g: 230, b: 220 } },
+      true,
+      'negative',
+      profile?.advancedInversion,
+      { r: 200, g: 180, b: 150 },
+    );
+
+    expect(params.enabled).toBe(true);
+    expect(params.baseSampleSource).toBe('manual-picker');
+    expect(params.baseDensity[0]).toBeLessThan(profile!.advancedInversion!.baseDensityFallback[0]);
+  });
+
   it('forces standard mode semantics for unsupported film types', () => {
     const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
     expect(profile?.advancedInversion).toBeDefined();
 
     const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd' },
+      { inversionMethod: 'advanced-hd', filmBaseSample: null },
       true,
       'slide',
       profile?.advancedInversion,
@@ -206,6 +223,7 @@ describe('advanced H&D inversion', () => {
       enabled: false,
       gamma: [0, 0, 0],
       baseDensity: [0, 0, 0],
+      baseSampleSource: null,
     });
   });
 });

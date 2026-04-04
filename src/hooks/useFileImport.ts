@@ -6,6 +6,7 @@ import {
   DecodedImage,
   DocumentTab,
   FilmProfile,
+  Roll,
   WorkspaceDocument,
 } from '../types';
 import {
@@ -77,6 +78,7 @@ type UseFileImportOptions = {
   setError: (message: string | null) => void;
   setTransientNotice: (notice: TransientNoticeState) => void;
   resolveRollId?: (nativePath: string | null | undefined, fileName: string) => string | null;
+  getRollById?: (rollId: string | null) => Roll | null;
 };
 
 export function useFileImport({
@@ -99,6 +101,7 @@ export function useFileImport({
   setError,
   setTransientNotice,
   resolveRollId,
+  getRollById,
 }: UseFileImportOptions) {
   const importSessionRef = useRef(0);
   const ignoredSidecarsRef = useRef(new Set<string>());
@@ -187,6 +190,7 @@ export function useFileImport({
           : fallbackProfile
       );
     const initialInversionMethod = resolveDefaultInversionMethodForProfile(initialProfile, preferredColorNegativeInversion);
+    const roll = getRollById?.(rollId) ?? null;
     activeDocumentIdRef.current = documentId;
 
     appendDiagnostic({
@@ -217,6 +221,7 @@ export function useFileImport({
       settings: {
         ...structuredClone(initialProfile.defaultSettings),
         inversionMethod: initialInversionMethod,
+        filmBaseSample: roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample,
         flatFieldEnabled: defaultFlatFieldEnabled,
       },
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
@@ -253,6 +258,7 @@ export function useFileImport({
       let initialSettings: ConversionSettings = {
         ...structuredClone(initialProfile.defaultSettings),
         inversionMethod: initialInversionMethod,
+        filmBaseSample: roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample,
         flatFieldEnabled: defaultFlatFieldEnabled,
       };
       let rawImportProfile: FilmProfile | null = null;
@@ -277,6 +283,9 @@ export function useFileImport({
             ...initialSettings,
             flatFieldEnabled: defaultFlatFieldEnabled,
           };
+          if (roll?.filmBaseSample) {
+            initialSettings.filmBaseSample = structuredClone(roll.filmBaseSample);
+          }
           rawImportProfile = createRawImportProfile(initialProfile, initialSettings);
 
           if (estimatedFilmBase) {
@@ -443,6 +452,9 @@ export function useFileImport({
           ...activeSidecar.colorManagement,
         };
         nextDocument.lightSourceId = activeSidecar.lightSourceProfileId ?? nextDocument.lightSourceId;
+        if (roll?.filmBaseSample && !nextDocument.settings.filmBaseSample) {
+          nextDocument.settings.filmBaseSample = structuredClone(roll.filmBaseSample);
+        }
       }
 
       tabsApi.replaceDocument(documentId, nextDocument);

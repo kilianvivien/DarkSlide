@@ -1,32 +1,67 @@
 import { useCallback, useMemo, useState } from 'react';
-import { DocumentTab, FilmBaseSample, Roll } from '../types';
+import { DocumentTab, FilmBaseSample, Roll, RollCalibration, RollCalibrationNeutralSample } from '../types';
+import {
+  createEmptyRollCalibration,
+  fitRollCalibration,
+  IDENTITY_ROLL_CALIBRATION_OFFSETS,
+  IDENTITY_ROLL_CALIBRATION_SLOPES,
+  MIN_ROLL_CALIBRATION_SAMPLES,
+} from '../utils/rollCalibration';
 
-const STORAGE_KEY = 'darkslide_rolls_v1';
+const STORAGE_KEY = 'darkslide_rolls_v2';
+const LEGACY_STORAGE_KEY = 'darkslide_rolls_v1';
 
-type StoredRolls = {
+type StoredRollsV1 = {
   version: 1;
   rolls: Roll[];
 };
 
-function loadStoredRolls() {
-  if (typeof window === 'undefined') {
-    return new Map<string, Roll>();
-  }
+type StoredRollsV2 = {
+  version: 2;
+  rolls: Roll[];
+};
 
-  const raw = window.localStorage.getItem(STORAGE_KEY);
+type StoredRolls = StoredRollsV1 | StoredRollsV2;
+
+function normalizeRoll(roll: Roll): Roll {
+  return {
+    ...roll,
+    calibration: roll.calibration ?? null,
+  };
+}
+
+function readStoredRolls(raw: string | null) {
   if (!raw) {
     return new Map<string, Roll>();
   }
 
   try {
     const parsed = JSON.parse(raw) as Partial<StoredRolls>;
-    if (parsed.version !== 1 || !Array.isArray(parsed.rolls)) {
+    if ((parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.rolls)) {
       return new Map<string, Roll>();
     }
-    return new Map(parsed.rolls.map((roll) => [roll.id, roll] as const));
+    return new Map(parsed.rolls.map((roll) => [roll.id, normalizeRoll(roll)] as const));
   } catch {
     return new Map<string, Roll>();
   }
+}
+
+function loadStoredRolls() {
+  if (typeof window === 'undefined') {
+    return new Map<string, Roll>();
+  }
+
+  const currentRaw = window.localStorage.getItem(STORAGE_KEY);
+  if (currentRaw !== null) {
+    return readStoredRolls(currentRaw);
+  }
+
+  const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+  if (legacyRaw !== null) {
+    return readStoredRolls(legacyRaw);
+  }
+
+  return new Map<string, Roll>();
 }
 
 function persistRolls(rolls: Map<string, Roll>) {
@@ -34,12 +69,28 @@ function persistRolls(rolls: Map<string, Roll>) {
     return;
   }
 
-  const payload: StoredRolls = {
-    version: 1,
+  const payload: StoredRollsV2 = {
+    version: 2,
     rolls: Array.from(rolls.values()),
   };
 
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+}
+
+function invalidateRollCalibration(
+  calibration: RollCalibration,
+  overrides: Partial<Pick<RollCalibration, 'baseSample' | 'neutralSamples'>> = {},
+): RollCalibration {
+  return {
+    ...calibration,
+    enabled: false,
+    baseSample: overrides.baseSample ?? calibration.baseSample,
+    neutralSamples: overrides.neutralSamples ?? calibration.neutralSamples,
+    slopes: [...IDENTITY_ROLL_CALIBRATION_SLOPES],
+    offsets: [...IDENTITY_ROLL_CALIBRATION_OFFSETS],
+    updatedAt: Date.now(),
+  };
 }
 
 type UseRollsOptions = {
@@ -73,6 +124,7 @@ export function useRolls({
       date: null,
       notes: '',
       filmBaseSample: null,
+      calibration: null,
       createdAt: Date.now(),
       directory: directory ?? null,
     };
@@ -165,7 +217,22 @@ export function useRolls({
   }, [tabs, updateRoll, updateTabById]);
 
   const applyFilmBaseToRoll = useCallback((filmBase: FilmBaseSample, rollId: string) => {
-    updateRoll(rollId, { filmBaseSample: filmBase });
+    writeRolls((current) => {
+      const existing = current.get(rollId);
+      if (!existing) {
+        return current;
+      }
+
+      const next = new Map(current);
+      next.set(rollId, {
+        ...existing,
+        filmBaseSample: structuredClone(filmBase),
+        calibration: existing.calibration
+          ? invalidateRollCalibration(existing.calibration, { baseSample: structuredClone(filmBase) })
+          : existing.calibration,
+      });
+      return next;
+    });
 
     if (!updateTabById) {
       return;
@@ -188,7 +255,94 @@ export function useRolls({
         },
       }));
     });
-  }, [tabs, updateRoll, updateTabById]);
+  }, [tabs, updateTabById, writeRolls]);
+
+  const setRollCalibrationBaseSample = useCallback((rollId: string, baseSample: FilmBaseSample) => {
+    applyFilmBaseToRoll(baseSample, rollId);
+
+    writeRolls((current) => {
+      const existing = current.get(rollId);
+      if (!existing) {
+        return current;
+      }
+
+      const next = new Map(current);
+      next.set(rollId, {
+        ...existing,
+        calibration: invalidateRollCalibration(
+          existing.calibration ?? createEmptyRollCalibration(structuredClone(baseSample)),
+          { baseSample: structuredClone(baseSample) },
+        ),
+      });
+      return next;
+    });
+  }, [applyFilmBaseToRoll, writeRolls]);
+
+  const addRollCalibrationNeutralSample = useCallback((rollId: string, sample: RollCalibrationNeutralSample) => {
+    writeRolls((current) => {
+      const existing = current.get(rollId);
+      if (!existing) {
+        return current;
+      }
+
+      const calibration = existing.calibration ?? createEmptyRollCalibration(existing.filmBaseSample);
+      const next = new Map(current);
+      next.set(rollId, {
+        ...existing,
+        calibration: invalidateRollCalibration(calibration, {
+          neutralSamples: [...calibration.neutralSamples, structuredClone(sample)],
+        }),
+      });
+      return next;
+    });
+  }, [writeRolls]);
+
+  const fitRollCalibrationForRoll = useCallback((rollId: string) => {
+    let fitted = null as { enabled: boolean; slopes: [number, number, number]; offsets: [number, number, number]; updatedAt: number } | null;
+
+    writeRolls((current) => {
+      const existing = current.get(rollId);
+      if (!existing) {
+        return current;
+      }
+
+      const calibration = existing.calibration ?? createEmptyRollCalibration(existing.filmBaseSample);
+      const baseSample = calibration.baseSample ?? existing.filmBaseSample;
+      if (!baseSample || calibration.neutralSamples.length < MIN_ROLL_CALIBRATION_SAMPLES) {
+        return current;
+      }
+
+      fitted = fitRollCalibration(calibration.neutralSamples, baseSample);
+      const next = new Map(current);
+      next.set(rollId, {
+        ...existing,
+        calibration: {
+          ...calibration,
+          baseSample: structuredClone(baseSample),
+          ...fitted,
+        },
+      });
+      return next;
+    });
+
+    return fitted;
+  }, [writeRolls]);
+
+  const clearRollCalibration = useCallback((rollId: string) => {
+    writeRolls((current) => {
+      const existing = current.get(rollId);
+      if (!existing) {
+        return current;
+      }
+
+      const next = new Map(current);
+      next.set(rollId, {
+        ...existing,
+        calibration: null,
+      });
+      return next;
+    });
+  }, [writeRolls]);
 
   const rollsByDirectory = useMemo(() => {
     const map = new Map<string, Roll>();
@@ -220,6 +374,10 @@ export function useRolls({
     getDocumentsInRoll,
     syncSettingsToRoll,
     applyFilmBaseToRoll,
+    setRollCalibrationBaseSample,
+    addRollCalibrationNeutralSample,
+    fitRollCalibrationForRoll,
+    clearRollCalibration,
     ensureRollForDirectory,
   };
 }

@@ -2,10 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Analytics } from '@vercel/analytics/react';
 import { DEFAULT_COLOR_NEGATIVE_INVERSION, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from './constants';
 import { AppShell } from './components/AppShell';
+import { RollCalibrationModal } from './components/RollCalibrationModal';
 import { RollInfoModal } from './components/RollInfoModal';
 import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
 import { UpdateBanner } from './components/UpdateBanner';
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InteractionQuality, MaskTuning, NotificationSettings, PointPickerMode, RenderBackendDiagnostics, Roll, RollCalibration, RollCalibrationNeutralSample, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
@@ -26,6 +27,7 @@ import { createPresetBackupFile, validatePresetBackupFile } from './utils/preset
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
 import { syncRecentFilesToMenu } from './utils/recentFilesStore';
+import { MIN_ROLL_CALIBRATION_SAMPLES } from './utils/rollCalibration';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore';
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
@@ -82,7 +84,9 @@ export default function App() {
   const [isLeftPaneOpen, setIsLeftPaneOpen] = useState(true);
   const [isRightPaneOpen, setIsRightPaneOpen] = useState(true);
   const [isPickingFilmBase, setIsPickingFilmBase] = useState(false);
-  const [activePointPicker, setActivePointPicker] = useState<'black' | 'white' | 'grey' | null>(null);
+  const [activePointPicker, setActivePointPicker] = useState<PointPickerMode | null>(null);
+  const [activeRollCalibrationId, setActiveRollCalibrationId] = useState<string | null>(null);
+  const [activeRollCalibrationPicker, setActiveRollCalibrationPicker] = useState<'base' | 'neutral' | null>(null);
   const [comparisonMode, setComparisonMode] = useState<'processed' | 'original'>('processed');
   const [isDragActive, setIsDragActive] = useState(false);
   const [isCropOverlayVisible, setIsCropOverlayVisible] = useState(false);
@@ -101,10 +105,12 @@ export default function App() {
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [showContactSheetModal, setShowContactSheetModal] = useState(false);
   const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
+  const [activeRollCalibrationModalId, setActiveRollCalibrationModalId] = useState<string | null>(null);
   const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
   const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
   const [contactSheetSharedProfile, setContactSheetSharedProfile] = useState<FilmProfile | null>(null);
   const [contactSheetSharedColorManagement, setContactSheetSharedColorManagement] = useState<ColorManagementSettings | null>(null);
+  const [contactSheetSharedRollCalibration, setContactSheetSharedRollCalibration] = useState<RollCalibration | null>(null);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => initialPreferences?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS);
@@ -230,6 +236,7 @@ export default function App() {
     settings: ConversionSettings;
     isColor: boolean;
     filmType?: 'negative' | 'slide';
+    advancedInversion?: FilmProfile['advancedInversion'] | null;
     comparisonMode: 'processed' | 'original';
     targetMaxDimension: number;
     inputProfileId: string;
@@ -242,6 +249,7 @@ export default function App() {
     labTonalCharacterOverride?: Partial<TonalCharacter>;
     labSaturationBias?: number;
     labTemperatureBias?: number;
+    rollCalibration?: RollCalibration | null;
     flareFloor?: [number, number, number] | null;
     lightSourceBias?: [number, number, number];
   }) => JSON.stringify(payload), []);
@@ -331,6 +339,10 @@ export default function App() {
     getDocumentsInRoll,
     syncSettingsToRoll,
     applyFilmBaseToRoll,
+    setRollCalibrationBaseSample,
+    addRollCalibrationNeutralSample,
+    fitRollCalibrationForRoll,
+    clearRollCalibration,
     ensureRollForDirectory,
   } = useRolls({
     tabs,
@@ -393,11 +405,43 @@ export default function App() {
     rollId ? rolls.get(rollId) ?? null : null
   ), [rolls]);
   const activeRoll = useMemo(() => getRollById(documentState?.rollId ?? null), [documentState?.rollId, getRollById]);
+  const activeRollCalibration = activeRoll?.calibration ?? null;
+  const calibrationTargetRoll = useMemo(() => getRollById(activeRollCalibrationId), [activeRollCalibrationId, getRollById]);
+  const calibrationModalRoll = useMemo(() => getRollById(activeRollCalibrationModalId), [activeRollCalibrationModalId, getRollById]);
   const filmstripTabs = useMemo(() => (
     activeRoll
       ? tabs.filter((tab) => tab.rollId === activeRoll.id)
       : tabs
   ), [activeRoll, tabs]);
+  const canApplyFilmBaseToActiveRoll = useMemo(
+    () => filmstripTabs.some((tab) => Boolean(tab.document.settings.filmBaseSample)),
+    [filmstripTabs],
+  );
+
+  useEffect(() => {
+    if (activeRollCalibrationId && !calibrationTargetRoll) {
+      setActiveRollCalibrationId(null);
+      setActiveRollCalibrationPicker(null);
+      setIsPickingFilmBase(false);
+      setActivePointPicker((current) => (current === 'neutral' ? null : current));
+    }
+  }, [activeRollCalibrationId, calibrationTargetRoll]);
+
+  useEffect(() => {
+    if (activeRollCalibrationModalId && !calibrationModalRoll) {
+      setActiveRollCalibrationModalId(null);
+    }
+  }, [activeRollCalibrationModalId, calibrationModalRoll]);
+
+  useEffect(() => {
+    if (!isPickingFilmBase && activeRollCalibrationPicker === 'base') {
+      setActiveRollCalibrationPicker(null);
+    }
+
+    if (activePointPicker !== 'neutral' && activeRollCalibrationPicker === 'neutral') {
+      setActiveRollCalibrationPicker(null);
+    }
+  }, [activePointPicker, activeRollCalibrationPicker, isPickingFilmBase]);
 
   const resolveRollId = useCallback((nativePath: string | null | undefined) => {
     if (!nativePath) {
@@ -1046,6 +1090,7 @@ export default function App() {
     settings: ConversionSettings,
     isColor: boolean,
     filmType: 'negative' | 'slide',
+    advancedInversion: FilmProfile['advancedInversion'] | null,
     nextComparisonMode: 'processed' | 'original',
     nextTargetMaxDimension: number,
     previewMode: 'draft' | 'settled',
@@ -1060,6 +1105,7 @@ export default function App() {
     labSaturationBias?: number,
     labTemperatureBias?: number,
     highlightDensityEstimate?: number,
+    rollCalibration?: RollCalibration | null,
     flareFloor?: [number, number, number] | null,
     lightSourceBias?: [number, number, number],
   ) => {
@@ -1083,6 +1129,7 @@ export default function App() {
       settings,
       isColor,
       filmType,
+      advancedInversion,
       comparisonMode: nextComparisonMode,
       targetMaxDimension: nextTargetMaxDimension,
       inputProfileId,
@@ -1095,6 +1142,7 @@ export default function App() {
       labTonalCharacterOverride,
       labSaturationBias,
       labTemperatureBias,
+      rollCalibration,
       flareFloor,
       lightSourceBias,
     });
@@ -1132,6 +1180,7 @@ export default function App() {
         settings,
         isColor,
         filmType,
+        advancedInversion,
         inputProfileId,
         outputProfileId,
         revision,
@@ -1149,6 +1198,7 @@ export default function App() {
         labSaturationBias,
         labTemperatureBias,
         highlightDensityEstimate: resolvedHighlightDensityEstimate,
+        rollCalibration,
         flareFloor,
         lightSourceBias,
       });
@@ -1261,6 +1311,7 @@ export default function App() {
             settings,
             isColor,
             filmType,
+            advancedInversion,
             comparisonMode: nextComparisonMode,
             targetMaxDimension: nextTargetMaxDimension,
             previewMode: 'settled',
@@ -1325,6 +1376,7 @@ export default function App() {
         next.settings,
         next.isColor,
         next.filmType ?? 'negative',
+        next.advancedInversion ?? null,
         next.comparisonMode,
         next.targetMaxDimension,
         next.previewMode,
@@ -1339,6 +1391,7 @@ export default function App() {
         next.labSaturationBias,
         next.labTemperatureBias,
         next.highlightDensityEstimate,
+        next.rollCalibration,
         next.flareFloor,
         next.lightSourceBias,
       );
@@ -1387,7 +1440,9 @@ export default function App() {
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
     const profileFilmType = activeProfile.filmType ?? 'negative';
+    const profileAdvancedInversion = activeProfile.advancedInversion ?? null;
     const highlightDensityEstimate = getSettledAdaptiveState(documentId).committedHighlightDensity;
+    const rollCalibration = activeRollCalibration;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const flareFloor = documentState.estimatedFlare;
     const previewMode = isDraftPreview ? 'draft' : 'settled';
@@ -1410,6 +1465,7 @@ export default function App() {
       settings,
       isColor,
       filmType: profileFilmType,
+      advancedInversion: profileAdvancedInversion,
       comparisonMode,
       targetMaxDimension: renderTargetDimension,
       previewMode,
@@ -1424,6 +1480,7 @@ export default function App() {
       labSaturationBias: activeLabStyle?.saturationBias ?? 0,
       labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
       highlightDensityEstimate,
+      rollCalibration,
       flareFloor,
       lightSourceBias,
     } satisfies QueuedPreviewRender;
@@ -1433,6 +1490,7 @@ export default function App() {
         settings,
         isColor,
         filmType: profileFilmType,
+        advancedInversion: profileAdvancedInversion,
         comparisonMode,
         targetMaxDimension: renderTargetDimension,
         inputProfileId: getResolvedInputProfileId(documentState.source, documentState.colorManagement),
@@ -1445,6 +1503,7 @@ export default function App() {
         labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
         labSaturationBias: activeLabStyle?.saturationBias ?? 0,
         labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+        rollCalibration,
         flareFloor,
         lightSourceBias,
       })
@@ -1461,6 +1520,7 @@ export default function App() {
         settings,
         isColor,
         profileFilmType,
+        profileAdvancedInversion,
         comparisonMode,
         switchDraftTargetDimension,
         'draft',
@@ -1475,6 +1535,7 @@ export default function App() {
         activeLabStyle?.saturationBias ?? 0,
         activeLabStyle?.temperatureBias ?? 0,
         highlightDensityEstimate,
+        rollCalibration,
         flareFloor,
         lightSourceBias,
       ).finally(() => {
@@ -1547,12 +1608,14 @@ export default function App() {
 
     return () => window.clearTimeout(timer);
   }, [
+    activeProfile.advancedInversion,
     activeProfile.colorMatrix,
     activeProfile.filmType,
     activeProfile.maskTuning,
     activeProfile.tonalCharacter,
     activeProfile.type,
     activeLabStyle,
+    activeRollCalibration,
     cancelScheduledInteractivePreview,
     comparisonMode,
     displaySettings,
@@ -1651,6 +1714,8 @@ export default function App() {
     setCropTab,
     isPickingFilmBase,
     activePointPicker,
+    activeRollCalibrationId,
+    activeRollCalibrationPicker,
     usesNativeFileDialogs,
     lightSourceProfiles: allLightSourceProfiles,
     defaultFlatFieldEnabled: calibration.activeProfileLoaded,
@@ -1705,6 +1770,7 @@ export default function App() {
     setContactSheetSharedSettings,
     setContactSheetSharedProfile,
     setContactSheetSharedColorManagement,
+    setContactSheetSharedRollCalibration,
     setGPURenderingEnabled,
     setUltraSmoothDragEnabled,
     setNotificationSettings,
@@ -1729,6 +1795,37 @@ export default function App() {
     getErrorCode,
     resolveRollId,
     getRollById,
+    onRecordRollCalibrationBaseSample: (rollId, sample) => {
+      if (!sample) {
+        return;
+      }
+
+      setRollCalibrationBaseSample(rollId, sample);
+      const roll = getRollById(rollId);
+      if (roll) {
+        showTransientNotice(`Stored roll film base for ${roll.name}.`, 'success');
+      }
+    },
+    onAddRollCalibrationNeutralSample: (rollId, documentId, sampleRgb) => {
+      if (!sampleRgb) {
+        return;
+      }
+
+      const sample: RollCalibrationNeutralSample = {
+        id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `neutral-${Date.now()}`,
+        documentId,
+        sampleRgb,
+        sampledAt: Date.now(),
+      };
+      addRollCalibrationNeutralSample(rollId, sample);
+      const roll = getRollById(rollId);
+      if (roll) {
+        const nextCount = (roll.calibration?.neutralSamples.length ?? 0) + 1;
+        showTransientNotice(`Added neutral sample ${nextCount} for ${roll.name}.`, 'success');
+      }
+    },
   });
 
   const handleSelectFlatFieldProfile = useCallback(async (name: string | null) => {
@@ -1915,13 +2012,16 @@ export default function App() {
     const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
     const outputProfileId = documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const rollCalibration = getRollById(documentState.rollId)?.calibration ?? null;
     const result = await worker.autoAnalyze({
       documentId: requestDocumentId,
       settings: displaySettings,
       isColor: activeProfile.type === 'color',
       filmType: activeProfile.filmType,
+      advancedInversion: activeProfile.advancedInversion ?? null,
       inputProfileId,
       outputProfileId,
+      rollCalibration,
       targetMaxDimension: Math.min(targetMaxDimension, 1024),
       maskTuning: activeProfile.maskTuning,
       colorMatrix: activeProfile.colorMatrix,
@@ -1969,6 +2069,7 @@ export default function App() {
       showTransientNotice('Auto adjusted tone, but left white balance unchanged.');
     }
   }, [
+    activeProfile.advancedInversion,
     activeLabStyle?.channelCurves,
     activeLabStyle?.saturationBias,
     activeLabStyle?.temperatureBias,
@@ -1987,6 +2088,89 @@ export default function App() {
   const handleOpenRollInfo = useCallback((rollId: string) => {
     setActiveRollInfoId(rollId);
   }, []);
+
+  const handleOpenRollCalibration = useCallback((rollId: string) => {
+    const roll = getRollById(rollId);
+    if (!roll) {
+      return;
+    }
+
+    setActiveRollCalibrationId(rollId);
+    setActiveRollCalibrationPicker(null);
+    setActiveRollCalibrationModalId(rollId);
+  }, [getRollById]);
+
+  const handleCloseRollCalibration = useCallback(() => {
+    setActiveRollCalibrationModalId(null);
+  }, []);
+
+  const handlePickRollCalibrationBase = useCallback((rollId: string) => {
+    if (!documentState || documentState.rollId !== rollId) {
+      showTransientNotice('Open a frame from this roll before picking a roll film base.');
+      return;
+    }
+
+    setActiveRollCalibrationId(rollId);
+    setActiveRollCalibrationPicker('base');
+    setActiveRollCalibrationModalId(null);
+    setActivePointPicker(null);
+    setIsPickingFilmBase(true);
+  }, [documentState, showTransientNotice]);
+
+  const handlePickRollCalibrationNeutral = useCallback((rollId: string) => {
+    if (!documentState || documentState.rollId !== rollId) {
+      showTransientNotice('Open a frame from this roll before sampling a neutral point.');
+      return;
+    }
+
+    setActiveRollCalibrationId(rollId);
+    setActiveRollCalibrationPicker('neutral');
+    setActiveRollCalibrationModalId(null);
+    setIsPickingFilmBase(false);
+    setActivePointPicker('neutral');
+  }, [documentState, showTransientNotice]);
+
+  const handleFitActiveRollCalibration = useCallback((rollId: string) => {
+    const roll = getRollById(rollId);
+    const calibrationState = roll?.calibration ?? null;
+    const neutralSampleCount = calibrationState?.neutralSamples.length ?? 0;
+    const baseSample = calibrationState?.baseSample ?? roll?.filmBaseSample ?? null;
+
+    if (!roll || !baseSample) {
+      showTransientNotice('Pick a roll film base before fitting roll calibration.');
+      return;
+    }
+
+    if (neutralSampleCount < MIN_ROLL_CALIBRATION_SAMPLES) {
+      showTransientNotice(`Pick at least ${MIN_ROLL_CALIBRATION_SAMPLES} neutral samples before fitting roll calibration.`);
+      return;
+    }
+
+    const fitted = fitRollCalibrationForRoll(rollId);
+    if (!fitted) {
+      showTransientNotice('Could not fit roll calibration from the current samples.');
+      return;
+    }
+
+    setActiveRollCalibrationId(rollId);
+    setActiveRollCalibrationPicker(null);
+    showTransientNotice(`Applied roll calibration to ${roll.name}.`, 'success');
+  }, [fitRollCalibrationForRoll, getRollById, showTransientNotice]);
+
+  const handleClearActiveRollCalibration = useCallback((rollId: string) => {
+    clearRollCalibration(rollId);
+    if (activeRollCalibrationId === rollId) {
+      setIsPickingFilmBase(false);
+      setActivePointPicker((current) => (current === 'neutral' ? null : current));
+      setActiveRollCalibrationPicker(null);
+      setActiveRollCalibrationId(null);
+    }
+
+    const roll = getRollById(rollId);
+    if (roll) {
+      showTransientNotice(`Cleared roll calibration for ${roll.name}.`, 'success');
+    }
+  }, [activeRollCalibrationId, clearRollCalibration, getRollById, showTransientNotice]);
 
   const handleSaveRollMetadata = useCallback((rollId: string, updates: Partial<Roll>) => {
     updateRoll(rollId, {
@@ -2076,13 +2260,16 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     const labStyle = tab.document.labStyleId ? LAB_STYLE_PROFILES_MAP[tab.document.labStyleId] ?? null : null;
     const outputProfileId = tab.document.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     const lightSourceBias = lightSourceProfilesById.get(tab.document.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const rollCalibration = getRollById(tab.document.rollId)?.calibration ?? null;
     const result = await worker.autoAnalyze({
       documentId,
       settings: tab.document.settings,
       isColor: profile.type === 'color',
       filmType: profile.filmType,
+      advancedInversion: profile.advancedInversion ?? null,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
       outputProfileId,
+      rollCalibration,
       targetMaxDimension: Math.min(targetMaxDimension, 1024),
       maskTuning: profile.maskTuning,
       colorMatrix: profile.colorMatrix,
@@ -2156,14 +2343,17 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     const profile = profilesById.get(tab.document.profileId) ?? fallbackProfile;
     const labStyle = tab.document.labStyleId ? LAB_STYLE_PROFILES_MAP[tab.document.labStyleId] ?? null : null;
     const lightSourceBias = lightSourceProfilesById.get(tab.document.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const rollCalibration = getRollById(tab.document.rollId)?.calibration ?? null;
     const result = await worker.export({
       documentId,
       settings: tab.document.settings,
       isColor: profile.type === 'color' && !tab.document.settings.blackAndWhite.enabled,
       filmType: profile.filmType,
+      advancedInversion: profile.advancedInversion ?? null,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
       outputProfileId: tab.document.exportOptions.outputProfileId,
       options: tab.document.exportOptions,
+      rollCalibration,
       sourceExif: tab.document.source.exif,
       flareFloor: tab.document.estimatedFlare,
       lightSourceBias,
@@ -2385,6 +2575,7 @@ onToggleScanningSession: toggleScanningWindow,
       activeRoll={activeRoll}
       rolls={rolls}
       filmstripTabs={filmstripTabs}
+      canApplyRollFilmBase={canApplyFilmBaseToActiveRoll}
       getRollById={getRollById}
       profilesById={profilesById}
       lightSourceProfilesById={lightSourceProfilesById}
@@ -2399,6 +2590,7 @@ onToggleScanningSession: toggleScanningWindow,
       contactSheetSharedSettings={contactSheetSharedSettings}
       contactSheetSharedProfile={contactSheetSharedProfile}
       contactSheetSharedColorManagement={contactSheetSharedColorManagement}
+      contactSheetSharedRollCalibration={contactSheetSharedRollCalibration}
       onSetIsPanDragging={setIsPanDragging}
       onSetIsDragActive={setIsDragActive}
       onSetComparisonMode={setComparisonMode}
@@ -2449,6 +2641,7 @@ onToggleScanningSession: toggleScanningWindow,
       onCropDone={handleCropDone}
       onResetCrop={handleResetCrop}
       onSetActivePointPicker={setActivePointPicker}
+      onOpenRollCalibration={handleOpenRollCalibration}
       onOpenSettingsModal={handleOpenSettingsModal}
       onLightSourceChange={handleLightSourceChange}
       onLabStyleChange={handleLabStyleChange}
@@ -2523,7 +2716,6 @@ onToggleScanningSession: toggleScanningWindow,
       <RollInfoModal
         isOpen={Boolean(activeRollInfoId)}
         roll={getRollById(activeRollInfoId)}
-        activeDocument={documentState}
         frameCount={activeRollInfoId ? getDocumentsInRoll(activeRollInfoId).length : 0}
         onClose={() => setActiveRollInfoId(null)}
         onSave={handleSaveRollMetadata}
@@ -2532,8 +2724,17 @@ onToggleScanningSession: toggleScanningWindow,
             handleSyncRollSettings(activeTabId, rollId);
           }
         }}
-        onApplyFilmBase={handleApplyRollFilmBase}
         onDeleteRoll={handleDeleteRoll}
+      />
+      <RollCalibrationModal
+        isOpen={Boolean(activeRollCalibrationModalId)}
+        roll={calibrationModalRoll}
+        activeDocument={documentState}
+        onClose={handleCloseRollCalibration}
+        onPickFilmBase={handlePickRollCalibrationBase}
+        onPickNeutral={handlePickRollCalibrationNeutral}
+        onFitCalibration={handleFitActiveRollCalibration}
+        onClearCalibration={handleClearActiveRollCalibration}
       />
       <Analytics />
     </>

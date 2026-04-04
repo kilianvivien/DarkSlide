@@ -2,29 +2,25 @@ import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Trash2, X } from 'lucide-react';
 import { FILM_PROFILES } from '../constants';
-import { Roll, WorkspaceDocument } from '../types';
+import { Roll } from '../types';
 
 type RollInfoModalProps = {
   isOpen: boolean;
   roll: Roll | null;
-  activeDocument: WorkspaceDocument | null;
   frameCount: number;
   onClose: () => void;
   onSave: (rollId: string, updates: Partial<Roll>) => void;
   onSyncSettings: (rollId: string) => void;
-  onApplyFilmBase: (rollId: string) => void;
   onDeleteRoll: (rollId: string) => void;
 };
 
 export function RollInfoModal({
   isOpen,
   roll,
-  activeDocument,
   frameCount,
   onClose,
   onSave,
   onSyncSettings,
-  onApplyFilmBase,
   onDeleteRoll,
 }: RollInfoModalProps) {
   const [draft, setDraft] = useState<Partial<Roll>>({});
@@ -146,14 +142,6 @@ export function RollInfoModal({
                     className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 transition-colors hover:bg-zinc-800"
                   >
                     Sync To Roll
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!activeDocument?.settings.filmBaseSample}
-                    onClick={() => onApplyFilmBase(roll.id)}
-                    className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Apply Film Base To Roll
                   </button>
                   <button
                     type="button"

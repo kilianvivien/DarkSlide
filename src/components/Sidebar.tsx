@@ -18,7 +18,7 @@ import {
   Wand2,
   Zap,
 } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, QuickExportPreset, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, PointPickerMode, QuickExportPreset, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
@@ -154,8 +154,8 @@ interface SidebarProps {
   onRedetectFrame?: () => void;
   onCropDone: () => void;
   onResetCrop: () => void;
-  activePointPicker: 'black' | 'white' | 'grey' | null;
-  onSetPointPicker: (mode: 'black' | 'white' | 'grey' | null) => void;
+  activePointPicker: PointPickerMode | null;
+  onSetPointPicker: (mode: PointPickerMode | null) => void;
   onOpenSettings: () => void;
   onLightSourceChange?: (lightSourceId: string | null) => void;
   onLabStyleChange?: (labStyleId: string | null) => void;

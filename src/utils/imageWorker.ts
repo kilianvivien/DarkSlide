@@ -949,6 +949,45 @@ function handleCancelJob(payload: CancelTileJobRequest) {
   return { cancelled: true } as const;
 }
 
+function sampleRegionFromTransformedCanvas(
+  transformed: { canvas: OffscreenCanvas; width: number; height: number },
+  payload: SampleRequest,
+) {
+  const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Could not sample image region.');
+  const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
+  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
+  convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
+  ctx.putImageData(imageData, 0, 0);
+
+  const sampleX = clamp(Math.round(payload.x * (transformed.width - 1)), 0, Math.max(transformed.width - 1, 0));
+  const sampleY = clamp(Math.round(payload.y * (transformed.height - 1)), 0, Math.max(transformed.height - 1, 0));
+  const radius = clamp(Math.round(Math.min(transformed.width, transformed.height) / 512), 1, 4);
+  const left = clamp(sampleX - radius, 0, Math.max(transformed.width - 1, 0));
+  const top = clamp(sampleY - radius, 0, Math.max(transformed.height - 1, 0));
+  const right = clamp(sampleX + radius, 0, Math.max(transformed.width - 1, 0));
+  const bottom = clamp(sampleY + radius, 0, Math.max(transformed.height - 1, 0));
+  const area = ctx.getImageData(left, top, right - left + 1, bottom - top + 1).data;
+
+  let totalR = 0;
+  let totalG = 0;
+  let totalB = 0;
+  let count = 0;
+
+  for (let index = 0; index < area.length; index += 4) {
+    totalR += area[index];
+    totalG += area[index + 1];
+    totalB += area[index + 2];
+    count += 1;
+  }
+
+  return {
+    r: count > 0 ? Math.round(totalR / count) : 0,
+    g: count > 0 ? Math.round(totalG / count) : 0,
+    b: count > 0 ? Math.round(totalB / count) : 0,
+  } satisfies FilmBaseSample;
+}
+
 function applyAutoWhiteBalanceAnalysisStage(
   imageData: ImageData,
   payload: AutoAnalyzeRequest,
@@ -968,6 +1007,9 @@ function applyAutoWhiteBalanceAnalysisStage(
     payload.advancedInversion ?? null,
     estimatedFilmBaseSample,
   );
+  const rollCalibration = advancedHd.enabled && payload.rollCalibration?.enabled
+    ? payload.rollCalibration
+    : null;
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -979,9 +1021,27 @@ function applyAutoWhiteBalanceAnalysisStage(
     b = applyLightSourceCorrection(b, lightSourceBias[2]);
 
     if (advancedHd.enabled) {
-      r = applyAdvancedHdInversion(r, advancedHd.baseDensity[0], advancedHd.gamma[0]) * payload.settings.redBalance;
-      g = applyAdvancedHdInversion(g, advancedHd.baseDensity[1], advancedHd.gamma[1]) * payload.settings.greenBalance;
-      b = applyAdvancedHdInversion(b, advancedHd.baseDensity[2], advancedHd.gamma[2]) * payload.settings.blueBalance;
+      r = applyAdvancedHdInversion(
+        r,
+        advancedHd.baseDensity[0],
+        advancedHd.gamma[0],
+        rollCalibration?.slopes[0] ?? 1,
+        rollCalibration?.offsets[0] ?? 0,
+      ) * payload.settings.redBalance;
+      g = applyAdvancedHdInversion(
+        g,
+        advancedHd.baseDensity[1],
+        advancedHd.gamma[1],
+        rollCalibration?.slopes[1] ?? 1,
+        rollCalibration?.offsets[1] ?? 0,
+      ) * payload.settings.greenBalance;
+      b = applyAdvancedHdInversion(
+        b,
+        advancedHd.baseDensity[2],
+        advancedHd.gamma[2],
+        rollCalibration?.slopes[2] ?? 1,
+        rollCalibration?.offsets[2] ?? 0,
+      ) * payload.settings.blueBalance;
     } else {
       if (filmType !== 'slide') {
         r = 1 - r;
@@ -1030,6 +1090,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.filmType ?? 'negative',
     payload.advancedInversion ?? null,
     document.estimatedFilmBaseSample,
+    payload.rollCalibration ?? null,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
@@ -1076,6 +1137,7 @@ function handleRender(payload: RenderRequest) {
       payload.filmType ?? 'negative',
       payload.advancedInversion ?? null,
       document.estimatedFilmBaseSample,
+      payload.rollCalibration ?? null,
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
     );
@@ -1102,39 +1164,7 @@ function handleSampleFilmBase(payload: SampleRequest) {
   const level = selectPreviewLevel(document.previews.map((preview) => preview.level), payload.targetMaxDimension);
   const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
   const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
-  const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) throw new Error('Could not sample film base.');
-  const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
-  convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
-  ctx.putImageData(imageData, 0, 0);
-
-  const sampleX = clamp(Math.round(payload.x * (transformed.width - 1)), 0, Math.max(transformed.width - 1, 0));
-  const sampleY = clamp(Math.round(payload.y * (transformed.height - 1)), 0, Math.max(transformed.height - 1, 0));
-  const radius = clamp(Math.round(Math.min(transformed.width, transformed.height) / 512), 1, 4);
-  const left = clamp(sampleX - radius, 0, Math.max(transformed.width - 1, 0));
-  const top = clamp(sampleY - radius, 0, Math.max(transformed.height - 1, 0));
-  const right = clamp(sampleX + radius, 0, Math.max(transformed.width - 1, 0));
-  const bottom = clamp(sampleY + radius, 0, Math.max(transformed.height - 1, 0));
-  const area = ctx.getImageData(left, top, right - left + 1, bottom - top + 1).data;
-
-  let totalR = 0;
-  let totalG = 0;
-  let totalB = 0;
-  let count = 0;
-
-  for (let index = 0; index < area.length; index += 4) {
-    totalR += area[index];
-    totalG += area[index + 1];
-    totalB += area[index + 2];
-    count += 1;
-  }
-
-  return {
-    r: count > 0 ? Math.round(totalR / count) : 0,
-    g: count > 0 ? Math.round(totalG / count) : 0,
-    b: count > 0 ? Math.round(totalB / count) : 0,
-  } satisfies FilmBaseSample;
+  return sampleRegionFromTransformedCanvas(transformed, payload);
 }
 
 async function handleExport(payload: ExportRequest) {
@@ -1177,6 +1207,7 @@ async function handleExport(payload: ExportRequest) {
     payload.filmType ?? 'negative',
     payload.advancedInversion ?? null,
     document.estimatedFilmBaseSample,
+    payload.rollCalibration ?? null,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
@@ -1265,6 +1296,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       profile.filmType ?? 'negative',
       profile.advancedInversion ?? null,
       payload.estimatedFilmBaseSamplePerCell?.[index] ?? document.estimatedFilmBaseSample,
+      payload.rollCalibrationPerCell?.[index] ?? null,
       payload.flareFloorPerCell?.[index] ?? null,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
     );

@@ -158,14 +158,12 @@ function isVersion5Preferences(value: unknown): value is PreferencesV5 {
 
 function withV6Defaults(base: PreferencesV6Base): UserPreferences {
   const {
-    version: _version,
-    defaultColorNegativeInversion: _defaultColorNegativeInversion,
     scanningWatchPath,
     scanningAutoExport,
     scanningAutoExportPath,
     updateChannel,
     ...rest
-  } = base as PreferencesV6Base & Partial<Pick<UserPreferences, 'version' | 'defaultColorNegativeInversion'>>;
+  } = base;
 
   return {
     version: 7,

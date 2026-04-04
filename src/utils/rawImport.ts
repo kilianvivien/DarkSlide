@@ -223,7 +223,7 @@ export function buildRawInitialSettings(
 
   return {
     ...structuredClone(baseSettings),
-    filmBaseSample: estimatedFilmBase,
+    filmBaseSample: baseSettings.inversionMethod === 'advanced-hd' ? null : estimatedFilmBase,
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
 }

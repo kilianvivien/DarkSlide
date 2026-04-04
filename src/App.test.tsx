@@ -282,7 +282,28 @@ vi.mock('./components/CropOverlay', () => ({
 }));
 
 vi.mock('./components/TabBar', () => ({
-  TabBar: () => <div data-testid="tab-bar" />,
+  TabBar: ({
+    tabs = [],
+    activeTabId,
+    onSelectTab,
+  }: {
+    tabs?: Array<{ id: string; document: { source: { name: string } } }>;
+    activeTabId?: string | null;
+    onSelectTab?: (tabId: string) => void;
+  }) => (
+    <div data-testid="tab-bar">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          aria-pressed={tab.id === activeTabId}
+          onClick={() => onSelectTab?.(tab.id)}
+        >
+          {tab.document.source.name}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock('./components/BatchModal', () => ({
@@ -1545,6 +1566,7 @@ describe('App import and preview pipeline', () => {
 
     expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
       settings: expect.objectContaining({ inversionMethod: 'advanced-hd' }),
+      advancedInversion: expect.any(Object),
     });
 
     await act(async () => {
@@ -1569,6 +1591,7 @@ describe('App import and preview pipeline', () => {
 
     expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
       settings: expect.objectContaining({ inversionMethod: 'advanced-hd' }),
+      advancedInversion: expect.any(Object),
     });
 
     await uploadFile(createFile('standard-default.tiff', 'image/tiff'));
@@ -1580,6 +1603,62 @@ describe('App import and preview pipeline', () => {
 
     expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
       settings: expect.objectContaining({ inversionMethod: 'standard' }),
+    });
+  });
+
+  it('restores advanced inversion payloads when switching back to an earlier tab', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+      settings: { inversionMethod: string };
+      advancedInversion?: unknown;
+    }) => createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Color' }));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Advanced inversion'), { target: { value: 'advanced-hd' } });
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    await uploadFile(createFile('first-advanced.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    await uploadFile(createFile('second-advanced.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const renderCallsBeforeSwitch = workerState.render.mock.calls.length;
+    const tabButtons = screen.getAllByRole('button', { name: 'scan-300x200.tiff' });
+    expect(tabButtons).toHaveLength(2);
+    await act(async () => {
+      fireEvent.click(tabButtons[0]!);
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render.mock.calls.length).toBeGreaterThan(renderCallsBeforeSwitch);
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      settings: expect.objectContaining({ inversionMethod: 'advanced-hd' }),
+      advancedInversion: expect.any(Object),
     });
   });
 

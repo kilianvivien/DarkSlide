@@ -36,12 +36,14 @@ import {
   FilmProfile,
   LightSourceProfile,
   NotificationSettings,
+  PointPickerMode,
   RenderBackendDiagnostics,
   ScannerType,
   TonalCharacter,
   WorkspaceDocument,
   QuickExportPreset,
   Roll,
+  RollCalibration,
 } from '../types';
 import { buildSidecarFile, getSidecarPathForExport, serializeSidecar } from '../utils/sidecarSettings';
 import { sanitizeFilenameBase } from '../utils/imagePipeline';
@@ -101,7 +103,9 @@ type UseWorkspaceCommandsOptions = {
   setSidebarTab: SetState<'adjust' | 'curves' | 'crop' | 'export'>;
   setCropTab: SetState<CropTab>;
   isPickingFilmBase: boolean;
-  activePointPicker: 'black' | 'white' | 'grey' | null;
+  activePointPicker: PointPickerMode | null;
+  activeRollCalibrationId: string | null;
+  activeRollCalibrationPicker: 'base' | 'neutral' | null;
   usesNativeFileDialogs: boolean;
   lightSourceProfiles: LightSourceProfile[];
   defaultFlatFieldEnabled?: boolean;
@@ -151,7 +155,7 @@ type UseWorkspaceCommandsOptions = {
   setBlockingOverlay: SetState<{ title: string; detail: string } | null>;
   setTransientNotice: SetState<TransientNoticeState | null>;
   setIsPickingFilmBase: SetState<boolean>;
-  setActivePointPicker: SetState<'black' | 'white' | 'grey' | null>;
+  setActivePointPicker: SetState<PointPickerMode | null>;
   setComparisonMode: SetState<'processed' | 'original'>;
   setIsCropOverlayVisible: SetState<boolean>;
   setIsAdjustingLevel: SetState<boolean>;
@@ -165,6 +169,7 @@ type UseWorkspaceCommandsOptions = {
   setContactSheetSharedSettings: SetState<ConversionSettings | null>;
   setContactSheetSharedProfile: SetState<FilmProfile | null>;
   setContactSheetSharedColorManagement: SetState<ColorManagementSettings | null>;
+  setContactSheetSharedRollCalibration: SetState<RollCalibration | null>;
   setGPURenderingEnabled: SetState<boolean>;
   setUltraSmoothDragEnabled: SetState<boolean>;
   setNotificationSettings: SetState<NotificationSettings>;
@@ -192,6 +197,8 @@ type UseWorkspaceCommandsOptions = {
   getErrorCode: (error: unknown) => string | null;
   resolveRollId: (nativePath: string | null | undefined, fileName: string) => string | null;
   getRollById: (rollId: string | null) => Roll | null;
+  onRecordRollCalibrationBaseSample?: (rollId: string, sample: ConversionSettings['filmBaseSample']) => void;
+  onAddRollCalibrationNeutralSample?: (rollId: string, documentId: string, sample: ConversionSettings['filmBaseSample']) => void;
 };
 
 export function useWorkspaceCommands({
@@ -266,6 +273,7 @@ export function useWorkspaceCommands({
   setContactSheetSharedSettings,
   setContactSheetSharedProfile,
   setContactSheetSharedColorManagement,
+  setContactSheetSharedRollCalibration,
   setGPURenderingEnabled,
   setUltraSmoothDragEnabled,
   setNotificationSettings,
@@ -292,8 +300,12 @@ export function useWorkspaceCommands({
   getErrorCode,
   resolveRollId,
   getRollById,
+  onRecordRollCalibrationBaseSample,
+  onAddRollCalibrationNeutralSample,
   isPickingFilmBase,
   activePointPicker,
+  activeRollCalibrationId,
+  activeRollCalibrationPicker,
 }: UseWorkspaceCommandsOptions) {
   void tabs;
   void transientNoticeTimeoutRef;
@@ -391,6 +403,7 @@ export function useWorkspaceCommands({
     setError,
     setTransientNotice,
     resolveRollId,
+    getRollById,
   });
 
   const handleSettingsChange = useCallback((newSettings: Partial<ConversionSettings>) => {
@@ -755,13 +768,22 @@ export function useWorkspaceCommands({
     sharedSettings: ConversionSettings;
     sharedProfile: FilmProfile;
     sharedColorManagement: ColorManagementSettings;
+    sharedRollCalibration: RollCalibration | null;
   }) => {
     setContactSheetEntries(payload.entries);
     setContactSheetSharedSettings(payload.sharedSettings);
     setContactSheetSharedProfile(payload.sharedProfile);
     setContactSheetSharedColorManagement(payload.sharedColorManagement);
+    setContactSheetSharedRollCalibration(payload.sharedRollCalibration);
     setShowContactSheetModal(true);
-  }, [setContactSheetEntries, setContactSheetSharedColorManagement, setContactSheetSharedProfile, setContactSheetSharedSettings, setShowContactSheetModal]);
+  }, [
+    setContactSheetEntries,
+    setContactSheetSharedColorManagement,
+    setContactSheetSharedProfile,
+    setContactSheetSharedRollCalibration,
+    setContactSheetSharedSettings,
+    setShowContactSheetModal,
+  ]);
 
   const handleGPURenderingChange = useCallback((enabled: boolean) => {
     setGPURenderingEnabled(enabled);
@@ -904,15 +926,18 @@ export function useWorkspaceCommands({
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
       const lightSourceBias = getLightSourceProfile(documentState.lightSourceId ?? null).spectralBias;
       const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
+      const rollCalibration = getRollById(documentState.rollId)?.calibration ?? null;
       const result = await worker.export({
         documentId: documentState.id,
         settings: exportSettings,
         isColor: activeProfile.type === 'color' && !exportSettings.blackAndWhite.enabled,
         filmType: activeProfile.filmType,
+        advancedInversion: activeProfile.advancedInversion ?? null,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
         options: exportOptions,
         sourceExif: documentState.source.exif,
+        rollCalibration,
         flareFloor: documentState.estimatedFlare,
         lightSourceBias,
         maskTuning: activeProfile.maskTuning,
@@ -959,6 +984,7 @@ export function useWorkspaceCommands({
               camera: roll.camera,
               date: roll.date,
               notes: roll.notes,
+              calibration: roll.calibration ?? null,
             } : undefined,
             lightSourceProfileId: documentState.lightSourceId ?? undefined,
             labStyleId: documentState.labStyleId ?? undefined,
@@ -992,7 +1018,7 @@ export function useWorkspaceCommands({
       void refreshRenderBackendDiagnostics();
     }
     return null;
-  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.name, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, getRollById, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeLabStyle, activeProfile.advancedInversion, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.name, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, getRollById, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleDownload = useCallback(async () => {
     await runExport();
@@ -1043,15 +1069,18 @@ export function useWorkspaceCommands({
       const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
       const lightSourceBias = getLightSourceProfile(documentState.lightSourceId ?? null).spectralBias;
       const highlightDensityEstimate = documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0;
+      const rollCalibration = getRollById(documentState.rollId)?.calibration ?? null;
       const result = await worker.export({
         documentId: documentState.id,
         settings: documentState.settings,
         isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
         filmType: activeProfile.filmType,
+        advancedInversion: activeProfile.advancedInversion ?? null,
         inputProfileId,
         outputProfileId: documentState.exportOptions.outputProfileId,
         options: documentState.exportOptions,
         sourceExif: documentState.source.exif,
+        rollCalibration,
         flareFloor: documentState.estimatedFlare,
         lightSourceBias,
         maskTuning: activeProfile.maskTuning,
@@ -1098,7 +1127,7 @@ export function useWorkspaceCommands({
       setError(`Open in editor failed. ${message}`);
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'OPEN_IN_EDITOR_FAILED' } : current);
     }
-  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeLabStyle, activeProfile.advancedInversion, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleLightSourceChange = useCallback((lightSourceId: string | null) => {
     updateDocument((current) => {
@@ -1264,7 +1293,17 @@ export function useWorkspaceCommands({
           y,
         });
 
-        handleSettingsChange(getFilmBaseCorrectionSettings(sample));
+        const isRollCalibrationSample = activeRollCalibrationPicker === 'base'
+          && activeRollCalibrationId
+          && documentState.rollId === activeRollCalibrationId;
+
+        if (isRollCalibrationSample) {
+          onRecordRollCalibrationBaseSample?.(activeRollCalibrationId, sample);
+        } else if (documentState.settings.inversionMethod === 'advanced-hd') {
+          handleSettingsChange({ filmBaseSample: sample });
+        } else {
+          handleSettingsChange(getFilmBaseCorrectionSettings(sample));
+        }
 
         setIsPickingFilmBase(false);
         appendDiagnostic({
@@ -1294,7 +1333,14 @@ export function useWorkspaceCommands({
           y,
         });
 
-        if (activePointPicker === 'black') {
+        if (
+          activePointPicker === 'neutral'
+          && activeRollCalibrationPicker === 'neutral'
+          && activeRollCalibrationId
+          && documentState.rollId === activeRollCalibrationId
+        ) {
+          onAddRollCalibrationNeutralSample?.(activeRollCalibrationId, documentState.id, sample);
+        } else if (activePointPicker === 'black') {
           const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
           handleSettingsChange({ blackPoint: clamp(luminance, 0, 80) });
         } else if (activePointPicker === 'white') {
@@ -1358,6 +1404,7 @@ export function useWorkspaceCommands({
           filmType: activeProfile.filmType,
           advancedInversion: activeProfile.advancedInversion ?? null,
           estimatedFilmBaseSample: documentState.estimatedFilmBaseSample ?? null,
+          rollCalibration: getRollById(documentState.rollId)?.calibration ?? null,
         }) : null,
         fitScale,
         targetMaxDimension,

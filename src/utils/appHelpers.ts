@@ -10,6 +10,7 @@ import {
   InversionMethod,
   InteractionQuality,
   MaskTuning,
+  RollCalibration,
   SourceMetadata,
   TonalCharacter,
 } from '../types';
@@ -146,12 +147,13 @@ export function canUseAdvancedInversion(
 }
 
 export function getResolvedInversionPipelineSummary(
-  settings: Pick<ConversionSettings, 'inversionMethod' | 'blackAndWhite'>,
+  settings: Pick<ConversionSettings, 'inversionMethod' | 'blackAndWhite' | 'filmBaseSample'>,
   options: {
     profileType: FilmProfile['type'];
     filmType?: FilmProfile['filmType'];
     advancedInversion?: AdvancedInversionProfile | null;
     estimatedFilmBaseSample?: ConversionSettings['filmBaseSample'] | null;
+    rollCalibration?: RollCalibration | null;
   },
 ) {
   const isColor = options.profileType === 'color' && !settings.blackAndWhite.enabled;
@@ -166,7 +168,11 @@ export function getResolvedInversionPipelineSummary(
   );
 
   const baseSampleSource = advancedActive
-    ? (options.estimatedFilmBaseSample ? 'auto-estimated-border-sample' : 'profile-fallback')
+    ? settings.filmBaseSample
+      ? 'manual-picker'
+      : options.estimatedFilmBaseSample
+        ? 'auto-estimated-border-sample'
+        : 'profile-fallback'
     : null;
 
   const reason = advancedActive
@@ -189,8 +195,10 @@ export function getResolvedInversionPipelineSummary(
     filmType,
     blackAndWhiteEnabled: settings.blackAndWhite.enabled,
     advancedSupportedByProfile: Boolean(options.advancedInversion),
-    usedEstimatedFilmBaseSample: advancedActive && Boolean(options.estimatedFilmBaseSample),
+    usedEstimatedFilmBaseSample: advancedActive && !settings.filmBaseSample && Boolean(options.estimatedFilmBaseSample),
     baseSampleSource,
+    rollCalibrationPresent: Boolean(options.rollCalibration),
+    rollCalibrationApplied: advancedActive && Boolean(options.rollCalibration?.enabled),
     reason,
   };
 }
@@ -243,6 +251,7 @@ export type QueuedPreviewRender = {
   settings: ConversionSettings;
   isColor: boolean;
   filmType?: 'negative' | 'slide';
+  advancedInversion?: AdvancedInversionProfile | null;
   comparisonMode: 'processed' | 'original';
   targetMaxDimension: number;
   previewMode: 'draft' | 'settled';
@@ -257,6 +266,7 @@ export type QueuedPreviewRender = {
   labSaturationBias?: number;
   labTemperatureBias?: number;
   highlightDensityEstimate?: number;
+  rollCalibration?: RollCalibration | null;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
 };

@@ -84,6 +84,7 @@ describe('runBatch auto-analysis', () => {
       profile,
       null,
       DEFAULT_COLOR_MANAGEMENT,
+      null,
       DEFAULT_EXPORT_OPTIONS,
       null,
       { cancelled: false },
@@ -153,6 +154,7 @@ describe('runBatch auto-analysis', () => {
       profile,
       null,
       DEFAULT_COLOR_MANAGEMENT,
+      null,
       DEFAULT_EXPORT_OPTIONS,
       null,
       { cancelled: false },
@@ -175,5 +177,63 @@ describe('runBatch auto-analysis', () => {
       temperature: 18,
       tint: 4,
     });
+  });
+
+  it('forwards shared roll calibration into auto-analysis and export', async () => {
+    const sharedSettings = createDefaultSettings();
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    const sharedRollCalibration = {
+      enabled: true,
+      baseSample: { r: 245, g: 245, b: 245 },
+      neutralSamples: [],
+      slopes: [1.1, 1, 0.9] as [number, number, number],
+      offsets: [0.05, 0, -0.03] as [number, number, number],
+      updatedAt: Date.now(),
+    };
+    const workerClient = {
+      detectFrame: vi.fn(async () => null),
+      computeFlare: vi.fn(async () => null),
+      autoAnalyze: vi.fn(async () => ({
+        exposure: 0,
+        blackPoint: 0,
+        whitePoint: 255,
+        temperature: 0,
+        tint: 0,
+      })),
+      export: vi.fn(async () => ({
+        blob: new Blob(['ok'], { type: 'image/jpeg' }),
+        filename: 'frame.jpg',
+      })),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+    } as const;
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'doc-1',
+        kind: 'open-tab',
+        documentId: 'doc-1',
+        sourceMetadata: createSourceMetadata('doc-1'),
+        filename: 'doc-1.tiff',
+        size: 1,
+        status: 'pending',
+      }],
+      sharedSettings,
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      sharedRollCalibration,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoMode: 'per-image' },
+    ));
+
+    expect(workerClient.autoAnalyze).toHaveBeenCalledWith(expect.objectContaining({
+      rollCalibration: sharedRollCalibration,
+    }));
+    expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
+      rollCalibration: sharedRollCalibration,
+    }));
   });
 });

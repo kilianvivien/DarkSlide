@@ -808,6 +808,7 @@ export class ImageWorkerClient {
     filmType?: RenderRequest['filmType'],
     advancedInversion?: RenderRequest['advancedInversion'],
     estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
+    rollCalibration?: RenderRequest['rollCalibration'],
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
@@ -850,6 +851,7 @@ export class ImageWorkerClient {
           filmType,
           advancedInversion,
           estimatedFilmBaseSample,
+          rollCalibration,
           flareFloor,
           lightSourceBias,
         )
@@ -887,6 +889,7 @@ export class ImageWorkerClient {
     filmType?: RenderRequest['filmType'],
     advancedInversion?: RenderRequest['advancedInversion'],
     estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
+    rollCalibration?: RenderRequest['rollCalibration'],
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
@@ -924,6 +927,7 @@ export class ImageWorkerClient {
         filmType,
         advancedInversion,
         estimatedFilmBaseSample,
+        rollCalibration,
         flareFloor,
         lightSourceBias,
       );
@@ -1356,6 +1360,7 @@ export class ImageWorkerClient {
         payload.filmType,
         payload.advancedInversion,
         estimatedFilmBaseSample,
+        payload.rollCalibration,
         payload.flareFloor,
         payload.lightSourceBias,
       );
@@ -1634,6 +1639,7 @@ export class ImageWorkerClient {
         payload.filmType,
         payload.advancedInversion,
         estimatedFilmBaseSample,
+        payload.rollCalibration,
         payload.flareFloor,
         payload.lightSourceBias,
       );

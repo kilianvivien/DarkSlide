@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, X } from 'lucide-react';
 import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile, NotificationSettings } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile, NotificationSettings, RollCalibration } from '../types';
 import { isDesktopShell, saveExportBlob, saveToDirectory } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { BatchJobEntry } from '../utils/batchProcessor';
@@ -19,6 +19,7 @@ interface ContactSheetModalProps {
   sharedSettings: ConversionSettings | null;
   sharedProfile: FilmProfile | null;
   sharedColorManagement: ColorManagementSettings | null;
+  sharedRollCalibration?: RollCalibration | null;
   notificationSettings: NotificationSettings;
   workerClient: ImageWorkerClient | null;
   defaultOutputPath?: string | null;
@@ -68,6 +69,7 @@ export function ContactSheetModal({
   sharedSettings,
   sharedProfile,
   sharedColorManagement,
+  sharedRollCalibration = null,
   notificationSettings,
   workerClient,
   defaultOutputPath,
@@ -160,10 +162,13 @@ export function ContactSheetModal({
             documentId,
             settings: structuredClone(sharedSettings),
             isColor: sharedProfile.type === 'color',
+            filmType: sharedProfile.filmType,
+            advancedInversion: sharedProfile.advancedInversion ?? null,
             inputProfileId: sharedColorManagement?.inputMode === 'override'
               ? sharedColorManagement.inputProfileId
               : undefined,
             outputProfileId: 'srgb',
+            rollCalibration: sharedRollCalibration,
             revision: 0,
             targetMaxDimension: 256,
             comparisonMode: 'processed',
@@ -194,7 +199,7 @@ export function ContactSheetModal({
       token.cancelled = true;
       tempDocumentIds.forEach((id) => void workerClient.disposeDocument(id));
     };
-  }, [entries, isOpen, sharedColorManagement, sharedProfile, sharedSettings, workerClient]);
+  }, [entries, isOpen, sharedColorManagement, sharedProfile, sharedRollCalibration, sharedSettings, workerClient]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -307,6 +312,7 @@ export function ContactSheetModal({
           outputProfileId,
           embedOutputProfile,
         })),
+        rollCalibrationPerCell: cells.map(() => sharedRollCalibration),
       });
 
       let saveResult: 'saved' | 'cancelled';

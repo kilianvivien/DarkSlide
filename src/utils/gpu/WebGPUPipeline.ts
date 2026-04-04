@@ -8,6 +8,7 @@ import {
   FilmProfileType,
   MaskTuning,
   ReadTileResult,
+  RollCalibration,
   TonalCharacter,
 } from '../../types';
 import {
@@ -16,7 +17,7 @@ import {
 } from '../imagePipeline';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
-const PROCESSING_UNIFORM_BYTES = 76 * 4;
+const PROCESSING_UNIFORM_BYTES = 84 * 4;
 const CURVE_LUT_BYTES = 1024 * 4;
 const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
@@ -524,6 +525,7 @@ export class WebGPUPipeline {
     filmType: FilmProfileType = 'negative',
     advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
+    rollCalibration?: RollCalibration | null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
@@ -582,6 +584,7 @@ export class WebGPUPipeline {
       filmType,
       advancedInversion,
       estimatedFilmBaseSample,
+      rollCalibration,
       flareFloor,
       lightSourceBias,
     );
@@ -725,6 +728,7 @@ export class WebGPUPipeline {
     filmType: FilmProfileType = 'negative',
     advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
+    rollCalibration?: RollCalibration | null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
@@ -751,6 +755,7 @@ export class WebGPUPipeline {
       filmType,
       advancedInversion,
       estimatedFilmBaseSample,
+      rollCalibration,
       flareFloor,
       lightSourceBias,
     );
@@ -775,6 +780,7 @@ export class WebGPUPipeline {
     filmType: FilmProfileType = 'negative',
     advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
+    rollCalibration?: RollCalibration | null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
@@ -797,6 +803,7 @@ export class WebGPUPipeline {
       filmType,
       advancedInversion,
       estimatedFilmBaseSample,
+      rollCalibration,
       flareFloor,
       lightSourceBias,
     );
@@ -890,6 +897,7 @@ export class WebGPUPipeline {
     filmType: FilmProfileType = 'negative',
     advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
+    rollCalibration?: RollCalibration | null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
@@ -912,6 +920,7 @@ export class WebGPUPipeline {
       filmType,
       advancedInversion,
       estimatedFilmBaseSample,
+      rollCalibration,
       flareFloor,
       lightSourceBias,
     );

@@ -96,7 +96,17 @@ struct Uniforms {
   advancedBaseDensityR: f32,
   advancedBaseDensityG: f32,
   advancedBaseDensityB: f32,
+  rollCalibrationEnabled: f32,
+
+  rollCalibrationSlopeR: f32,
+  rollCalibrationSlopeG: f32,
+  rollCalibrationSlopeB: f32,
   _pad16: f32,
+
+  rollCalibrationOffsetR: f32,
+  rollCalibrationOffsetG: f32,
+  rollCalibrationOffsetB: f32,
+  _pad17: f32,
 };
 
 struct BlurParams {
@@ -142,6 +152,17 @@ fn applyAdvancedHdInversion(value: f32, baseDensity: f32, gamma: f32) -> f32 {
   let transmittance = clampF(value, 1e-6, 1.0);
   let density = -log10(transmittance);
   let imageDensity = max(0.0, density - baseDensity);
+  return clampF(1.0 - pow(10.0, -imageDensity / max(gamma, 0.01)), 0.0, 1.0);
+}
+
+fn applyRollCalibrationToDensity(value: f32, slope: f32, offset: f32) -> f32 {
+  return max(0.0, value * slope + offset);
+}
+
+fn applyAdvancedHdInversionWithCalibration(value: f32, baseDensity: f32, gamma: f32, slope: f32, offset: f32) -> f32 {
+  let transmittance = clampF(value, 1e-6, 1.0);
+  let density = -log10(transmittance);
+  let imageDensity = applyRollCalibrationToDensity(max(0.0, density - baseDensity), slope, offset);
   return clampF(1.0 - pow(10.0, -imageDensity / max(gamma, 0.01)), 0.0, 1.0);
 }
 
@@ -313,9 +334,27 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
     b = clampF(b / max(uniforms.lightSourceBiasB, 0.05), 0.0, 1.0);
 
     if (uniforms.inversionMode > 0.5) {
-      r = applyAdvancedHdInversion(r, uniforms.advancedBaseDensityR, uniforms.advancedGammaR);
-      g = applyAdvancedHdInversion(g, uniforms.advancedBaseDensityG, uniforms.advancedGammaG);
-      b = applyAdvancedHdInversion(b, uniforms.advancedBaseDensityB, uniforms.advancedGammaB);
+      r = applyAdvancedHdInversionWithCalibration(
+        r,
+        uniforms.advancedBaseDensityR,
+        uniforms.advancedGammaR,
+        uniforms.rollCalibrationSlopeR,
+        uniforms.rollCalibrationOffsetR,
+      );
+      g = applyAdvancedHdInversionWithCalibration(
+        g,
+        uniforms.advancedBaseDensityG,
+        uniforms.advancedGammaG,
+        uniforms.rollCalibrationSlopeG,
+        uniforms.rollCalibrationOffsetG,
+      );
+      b = applyAdvancedHdInversionWithCalibration(
+        b,
+        uniforms.advancedBaseDensityB,
+        uniforms.advancedGammaB,
+        uniforms.rollCalibrationSlopeB,
+        uniforms.rollCalibrationOffsetB,
+      );
     } else {
       if (uniforms.isSlide <= 0.5) {
         r = 1.0 - r;

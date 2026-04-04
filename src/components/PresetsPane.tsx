@@ -6,7 +6,7 @@ import { confirmDeletePreset, isDesktopShell, savePresetFile, openPresetFile } f
 import { validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
 import { getRollAccent } from '../utils/rolls';
-import { DarkslidePresetFile, DocumentTab, FilmProfile, FilmProfileCategory, PresetFolder, Roll, ScannerType, WorkspaceDocument } from '../types';
+import { DarkslidePresetFile, DocumentTab, FilmProfile, FilmProfileCategory, PresetFolder, Roll, ScannerType } from '../types';
 
 const GENERIC_IDS = new Set(['generic-bw', 'generic-color']);
 
@@ -151,11 +151,12 @@ interface PresetsPaneProps {
   activeRoll?: Roll | null;
   activeTabId?: string | null;
   filmstripTabs?: DocumentTab[];
-  activeDocument?: WorkspaceDocument | null;
+  canApplyRollFilmBase?: boolean;
   onSelectTab?: (tabId: string) => void;
   onOpenRollInfo?: (rollId: string) => void;
   onSyncRollSettings?: (tabId: string, rollId: string) => void;
   onApplyRollFilmBase?: (rollId: string) => void;
+  onOpenRollCalibration?: (rollId: string) => void;
   onRemoveFromRoll?: (tabId: string) => void;
   onDeleteRoll?: (rollId: string) => void;
   onCreateRollFromTabs?: () => void;
@@ -184,11 +185,12 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   activeRoll,
   activeTabId,
   filmstripTabs = [],
-  activeDocument,
+  canApplyRollFilmBase = false,
   onSelectTab,
   onOpenRollInfo,
   onSyncRollSettings,
   onApplyRollFilmBase,
+  onOpenRollCalibration,
   onRemoveFromRoll,
   onDeleteRoll,
   onCreateRollFromTabs,
@@ -1056,11 +1058,11 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-2 gap-1.5">
                     <button
                       type="button"
                       onClick={() => onOpenRollInfo?.(activeRoll.id)}
-                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
                     >
                       <Info size={12} />
                       Edit Info
@@ -1069,7 +1071,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                       type="button"
                       onClick={() => activeTabId && onSyncRollSettings?.(activeTabId, activeRoll.id)}
                       disabled={!activeTabId || filmstripTabs.length < 2}
-                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Copy size={12} />
                       Sync Settings
@@ -1077,23 +1079,34 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                     <button
                       type="button"
                       onClick={() => onApplyRollFilmBase?.(activeRoll.id)}
-                      disabled={!activeDocument?.settings.filmBaseSample}
-                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={!canApplyRollFilmBase}
+                      title={canApplyRollFilmBase ? 'Copy the stored film-base sample to the whole roll' : 'Sample or load a film-base value on any frame in this roll first'}
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Droplets size={12} />
-                      Sync Film Base
+                      Apply Stored Film Base
                     </button>
-                    {onDeleteRoll && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenRollCalibration?.(activeRoll.id)}
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+                    >
+                      <SlidersHorizontal size={12} />
+                      Roll Calibration
+                    </button>
+                  </div>
+                  {onDeleteRoll && (
+                    <div className="mt-2 pt-2 border-t border-zinc-800">
                       <button
                         type="button"
                         onClick={() => onDeleteRoll(activeRoll.id)}
-                        className="flex items-center gap-1.5 rounded-lg border border-red-900/50 bg-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-red-400 transition-colors hover:border-red-800 hover:bg-red-950/30"
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-900/40 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-red-400/80 transition-colors hover:border-red-800/60 hover:bg-red-950/30 hover:text-red-300"
                       >
                         <Trash2 size={12} />
                         Delete Roll
                       </button>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
 
                 <div>

@@ -50,10 +50,12 @@ import {
   LabStyleProfile,
   LightSourceProfile,
   NotificationSettings,
+  PointPickerMode,
   PresetFolder,
   QuickExportPreset,
   RenderBackendDiagnostics,
   Roll,
+  RollCalibration,
   ScannerType,
   WorkspaceDocument,
 } from '../types';
@@ -89,7 +91,7 @@ type AppShellProps = {
   isLeftPaneOpen: boolean;
   isRightPaneOpen: boolean;
   isPickingFilmBase: boolean;
-  activePointPicker: 'black' | 'white' | 'grey' | null;
+  activePointPicker: PointPickerMode | null;
   isAdjustingLevel: boolean;
   isAdjustingCrop: boolean;
   isPanDragging: boolean;
@@ -151,6 +153,7 @@ type AppShellProps = {
   contactSheetSharedSettings: ConversionSettings | null;
   contactSheetSharedProfile: FilmProfile | null;
   contactSheetSharedColorManagement: ColorManagementSettings | null;
+  contactSheetSharedRollCalibration: RollCalibration | null;
   onSetIsPanDragging: React.Dispatch<React.SetStateAction<boolean>>;
   onSetIsDragActive: React.Dispatch<React.SetStateAction<boolean>>;
   onSetComparisonMode: React.Dispatch<React.SetStateAction<'processed' | 'original'>>;
@@ -185,6 +188,7 @@ type AppShellProps = {
     sharedSettings: ConversionSettings;
     sharedProfile: FilmProfile;
     sharedColorManagement: ColorManagementSettings;
+    sharedRollCalibration: RollCalibration | null;
   }) => void;
   defaultExportOptions: WorkspaceDocument['exportOptions'];
   onSettingsChange: (newSettings: Partial<ConversionSettings>) => void;
@@ -205,7 +209,8 @@ type AppShellProps = {
   onRedetectFrame: () => void;
   onCropDone: () => void;
   onResetCrop: () => void;
-  onSetActivePointPicker: React.Dispatch<React.SetStateAction<'black' | 'white' | 'grey' | null>>;
+  onSetActivePointPicker: React.Dispatch<React.SetStateAction<PointPickerMode | null>>;
+  onOpenRollCalibration: (rollId: string) => void;
   onOpenSettingsModal: () => void;
   onLightSourceChange: (lightSourceId: string | null) => void;
   onLabStyleChange: (labStyleId: string | null) => void;
@@ -359,6 +364,7 @@ export function AppShell({
   contactSheetSharedSettings,
   contactSheetSharedProfile,
   contactSheetSharedColorManagement,
+  contactSheetSharedRollCalibration,
   onSetIsPanDragging,
   onSetIsDragActive,
   onSetComparisonMode,
@@ -409,6 +415,7 @@ export function AppShell({
   onCropDone,
   onResetCrop,
   onSetActivePointPicker,
+  onOpenRollCalibration,
   onOpenSettingsModal,
   onLightSourceChange,
   onLabStyleChange,
@@ -1023,6 +1030,7 @@ export function AppShell({
                   onOpenRollInfo={onOpenRollInfo}
                   onSyncRollSettings={onSyncRollSettings}
                   onApplyRollFilmBase={onApplyRollFilmBase}
+                  onOpenRollCalibration={onOpenRollCalibration}
                   onRemoveFromRoll={onRemoveFromRoll}
                   onDeleteRoll={onDeleteRoll}
                   onCreateRollFromTabs={onCreateRollFromTabs}
@@ -1136,6 +1144,7 @@ export function AppShell({
           sharedSettings={contactSheetSharedSettings}
           sharedProfile={contactSheetSharedProfile}
           sharedColorManagement={contactSheetSharedColorManagement}
+          sharedRollCalibration={contactSheetSharedRollCalibration}
           notificationSettings={notificationSettings}
           workerClient={workerClient}
           defaultOutputPath={contactSheetOutputPath}

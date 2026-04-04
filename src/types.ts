@@ -60,6 +60,24 @@ export interface FilmBaseSample {
   b: number;
 }
 
+export interface RollCalibrationNeutralSample {
+  id: string;
+  documentId: string;
+  sampleRgb: FilmBaseSample;
+  sampledAt: number;
+}
+
+export interface RollCalibration {
+  enabled: boolean;
+  baseSample: FilmBaseSample | null;
+  neutralSamples: RollCalibrationNeutralSample[];
+  slopes: [number, number, number];
+  offsets: [number, number, number];
+  updatedAt: number;
+}
+
+export type PointPickerMode = 'black' | 'white' | 'grey' | 'neutral';
+
 export type ColorMatrix = [
   number, number, number,
   number, number, number,
@@ -200,6 +218,7 @@ export interface Roll {
   date: string | null;
   notes: string;
   filmBaseSample: FilmBaseSample | null;
+  calibration?: RollCalibration | null;
   createdAt: number;
   directory: string | null;
 }
@@ -226,6 +245,7 @@ export interface SidecarFile {
     camera: string | null;
     date: string | null;
     notes: string;
+    calibration?: RollCalibration | null;
   };
   flatFieldProfileId?: string;
   lightSourceProfileId?: string;
@@ -373,6 +393,7 @@ export interface RenderRequest {
   filmType?: FilmProfileType;
   advancedInversion?: AdvancedInversionProfile | null;
   estimatedFilmBaseSample?: FilmBaseSample | null;
+  rollCalibration?: RollCalibration | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   revision: number;
@@ -424,6 +445,7 @@ export interface ExportRequest {
   isColor: boolean;
   filmType?: FilmProfileType;
   advancedInversion?: AdvancedInversionProfile | null;
+  rollCalibration?: RollCalibration | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   options: ExportOptions;
@@ -465,6 +487,7 @@ export interface ContactSheetRequest {
   profilePerCell: FilmProfile[];
   colorManagementPerCell: ColorManagementSettings[];
   estimatedFilmBaseSamplePerCell?: Array<FilmBaseSample | null>;
+  rollCalibrationPerCell?: Array<RollCalibration | null>;
   flareFloorPerCell?: Array<[number, number, number] | null>;
   lightSourceBiasPerCell?: Array<[number, number, number]>;
 }
@@ -611,6 +634,7 @@ export interface AutoAnalyzeRequest {
   isColor: boolean;
   filmType?: FilmProfileType;
   advancedInversion?: AdvancedInversionProfile | null;
+  rollCalibration?: RollCalibration | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   targetMaxDimension: number;
