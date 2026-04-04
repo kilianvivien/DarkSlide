@@ -399,11 +399,14 @@ export function useWorkspaceCommands({
 
   const handleSettingsChange = useCallback((newSettings: Partial<ConversionSettings>) => {
     updateDocument((current) => {
+      const blackAndWhiteEnabled = newSettings.blackAndWhite?.enabled;
       const nextSettings = {
         ...current.settings,
         ...newSettings,
       };
-      const blackAndWhiteEnabled = newSettings.blackAndWhite?.enabled;
+      if (blackAndWhiteEnabled) {
+        nextSettings.inversionMethod = 'standard';
+      }
       const nextLightSourceId = blackAndWhiteEnabled === undefined
         ? current.lightSourceId
         : resolveLightSourceIdForProfile(activeProfile, current.lightSourceId, { blackAndWhiteEnabled });

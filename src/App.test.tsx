@@ -1734,6 +1734,63 @@ describe('App import and preview pipeline', () => {
     });
   });
 
+  it('reverts advanced inversion to standard when enabling black and white conversion', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+      settings: {
+        inversionMethod: string;
+        blackAndWhite: { enabled: boolean };
+      };
+    }) => createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Color' }));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Advanced inversion'), { target: { value: 'advanced-hd' } });
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    await uploadFile(createFile('advanced-bw.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      settings: expect.objectContaining({
+        inversionMethod: 'advanced-hd',
+        blackAndWhite: expect.objectContaining({ enabled: false }),
+      }),
+      advancedInversion: expect.any(Object),
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle Black And White' }));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      settings: expect.objectContaining({
+        inversionMethod: 'standard',
+        blackAndWhite: expect.objectContaining({ enabled: true }),
+      }),
+    });
+  });
+
   it('copies debug info with the resolved color inversion pipeline summary', async () => {
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(300, 200),
