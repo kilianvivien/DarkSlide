@@ -252,7 +252,7 @@ export interface FilmProfile {
   tags?: string[];
   filmStock?: string | null;
   scannerType?: ScannerType | null;
-  includesCrop?: boolean;
+  includesFraming?: boolean;
   lightSourceId?: string | null;
   folderId?: string | null;
   labStyleId?: string | null;

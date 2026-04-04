@@ -78,6 +78,20 @@ const DEFAULT_PRESET_CROP: ConversionSettings['crop'] = {
   aspectRatio: null,
 };
 
+function preserveCurrentFraming(
+  nextSettings: ConversionSettings,
+  currentSettings: ConversionSettings | null | undefined,
+) {
+  if (!currentSettings) {
+    return nextSettings;
+  }
+
+  nextSettings.crop = structuredClone(currentSettings.crop);
+  nextSettings.rotation = currentSettings.rotation;
+  nextSettings.levelAngle = currentSettings.levelAngle;
+  return nextSettings;
+}
+
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
 type TauriWindowHandle = {
@@ -830,8 +844,8 @@ export function useWorkspaceCommands({
       : undefined;
 
     const nextSettings = structuredClone(profile.defaultSettings);
-    if (profile.includesCrop === false && documentState) {
-      nextSettings.crop = structuredClone(documentState.settings.crop);
+    if (profile.includesFraming === false) {
+      preserveCurrentFraming(nextSettings, documentState?.settings);
     }
 
     updateDocument((current) => ({
@@ -859,12 +873,14 @@ export function useWorkspaceCommands({
     filmStock?: string;
     scannerType?: ScannerType | null;
     folderId?: string | null;
-    saveCrop?: boolean;
+    saveFraming?: boolean;
   }) => {
     if (!documentState) return;
     const presetSettings = structuredClone(documentState.settings);
-    if (!metadata?.saveCrop) {
+    if (!metadata?.saveFraming) {
       presetSettings.crop = structuredClone(DEFAULT_PRESET_CROP);
+      presetSettings.rotation = 0;
+      presetSettings.levelAngle = 0;
     }
 
     const newPreset = savePreset({
@@ -882,7 +898,7 @@ export function useWorkspaceCommands({
       tags: savePresetTags,
       filmStock: metadata?.filmStock?.trim() ? metadata.filmStock.trim() : null,
       scannerType: metadata?.scannerType ?? null,
-      includesCrop: Boolean(metadata?.saveCrop),
+      includesFraming: Boolean(metadata?.saveFraming),
       lightSourceId: documentState.lightSourceId ?? null,
       folderId: metadata?.folderId ?? null,
       labStyleId: documentState.labStyleId ?? null,
@@ -920,8 +936,8 @@ export function useWorkspaceCommands({
   const handleReset = useCallback(() => {
     if (!documentState) return;
     const nextSettings = structuredClone(activeProfile.defaultSettings);
-    if (activeProfile.includesCrop === false) {
-      nextSettings.crop = structuredClone(documentState.settings.crop);
+    if (activeProfile.includesFraming === false) {
+      preserveCurrentFraming(nextSettings, documentState.settings);
     }
     pushHistoryEntry(createHistoryEntry(documentState.settings, documentState.labStyleId));
     updateDocument((current) => ({

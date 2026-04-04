@@ -269,6 +269,12 @@ vi.mock('./components/Sidebar', () => ({
         >
           Apply Square Crop
         </button>
+        <button type="button" onClick={() => onSettingsChange({ rotation: 90, levelAngle: 5 })}>
+          Apply Quarter Rotation
+        </button>
+        <button type="button" onClick={() => onSettingsChange({ rotation: 180, levelAngle: -3 })}>
+          Apply Half Rotation
+        </button>
         <button type="button" onClick={onInteractionEnd}>
           End Drag
         </button>
@@ -287,13 +293,13 @@ vi.mock('./components/PresetsPane', () => ({
     builtinProfiles?: Array<{ id: string; name: string }>;
     customPresets?: Array<{ id: string; name: string }>;
     onStockChange: (profile: { id: string; name: string }) => void;
-    onSavePreset?: (name: string, metadata?: { saveCrop?: boolean }) => void;
+    onSavePreset?: (name: string, metadata?: { saveFraming?: boolean }) => void;
   }) => (
     <div data-testid="presets">
-      <button type="button" onClick={() => onSavePreset?.('Saved Custom Preset', { saveCrop: false })}>
+      <button type="button" onClick={() => onSavePreset?.('Saved Custom Preset', { saveFraming: false })}>
         Save Custom Preset
       </button>
-      <button type="button" onClick={() => onSavePreset?.('Saved Crop Preset', { saveCrop: true })}>
+      <button type="button" onClick={() => onSavePreset?.('Saved Crop Preset', { saveFraming: true })}>
         Save Custom Preset With Crop
       </button>
       {[...builtinProfiles, ...customPresets].map((profile) => (
@@ -1108,9 +1114,17 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.98, 0.95]);
   });
 
-  it('keeps the current crop when applying a custom preset saved without crop', async () => {
+  it('keeps the current crop and rotation when applying a custom preset saved without framing', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
-    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; settings: { crop: unknown } }) => (
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      settings: {
+        crop: unknown;
+        rotation: number;
+        levelAngle: number;
+      };
+    }) => (
       createRenderResult(payload.documentId, payload.revision, 300, 200)
     ));
 
@@ -1130,10 +1144,18 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Quarter Rotation' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
     fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply Square Crop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Half Rotation' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1156,6 +1178,8 @@ describe('App import and preview pipeline', () => {
           height: number;
           aspectRatio: number | null;
         };
+        rotation: number;
+        levelAngle: number;
       };
     };
     expect(latestRenderCall.settings.crop).toEqual({
@@ -1165,6 +1189,8 @@ describe('App import and preview pipeline', () => {
       height: 0.5,
       aspectRatio: 1,
     });
+    expect(latestRenderCall.settings.rotation).toBe(180);
+    expect(latestRenderCall.settings.levelAngle).toBe(-3);
   });
 
   it('switches CS-LITE to the white mode when black-and-white conversion is enabled', async () => {

@@ -223,7 +223,7 @@ type AppShellProps = {
     filmStock?: string;
     scannerType?: ScannerType | null;
     folderId?: string | null;
-    saveCrop?: boolean;
+    saveFraming?: boolean;
   }) => void;
   onImportPreset: (profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => void;
   onDeletePreset: (id: string) => void;

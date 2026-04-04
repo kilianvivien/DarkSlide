@@ -97,11 +97,11 @@ describe('PresetsPane', () => {
       filmStock: 'Kodak Gold 200',
       scannerType: 'smartphone',
       folderId: null,
-      saveCrop: false,
+      saveFraming: false,
     });
   });
 
-  it('lets the user opt into saving crop with the preset', () => {
+  it('lets the user opt into saving crop and rotation with the preset', () => {
     const onSavePreset = vi.fn();
 
     render(
@@ -118,14 +118,14 @@ describe('PresetsPane', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /save current preset/i }));
     fireEvent.change(screen.getByPlaceholderText('Preset Name...'), { target: { value: 'Crop Preset' } });
-    fireEvent.click(screen.getByLabelText(/save crop/i));
+    fireEvent.click(screen.getByLabelText(/save crop & rotation/i));
     fireEvent.click(screen.getByRole('button', { name: /save preset/i }));
 
     expect(onSavePreset).toHaveBeenCalledWith('Crop Preset', {
       filmStock: undefined,
       scannerType: null,
       folderId: null,
-      saveCrop: true,
+      saveFraming: true,
     });
   });
 
