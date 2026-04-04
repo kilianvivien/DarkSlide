@@ -22,11 +22,12 @@ import { confirmDeleteRoll, confirmReplacePresetLibrary, confirmSyncFilmBase, co
 import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
+import { analyzeMonochromeSuggestion } from './utils/autoAnalysis';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
 import { syncRecentFilesToMenu } from './utils/recentFilesStore';
-import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, TransientNoticeState } from './utils/appHelpers';
+import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, SuggestionNoticeState, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore';
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
 
@@ -126,6 +127,7 @@ export default function App() {
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
   const [isRenderIndicatorVisible, setIsRenderIndicatorVisible] = useState(false);
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
+  const [suggestionNotice, setSuggestionNotice] = useState<SuggestionNoticeState | null>(null);
   const [transientNotice, setTransientNotice] = useState<TransientNoticeState | null>(null);
   const [showTabSwitchOverlay, setShowTabSwitchOverlay] = useState(false);
   const [tabSwitchOverlayKey, setTabSwitchOverlayKey] = useState(0);
@@ -208,6 +210,8 @@ export default function App() {
   const tabSwitchOverlayTimeoutRef = useRef<number | null>(null);
   const previousActiveTabIdRef = useRef<string | null>(null);
   const lastAutoFitCropKeyRef = useRef<string | null>(null);
+  const monochromeSuggestionOfferedRef = useRef(new Set<string>());
+  const convertToBlackAndWhiteActionRef = useRef<(documentId: string) => void>(() => undefined);
   const tauriWindowRef = useRef<{
     startDragging: () => Promise<void>;
     scaleFactor: () => Promise<number>;
@@ -225,6 +229,61 @@ export default function App() {
       transientNoticeTimeoutRef.current = null;
     }, 4000);
   }, []);
+
+  const maybeSuggestBlackAndWhiteConversion = useCallback((
+    documentId: string,
+    imageData: ImageData,
+    options: {
+      comparisonMode: 'processed' | 'original';
+      previewMode: 'draft' | 'settled';
+      interactionQuality: InteractionQuality | null;
+      isColor: boolean;
+      blackAndWhiteEnabled: boolean;
+    },
+  ) => {
+    if (
+      options.comparisonMode !== 'processed'
+      || options.previewMode !== 'settled'
+      || options.interactionQuality !== null
+      || !options.isColor
+      || options.blackAndWhiteEnabled
+      || monochromeSuggestionOfferedRef.current.has(documentId)
+    ) {
+      return;
+    }
+
+    const analysis = analyzeMonochromeSuggestion(imageData);
+    if (!analysis.isLikelyMonochrome || activeDocumentIdRef.current !== documentId) {
+      return;
+    }
+
+    monochromeSuggestionOfferedRef.current.add(documentId);
+    setSuggestionNotice({
+      documentId,
+      message: 'This scan looks monochrome. Convert it to black and white?',
+      actionLabel: 'Convert to B&W',
+      onAction: () => convertToBlackAndWhiteActionRef.current(documentId),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!documentState) {
+      setSuggestionNotice(null);
+      return;
+    }
+
+    if (documentState.settings.blackAndWhite.enabled) {
+      setSuggestionNotice((current) => current?.documentId === documentState.id ? null : current);
+      return;
+    }
+
+    if (
+      suggestionNotice
+      && suggestionNotice.documentId !== documentState.id
+    ) {
+      setSuggestionNotice(null);
+    }
+  }, [documentState, suggestionNotice]);
 
   const createPreviewRenderKey = useCallback((payload: {
     documentId: string;
@@ -1251,6 +1310,13 @@ export default function App() {
           status: 'ready',
         };
       });
+      maybeSuggestBlackAndWhiteConversion(result.documentId, normalizedImageData, {
+        comparisonMode: nextComparisonMode,
+        previewMode,
+        interactionQuality,
+        isColor,
+        blackAndWhiteEnabled: settings.blackAndWhite.enabled,
+      });
       if (shouldTrackHeavyRenderIndicator) {
         lastCompletedSettledRenderKeyRef.current = renderKey;
         adaptiveState.committedHighlightDensity = result.highlightDensity;
@@ -1319,7 +1385,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, drawPreview, flushPendingPreview, getSettledAdaptiveState, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility]);
+  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, drawPreview, flushPendingPreview, getSettledAdaptiveState, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility]);
 
   const {
     enqueueRender: enqueuePreviewRender,
@@ -1743,6 +1809,23 @@ export default function App() {
     resolveRollId,
     getRollById,
   });
+
+  useEffect(() => {
+    convertToBlackAndWhiteActionRef.current = (documentId: string) => {
+      if (!documentState || documentState.id !== documentId) {
+        return;
+      }
+
+      handleSettingsChange({
+        blackAndWhite: {
+          ...documentState.settings.blackAndWhite,
+          enabled: true,
+        },
+      });
+      setSuggestionNotice(null);
+      showTransientNotice('Converted to black and white.', 'success');
+    };
+  }, [documentState, handleSettingsChange, showTransientNotice]);
 
   const handleSelectFlatFieldProfile = useCallback(async (name: string | null) => {
     await calibration.selectActiveProfile(name);
@@ -2371,6 +2454,7 @@ onToggleScanningSession: toggleScanningWindow,
       isRenderIndicatorVisible={isRenderIndicatorVisible}
       overlayContent={overlayContent}
       error={error}
+      suggestionNotice={suggestionNotice}
       transientNotice={transientNotice}
       isExporting={Boolean(isExporting)}
       gpuRenderingEnabled={gpuRenderingEnabled}
@@ -2424,6 +2508,7 @@ onToggleScanningSession: toggleScanningWindow,
       onSetShowSettingsModal={setShowSettingsModal}
       onSetShowBatchModal={setShowBatchModal}
       onSetShowContactSheetModal={setShowContactSheetModal}
+      onSetSuggestionNotice={setSuggestionNotice}
       onSetTransientNotice={setTransientNotice}
       onSetError={setError}
       onOpenImage={handleOpenImage}

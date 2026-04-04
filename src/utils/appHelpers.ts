@@ -276,6 +276,13 @@ export type TransientNoticeState = {
   tone?: 'warning' | 'success';
 };
 
+export type SuggestionNoticeState = {
+  documentId: string;
+  message: string;
+  actionLabel: string;
+  onAction: () => void;
+};
+
 export function formatMemoryBadge(bytes: number | null) {
   if (bytes === null) {
     return 'Worker memory unavailable';

@@ -39,6 +39,7 @@ import {
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import {
   BlockingOverlayState,
+  SuggestionNoticeState,
   TransientNoticeState,
 } from '../utils/appHelpers';
 import {
@@ -107,6 +108,7 @@ type AppShellProps = {
   isRenderIndicatorVisible: boolean;
   overlayContent: BlockingOverlayState | null;
   error: string | null;
+  suggestionNotice: SuggestionNoticeState | null;
   transientNotice: TransientNoticeState | null;
   isExporting: boolean;
   gpuRenderingEnabled: boolean;
@@ -160,6 +162,7 @@ type AppShellProps = {
   onSetShowSettingsModal: React.Dispatch<React.SetStateAction<boolean>>;
   onSetShowBatchModal: React.Dispatch<React.SetStateAction<boolean>>;
   onSetShowContactSheetModal: React.Dispatch<React.SetStateAction<boolean>>;
+  onSetSuggestionNotice: React.Dispatch<React.SetStateAction<SuggestionNoticeState | null>>;
   onSetTransientNotice: React.Dispatch<React.SetStateAction<TransientNoticeState | null>>;
   onSetError: React.Dispatch<React.SetStateAction<string | null>>;
   onOpenImage: () => Promise<void>;
@@ -317,6 +320,7 @@ export function AppShell({
   isRenderIndicatorVisible,
   overlayContent,
   error,
+  suggestionNotice,
   transientNotice,
   isExporting,
   gpuRenderingEnabled,
@@ -370,6 +374,7 @@ export function AppShell({
   onSetShowSettingsModal,
   onSetShowBatchModal,
   onSetShowContactSheetModal,
+  onSetSuggestionNotice,
   onSetTransientNotice,
   onSetError,
   onOpenImage,
@@ -969,6 +974,36 @@ export function AppShell({
                   <FileWarning size={18} className="shrink-0 text-red-400" />
                   <span>{error}</span>
                   <button onClick={() => onSetError(null)} className="ml-2 opacity-50 hover:opacity-100">✕</button>
+                </motion.div>
+              )}
+
+              {suggestionNotice && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 20 }}
+                  className="absolute bottom-44 right-8 z-50 flex max-w-lg items-center gap-3 rounded-xl border border-sky-800/60 bg-sky-950/60 px-4 py-3 text-sm text-sky-100 shadow-2xl backdrop-blur-xl"
+                >
+                  <ImageIcon size={18} className="shrink-0 text-sky-300" />
+                  <span className="min-w-0 flex-1">{suggestionNotice.message}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      suggestionNotice.onAction();
+                      onSetSuggestionNotice(null);
+                    }}
+                    className="shrink-0 rounded-lg bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-950 transition-colors hover:bg-white"
+                  >
+                    {suggestionNotice.actionLabel}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSetSuggestionNotice(null)}
+                    className="ml-1 shrink-0 opacity-60 transition-opacity hover:opacity-100"
+                    aria-label="Dismiss suggestion"
+                  >
+                    <X size={14} />
+                  </button>
                 </motion.div>
               )}
 

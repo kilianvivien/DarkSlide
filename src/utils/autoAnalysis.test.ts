@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeColorBalance, analyzeExposure, autoAnalyze } from './autoAnalysis';
+import { analyzeColorBalance, analyzeExposure, analyzeMonochromeSuggestion, autoAnalyze } from './autoAnalysis';
 import type { HistogramData } from '../types';
 
 function createHistogramData(): HistogramData {
@@ -85,5 +85,48 @@ describe('autoAnalysis', () => {
     expect(result.temperature).toBeLessThanOrEqual(100);
     expect(result.tint).toBeGreaterThanOrEqual(-100);
     expect(result.tint).toBeLessThanOrEqual(100);
+  });
+
+  it('suggests black and white conversion for a near-neutral monochrome scan', () => {
+    const imageData = createImageData(120, 120, (x, y) => {
+      const base = 40 + ((x + y) % 80);
+      return [base, base + 2, base + 4];
+    });
+
+    const result = analyzeMonochromeSuggestion(imageData);
+    expect(result.isLikelyMonochrome).toBe(true);
+    expect(result.meanChroma).toBeLessThanOrEqual(11);
+    expect(result.meanNormalizedResidual).toBeLessThanOrEqual(0.2);
+  });
+
+  it('still suggests black and white conversion when the monochrome scan has a strong global tint', () => {
+    const imageData = createImageData(120, 120, (x, y) => {
+      const base = 36 + ((x + y) % 96);
+      return [base + 20, base + 2, base + 32];
+    });
+
+    const result = analyzeMonochromeSuggestion(imageData);
+    expect(result.isLikelyMonochrome).toBe(true);
+    expect(result.meanNormalizedResidual).toBeLessThanOrEqual(0.2);
+  });
+
+  it('does not suggest black and white conversion for a muted but clearly color image', () => {
+    const imageData = createImageData(120, 120, (x, y) => {
+      if (x > 36 && x < 84 && y > 30 && y < 90) {
+        return [122, 126, 132];
+      }
+      if (x < 40) {
+        return [88, 132, 176];
+      }
+      if (y > 82) {
+        return [156, 112, 98];
+      }
+
+      return [116, 148, 98];
+    });
+
+    const result = analyzeMonochromeSuggestion(imageData);
+    expect(result.isLikelyMonochrome).toBe(false);
+    expect(result.highChromaRatio).toBeGreaterThan(0.12);
   });
 });

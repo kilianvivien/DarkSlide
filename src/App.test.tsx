@@ -533,6 +533,25 @@ function createRenderResult(documentId: string, revision: number, width: number,
   };
 }
 
+function createRenderImageData(
+  width: number,
+  height: number,
+  pixel: (x: number, y: number) => [number, number, number],
+) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      const [r, g, b] = pixel(x, y);
+      data[index] = r;
+      data[index + 1] = g;
+      data[index + 2] = b;
+      data[index + 3] = 255;
+    }
+  }
+  return new ImageData(data, width, height);
+}
+
 async function uploadFile(file: File) {
   const input = document.querySelector('input[type="file"]') as HTMLInputElement;
   expect(input).toBeTruthy();
@@ -1082,6 +1101,55 @@ describe('App import and preview pipeline', () => {
       lightSourceBias: [number, number, number];
     };
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.94, 0.88]);
+  });
+
+  it('suggests black and white conversion for likely monochrome color scans and applies it from the notice button', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+      settings: {
+        inversionMethod: string;
+        blackAndWhite: { enabled: boolean };
+      };
+    }) => {
+      const result = createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension);
+      result.imageData = createRenderImageData(payload.targetMaxDimension, payload.targetMaxDimension, (x, y) => {
+        const base = 52 + ((x + y) % 96);
+        return [base, base + 2, base + 4];
+      });
+      return result;
+    });
+
+    render(<App />);
+
+    await uploadFile(createFile('mono-scan.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(screen.getByText('This scan looks monochrome. Convert it to black and white?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Convert to B&W' })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Convert to B&W' }));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      settings: expect.objectContaining({
+        inversionMethod: 'standard',
+        blackAndWhite: expect.objectContaining({ enabled: true }),
+      }),
+    });
+    expect(screen.queryByRole('button', { name: 'Convert to B&W' })).not.toBeInTheDocument();
   });
 
   it('shows the RAW decoding overlay while the native decode is still running', async () => {
