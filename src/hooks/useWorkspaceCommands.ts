@@ -70,6 +70,14 @@ function buildQuickExportCrop(crop: ConversionSettings['crop']) {
   };
 }
 
+const DEFAULT_PRESET_CROP: ConversionSettings['crop'] = {
+  x: 0,
+  y: 0,
+  width: 1,
+  height: 1,
+  aspectRatio: null,
+};
+
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
 type TauriWindowHandle = {
@@ -821,6 +829,11 @@ export function useWorkspaceCommands({
       ? (profile.labStyleId ?? null)
       : undefined;
 
+    const nextSettings = structuredClone(profile.defaultSettings);
+    if (profile.includesCrop === false && documentState) {
+      nextSettings.crop = structuredClone(documentState.settings.crop);
+    }
+
     updateDocument((current) => ({
       ...current,
       profileId: profile.id,
@@ -828,7 +841,7 @@ export function useWorkspaceCommands({
         ? nextLightSourceId
         : resolveLightSourceIdForProfile(profile, current.lightSourceId),
       settings: {
-        ...structuredClone(profile.defaultSettings),
+        ...nextSettings,
         inversionMethod: resolveDefaultInversionMethodForProfile(profile, prefsSnapshotRef.current.defaultColorNegativeInversion),
       },
       ...(nextLabStyleId !== undefined ? { labStyleId: nextLabStyleId } : {}),
@@ -836,14 +849,24 @@ export function useWorkspaceCommands({
     }));
     const resolvedLabStyleId = nextLabStyleId !== undefined ? nextLabStyleId : (documentState?.labStyleId ?? null);
     resetHistory(createHistoryEntry({
-      ...structuredClone(profile.defaultSettings),
+      ...nextSettings,
       inversionMethod: resolveDefaultInversionMethodForProfile(profile, prefsSnapshotRef.current.defaultColorNegativeInversion),
     }, resolvedLabStyleId));
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
-  }, [documentState?.labStyleId, prefsSnapshotRef, resetHistory, updateDocument]);
+  }, [documentState, prefsSnapshotRef, resetHistory, updateDocument]);
 
-  const handleSavePreset = useCallback((name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null; folderId?: string | null }) => {
+  const handleSavePreset = useCallback((name: string, metadata?: {
+    filmStock?: string;
+    scannerType?: ScannerType | null;
+    folderId?: string | null;
+    saveCrop?: boolean;
+  }) => {
     if (!documentState) return;
+    const presetSettings = structuredClone(documentState.settings);
+    if (!metadata?.saveCrop) {
+      presetSettings.crop = structuredClone(DEFAULT_PRESET_CROP);
+    }
+
     const newPreset = savePreset({
       id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
         ? `custom-${crypto.randomUUID()}`
@@ -854,11 +877,12 @@ export function useWorkspaceCommands({
       filmType: activeProfile.filmType,
       category: activeProfile.category,
       description: 'Custom DarkSlide preset',
-      defaultSettings: structuredClone(documentState.settings),
+      defaultSettings: presetSettings,
       isCustom: true,
       tags: savePresetTags,
       filmStock: metadata?.filmStock?.trim() ? metadata.filmStock.trim() : null,
       scannerType: metadata?.scannerType ?? null,
+      includesCrop: Boolean(metadata?.saveCrop),
       lightSourceId: documentState.lightSourceId ?? null,
       folderId: metadata?.folderId ?? null,
       labStyleId: documentState.labStyleId ?? null,
@@ -895,11 +919,15 @@ export function useWorkspaceCommands({
 
   const handleReset = useCallback(() => {
     if (!documentState) return;
+    const nextSettings = structuredClone(activeProfile.defaultSettings);
+    if (activeProfile.includesCrop === false) {
+      nextSettings.crop = structuredClone(documentState.settings.crop);
+    }
     pushHistoryEntry(createHistoryEntry(documentState.settings, documentState.labStyleId));
     updateDocument((current) => ({
       ...current,
       settings: {
-        ...structuredClone(activeProfile.defaultSettings),
+        ...nextSettings,
         inversionMethod: resolveDefaultInversionMethodForProfile(activeProfile, prefsSnapshotRef.current.defaultColorNegativeInversion),
       },
       dirty: false,

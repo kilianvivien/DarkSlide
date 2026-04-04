@@ -219,7 +219,12 @@ type AppShellProps = {
   onLabStyleChange: (labStyleId: string | null) => void;
   onAutoAdjust: () => void;
   onProfileChange: (profile: FilmProfile) => void;
-  onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null }) => void;
+  onSavePreset: (name: string, metadata?: {
+    filmStock?: string;
+    scannerType?: ScannerType | null;
+    folderId?: string | null;
+    saveCrop?: boolean;
+  }) => void;
   onImportPreset: (profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => void;
   onDeletePreset: (id: string) => void;
   onCreateFolder: (name: string) => void;

@@ -139,7 +139,12 @@ interface PresetsPaneProps {
   presetFolders?: PresetFolder[];
   canSavePreset: boolean;
   saveTags?: string[];
-  onSavePreset: (name: string, metadata?: { filmStock?: string; scannerType?: ScannerType | null; folderId?: string | null }) => void;
+  onSavePreset: (name: string, metadata?: {
+    filmStock?: string;
+    scannerType?: ScannerType | null;
+    folderId?: string | null;
+    saveCrop?: boolean;
+  }) => void;
   onImportPreset: (profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => void;
   onDeletePreset: (id: string) => void;
   onCreateFolder?: (name: string) => void;
@@ -196,6 +201,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   const [newPresetName, setNewPresetName] = useState('');
   const [saveFilmStock, setSaveFilmStock] = useState('');
   const [saveScannerType, setSaveScannerType] = useState<ScannerType | null>(null);
+  const [saveCrop, setSaveCrop] = useState(false);
   const [presetTab, setPresetTab] = useState<'builtin' | 'custom' | 'rolls'>('builtin');
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [importConflict, setImportConflict] = useState<ImportConflictState | null>(null);
@@ -384,6 +390,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     setNewPresetName('');
     setSaveFilmStock('');
     setSaveScannerType(null);
+    setSaveCrop(false);
     setSaveFolderId(null);
     setIsSaving(false);
   };
@@ -401,6 +408,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       filmStock,
       scannerType: saveScannerType,
       folderId: saveFolderId,
+      saveCrop,
     });
     resetSaveForm();
   };
@@ -910,6 +918,19 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                   ))}
                 </div>
               </div>
+
+              <label className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-left">
+                <input
+                  type="checkbox"
+                  checked={saveCrop}
+                  onChange={(event) => setSaveCrop(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-zinc-100 focus:ring-zinc-500"
+                />
+                <span className="min-w-0">
+                  <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Save crop</span>
+                  <span className="block text-xs text-zinc-400">Include the current crop in this preset.</span>
+                </span>
+              </label>
 
               <div className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Tags</span>

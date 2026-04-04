@@ -241,6 +241,34 @@ vi.mock('./components/Sidebar', () => ({
         >
           Nudge Exposure
         </button>
+        <button
+          type="button"
+          onClick={() => onSettingsChange({
+            crop: {
+              x: 0.1,
+              y: 0.15,
+              width: 0.8,
+              height: 0.7,
+              aspectRatio: null,
+            },
+          })}
+        >
+          Apply Wide Crop
+        </button>
+        <button
+          type="button"
+          onClick={() => onSettingsChange({
+            crop: {
+              x: 0.2,
+              y: 0.2,
+              width: 0.5,
+              height: 0.5,
+              aspectRatio: 1,
+            },
+          })}
+        >
+          Apply Square Crop
+        </button>
         <button type="button" onClick={onInteractionEnd}>
           End Drag
         </button>
@@ -259,11 +287,14 @@ vi.mock('./components/PresetsPane', () => ({
     builtinProfiles?: Array<{ id: string; name: string }>;
     customPresets?: Array<{ id: string; name: string }>;
     onStockChange: (profile: { id: string; name: string }) => void;
-    onSavePreset?: (name: string) => void;
+    onSavePreset?: (name: string, metadata?: { saveCrop?: boolean }) => void;
   }) => (
     <div data-testid="presets">
-      <button type="button" onClick={() => onSavePreset?.('Saved Custom Preset')}>
+      <button type="button" onClick={() => onSavePreset?.('Saved Custom Preset', { saveCrop: false })}>
         Save Custom Preset
+      </button>
+      <button type="button" onClick={() => onSavePreset?.('Saved Crop Preset', { saveCrop: true })}>
+        Save Custom Preset With Crop
       </button>
       {[...builtinProfiles, ...customPresets].map((profile) => (
         <button
@@ -1075,6 +1106,65 @@ describe('App import and preview pipeline', () => {
     };
     expect(screen.getByText('Current Light Source: daylight')).toBeInTheDocument();
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.98, 0.95]);
+  });
+
+  it('keeps the current crop when applying a custom preset saved without crop', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; settings: { crop: unknown } }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Wide Crop' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Square Crop' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Custom Preset' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        crop: {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          aspectRatio: number | null;
+        };
+      };
+    };
+    expect(latestRenderCall.settings.crop).toEqual({
+      x: 0.2,
+      y: 0.2,
+      width: 0.5,
+      height: 0.5,
+      aspectRatio: 1,
+    });
   });
 
   it('switches CS-LITE to the white mode when black-and-white conversion is enabled', async () => {

@@ -97,6 +97,35 @@ describe('PresetsPane', () => {
       filmStock: 'Kodak Gold 200',
       scannerType: 'smartphone',
       folderId: null,
+      saveCrop: false,
+    });
+  });
+
+  it('lets the user opt into saving crop with the preset', () => {
+    const onSavePreset = vi.fn();
+
+    render(
+      <PresetsPane
+        activeStockId="generic-color"
+        onStockChange={vi.fn()}
+        customPresets={[]}
+        canSavePreset
+        onSavePreset={onSavePreset}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /save current preset/i }));
+    fireEvent.change(screen.getByPlaceholderText('Preset Name...'), { target: { value: 'Crop Preset' } });
+    fireEvent.click(screen.getByLabelText(/save crop/i));
+    fireEvent.click(screen.getByRole('button', { name: /save preset/i }));
+
+    expect(onSavePreset).toHaveBeenCalledWith('Crop Preset', {
+      filmStock: undefined,
+      scannerType: null,
+      folderId: null,
+      saveCrop: true,
     });
   });
 
