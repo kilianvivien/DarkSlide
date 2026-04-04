@@ -21,6 +21,8 @@ const LUMA_R = 0.299;
 const LUMA_G = 0.587;
 const LUMA_B = 0.114;
 const DENSITY_EPSILON = 1e-6;
+export const ADVANCED_HD_BLUE_GAMMA_SCALE = 1.12;
+export const ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET = 0.04;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -292,6 +294,26 @@ function sampleChannelToDensity(sampleValue: number) {
   return -Math.log10(clamp(sampleValue / 255, DENSITY_EPSILON, 1));
 }
 
+function convertEstimatedFilmBaseSampleToWorkingProfile(
+  sample: FilmBaseSample,
+  inputProfileId: ColorProfileId,
+  outputProfileId: ColorProfileId,
+): FilmBaseSample {
+  const [r, g, b] = convertRgbBetweenProfiles(
+    sample.r / 255,
+    sample.g / 255,
+    sample.b / 255,
+    inputProfileId,
+    outputProfileId,
+  );
+
+  return {
+    r: clamp(Math.round(r * 255), 1, 255),
+    g: clamp(Math.round(g * 255), 1, 255),
+    b: clamp(Math.round(b * 255), 1, 255),
+  };
+}
+
 function applyRollCalibrationToDensity(value: number, slope: number, offset: number) {
   return Math.max(0, value * slope + offset);
 }
@@ -315,6 +337,8 @@ export function resolveAdvancedHdParameters(
   filmType: FilmProfileType,
   advancedInversion?: AdvancedInversionProfile | null,
   estimatedFilmBaseSample?: FilmBaseSample | null,
+  inputProfileId: ColorProfileId = 'srgb',
+  outputProfileId: ColorProfileId = 'srgb',
 ) {
   const enabled = settings.inversionMethod === 'advanced-hd'
     && isColor
@@ -330,18 +354,32 @@ export function resolveAdvancedHdParameters(
     };
   }
 
-  const resolvedBaseSample = settings.filmBaseSample ?? estimatedFilmBaseSample ?? null;
+  // Auto-estimated border samples are captured in the decoded image profile, so they
+  // need the same profile transform as the pixels before advanced density math.
+  const convertedEstimatedFilmBaseSample = estimatedFilmBaseSample
+    ? convertEstimatedFilmBaseSampleToWorkingProfile(estimatedFilmBaseSample, inputProfileId, outputProfileId)
+    : null;
+  const resolvedBaseSample = settings.filmBaseSample ?? convertedEstimatedFilmBaseSample ?? null;
+  const gamma: [number, number, number] = [
+    advancedInversion.gamma[0],
+    advancedInversion.gamma[1],
+    advancedInversion.gamma[2] * ADVANCED_HD_BLUE_GAMMA_SCALE,
+  ];
   const baseDensity: [number, number, number] = resolvedBaseSample
     ? [
       sampleChannelToDensity(resolvedBaseSample.r),
       sampleChannelToDensity(resolvedBaseSample.g),
-      sampleChannelToDensity(resolvedBaseSample.b),
+      sampleChannelToDensity(resolvedBaseSample.b) + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET,
     ]
-    : [...advancedInversion.baseDensityFallback] as [number, number, number];
+    : [
+      advancedInversion.baseDensityFallback[0],
+      advancedInversion.baseDensityFallback[1],
+      advancedInversion.baseDensityFallback[2] + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET,
+    ];
 
   return {
     enabled: true,
-    gamma: [...advancedInversion.gamma] as [number, number, number],
+    gamma,
     baseDensity,
     baseSampleSource: settings.filmBaseSample
       ? 'manual-picker'
@@ -488,6 +526,8 @@ export function buildProcessingUniforms(
     filmType,
     advancedInversion,
     estimatedFilmBaseSample,
+    inputProfileId,
+    outputProfileId,
   );
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
   const flareCorrection = effectiveSettings.flareCorrection ?? 50;
@@ -789,6 +829,8 @@ export function processImageData(
     filmType,
     advancedInversion,
     estimatedFilmBaseSample,
+    inputProfileId,
+    outputProfileId,
   );
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { buildProcessingUniforms, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, resolveAdvancedHdParameters, rotateCropClockwise } from './imagePipeline';
+import { convertRgbBetweenProfiles } from './colorProfiles';
+import { ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET, ADVANCED_HD_BLUE_GAMMA_SCALE, buildProcessingUniforms, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, resolveAdvancedHdParameters, rotateCropClockwise } from './imagePipeline';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -25,6 +26,10 @@ function luminance(imageData: ImageData, index = 0) {
 
 function midpointDeviation(imageData: ImageData, target = 128) {
   return Math.abs(luminance(imageData) - target);
+}
+
+function sampleChannelToDensity(sampleValue: number) {
+  return -Math.log10(Math.max(sampleValue / 255, 1e-6));
 }
 
 // Neutral settings that isolate a single parameter
@@ -149,7 +154,7 @@ describe('buildProcessingUniforms', () => {
     expect(uniforms[68]).toBe(1);
     expect(uniforms[69]).toBeCloseTo(profile!.advancedInversion!.gamma[0], 5);
     expect(uniforms[70]).toBeCloseTo(profile!.advancedInversion!.gamma[1], 5);
-    expect(uniforms[71]).toBeCloseTo(profile!.advancedInversion!.gamma[2], 5);
+    expect(uniforms[71]).toBeCloseTo(profile!.advancedInversion!.gamma[2] * ADVANCED_HD_BLUE_GAMMA_SCALE, 5);
     expect(uniforms[72]).toBeGreaterThan(0);
     expect(uniforms[73]).toBeGreaterThan(0);
     expect(uniforms[74]).toBeGreaterThan(0);
@@ -172,6 +177,40 @@ describe('advanced H&D inversion', () => {
     expect(params.enabled).toBe(true);
     expect(params.baseDensity[0]).toBeGreaterThan(0);
     expect(params.baseDensity).not.toEqual(profile!.advancedInversion!.baseDensityFallback);
+    expect(params.gamma[2]).toBeCloseTo(profile!.advancedInversion!.gamma[2] * ADVANCED_HD_BLUE_GAMMA_SCALE, 5);
+    expect(params.baseDensity[2]).toBeCloseTo(sampleChannelToDensity(150) + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET, 5);
+  });
+
+  it('converts the estimated film base into the working profile before deriving densities', () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
+    expect(profile?.advancedInversion).toBeDefined();
+
+    const estimatedFilmBaseSample = { r: 240, g: 180, b: 60 };
+    const params = resolveAdvancedHdParameters(
+      { inversionMethod: 'advanced-hd', filmBaseSample: null },
+      true,
+      'negative',
+      profile?.advancedInversion,
+      estimatedFilmBaseSample,
+      'adobe-rgb',
+      'srgb',
+    );
+    const [expectedR, expectedG, expectedB] = convertRgbBetweenProfiles(
+      estimatedFilmBaseSample.r / 255,
+      estimatedFilmBaseSample.g / 255,
+      estimatedFilmBaseSample.b / 255,
+      'adobe-rgb',
+      'srgb',
+    );
+    const expectedConvertedSample = {
+      r: Math.round(expectedR * 255),
+      g: Math.round(expectedG * 255),
+      b: Math.round(expectedB * 255),
+    };
+
+    expect(params.baseDensity[0]).toBeCloseTo(sampleChannelToDensity(expectedConvertedSample.r), 5);
+    expect(params.baseDensity[1]).toBeCloseTo(sampleChannelToDensity(expectedConvertedSample.g), 5);
+    expect(params.baseDensity[2]).toBeCloseTo(sampleChannelToDensity(expectedConvertedSample.b) + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET, 5);
   });
 
   it('falls back to the profile density when auto estimation is unavailable', () => {
@@ -187,7 +226,11 @@ describe('advanced H&D inversion', () => {
     );
 
     expect(params.enabled).toBe(true);
-    expect(params.baseDensity).toEqual(profile!.advancedInversion!.baseDensityFallback);
+    expect(params.baseDensity).toEqual([
+      profile!.advancedInversion!.baseDensityFallback[0],
+      profile!.advancedInversion!.baseDensityFallback[1],
+      profile!.advancedInversion!.baseDensityFallback[2] + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET,
+    ]);
   });
 
   it('prefers a manual film-base sample over the estimated one', () => {

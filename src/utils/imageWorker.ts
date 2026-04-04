@@ -1006,6 +1006,8 @@ function applyAutoWhiteBalanceAnalysisStage(
     filmType,
     payload.advancedInversion ?? null,
     estimatedFilmBaseSample,
+    payload.inputProfileId ?? 'srgb',
+    payload.outputProfileId ?? 'srgb',
   );
 
   for (let index = 0; index < data.length; index += 4) {
