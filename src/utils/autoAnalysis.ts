@@ -12,6 +12,13 @@ const WB_MAX_CHROMA = 36;
 const WB_MIN_SAMPLE_COUNT = 256;
 const WB_MIN_SAMPLE_RATIO = 0.0005;
 const WB_SAMPLE_STRIDE = 2;
+const FLOOR_THRESHOLD = 20;
+const FLOOR_SPREAD_THRESHOLD = 15;
+const FLOOR_PERCENTILE = 0.01;
+const MIDTONE_COMPRESSION_THRESHOLD = 0.35;
+const MIDTONE_MAX_BOOST = 25;
+const WB_MAX_CHROMA_RELAXED = 56;
+const WB_WARM_NUDGE = 5;
 const MONO_MARGIN_RATIO = 0.05;
 const MONO_MARGIN_MIN = 8;
 const MONO_MARGIN_MAX = 64;
@@ -76,12 +83,64 @@ export function analyzeExposure(histogram: HistogramData): Pick<AutoAnalyzeResul
   };
 }
 
-export function analyzeColorBalance(imageData: ImageData): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
-  const { data, width, height } = imageData;
-  if (width <= 0 || height <= 0) {
-    return { temperature: null, tint: null };
+export function analyzeChannelFloors(imageData: ImageData): {
+  redFloor: number | null;
+  greenFloor: number | null;
+  blueFloor: number | null;
+} {
+  const { data } = imageData;
+  const rHist = new Array<number>(256).fill(0);
+  const gHist = new Array<number>(256).fill(0);
+  const bHist = new Array<number>(256).fill(0);
+
+  for (let i = 0; i < data.length; i += 4) {
+    rHist[data[i]] += 1;
+    gHist[data[i + 1]] += 1;
+    bHist[data[i + 2]] += 1;
   }
 
+  const rFloor = percentile(rHist, FLOOR_PERCENTILE);
+  const gFloor = percentile(gHist, FLOOR_PERCENTILE);
+  const bFloor = percentile(bHist, FLOOR_PERCENTILE);
+
+  const maxFloor = Math.max(rFloor, gFloor, bFloor);
+  const minFloor = Math.min(rFloor, gFloor, bFloor);
+
+  if (maxFloor < FLOOR_THRESHOLD || (maxFloor - minFloor) < FLOOR_SPREAD_THRESHOLD) {
+    return { redFloor: null, greenFloor: null, blueFloor: null };
+  }
+
+  return {
+    redFloor: rFloor > FLOOR_THRESHOLD ? rFloor : null,
+    greenFloor: gFloor > FLOOR_THRESHOLD ? gFloor : null,
+    blueFloor: bFloor > FLOOR_THRESHOLD ? bFloor : null,
+  };
+}
+
+export function analyzeMidtoneContrast(histogram: HistogramData): {
+  contrast: number | null;
+} {
+  const p25 = percentile(histogram.l, 0.25);
+  const p75 = percentile(histogram.l, 0.75);
+  const p1 = percentile(histogram.l, 0.01);
+  const p99 = percentile(histogram.l, 0.99);
+  const range = Math.max(1, p99 - p1);
+  const iqr = p75 - p25;
+  const compression = iqr / range;
+
+  if (compression < MIDTONE_COMPRESSION_THRESHOLD) {
+    const boost = clamp(Math.round((MIDTONE_COMPRESSION_THRESHOLD - compression) * 60), 0, MIDTONE_MAX_BOOST);
+    return { contrast: boost > 0 ? boost : null };
+  }
+  return { contrast: null };
+}
+
+function sampleColorBalance(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  maxChroma: number,
+): { temperature: number; tint: number; sampleCount: number } | null {
   const margin = clamp(
     Math.round(Math.min(width, height) * WB_MARGIN_RATIO),
     WB_MARGIN_MIN,
@@ -115,7 +174,7 @@ export function analyzeColorBalance(imageData: ImageData): Pick<AutoAnalyzeResul
       const maxChannel = Math.max(r, g, b);
       const minChannel = Math.min(r, g, b);
       const chroma = maxChannel - minChannel;
-      if (chroma > WB_MAX_CHROMA) {
+      if (chroma > maxChroma) {
         continue;
       }
 
@@ -124,7 +183,7 @@ export function analyzeColorBalance(imageData: ImageData): Pick<AutoAnalyzeResul
         continue;
       }
 
-      const neutralityWeight = 1 - chroma / WB_MAX_CHROMA;
+      const neutralityWeight = 1 - chroma / maxChroma;
       const midtoneWeight = 1 - Math.abs(luma - 127.5) / 127.5;
       const weight = Math.max(0, neutralityWeight) * Math.max(0, neutralityWeight) * Math.max(0.05, midtoneWeight);
       if (weight <= 0) {
@@ -144,7 +203,7 @@ export function analyzeColorBalance(imageData: ImageData): Pick<AutoAnalyzeResul
     Math.round(((right - left) * (bottom - top) * WB_MIN_SAMPLE_RATIO) / (WB_SAMPLE_STRIDE * WB_SAMPLE_STRIDE)),
   );
   if (sampleCount < minimumSamples || weightSum <= 0) {
-    return { temperature: null, tint: null };
+    return null;
   }
 
   const meanR = weightedR / weightSum;
@@ -155,7 +214,40 @@ export function analyzeColorBalance(imageData: ImageData): Pick<AutoAnalyzeResul
   return {
     temperature: clamp(Math.round((meanB - meanR) * 0.4), -100, 100),
     tint: clamp(Math.round((rbAvg - meanG) * 0.4), -100, 100),
+    sampleCount,
   };
+}
+
+export function analyzeColorBalance(imageData: ImageData, isColorNegative = false): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
+  const { data, width, height } = imageData;
+  if (width <= 0 || height <= 0) {
+    return { temperature: null, tint: null };
+  }
+
+  const firstPass = sampleColorBalance(data, width, height, WB_MAX_CHROMA);
+
+  if (firstPass && Math.abs(firstPass.temperature) <= 15) {
+    let temperature = firstPass.temperature;
+    if (isColorNegative && temperature < 8) {
+      temperature = clamp(temperature + WB_WARM_NUDGE, -100, 100);
+    }
+    return { temperature, tint: firstPass.tint };
+  }
+
+  const secondPass = firstPass === null || Math.abs(firstPass.temperature) > 15
+    ? sampleColorBalance(data, width, height, WB_MAX_CHROMA_RELAXED)
+    : null;
+
+  const result = secondPass ?? firstPass;
+  if (!result) {
+    return { temperature: null, tint: null };
+  }
+
+  let temperature = result.temperature;
+  if (isColorNegative && temperature < 8) {
+    temperature = clamp(temperature + WB_WARM_NUDGE, -100, 100);
+  }
+  return { temperature, tint: result.tint };
 }
 
 export function analyzeMonochromeSuggestion(imageData: ImageData): MonochromeSuggestionAnalysis {
@@ -337,9 +429,17 @@ export function analyzeMonochromeSuggestion(imageData: ImageData): MonochromeSug
   };
 }
 
-export function autoAnalyze(histogram: HistogramData, imageData: ImageData): AutoAnalyzeResult {
+export function autoAnalyze(histogram: HistogramData, imageData: ImageData, isColorNegative = false): AutoAnalyzeResult {
+  const channelFloors = analyzeChannelFloors(imageData);
+  const hasSuggestedCurves = channelFloors.redFloor !== null
+    || channelFloors.greenFloor !== null
+    || channelFloors.blueFloor !== null;
+  const midtone = analyzeMidtoneContrast(histogram);
+
   return {
     ...analyzeExposure(histogram),
-    ...analyzeColorBalance(imageData),
+    ...analyzeColorBalance(imageData, isColorNegative),
+    contrast: midtone.contrast,
+    suggestedCurves: hasSuggestedCurves ? channelFloors : null,
   };
 }

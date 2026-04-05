@@ -2063,6 +2063,26 @@ export default function App() {
       nextSettings.tint = result.tint;
     }
 
+    if (result.contrast !== null) {
+      nextSettings.contrast = result.contrast;
+    }
+
+    if (result.suggestedCurves) {
+      const currentCurves = latestDocument.settings.curves;
+      nextSettings.curves = {
+        ...currentCurves,
+        red: result.suggestedCurves.redFloor !== null
+          ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.redFloor, y: 0 }, { x: 255, y: 255 }]
+          : currentCurves.red,
+        green: result.suggestedCurves.greenFloor !== null
+          ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.greenFloor, y: 0 }, { x: 255, y: 255 }]
+          : currentCurves.green,
+        blue: result.suggestedCurves.blueFloor !== null
+          ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.blueFloor, y: 0 }, { x: 255, y: 255 }]
+          : currentCurves.blue,
+      };
+    }
+
     handleSettingsChange(nextSettings);
     if (result.temperature === null || result.tint === null) {
       showTransientNotice('Auto adjusted tone, but left white balance unchanged.');
@@ -2198,21 +2218,41 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       lightSourceBias,
     });
 
-    updateTabById(documentId, (currentTab) => ({
-      ...currentTab,
-      document: {
-        ...currentTab.document,
-        settings: {
-          ...currentTab.document.settings,
-          exposure: result.exposure,
-          blackPoint: result.blackPoint,
-          whitePoint: result.whitePoint,
-          temperature: result.temperature ?? currentTab.document.settings.temperature,
-          tint: result.tint ?? currentTab.document.settings.tint,
+    updateTabById(documentId, (currentTab) => {
+      const curveOverrides: Partial<ConversionSettings> = {};
+      if (result.suggestedCurves) {
+        const currentCurves = currentTab.document.settings.curves;
+        curveOverrides.curves = {
+          ...currentCurves,
+          red: result.suggestedCurves.redFloor !== null
+            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.redFloor, y: 0 }, { x: 255, y: 255 }]
+            : currentCurves.red,
+          green: result.suggestedCurves.greenFloor !== null
+            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.greenFloor, y: 0 }, { x: 255, y: 255 }]
+            : currentCurves.green,
+          blue: result.suggestedCurves.blueFloor !== null
+            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.blueFloor, y: 0 }, { x: 255, y: 255 }]
+            : currentCurves.blue,
+        };
+      }
+      return {
+        ...currentTab,
+        document: {
+          ...currentTab.document,
+          settings: {
+            ...currentTab.document.settings,
+            exposure: result.exposure,
+            blackPoint: result.blackPoint,
+            whitePoint: result.whitePoint,
+            temperature: result.temperature ?? currentTab.document.settings.temperature,
+            tint: result.tint ?? currentTab.document.settings.tint,
+            ...(result.contrast !== null ? { contrast: result.contrast } : {}),
+            ...curveOverrides,
+          },
+          dirty: true,
         },
-        dirty: true,
-      },
-    }));
+      };
+    });
   }, [fallbackProfile, lightSourceProfilesById, profilesById, tabsRef, targetMaxDimension, updateTabById]);
 
   const runAutoCropForDocument = useCallback(async (documentId: string) => {

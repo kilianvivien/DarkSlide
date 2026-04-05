@@ -285,9 +285,11 @@ export function getFilmBaseBalance(sample: FilmBaseSample | null) {
   };
 }
 
-export function applyFilmBaseCompensation(value: number, sampleValue: number) {
+export function applyFilmBaseCompensation(value: number, sampleValue: number, dampingExponent = 1.0) {
   const invertedFilmBase = 1 - clamp(sampleValue, 1 / 255, 1);
-  return clamp((value - invertedFilmBase) / Math.max(1 / 255, 1 - invertedFilmBase), 0, 1);
+  const range = Math.max(1 / 255, 1 - invertedFilmBase);
+  const normalized = clamp((value - invertedFilmBase) / range, 0, 1);
+  return dampingExponent !== 1.0 ? Math.pow(normalized, dampingExponent) : normalized;
 }
 
 function sampleChannelToDensity(sampleValue: number) {
@@ -339,6 +341,7 @@ export function resolveAdvancedHdParameters(
   estimatedFilmBaseSample?: FilmBaseSample | null,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
+  lightSourceBias: [number, number, number] = [1, 1, 1],
 ) {
   const enabled = settings.inversionMethod === 'advanced-hd'
     && isColor
@@ -360,21 +363,24 @@ export function resolveAdvancedHdParameters(
     ? convertEstimatedFilmBaseSampleToWorkingProfile(estimatedFilmBaseSample, inputProfileId, outputProfileId)
     : null;
   const resolvedBaseSample = settings.filmBaseSample ?? convertedEstimatedFilmBaseSample ?? null;
+  const blueExcess = Math.max(0, (lightSourceBias[2] / Math.max(lightSourceBias[0], 0.01)) - 1);
+  const adaptiveBlueGammaScale = ADVANCED_HD_BLUE_GAMMA_SCALE + blueExcess * 0.15;
+  const adaptiveBlueDensityOffset = ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET + blueExcess * 0.03;
   const gamma: [number, number, number] = [
     advancedInversion.gamma[0],
     advancedInversion.gamma[1],
-    advancedInversion.gamma[2] * ADVANCED_HD_BLUE_GAMMA_SCALE,
+    advancedInversion.gamma[2] * adaptiveBlueGammaScale,
   ];
   const baseDensity: [number, number, number] = resolvedBaseSample
     ? [
       sampleChannelToDensity(resolvedBaseSample.r),
       sampleChannelToDensity(resolvedBaseSample.g),
-      sampleChannelToDensity(resolvedBaseSample.b) + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET,
+      sampleChannelToDensity(resolvedBaseSample.b) + adaptiveBlueDensityOffset,
     ]
     : [
       advancedInversion.baseDensityFallback[0],
       advancedInversion.baseDensityFallback[1],
-      advancedInversion.baseDensityFallback[2] + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET,
+      advancedInversion.baseDensityFallback[2] + adaptiveBlueDensityOffset,
     ];
 
   return {
@@ -528,6 +534,7 @@ export function buildProcessingUniforms(
     estimatedFilmBaseSample,
     inputProfileId,
     outputProfileId,
+    lightSourceBias,
   );
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
   const flareCorrection = effectiveSettings.flareCorrection ?? 50;
@@ -639,7 +646,7 @@ export function buildProcessingUniforms(
     0,
     0,
     0,
-    0,
+    filmBaseBalance.blue < 0.35 ? 1.08 : 1.0,
   ]);
 }
 
@@ -831,6 +838,7 @@ export function processImageData(
     estimatedFilmBaseSample,
     inputProfileId,
     outputProfileId,
+    lightSourceBias,
   );
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;
@@ -841,6 +849,7 @@ export function processImageData(
   const flareFloorNormalized: [number, number, number] = flareFloor
     ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
     : [0, 0, 0];
+  const blueDamping = filmBaseBalance.blue < 0.35 ? 1.08 : 1.0;
 
   for (let index = 0; index < 256; index += 1) {
     fusedR[index] = lut.r[lut.master[index]] / 255;
@@ -877,7 +886,7 @@ export function processImageData(
 
         r = applyFilmBaseCompensation(r, filmBaseBalance.red);
         g = applyFilmBaseCompensation(g, filmBaseBalance.green);
-        b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
+        b = applyFilmBaseCompensation(b, filmBaseBalance.blue, blueDamping);
       }
 
       if (colorMatrix) {

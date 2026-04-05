@@ -48,7 +48,7 @@ import {
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
-import { analyzeColorBalance, analyzeExposure } from './autoAnalysis';
+import { analyzeChannelFloors, analyzeColorBalance, analyzeExposure, analyzeMidtoneContrast } from './autoAnalysis';
 import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
 import { getColorProfileIdFromName, identifyIccProfile, convertImageDataColorProfile } from './colorProfiles';
@@ -1008,6 +1008,7 @@ function applyAutoWhiteBalanceAnalysisStage(
     estimatedFilmBaseSample,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
+    lightSourceBias as [number, number, number],
   );
 
   for (let index = 0; index < data.length; index += 4) {
@@ -1090,9 +1091,18 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   const whiteBalanceImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   applyAutoWhiteBalanceAnalysisStage(whiteBalanceImageData, payload, document.estimatedFilmBaseSample);
 
+  const isColorNegative = payload.isColor && (payload.filmType ?? 'negative') === 'negative';
+  const channelFloors = analyzeChannelFloors(whiteBalanceImageData);
+  const hasSuggestedCurves = channelFloors.redFloor !== null
+    || channelFloors.greenFloor !== null
+    || channelFloors.blueFloor !== null;
+  const midtone = analyzeMidtoneContrast(toneHistogram);
+
   return {
     ...analyzeExposure(toneHistogram),
-    ...analyzeColorBalance(whiteBalanceImageData),
+    ...analyzeColorBalance(whiteBalanceImageData, isColorNegative),
+    contrast: midtone.contrast,
+    suggestedCurves: hasSuggestedCurves ? channelFloors : null,
   } satisfies AutoAnalyzeResult;
 }
 

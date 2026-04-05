@@ -641,6 +641,12 @@ export interface AutoAnalyzeResult {
   whitePoint: number;
   temperature: number | null;
   tint: number | null;
+  contrast: number | null;
+  suggestedCurves: {
+    redFloor: number | null;
+    greenFloor: number | null;
+    blueFloor: number | null;
+  } | null;
 }
 
 export interface SampleRequest {
