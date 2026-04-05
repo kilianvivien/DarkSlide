@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, ImagePlus, Pencil, Trash2, Upload } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ExportOptions, InversionMethod, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
+import { ColorManagementSettings, ColorProfileId, ExportOptions, InversionMethod, LabStyleProfile, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { confirmDeleteFlatFieldProfile, isDesktopShell, promptText } from '../utils/fileBridge';
@@ -31,6 +31,9 @@ interface SettingsModalProps {
   lightSourceProfiles: LightSourceProfile[];
   defaultLightSourceId: string;
   onDefaultLightSourceChange: (lightSourceId: string) => void;
+  defaultLabStyleId: string;
+  onDefaultLabStyleChange: (labStyleId: string) => void;
+  labStyleProfiles: LabStyleProfile[];
   onSaveCustomLightSource: (profile: {
     id?: string | null;
     name: string;
@@ -304,6 +307,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   lightSourceProfiles,
   defaultLightSourceId,
   onDefaultLightSourceChange,
+  defaultLabStyleId,
+  onDefaultLabStyleChange,
+  labStyleProfiles,
   onSaveCustomLightSource,
   onDeleteCustomLightSource,
   flatFieldProfileNames,
@@ -1053,6 +1059,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
                           >
                             {lightSourceProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>{profile.name}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Default Lab Style</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              New imports start with this lab style selected. You can still override it per image in the sidebar.
+                            </p>
+                          </div>
+
+                          <select
+                            value={defaultLabStyleId}
+                            onChange={(event) => onDefaultLabStyleChange(event.target.value)}
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
+                          >
+                            <option value="">None</option>
+                            {labStyleProfiles.map((profile) => (
                               <option key={profile.id} value={profile.id}>{profile.name}</option>
                             ))}
                           </select>

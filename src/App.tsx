@@ -173,6 +173,11 @@ export default function App() {
       ? window.localStorage.getItem('darkslide_default_light_source') ?? 'auto'
       : 'auto'
   ));
+  const [defaultLabStyleId, setDefaultLabStyleId] = useState<string>(() => (
+    typeof window !== 'undefined'
+      ? window.localStorage.getItem('darkslide_default_lab_style') ?? ''
+      : ''
+  ));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -1952,6 +1957,17 @@ export default function App() {
     }
   }, []);
 
+  const handleDefaultLabStyleChange = useCallback((labStyleId: string) => {
+    setDefaultLabStyleId(labStyleId);
+    if (typeof window !== 'undefined') {
+      if (labStyleId) {
+        window.localStorage.setItem('darkslide_default_lab_style', labStyleId);
+      } else {
+        window.localStorage.removeItem('darkslide_default_lab_style');
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (!documentState || calibration.activeProfileLoaded || !documentState.settings.flatFieldEnabled) {
       return;
@@ -2511,6 +2527,8 @@ onToggleScanningSession: toggleScanningWindow,
       defaultColorNegativeInversion={defaultColorNegativeInversion}
       renderBackendDiagnostics={renderBackendDiagnostics}
       defaultLightSourceId={defaultLightSourceId}
+      defaultLabStyleId={defaultLabStyleId}
+      onDefaultLabStyleChange={handleDefaultLabStyleChange}
       flatFieldProfileNames={calibration.profileNames}
       activeFlatFieldProfileName={calibration.activeProfileName}
       activeFlatFieldLoaded={calibration.activeProfileLoaded}

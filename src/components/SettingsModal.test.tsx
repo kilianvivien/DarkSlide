@@ -94,6 +94,9 @@ describe('SettingsModal', () => {
     ],
     defaultLightSourceId: 'auto',
     onDefaultLightSourceChange: vi.fn(),
+    defaultLabStyleId: '',
+    onDefaultLabStyleChange: vi.fn(),
+    labStyleProfiles: [],
     onSaveCustomLightSource: vi.fn(async () => ({
       id: 'custom-light',
       name: 'Custom Light Source',

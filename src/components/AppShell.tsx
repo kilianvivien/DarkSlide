@@ -117,6 +117,8 @@ type AppShellProps = {
   defaultColorNegativeInversion: 'standard' | 'advanced-hd';
   renderBackendDiagnostics: RenderBackendDiagnostics;
   defaultLightSourceId: string;
+  defaultLabStyleId: string;
+  onDefaultLabStyleChange: (labStyleId: string) => void;
   flatFieldProfileNames: string[];
   activeFlatFieldProfileName: string | null;
   activeFlatFieldLoaded: boolean;
@@ -336,6 +338,8 @@ export function AppShell({
   defaultColorNegativeInversion,
   renderBackendDiagnostics,
   defaultLightSourceId,
+  defaultLabStyleId,
+  onDefaultLabStyleChange,
   flatFieldProfileNames,
   activeFlatFieldProfileName,
   activeFlatFieldLoaded,
@@ -1113,6 +1117,9 @@ export function AppShell({
           lightSourceProfiles={lightSourceProfiles}
           defaultLightSourceId={defaultLightSourceId}
           onDefaultLightSourceChange={onDefaultLightSourceChange}
+          defaultLabStyleId={defaultLabStyleId}
+          onDefaultLabStyleChange={onDefaultLabStyleChange}
+          labStyleProfiles={labStyleProfiles}
           onSaveCustomLightSource={onSaveCustomLightSource}
           onDeleteCustomLightSource={onDeleteCustomLightSource}
           flatFieldProfileNames={flatFieldProfileNames}

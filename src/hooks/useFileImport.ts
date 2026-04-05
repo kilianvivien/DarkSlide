@@ -384,6 +384,9 @@ export function useFileImport({
       const savedLightSourceId = typeof window !== 'undefined'
         ? window.localStorage.getItem('darkslide_default_light_source')
         : null;
+      const savedLabStyleId = typeof window !== 'undefined'
+        ? window.localStorage.getItem('darkslide_default_lab_style')
+        : null;
       const resolvedProfile = rawImportProfile ?? initialProfile;
       let restoredSidecar = null;
 
@@ -432,7 +435,7 @@ export function useFileImport({
         cropSource: null,
         rawImportProfile,
         profileId: activeSidecar?.profileId ?? resolvedProfile.id,
-        labStyleId: activeSidecar?.labStyleId ?? null,
+        labStyleId: activeSidecar?.labStyleId ?? savedLabStyleId ?? null,
         rollId,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
