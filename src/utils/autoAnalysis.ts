@@ -137,9 +137,9 @@ export function analyzeMidtoneContrast(histogram: HistogramData): {
   }
 
   let midtoneBoostPoint: { x: number; y: number } | null = null;
-  if (p50 < 115) {
-    const liftAmount = clamp(Math.round((128 - p50) * 0.9), 12, 55);
-    const anchorX = clamp(Math.round((p50 * 0.4 + 128 * 0.6)), 90, 140);
+  if (p50 < 128) {
+    const liftAmount = clamp(Math.round((135 - p50) * 1.1), 15, 65);
+    const anchorX = clamp(Math.round((p50 * 0.35 + 128 * 0.65)), 95, 135);
     midtoneBoostPoint = { x: anchorX, y: clamp(anchorX + liftAmount, anchorX, 255) };
   }
 
