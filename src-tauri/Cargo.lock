@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "darkslide"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "notify",
  "rawler",
