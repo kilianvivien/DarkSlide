@@ -119,8 +119,10 @@ export function analyzeChannelFloors(imageData: ImageData): {
 
 export function analyzeMidtoneContrast(histogram: HistogramData): {
   contrast: number | null;
+  midtoneBoostPoint: { x: number; y: number } | null;
 } {
   const p25 = percentile(histogram.l, 0.25);
+  const p50 = percentile(histogram.l, 0.5);
   const p75 = percentile(histogram.l, 0.75);
   const p1 = percentile(histogram.l, 0.01);
   const p99 = percentile(histogram.l, 0.99);
@@ -128,11 +130,20 @@ export function analyzeMidtoneContrast(histogram: HistogramData): {
   const iqr = p75 - p25;
   const compression = iqr / range;
 
+  let contrast: number | null = null;
   if (compression < MIDTONE_COMPRESSION_THRESHOLD) {
     const boost = clamp(Math.round((MIDTONE_COMPRESSION_THRESHOLD - compression) * 60), 0, MIDTONE_MAX_BOOST);
-    return { contrast: boost > 0 ? boost : null };
+    contrast = boost > 0 ? boost : null;
   }
-  return { contrast: null };
+
+  let midtoneBoostPoint: { x: number; y: number } | null = null;
+  if (p50 < 115) {
+    const liftAmount = clamp(Math.round((128 - p50) * 0.9), 12, 55);
+    const anchorX = clamp(Math.round((p50 * 0.4 + 128 * 0.6)), 90, 140);
+    midtoneBoostPoint = { x: anchorX, y: clamp(anchorX + liftAmount, anchorX, 255) };
+  }
+
+  return { contrast, midtoneBoostPoint };
 }
 
 function sampleColorBalance(
@@ -440,6 +451,7 @@ export function autoAnalyze(histogram: HistogramData, imageData: ImageData, isCo
     ...analyzeExposure(histogram),
     ...analyzeColorBalance(imageData, isColorNegative),
     contrast: midtone.contrast,
+    midtoneBoostPoint: midtone.midtoneBoostPoint,
     suggestedCurves: hasSuggestedCurves ? channelFloors : null,
   };
 }

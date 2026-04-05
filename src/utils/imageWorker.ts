@@ -1102,6 +1102,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     ...analyzeExposure(toneHistogram),
     ...analyzeColorBalance(whiteBalanceImageData, isColorNegative),
     contrast: midtone.contrast,
+    midtoneBoostPoint: midtone.midtoneBoostPoint,
     suggestedCurves: hasSuggestedCurves ? channelFloors : null,
   } satisfies AutoAnalyzeResult;
 }

@@ -2067,17 +2067,20 @@ export default function App() {
       nextSettings.contrast = result.contrast;
     }
 
-    if (result.suggestedCurves) {
+    if (result.suggestedCurves || result.midtoneBoostPoint) {
       const currentCurves = latestDocument.settings.curves;
       nextSettings.curves = {
         ...currentCurves,
-        red: result.suggestedCurves.redFloor !== null
+        rgb: result.midtoneBoostPoint
+          ? [{ x: 0, y: 0 }, result.midtoneBoostPoint, { x: 255, y: 255 }]
+          : currentCurves.rgb,
+        red: result.suggestedCurves?.redFloor !== null && result.suggestedCurves?.redFloor !== undefined
           ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.redFloor, y: 0 }, { x: 255, y: 255 }]
           : currentCurves.red,
-        green: result.suggestedCurves.greenFloor !== null
+        green: result.suggestedCurves?.greenFloor !== null && result.suggestedCurves?.greenFloor !== undefined
           ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.greenFloor, y: 0 }, { x: 255, y: 255 }]
           : currentCurves.green,
-        blue: result.suggestedCurves.blueFloor !== null
+        blue: result.suggestedCurves?.blueFloor !== null && result.suggestedCurves?.blueFloor !== undefined
           ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.blueFloor, y: 0 }, { x: 255, y: 255 }]
           : currentCurves.blue,
       };
@@ -2220,17 +2223,20 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
 
     updateTabById(documentId, (currentTab) => {
       const curveOverrides: Partial<ConversionSettings> = {};
-      if (result.suggestedCurves) {
+      if (result.suggestedCurves || result.midtoneBoostPoint) {
         const currentCurves = currentTab.document.settings.curves;
         curveOverrides.curves = {
           ...currentCurves,
-          red: result.suggestedCurves.redFloor !== null
+          rgb: result.midtoneBoostPoint
+            ? [{ x: 0, y: 0 }, result.midtoneBoostPoint, { x: 255, y: 255 }]
+            : currentCurves.rgb,
+          red: result.suggestedCurves?.redFloor !== null && result.suggestedCurves?.redFloor !== undefined
             ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.redFloor, y: 0 }, { x: 255, y: 255 }]
             : currentCurves.red,
-          green: result.suggestedCurves.greenFloor !== null
+          green: result.suggestedCurves?.greenFloor !== null && result.suggestedCurves?.greenFloor !== undefined
             ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.greenFloor, y: 0 }, { x: 255, y: 255 }]
             : currentCurves.green,
-          blue: result.suggestedCurves.blueFloor !== null
+          blue: result.suggestedCurves?.blueFloor !== null && result.suggestedCurves?.blueFloor !== undefined
             ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.blueFloor, y: 0 }, { x: 255, y: 255 }]
             : currentCurves.blue,
         };

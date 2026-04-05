@@ -642,6 +642,7 @@ export interface AutoAnalyzeResult {
   temperature: number | null;
   tint: number | null;
   contrast: number | null;
+  midtoneBoostPoint: { x: number; y: number } | null;
   suggestedCurves: {
     redFloor: number | null;
     greenFloor: number | null;
