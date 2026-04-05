@@ -285,11 +285,20 @@ export function getFilmBaseBalance(sample: FilmBaseSample | null) {
   };
 }
 
-export function applyFilmBaseCompensation(value: number, sampleValue: number, dampingExponent = 1.0) {
+export function applyFilmBaseCompensation(value: number, sampleValue: number) {
   const invertedFilmBase = 1 - clamp(sampleValue, 1 / 255, 1);
-  const range = Math.max(1 / 255, 1 - invertedFilmBase);
-  const normalized = clamp((value - invertedFilmBase) / range, 0, 1);
-  return dampingExponent !== 1.0 ? Math.pow(normalized, dampingExponent) : normalized;
+  return clamp((value - invertedFilmBase) / Math.max(1 / 255, 1 - invertedFilmBase), 0, 1);
+}
+
+export function computeChannelShadowFloor(baseValue: number, maxBaseValue: number) {
+  if (maxBaseValue <= 0.01 || baseValue >= maxBaseValue * 0.85) return 0;
+  const ratio = baseValue / maxBaseValue;
+  return clamp((0.85 - ratio) * 0.5, 0, 0.2);
+}
+
+function applyShadowFloorCorrection(value: number, floor: number) {
+  if (floor <= 0) return value;
+  return clamp((value - floor) / (1 - floor), 0, 1);
 }
 
 function sampleChannelToDensity(sampleValue: number) {
@@ -538,6 +547,7 @@ export function buildProcessingUniforms(
   );
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
   const flareCorrection = effectiveSettings.flareCorrection ?? 50;
+  const maxBase = Math.max(filmBaseBalance.red, filmBaseBalance.green, filmBaseBalance.blue);
   const normalizedFlareFloor: [number, number, number] = flareFloor
     ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
     : [0, 0, 0];
@@ -556,7 +566,7 @@ export function buildProcessingUniforms(
     filmBaseBalance.red,
     filmBaseBalance.green,
     filmBaseBalance.blue,
-    0,
+    computeChannelShadowFloor(filmBaseBalance.red, maxBase),
 
     effectiveSettings.redBalance,
     effectiveSettings.greenBalance,
@@ -581,7 +591,7 @@ export function buildProcessingUniforms(
     (effectiveSettings.shadowRecovery ?? 0) / 100,
     (effectiveSettings.midtoneContrast ?? 0) / 100,
     clamp(highlightDensityEstimate, 0, 1),
-    0,
+    computeChannelShadowFloor(filmBaseBalance.green, maxBase),
 
     normalizedFlareFloor[0],
     normalizedFlareFloor[1],
@@ -646,7 +656,7 @@ export function buildProcessingUniforms(
     0,
     0,
     0,
-    filmBaseBalance.blue < 0.35 ? 1.08 : 1.0,
+    computeChannelShadowFloor(filmBaseBalance.blue, maxBase),
   ]);
 }
 
@@ -849,7 +859,10 @@ export function processImageData(
   const flareFloorNormalized: [number, number, number] = flareFloor
     ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
     : [0, 0, 0];
-  const blueDamping = filmBaseBalance.blue < 0.35 ? 1.08 : 1.0;
+  const maxBase = Math.max(filmBaseBalance.red, filmBaseBalance.green, filmBaseBalance.blue);
+  const redShadowFloor = computeChannelShadowFloor(filmBaseBalance.red, maxBase);
+  const greenShadowFloor = computeChannelShadowFloor(filmBaseBalance.green, maxBase);
+  const blueShadowFloor = computeChannelShadowFloor(filmBaseBalance.blue, maxBase);
 
   for (let index = 0; index < 256; index += 1) {
     fusedR[index] = lut.r[lut.master[index]] / 255;
@@ -886,7 +899,11 @@ export function processImageData(
 
         r = applyFilmBaseCompensation(r, filmBaseBalance.red);
         g = applyFilmBaseCompensation(g, filmBaseBalance.green);
-        b = applyFilmBaseCompensation(b, filmBaseBalance.blue, blueDamping);
+        b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
+
+        r = applyShadowFloorCorrection(r, redShadowFloor);
+        g = applyShadowFloorCorrection(g, greenShadowFloor);
+        b = applyShadowFloorCorrection(b, blueShadowFloor);
       }
 
       if (colorMatrix) {

@@ -16,7 +16,7 @@ struct Uniforms {
   filmBaseR: f32,
   filmBaseG: f32,
   filmBaseB: f32,
-  _pad3: f32,
+  shadowFloorR: f32,
 
   chanBalR: f32,
   chanBalG: f32,
@@ -41,7 +41,7 @@ struct Uniforms {
   shadowRecovery: f32,
   midtoneContrast: f32,
   highlightDensity: f32,
-  _pad8: f32,
+  shadowFloorG: f32,
 
   flareFloorR: f32,
   flareFloorG: f32,
@@ -106,7 +106,7 @@ struct Uniforms {
   rollCalibrationOffsetR: f32,
   rollCalibrationOffsetG: f32,
   rollCalibrationOffsetB: f32,
-  blueDamping: f32,
+  shadowFloorB: f32,
 };
 
 struct BlurParams {
@@ -211,14 +211,16 @@ fn applyWhiteBlackPoint(value: f32, blackPoint: f32, whitePoint: f32) -> f32 {
   return (value - blackPoint) / range;
 }
 
-fn applyFilmBaseCompensation(value: f32, sampleValue: f32, dampingExponent: f32) -> f32 {
+fn applyFilmBaseCompensation(value: f32, sampleValue: f32) -> f32 {
   let invertedFilmBase = 1.0 - clampF(sampleValue, 1.0 / 255.0, 1.0);
-  let range = max(1.0 / 255.0, 1.0 - invertedFilmBase);
-  let normalized = clampF((value - invertedFilmBase) / range, 0.0, 1.0);
-  if (dampingExponent != 1.0) {
-    return pow(normalized, dampingExponent);
+  return clampF((value - invertedFilmBase) / max(1.0 / 255.0, 1.0 - invertedFilmBase), 0.0, 1.0);
+}
+
+fn applyShadowFloorCorrection(value: f32, floor: f32) -> f32 {
+  if (floor <= 0.0) {
+    return value;
   }
-  return normalized;
+  return clampF((value - floor) / (1.0 - floor), 0.0, 1.0);
 }
 
 fn applyTonalCharacter(value: f32, uniforms: Uniforms) -> f32 {
@@ -367,9 +369,13 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
         b = 1.0 - b;
       }
 
-      r = applyFilmBaseCompensation(r, uniforms.filmBaseR, 1.0);
-      g = applyFilmBaseCompensation(g, uniforms.filmBaseG, 1.0);
-      b = applyFilmBaseCompensation(b, uniforms.filmBaseB, uniforms.blueDamping);
+      r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
+      g = applyFilmBaseCompensation(g, uniforms.filmBaseG);
+      b = applyFilmBaseCompensation(b, uniforms.filmBaseB);
+
+      r = applyShadowFloorCorrection(r, uniforms.shadowFloorR);
+      g = applyShadowFloorCorrection(g, uniforms.shadowFloorG);
+      b = applyShadowFloorCorrection(b, uniforms.shadowFloorB);
     }
 
     if (uniforms.hasColorMatrix > 0.5) {
