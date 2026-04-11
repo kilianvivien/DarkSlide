@@ -35,6 +35,10 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **Save and share presets** — create custom looks, organize them in folders, and export/import as `.darkslide` files
 - **Searchable preset browser** with sorting and tag display
 
+### Dust & Scratch Removal
+- **Manual repair** — paint over dust spots, hairs, and scratches; DarkSlide fills them in using surrounding pixels
+- **Auto-detect mode** — automatically marks likely defects across the image so you can review and remove them in one step *(experimental — results may vary depending on scan quality and film type)*
+
 ### Crop & Compose
 - **Non-destructive crop** with common film format ratios (3:2, 4:5, 1:1, 6x7, etc.)
 - **Zoom & pan** for checking fine details
