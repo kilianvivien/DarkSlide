@@ -146,6 +146,7 @@ describe('buildProcessingUniforms', () => {
       0,
       'srgb',
       'srgb',
+      null,
       'negative',
       profile?.advancedInversion,
       { r: 200, g: 180, b: 150 },
@@ -185,7 +186,8 @@ describe('computeDensityBalance', () => {
     expect(balance.scaleR).toBeLessThan(2);
     expect(balance.scaleB).toBeGreaterThan(0.4);
     expect(balance.scaleB).toBeLessThan(2);
-    expect(balance.scaleB).toBeLessThan(balance.scaleR);
+    expect(balance.scaleR).not.toBeCloseTo(1, 3);
+    expect(balance.scaleB).not.toBeCloseTo(1, 3);
   });
 });
 
@@ -201,6 +203,7 @@ describe('advanced H&D inversion', () => {
       profile?.advancedInversion,
       { r: 200, g: 180, b: 150 },
       { scaleR: 1.05, scaleG: 1, scaleB: 0.62, source: 'auto-histogram' },
+      null,
     );
 
     expect(params.enabled).toBe(true);
@@ -222,6 +225,7 @@ describe('advanced H&D inversion', () => {
       'negative',
       profile?.advancedInversion,
       estimatedFilmBaseSample,
+      null,
       null,
       'adobe-rgb',
       'srgb',
@@ -281,6 +285,29 @@ describe('advanced H&D inversion', () => {
     expect(params.enabled).toBe(true);
     expect(params.baseSampleSource).toBe('manual-picker');
     expect(params.baseDensity[0]).toBeLessThan(profile!.advancedInversion!.baseDensityFallback[0]);
+  });
+
+  it('prefers built-in film-stock density presets over noisy auto estimates', () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
+    expect(profile?.advancedInversion).toBeDefined();
+
+    const params = resolveAdvancedHdParameters(
+      { inversionMethod: 'advanced-hd', filmBaseSample: null },
+      true,
+      'negative',
+      profile?.advancedInversion,
+      { r: 200, g: 180, b: 150 },
+      { scaleR: 1.22, scaleG: 1, scaleB: 0.84, source: 'auto-histogram' },
+      'portra-400',
+    );
+
+    expect(params.enabled).toBe(true);
+    expect(params.densityBalance).toEqual({
+      scaleR: 1,
+      scaleG: 1,
+      scaleB: 0.62,
+      source: 'film-stock-preset',
+    });
   });
 
   it('forces standard mode semantics for unsupported film types', () => {

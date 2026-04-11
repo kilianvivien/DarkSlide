@@ -414,6 +414,14 @@ function encodeChannel(profileId: ColorProfileId, value: number) {
   return 1.055 * (normalized ** (1 / 2.4)) - 0.055;
 }
 
+export function decodeProfileChannel(profileId: ColorProfileId, value: number) {
+  return decodeChannel(profileId, value);
+}
+
+export function encodeProfileChannel(profileId: ColorProfileId, value: number) {
+  return encodeChannel(profileId, value);
+}
+
 export function getTransferMode(profileId: ColorProfileId) {
   return profileId === 'adobe-rgb' ? 1 : 0;
 }

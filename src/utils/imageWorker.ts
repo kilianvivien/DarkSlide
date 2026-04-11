@@ -37,6 +37,7 @@ import {
   applyLightSourceCorrection,
   assertSupportedDimensions,
   buildEmptyHistogram,
+  computeResidualBaseOffset,
   computeDensityBalance,
   computeHighlightDensity,
   getExtensionFromFormat,
@@ -54,7 +55,7 @@ import {
 import { analyzeChannelFloors, analyzeColorBalance, analyzeExposure, analyzeMidtoneContrast } from './autoAnalysis';
 import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS, resolveDustRemovalSettings } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
-import { getColorProfileIdFromName, identifyIccProfile, convertImageDataColorProfile } from './colorProfiles';
+import { convertImageDataColorProfile, decodeProfileChannel, getColorProfileIdFromName, identifyIccProfile } from './colorProfiles';
 import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata';
 import { detectDustMarks } from './dustDetection';
 import { applyFlatFieldCorrection } from './flatField';
@@ -1106,6 +1107,7 @@ function applyAutoWhiteBalanceAnalysisStage(
   payload: AutoAnalyzeRequest,
   estimatedFilmBaseSample: FilmBaseSample | null,
   estimatedDensityBalance: DensityBalance | null,
+  residualBaseOffset: [number, number, number] | null,
 ) {
   applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
@@ -1121,6 +1123,7 @@ function applyAutoWhiteBalanceAnalysisStage(
     payload.advancedInversion ?? null,
     estimatedFilmBaseSample,
     estimatedDensityBalance,
+    payload.profileId ?? null,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     lightSourceBias as [number, number, number],
@@ -1136,6 +1139,10 @@ function applyAutoWhiteBalanceAnalysisStage(
     b = applyLightSourceCorrection(b, lightSourceBias[2]);
 
     if (advancedHd.enabled) {
+      r = decodeProfileChannel(payload.outputProfileId ?? 'srgb', r);
+      g = decodeProfileChannel(payload.outputProfileId ?? 'srgb', g);
+      b = decodeProfileChannel(payload.outputProfileId ?? 'srgb', b);
+
       r = applyAdvancedHdInversion(
         r,
         advancedHd.baseDensity[0],
@@ -1166,6 +1173,12 @@ function applyAutoWhiteBalanceAnalysisStage(
       b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
     }
 
+    if (residualBaseOffset) {
+      r = Math.max(0, r - residualBaseOffset[0]);
+      g = Math.max(0, g - residualBaseOffset[1]);
+      b = Math.max(0, b - residualBaseOffset[2]);
+    }
+
     data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
     data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
     data[index + 2] = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
@@ -1183,6 +1196,20 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
 
   const toneImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   applyActiveFlatFieldIfNeeded(toneImageData, payload.settings.flatFieldEnabled);
+  const residualBaseOffset = computeResidualBaseOffset(
+    toneImageData,
+    payload.settings,
+    payload.isColor,
+    payload.filmType ?? 'negative',
+    payload.advancedInversion ?? null,
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
+    payload.profileId ?? null,
+    payload.inputProfileId ?? 'srgb',
+    payload.outputProfileId ?? 'srgb',
+    payload.lightSourceBias ?? [1, 1, 1],
+    payload.flareFloor ?? null,
+  );
   const toneHistogram = processImageData(
     toneImageData,
     payload.settings,
@@ -1199,10 +1226,12 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.highlightDensityEstimate ?? 0,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
+    payload.profileId ?? null,
     payload.filmType ?? 'negative',
     payload.advancedInversion ?? null,
     document.estimatedFilmBaseSample,
     document.estimatedDensityBalance,
+    residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
@@ -1213,6 +1242,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload,
     document.estimatedFilmBaseSample,
     document.estimatedDensityBalance,
+    residualBaseOffset,
   );
 
   const isColorNegative = payload.isColor && (payload.filmType ?? 'negative') === 'negative';
@@ -1249,6 +1279,22 @@ function handleRender(payload: RenderRequest) {
   if (payload.comparisonMode === 'processed') {
     applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   }
+  const residualBaseOffset = payload.skipProcessing || payload.comparisonMode !== 'processed'
+    ? null
+    : computeResidualBaseOffset(
+      imageData,
+      payload.settings,
+      payload.isColor,
+      payload.filmType ?? 'negative',
+      payload.advancedInversion ?? null,
+      document.estimatedFilmBaseSample,
+      payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
+      payload.profileId ?? null,
+      payload.inputProfileId ?? 'srgb',
+      payload.outputProfileId ?? 'srgb',
+      payload.lightSourceBias ?? [1, 1, 1],
+      payload.flareFloor ?? null,
+    );
   const histogram = payload.skipProcessing
     ? buildEmptyHistogram()
     : processImageData(
@@ -1267,10 +1313,12 @@ function handleRender(payload: RenderRequest) {
       payload.highlightDensityEstimate ?? 0,
       payload.inputProfileId ?? 'srgb',
       payload.outputProfileId ?? 'srgb',
+      payload.profileId ?? null,
       payload.filmType ?? 'negative',
       payload.advancedInversion ?? null,
       document.estimatedFilmBaseSample,
       payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
+      residualBaseOffset,
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
     );
@@ -1313,6 +1361,20 @@ async function handleExport(payload: ExportRequest) {
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
   applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
+  const residualBaseOffset = computeResidualBaseOffset(
+    imageData,
+    payload.settings,
+    payload.isColor,
+    payload.filmType ?? 'negative',
+    payload.advancedInversion ?? null,
+    document.estimatedFilmBaseSample,
+    payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
+    payload.profileId ?? null,
+    payload.inputProfileId ?? 'srgb',
+    payload.outputProfileId ?? 'srgb',
+    payload.lightSourceBias ?? [1, 1, 1],
+    payload.flareFloor ?? null,
+  );
 
   if (payload.skipProcessing) {
     return {
@@ -1341,10 +1403,12 @@ async function handleExport(payload: ExportRequest) {
     payload.highlightDensityEstimate ?? 0,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
+    payload.profileId ?? null,
     payload.filmType ?? 'negative',
     payload.advancedInversion ?? null,
     document.estimatedFilmBaseSample,
     payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
+    residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
@@ -1418,6 +1482,20 @@ async function handleContactSheet(payload: ContactSheetRequest) {
 
     const imageData = sourceContext.getImageData(0, 0, transformed.width, transformed.height);
     applyActiveFlatFieldIfNeeded(imageData, settings.flatFieldEnabled);
+    const residualBaseOffset = computeResidualBaseOffset(
+      imageData,
+      settings,
+      profile.type === 'color' && !settings.blackAndWhite.enabled,
+      profile.filmType ?? 'negative',
+      profile.advancedInversion ?? null,
+      payload.estimatedFilmBaseSamplePerCell?.[index] ?? document.estimatedFilmBaseSample,
+      document.estimatedDensityBalance,
+      profile.id,
+      resolveStoredInputProfileId(document, colorManagement?.inputMode ?? 'auto', colorManagement?.inputProfileId ?? 'srgb'),
+      payload.exportOptions.outputProfileId,
+      payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
+      payload.flareFloorPerCell?.[index] ?? null,
+    );
     processImageData(
       imageData,
       settings,
@@ -1434,10 +1512,12 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       0,
       resolveStoredInputProfileId(document, colorManagement?.inputMode ?? 'auto', colorManagement?.inputProfileId ?? 'srgb'),
       payload.exportOptions.outputProfileId,
+      profile.id,
       profile.filmType ?? 'negative',
       profile.advancedInversion ?? null,
       payload.estimatedFilmBaseSamplePerCell?.[index] ?? document.estimatedFilmBaseSample,
       document.estimatedDensityBalance,
+      residualBaseOffset,
       payload.flareFloorPerCell?.[index] ?? null,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
     );

@@ -392,7 +392,7 @@ export function useFileImport({
         return null;
       }
 
-      if (rawImport && initialSettings.inversionMethod !== 'advanced-hd' && !initialSettings.filmBaseSample && decoded.estimatedFilmBaseSample) {
+      if (initialSettings.inversionMethod !== 'advanced-hd' && !initialSettings.filmBaseSample && decoded.estimatedFilmBaseSample) {
         initialSettings = {
           ...initialSettings,
           filmBaseSample: structuredClone(decoded.estimatedFilmBaseSample),
@@ -451,7 +451,11 @@ export function useFileImport({
         estimatedFlare: decoded.estimatedFlare,
         estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
         estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
-        lightSourceId: resolveLightSourceIdForProfile(resolvedProfile, savedLightSourceId),
+        // RAW camera scans benefit from the saved capture light-source profile,
+        // but rendered TIFFs are typically already balanced and should start neutral.
+        lightSourceId: rawImport
+          ? resolveLightSourceIdForProfile(resolvedProfile, savedLightSourceId)
+          : null,
         cropSource: null,
         rawImportProfile,
         profileId: activeSidecar?.profileId ?? resolvedProfile.id,

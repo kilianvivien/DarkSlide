@@ -1221,9 +1221,10 @@ export default function App() {
         documentId,
         settings,
         isColor,
+        profileId: activeTabDocument?.profileId ?? null,
         filmType,
         advancedInversion,
-        estimatedDensityBalance: documentState?.estimatedDensityBalance ?? null,
+        estimatedDensityBalance: activeTabDocument?.estimatedDensityBalance ?? null,
         inputProfileId,
         outputProfileId,
         revision,
@@ -1413,7 +1414,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, drawPreview, flushPendingPreview, getSettledAdaptiveState, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility]);
+  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, documentState?.estimatedDensityBalance, drawPreview, flushPendingPreview, getSettledAdaptiveState, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility, tabsRef]);
 
   const {
     enqueueRender: enqueuePreviewRender,
@@ -2196,6 +2197,7 @@ export default function App() {
       documentId: requestDocumentId,
       settings: displaySettings,
       isColor: activeProfile.type === 'color',
+      profileId: activeProfile.id,
       filmType: activeProfile.filmType,
       advancedInversion: activeProfile.advancedInversion ?? null,
       inputProfileId,
@@ -2382,6 +2384,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       documentId,
       settings: tab.document.settings,
       isColor: profile.type === 'color',
+      profileId: profile.id,
       filmType: profile.filmType,
       advancedInversion: profile.advancedInversion ?? null,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
@@ -2486,6 +2489,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       documentId,
       settings: tab.document.settings,
       isColor: profile.type === 'color' && !tab.document.settings.blackAndWhite.enabled,
+      profileId: profile.id,
       filmType: profile.filmType,
       advancedInversion: profile.advancedInversion ?? null,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),

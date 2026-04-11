@@ -96,16 +96,16 @@ struct Uniforms {
   advancedBaseDensityR: f32,
   advancedBaseDensityG: f32,
   advancedBaseDensityB: f32,
-  rollCalibrationEnabled: f32,
+  densityBalanceEnabled: f32,
 
-  rollCalibrationSlopeR: f32,
-  rollCalibrationSlopeG: f32,
-  rollCalibrationSlopeB: f32,
+  densityBalanceScaleR: f32,
+  densityBalanceScaleG: f32,
+  densityBalanceScaleB: f32,
   _pad16: f32,
 
-  rollCalibrationOffsetR: f32,
-  rollCalibrationOffsetG: f32,
-  rollCalibrationOffsetB: f32,
+  residualBaseOffsetR: f32,
+  residualBaseOffsetG: f32,
+  residualBaseOffsetB: f32,
   shadowFloorB: f32,
 };
 
@@ -155,14 +155,14 @@ fn applyAdvancedHdInversion(value: f32, baseDensity: f32, gamma: f32) -> f32 {
   return clampF(1.0 - pow(10.0, -imageDensity / max(gamma, 0.01)), 0.0, 1.0);
 }
 
-fn applyRollCalibrationToDensity(value: f32, slope: f32, offset: f32) -> f32 {
-  return max(0.0, value * slope + offset);
+fn applyDensityBalanceToDensity(value: f32, slope: f32) -> f32 {
+  return max(0.0, value * slope);
 }
 
-fn applyAdvancedHdInversionWithCalibration(value: f32, baseDensity: f32, gamma: f32, slope: f32, offset: f32) -> f32 {
+fn applyAdvancedHdInversionWithDensityBalance(value: f32, baseDensity: f32, gamma: f32, slope: f32) -> f32 {
   let transmittance = clampF(value, 1e-6, 1.0);
   let density = -log10(transmittance);
-  let imageDensity = applyRollCalibrationToDensity(max(0.0, density - baseDensity), slope, offset);
+  let imageDensity = applyDensityBalanceToDensity(max(0.0, density - baseDensity), slope);
   return clampF(1.0 - pow(10.0, -imageDensity / max(gamma, 0.01)), 0.0, 1.0);
 }
 
@@ -341,26 +341,23 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
     b = clampF(b / max(uniforms.lightSourceBiasB, 0.05), 0.0, 1.0);
 
     if (uniforms.inversionMode > 0.5) {
-      r = applyAdvancedHdInversionWithCalibration(
-        r,
+      r = applyAdvancedHdInversionWithDensityBalance(
+        decodeTransfer(r, uniforms.outputTransferMode),
         uniforms.advancedBaseDensityR,
         uniforms.advancedGammaR,
-        uniforms.rollCalibrationSlopeR,
-        uniforms.rollCalibrationOffsetR,
+        uniforms.densityBalanceScaleR,
       );
-      g = applyAdvancedHdInversionWithCalibration(
-        g,
+      g = applyAdvancedHdInversionWithDensityBalance(
+        decodeTransfer(g, uniforms.outputTransferMode),
         uniforms.advancedBaseDensityG,
         uniforms.advancedGammaG,
-        uniforms.rollCalibrationSlopeG,
-        uniforms.rollCalibrationOffsetG,
+        uniforms.densityBalanceScaleG,
       );
-      b = applyAdvancedHdInversionWithCalibration(
-        b,
+      b = applyAdvancedHdInversionWithDensityBalance(
+        decodeTransfer(b, uniforms.outputTransferMode),
         uniforms.advancedBaseDensityB,
         uniforms.advancedGammaB,
-        uniforms.rollCalibrationSlopeB,
-        uniforms.rollCalibrationOffsetB,
+        uniforms.densityBalanceScaleB,
       );
     } else {
       if (uniforms.isSlide <= 0.5) {
@@ -377,6 +374,10 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       g = applyShadowFloorCorrection(g, uniforms.shadowFloorG);
       b = applyShadowFloorCorrection(b, uniforms.shadowFloorB);
     }
+
+    r = max(0.0, r - uniforms.residualBaseOffsetR);
+    g = max(0.0, g - uniforms.residualBaseOffsetG);
+    b = max(0.0, b - uniforms.residualBaseOffsetB);
 
     if (uniforms.hasColorMatrix > 0.5) {
       let nr = uniforms.cm0 * r + uniforms.cm1 * g + uniforms.cm2 * b;

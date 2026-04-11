@@ -974,6 +974,7 @@ export function useWorkspaceCommands({
         documentId: documentState.id,
         settings: exportSettings,
         isColor: activeProfile.type === 'color' && !exportSettings.blackAndWhite.enabled,
+        profileId: activeProfile.id,
         filmType: activeProfile.filmType,
         advancedInversion: activeProfile.advancedInversion ?? null,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
@@ -1115,6 +1116,7 @@ export function useWorkspaceCommands({
         documentId: documentState.id,
         settings: documentState.settings,
         isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+        profileId: activeProfile.id,
         filmType: activeProfile.filmType,
         advancedInversion: activeProfile.advancedInversion ?? null,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
@@ -1168,7 +1170,7 @@ export function useWorkspaceCommands({
       setError(`Open in editor failed. ${message}`);
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'OPEN_IN_EDITOR_FAILED' } : current);
     }
-  }, [activeLabStyle, activeProfile.advancedInversion, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeLabStyle, activeProfile.advancedInversion, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleLightSourceChange = useCallback((lightSourceId: string | null) => {
     updateDocument((current) => {

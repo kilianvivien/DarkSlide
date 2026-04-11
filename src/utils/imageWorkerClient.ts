@@ -1,4 +1,5 @@
 import {
+  AdvancedInversionProfile,
   AutoAnalyzeRequest,
   AutoAnalyzeResult,
   ColorProfileId,
@@ -13,6 +14,7 @@ import {
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  FilmProfileType,
   HistogramData,
   HistogramMode,
   InteractionQuality,
@@ -34,7 +36,7 @@ import {
 } from '../types';
 import UTIF from 'utif';
 import { appendDiagnostic } from './diagnostics';
-import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
+import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, computeResidualBaseOffset, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
 import { convertImageDataColorProfile, getPreferredPreviewDisplayProfile } from './colorProfiles';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
@@ -795,6 +797,60 @@ export class ImageWorkerClient {
     return this.request<ReadTileResult>('read-tile', payload);
   }
 
+  private async computeResidualBaseOffsetFromPreview(
+    documentId: string,
+    settings: ConversionSettings,
+    isColor: boolean,
+    inputProfileId: ColorProfileId,
+    outputProfileId: ColorProfileId,
+    profileId?: string | null,
+    filmType?: FilmProfileType,
+    advancedInversion?: AdvancedInversionProfile | null,
+    estimatedFilmBaseSample?: FilmBaseSample | null,
+    estimatedDensityBalance?: DensityBalance | null,
+    flareFloor?: [number, number, number] | null,
+    lightSourceBias?: [number, number, number],
+  ) {
+    const jobId = this.createJobId(documentId, `residual-${crypto.randomUUID()}`, 'preview');
+
+    try {
+      const prepared = await this.prepareTileJob({
+        documentId,
+        jobId,
+        sourceKind: 'preview',
+        settings,
+        comparisonMode: 'processed',
+        flatFieldHandledInWorker: false,
+        targetMaxDimension: 512,
+      });
+      const rawPreview = await this.readTile({
+        documentId,
+        jobId,
+        x: 0,
+        y: 0,
+        width: prepared.width,
+        height: prepared.height,
+      });
+
+      return computeResidualBaseOffset(
+        trimTileImageData(rawPreview),
+        settings,
+        isColor,
+        filmType ?? 'negative',
+        advancedInversion,
+        estimatedFilmBaseSample,
+        estimatedDensityBalance,
+        profileId ?? null,
+        inputProfileId,
+        outputProfileId,
+        lightSourceBias ?? [1, 1, 1],
+        flareFloor ?? null,
+      );
+    } finally {
+      await this.cancelTileJob(documentId, jobId).catch(() => undefined);
+    }
+  }
+
   private async assembleTileJob(
     prepared: PreparedTileJobResult,
     settings: ConversionSettings,
@@ -802,6 +858,7 @@ export class ImageWorkerClient {
     comparisonMode: 'processed' | 'original',
     inputProfileId: ColorProfileId,
     outputProfileId: ColorProfileId,
+    profileId?: RenderRequest['profileId'],
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
@@ -815,6 +872,7 @@ export class ImageWorkerClient {
     advancedInversion?: RenderRequest['advancedInversion'],
     estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
     estimatedDensityBalance?: RenderRequest['estimatedDensityBalance'],
+    residualBaseOffset?: [number, number, number] | null,
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
@@ -854,10 +912,12 @@ export class ImageWorkerClient {
           highlightDensityEstimate,
           inputProfileId,
           outputProfileId,
+          profileId ?? null,
           filmType,
           advancedInversion,
           estimatedFilmBaseSample,
           estimatedDensityBalance,
+          residualBaseOffset ?? null,
           flareFloor,
           lightSourceBias,
         )
@@ -883,6 +943,7 @@ export class ImageWorkerClient {
     inputProfileId: ColorProfileId,
     outputProfileId: ColorProfileId,
     displayProfileId: ColorProfileId,
+    profileId?: RenderRequest['profileId'],
     maskTuning?: RenderRequest['maskTuning'],
     colorMatrix?: RenderRequest['colorMatrix'],
     tonalCharacter?: RenderRequest['tonalCharacter'],
@@ -911,6 +972,22 @@ export class ImageWorkerClient {
 
     let histogramSourceImageData: ImageData;
     let imageData: ImageData;
+    const residualBaseOffset = comparisonMode === 'processed'
+      ? computeResidualBaseOffset(
+        trimTileImageData(rawPreview),
+        settings,
+        isColor,
+        filmType ?? 'negative',
+        advancedInversion,
+        estimatedFilmBaseSample,
+        estimatedDensityBalance,
+        profileId ?? null,
+        inputProfileId,
+        outputProfileId,
+        lightSourceBias ?? [1, 1, 1],
+        flareFloor ?? null,
+      )
+      : null;
 
     if (comparisonMode === 'processed' && this.gpuPipeline) {
       const gpuStartedAt = performance.now();
@@ -930,10 +1007,12 @@ export class ImageWorkerClient {
         highlightDensityEstimate,
         inputProfileId,
         outputProfileId,
+        profileId ?? null,
         filmType,
         advancedInversion,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
+        residualBaseOffset,
         flareFloor,
         lightSourceBias,
       );
@@ -1356,6 +1435,7 @@ export class ImageWorkerClient {
         payload.inputProfileId ?? 'srgb',
         payload.outputProfileId ?? 'srgb',
         displayProfileId,
+        payload.profileId ?? null,
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
@@ -1635,6 +1715,20 @@ export class ImageWorkerClient {
     });
 
     try {
+      const residualBaseOffset = await this.computeResidualBaseOffsetFromPreview(
+        payload.documentId,
+        payload.settings,
+        payload.isColor,
+        payload.inputProfileId ?? 'srgb',
+        payload.outputProfileId ?? 'srgb',
+        payload.profileId ?? null,
+        payload.filmType,
+        payload.advancedInversion,
+        estimatedFilmBaseSample,
+        estimatedDensityBalance,
+        payload.flareFloor,
+        payload.lightSourceBias,
+      );
       const prepared = await this.prepareTileJob({
         documentId: payload.documentId,
         jobId,
@@ -1650,6 +1744,7 @@ export class ImageWorkerClient {
         'processed',
         payload.inputProfileId ?? 'srgb',
         payload.outputProfileId ?? 'srgb',
+        payload.profileId ?? null,
         payload.maskTuning,
         payload.colorMatrix,
         payload.tonalCharacter,
@@ -1663,6 +1758,7 @@ export class ImageWorkerClient {
         payload.advancedInversion,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
+        residualBaseOffset,
         payload.flareFloor,
         payload.lightSourceBias,
       );

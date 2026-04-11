@@ -1,4 +1,4 @@
-import { AdvancedInversionProfile, ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, DustRemovalSettings, ExportOptions, FilmProfile, InversionMethod, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
+import { AdvancedInversionProfile, ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, DensityBalance, DustRemovalSettings, ExportOptions, FilmProfile, InversionMethod, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -145,6 +145,7 @@ export function createDefaultSettings(overrides: Partial<ConversionSettings> = {
     levelAngle: 0,
     crop: structuredClone(DEFAULT_CROP),
     filmBaseSample: null,
+    residualBaseCorrection: true,
     blackAndWhite: {
       enabled: false,
       redMix: 0,
@@ -287,6 +288,32 @@ const ADVANCED_INVERSION_PROFILES: Record<string, AdvancedInversionProfile> = {
   'lomo-400': { gamma: [0.65, 0.70, 0.62], baseDensityFallback: [0.76, 0.61, 0.35] },
   'lomo-800': { gamma: [0.66, 0.71, 0.63], baseDensityFallback: [0.78, 0.62, 0.36] },
   'fujifilm-200': { gamma: [0.63, 0.66, 0.58], baseDensityFallback: [0.68, 0.54, 0.29] },
+};
+
+export const FILM_STOCK_DENSITY_PRESETS: Record<string, Omit<DensityBalance, 'source'>> = {
+  'generic-color': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
+  'portra-160': { scaleR: 1, scaleG: 1, scaleB: 0.63 },
+  'portra-400': { scaleR: 1, scaleG: 1, scaleB: 0.62 },
+  'portra-800': { scaleR: 1, scaleG: 1, scaleB: 0.61 },
+  'ektar-100': { scaleR: 1, scaleG: 1, scaleB: 0.58 },
+  'gold-200': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
+  'gold-100': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
+  'ultramax-400': { scaleR: 1, scaleG: 1, scaleB: 0.59 },
+  'colorplus-200': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
+  'fuji-400h': { scaleR: 1, scaleG: 1, scaleB: 0.53 },
+  'superia-400': { scaleR: 1, scaleG: 1, scaleB: 0.55 },
+  'cinestill-800t': { scaleR: 1, scaleG: 1, scaleB: 0.68 },
+  'cinestill-50d': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
+  'cinestill-400d': { scaleR: 1, scaleG: 1, scaleB: 0.62 },
+  'lomo-400': { scaleR: 1, scaleG: 1, scaleB: 0.58 },
+  'lomo-800': { scaleR: 1, scaleG: 1, scaleB: 0.59 },
+  'pro-image-100': { scaleR: 1, scaleG: 1, scaleB: 0.61 },
+  'vision3-250d': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
+  'vision3-500t': { scaleR: 1, scaleG: 1, scaleB: 0.66 },
+  'fuji-c200': { scaleR: 1, scaleG: 1, scaleB: 0.57 },
+  'superia-xtra-400': { scaleR: 1, scaleG: 1, scaleB: 0.55 },
+  'pro-160ns': { scaleR: 1, scaleG: 1, scaleB: 0.54 },
+  'fujifilm-200': { scaleR: 1, scaleG: 1, scaleB: 0.57 },
 };
 
 export const LIGHT_SOURCE_PROFILES: LightSourceProfile[] = [

@@ -174,6 +174,7 @@ export interface ConversionSettings {
   levelAngle: number;
   crop: CropSettings;
   filmBaseSample: FilmBaseSample | null;
+  residualBaseCorrection?: boolean;
   blackAndWhite: BlackAndWhiteSettings;
   sharpen: SharpenSettings;
   noiseReduction: NoiseReductionSettings;
@@ -403,6 +404,7 @@ export interface RenderRequest {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  profileId?: string | null;
   filmType?: FilmProfileType;
   advancedInversion?: AdvancedInversionProfile | null;
   estimatedFilmBaseSample?: FilmBaseSample | null;
@@ -456,6 +458,7 @@ export interface ExportRequest {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  profileId?: string | null;
   filmType?: FilmProfileType;
   advancedInversion?: AdvancedInversionProfile | null;
   estimatedDensityBalance?: DensityBalance | null;
@@ -649,6 +652,7 @@ export interface AutoAnalyzeRequest {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  profileId?: string | null;
   filmType?: FilmProfileType;
   advancedInversion?: AdvancedInversionProfile | null;
   inputProfileId?: ColorProfileId;

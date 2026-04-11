@@ -14,8 +14,8 @@ import {
   PreviewLevel,
   TonalCharacter,
 } from '../types';
-import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
-import { convertRgbBetweenProfiles, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
+import { FILM_STOCK_DENSITY_PRESETS, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
+import { convertRgbBetweenProfiles, decodeProfileChannel, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
 import { clamp } from './math';
 
 const LUMA_R = 0.299;
@@ -33,6 +33,10 @@ type CurveChannelOverrides = {
   g?: CurvePoint[];
   b?: CurvePoint[];
 };
+
+type ResidualBaseOffset = [number, number, number];
+
+type ResolvedAdvancedHdParameters = ReturnType<typeof resolveAdvancedHdParameters>;
 
 export function getExtensionFromFormat(format: ExportFormat) {
   switch (format) {
@@ -319,11 +323,12 @@ function mean(values: number[], start: number, end: number) {
 export function computeDensityBalance(
   imageData: ImageData,
   filmBaseSample: FilmBaseSample,
+  profileId: ColorProfileId = 'srgb',
 ): DensityBalance {
   const { data, width, height } = imageData;
-  const baseR = clamp(filmBaseSample.r / 255, DENSITY_EPSILON, 1);
-  const baseG = clamp(filmBaseSample.g / 255, DENSITY_EPSILON, 1);
-  const baseB = clamp(filmBaseSample.b / 255, DENSITY_EPSILON, 1);
+  const baseR = clamp(decodeProfileChannel(profileId, filmBaseSample.r / 255), DENSITY_EPSILON, 1);
+  const baseG = clamp(decodeProfileChannel(profileId, filmBaseSample.g / 255), DENSITY_EPSILON, 1);
+  const baseB = clamp(decodeProfileChannel(profileId, filmBaseSample.b / 255), DENSITY_EPSILON, 1);
   const densitiesR: number[] = [];
   const densitiesG: number[] = [];
   const densitiesB: number[] = [];
@@ -331,9 +336,9 @@ export function computeDensityBalance(
   const sampleStride = Math.max(1, Math.floor(totalPixels / 50_000));
 
   for (let index = 0; index < data.length; index += 4 * sampleStride) {
-    const r = data[index] / 255;
-    const g = data[index + 1] / 255;
-    const b = data[index + 2] / 255;
+    const r = decodeProfileChannel(profileId, data[index] / 255);
+    const g = decodeProfileChannel(profileId, data[index + 1] / 255);
+    const b = decodeProfileChannel(profileId, data[index + 2] / 255);
 
     if (r < 0.02 || g < 0.02 || b < 0.02) continue;
     if (r > 0.98 && g > 0.98 && b > 0.98) continue;
@@ -372,6 +377,26 @@ export function computeDensityBalance(
     scaleR: clamp(meanG / Math.max(meanR, DENSITY_EPSILON), 0.4, 2),
     scaleG: 1,
     scaleB: clamp(meanG / Math.max(meanB, DENSITY_EPSILON), 0.4, 2),
+    source: 'auto-histogram',
+  };
+}
+
+function resolveDensityBalance(
+  profileId?: string | null,
+  estimatedDensityBalance?: DensityBalance | null,
+): DensityBalance {
+  const preset = profileId ? FILM_STOCK_DENSITY_PRESETS[profileId] : undefined;
+  if (preset) {
+    return {
+      ...preset,
+      source: 'film-stock-preset',
+    };
+  }
+
+  return estimatedDensityBalance ?? {
+    scaleR: 1,
+    scaleG: 1,
+    scaleB: 0.6,
     source: 'auto-histogram',
   };
 }
@@ -420,6 +445,7 @@ export function resolveAdvancedHdParameters(
   advancedInversion?: AdvancedInversionProfile | null,
   estimatedFilmBaseSample?: FilmBaseSample | null,
   estimatedDensityBalance?: DensityBalance | null,
+  profileId?: string | null,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
   lightSourceBias: [number, number, number] = [1, 1, 1],
@@ -464,7 +490,7 @@ export function resolveAdvancedHdParameters(
       advancedInversion.baseDensityFallback[1],
       advancedInversion.baseDensityFallback[2] + adaptiveBlueDensityOffset,
     ];
-  const densityBalance = estimatedDensityBalance ?? null;
+  const densityBalance = resolveDensityBalance(profileId, estimatedDensityBalance);
 
   return {
     enabled: true,
@@ -485,6 +511,167 @@ function applyFlareCorrection(value: number, floor: number, strength: number) {
 
 export function applyLightSourceCorrection(value: number, bias: number) {
   return clamp(value / Math.max(bias, 0.05), 0, 1);
+}
+
+function applyInversionStage(
+  r: number,
+  g: number,
+  b: number,
+  filmType: FilmProfileType,
+  outputProfileId: ColorProfileId,
+  filmBaseBalance: ReturnType<typeof getFilmBaseBalance>,
+  advancedHd: ResolvedAdvancedHdParameters,
+  redShadowFloor: number,
+  greenShadowFloor: number,
+  blueShadowFloor: number,
+  flareFloorNormalized: [number, number, number],
+  flareStrength: number,
+  lightSourceBias: [number, number, number],
+  residualBaseOffset: ResidualBaseOffset | null = null,
+): [number, number, number] {
+  r = applyFlareCorrection(r, flareFloorNormalized[0], flareStrength);
+  g = applyFlareCorrection(g, flareFloorNormalized[1], flareStrength);
+  b = applyFlareCorrection(b, flareFloorNormalized[2], flareStrength);
+
+  r = applyLightSourceCorrection(r, lightSourceBias[0]);
+  g = applyLightSourceCorrection(g, lightSourceBias[1]);
+  b = applyLightSourceCorrection(b, lightSourceBias[2]);
+
+  if (advancedHd.enabled) {
+    r = decodeProfileChannel(outputProfileId, r);
+    g = decodeProfileChannel(outputProfileId, g);
+    b = decodeProfileChannel(outputProfileId, b);
+
+    r = applyAdvancedHdInversion(
+      r,
+      advancedHd.baseDensity[0],
+      advancedHd.gamma[0],
+      advancedHd.densityBalance?.scaleR ?? 1,
+    );
+    g = applyAdvancedHdInversion(
+      g,
+      advancedHd.baseDensity[1],
+      advancedHd.gamma[1],
+      advancedHd.densityBalance?.scaleG ?? 1,
+    );
+    b = applyAdvancedHdInversion(
+      b,
+      advancedHd.baseDensity[2],
+      advancedHd.gamma[2],
+      advancedHd.densityBalance?.scaleB ?? 1,
+    );
+  } else {
+    if (filmType !== 'slide') {
+      r = 1 - r;
+      g = 1 - g;
+      b = 1 - b;
+    }
+
+    r = applyFilmBaseCompensation(r, filmBaseBalance.red);
+    g = applyFilmBaseCompensation(g, filmBaseBalance.green);
+    b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
+
+    r = applyShadowFloorCorrection(r, redShadowFloor);
+    g = applyShadowFloorCorrection(g, greenShadowFloor);
+    b = applyShadowFloorCorrection(b, blueShadowFloor);
+  }
+
+  if (residualBaseOffset) {
+    r = Math.max(0, r - residualBaseOffset[0]);
+    g = Math.max(0, g - residualBaseOffset[1]);
+    b = Math.max(0, b - residualBaseOffset[2]);
+  }
+
+  return [r, g, b];
+}
+
+export function computeResidualBaseOffset(
+  imageData: ImageData,
+  settings: ConversionSettings,
+  isColor: boolean,
+  filmType: FilmProfileType = 'negative',
+  advancedInversion?: AdvancedInversionProfile | null,
+  estimatedFilmBaseSample?: FilmBaseSample | null,
+  estimatedDensityBalance?: DensityBalance | null,
+  profileId?: string | null,
+  inputProfileId: ColorProfileId = 'srgb',
+  outputProfileId: ColorProfileId = 'srgb',
+  lightSourceBias: [number, number, number] = [1, 1, 1],
+  flareFloor: [number, number, number] | null = null,
+): ResidualBaseOffset | null {
+  if (!isColor || filmType !== 'negative' || settings.residualBaseCorrection === false) {
+    return null;
+  }
+
+  const advancedHd = resolveAdvancedHdParameters(
+    settings,
+    isColor,
+    filmType,
+    advancedInversion,
+    estimatedFilmBaseSample,
+    estimatedDensityBalance,
+    profileId,
+    inputProfileId,
+    outputProfileId,
+    lightSourceBias,
+  );
+
+  if (!advancedHd.enabled) {
+    return null;
+  }
+
+  const { data, width, height } = imageData;
+  const filmBaseBalance = getFilmBaseBalance(settings.filmBaseSample);
+  const maxBase = Math.max(filmBaseBalance.red, filmBaseBalance.green, filmBaseBalance.blue);
+  const redShadowFloor = computeChannelShadowFloor(filmBaseBalance.red, maxBase);
+  const greenShadowFloor = computeChannelShadowFloor(filmBaseBalance.green, maxBase);
+  const blueShadowFloor = computeChannelShadowFloor(filmBaseBalance.blue, maxBase);
+  const flareStrength = (settings.flareCorrection ?? 50) / 100;
+  const flareFloorNormalized: [number, number, number] = flareFloor
+    ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
+    : [0, 0, 0];
+  const sampleStride = Math.max(1, Math.floor((width * height) / 50_000));
+  const rs: number[] = [];
+  const gs: number[] = [];
+  const bs: number[] = [];
+
+  for (let index = 0; index < data.length; index += 4 * sampleStride) {
+    let r = data[index] / 255;
+    let g = data[index + 1] / 255;
+    let b = data[index + 2] / 255;
+
+    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
+    [r, g, b] = applyInversionStage(
+      r,
+      g,
+      b,
+      filmType,
+      outputProfileId,
+      filmBaseBalance,
+      advancedHd,
+      redShadowFloor,
+      greenShadowFloor,
+      blueShadowFloor,
+      flareFloorNormalized,
+      flareStrength,
+      lightSourceBias,
+    );
+
+    rs.push(r);
+    gs.push(g);
+    bs.push(b);
+  }
+
+  if (rs.length < 64) {
+    return null;
+  }
+
+  rs.sort((left, right) => left - right);
+  gs.sort((left, right) => left - right);
+  bs.sort((left, right) => left - right);
+  const p1Index = clamp(Math.floor(rs.length * 0.01), 0, rs.length - 1);
+
+  return [rs[p1Index], gs[p1Index], bs[p1Index]];
 }
 
 function mixBlackAndWhiteChannels(r: number, g: number, b: number, redMix: number, greenMix: number, blueMix: number) {
@@ -595,10 +782,12 @@ export function buildProcessingUniforms(
   highlightDensityEstimate = 0,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
+  profileId: string | null = null,
   filmType: FilmProfileType = 'negative',
   advancedInversion?: AdvancedInversionProfile | null,
   estimatedFilmBaseSample?: FilmBaseSample | null,
   estimatedDensityBalance?: DensityBalance | null,
+  residualBaseOffset: ResidualBaseOffset | null = null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
 ) {
@@ -618,6 +807,7 @@ export function buildProcessingUniforms(
     advancedInversion,
     estimatedFilmBaseSample,
     estimatedDensityBalance,
+    profileId,
     inputProfileId,
     outputProfileId,
     lightSourceBias,
@@ -730,9 +920,9 @@ export function buildProcessingUniforms(
     advancedHd.densityBalance?.scaleB ?? 1,
     0,
 
-    0,
-    0,
-    0,
+    residualBaseOffset?.[0] ?? 0,
+    residualBaseOffset?.[1] ?? 0,
+    residualBaseOffset?.[2] ?? 0,
     computeChannelShadowFloor(filmBaseBalance.blue, maxBase),
   ]);
 }
@@ -891,10 +1081,12 @@ export function processImageData(
   highlightDensityEstimate = 0,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
+  profileId: string | null = null,
   filmType: FilmProfileType = 'negative',
   advancedInversion?: AdvancedInversionProfile | null,
   estimatedFilmBaseSample?: FilmBaseSample | null,
   estimatedDensityBalance?: DensityBalance | null,
+  residualBaseOffset: ResidualBaseOffset | null = null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
 ): HistogramData {
@@ -925,6 +1117,7 @@ export function processImageData(
     advancedInversion,
     estimatedFilmBaseSample,
     estimatedDensityBalance,
+    profileId,
     inputProfileId,
     outputProfileId,
     lightSourceBias,
@@ -957,48 +1150,22 @@ export function processImageData(
     [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
 
     if (comparisonMode === 'processed') {
-      r = applyFlareCorrection(r, flareFloorNormalized[0], flareStrength);
-      g = applyFlareCorrection(g, flareFloorNormalized[1], flareStrength);
-      b = applyFlareCorrection(b, flareFloorNormalized[2], flareStrength);
-
-      r = applyLightSourceCorrection(r, lightSourceBias[0]);
-      g = applyLightSourceCorrection(g, lightSourceBias[1]);
-      b = applyLightSourceCorrection(b, lightSourceBias[2]);
-
-      if (advancedHd.enabled) {
-        r = applyAdvancedHdInversion(
-          r,
-          advancedHd.baseDensity[0],
-          advancedHd.gamma[0],
-          advancedHd.densityBalance?.scaleR ?? 1,
-        );
-        g = applyAdvancedHdInversion(
-          g,
-          advancedHd.baseDensity[1],
-          advancedHd.gamma[1],
-          advancedHd.densityBalance?.scaleG ?? 1,
-        );
-        b = applyAdvancedHdInversion(
-          b,
-          advancedHd.baseDensity[2],
-          advancedHd.gamma[2],
-          advancedHd.densityBalance?.scaleB ?? 1,
-        );
-      } else {
-        if (filmType !== 'slide') {
-          r = 1 - r;
-          g = 1 - g;
-          b = 1 - b;
-        }
-
-        r = applyFilmBaseCompensation(r, filmBaseBalance.red);
-        g = applyFilmBaseCompensation(g, filmBaseBalance.green);
-        b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
-
-        r = applyShadowFloorCorrection(r, redShadowFloor);
-        g = applyShadowFloorCorrection(g, greenShadowFloor);
-        b = applyShadowFloorCorrection(b, blueShadowFloor);
-      }
+      [r, g, b] = applyInversionStage(
+        r,
+        g,
+        b,
+        filmType,
+        outputProfileId,
+        filmBaseBalance,
+        advancedHd,
+        redShadowFloor,
+        greenShadowFloor,
+        blueShadowFloor,
+        flareFloorNormalized,
+        flareStrength,
+        lightSourceBias,
+        residualBaseOffset,
+      );
 
       if (colorMatrix) {
         [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);
