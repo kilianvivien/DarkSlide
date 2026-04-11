@@ -92,6 +92,47 @@ function preserveCurrentFraming(
   return nextSettings;
 }
 
+function buildProfileSettingsForDocument(
+  profile: FilmProfile,
+  currentDocument: WorkspaceDocument | null,
+) {
+  const profileDefaults = currentDocument?.rawImportProfile && profile.id === currentDocument.rawImportProfile.id
+    ? currentDocument.rawImportProfile.defaultSettings
+    : profile.defaultSettings;
+  const nextSettings = createDefaultSettings(structuredClone(profileDefaults));
+
+  const scanFilmBaseSample = currentDocument?.settings.filmBaseSample
+    ?? currentDocument?.estimatedFilmBaseSample
+    ?? currentDocument?.rawImportProfile?.defaultSettings.filmBaseSample
+    ?? null;
+
+  if (nextSettings.inversionMethod !== 'advanced-hd' && !nextSettings.filmBaseSample && scanFilmBaseSample) {
+    nextSettings.filmBaseSample = structuredClone(scanFilmBaseSample);
+  }
+
+  return nextSettings;
+}
+
+function resolveProfileSwitchInversionMethod(
+  profile: FilmProfile,
+  currentDocument: WorkspaceDocument | null,
+  preferred: 'standard' | 'advanced-hd',
+) {
+  const rawImportProfileId = currentDocument?.rawImportProfile?.id ?? null;
+  const isRawDocument = currentDocument?.source.mime === 'image/x-raw-rgba';
+
+  if (rawImportProfileId && profile.id === rawImportProfileId) {
+    return currentDocument?.rawImportProfile?.defaultSettings.inversionMethod
+      ?? profile.defaultSettings.inversionMethod;
+  }
+
+  if (isRawDocument && currentDocument) {
+    return currentDocument.settings.inversionMethod;
+  }
+
+  return resolveDefaultInversionMethodForProfile(profile, preferred);
+}
+
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
 type TauriWindowHandle = {
@@ -843,7 +884,12 @@ export function useWorkspaceCommands({
       ? (profile.labStyleId ?? null)
       : undefined;
 
-    const nextSettings = createDefaultSettings(structuredClone(profile.defaultSettings));
+    const nextSettings = buildProfileSettingsForDocument(profile, documentState);
+    const nextInversionMethod = resolveProfileSwitchInversionMethod(
+      profile,
+      documentState,
+      prefsSnapshotRef.current.defaultColorNegativeInversion,
+    );
     if (profile.includesFraming === false) {
       preserveCurrentFraming(nextSettings, documentState?.settings);
     }
@@ -856,7 +902,7 @@ export function useWorkspaceCommands({
         : resolveLightSourceIdForProfile(profile, current.lightSourceId),
       settings: {
         ...nextSettings,
-        inversionMethod: resolveDefaultInversionMethodForProfile(profile, prefsSnapshotRef.current.defaultColorNegativeInversion),
+        inversionMethod: nextInversionMethod,
       },
       ...(nextLabStyleId !== undefined ? { labStyleId: nextLabStyleId } : {}),
       dirty: true,
@@ -864,7 +910,7 @@ export function useWorkspaceCommands({
     const resolvedLabStyleId = nextLabStyleId !== undefined ? nextLabStyleId : (documentState?.labStyleId ?? null);
     resetHistory(createHistoryEntry({
       ...nextSettings,
-      inversionMethod: resolveDefaultInversionMethodForProfile(profile, prefsSnapshotRef.current.defaultColorNegativeInversion),
+      inversionMethod: nextInversionMethod,
     }, resolvedLabStyleId));
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [documentState, prefsSnapshotRef, resetHistory, updateDocument]);
@@ -935,7 +981,7 @@ export function useWorkspaceCommands({
 
   const handleReset = useCallback(() => {
     if (!documentState) return;
-    const nextSettings = createDefaultSettings(structuredClone(activeProfile.defaultSettings));
+    const nextSettings = buildProfileSettingsForDocument(activeProfile, documentState);
     if (activeProfile.includesFraming === false) {
       preserveCurrentFraming(nextSettings, documentState.settings);
     }
