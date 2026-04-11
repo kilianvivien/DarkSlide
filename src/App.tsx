@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Analytics } from '@vercel/analytics/react';
-import { DEFAULT_COLOR_NEGATIVE_INVERSION, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from './constants';
+import { DEFAULT_COLOR_NEGATIVE_INVERSION, DEFAULT_DUST_REMOVAL, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES, resolveDustRemovalSettings } from './constants';
 import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
 import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
@@ -96,7 +96,9 @@ export default function App() {
   const [renderedPreviewAngle, setRenderedPreviewAngle] = useState(0);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanDragging, setIsPanDragging] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'export'>('adjust');
+  const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'dust' | 'export'>('adjust');
+  const [dustBrushActive, setDustBrushActive] = useState(false);
+  const [isDetectingDust, setIsDetectingDust] = useState(false);
   const [cropTab, setCropTab] = useState<CropTab>(() => initialPreferences?.cropTab ?? 'Film');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
@@ -779,6 +781,21 @@ export default function App() {
     }
   }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
 
+  const handleDustBrushInteractionStart = useCallback(() => {
+    clearRenderIndicator();
+    interactionJustEndedRef.current = false;
+    beginInteraction();
+  }, [beginInteraction, clearRenderIndicator]);
+
+  const handleDustBrushInteractionEnd = useCallback(() => {
+    lastInteractionTypeRef.current = null;
+    interactionJustEndedRef.current = false;
+    cancelScheduledInteractivePreview();
+    if (documentState) {
+      commitInteraction(createDocumentHistoryEntry(documentState));
+    }
+  }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
+
   useEffect(() => {
     if (!activeTabId) {
       return;
@@ -786,6 +803,10 @@ export default function App() {
 
     setActiveViewport(zoom, pan);
   }, [activeTabId, pan, setActiveViewport, zoom]);
+
+  useEffect(() => {
+    setDustBrushActive(false);
+  }, [activeTabId]);
 
   useEffect(() => {
     workerClientRef.current = new ImageWorkerClient({
@@ -829,7 +850,7 @@ export default function App() {
   useEffect(() => {
     const prefs = initialPreferences;
     if (!prefs) return;
-    if (['adjust', 'curves', 'crop', 'export'].includes(prefs.sidebarTab)) {
+    if (['adjust', 'curves', 'crop', 'dust', 'export'].includes(prefs.sidebarTab)) {
       setSidebarTab(prefs.sidebarTab);
     }
     setCropTab(prefs.cropTab ?? 'Film');
@@ -1988,8 +2009,149 @@ export default function App() {
   }, []);
 
   const handleToggleCropOverlay = useCallback(() => {
+    setDustBrushActive(false);
     setIsCropOverlayVisible((current) => !current);
   }, []);
+
+  const handleDustRemovalChange = useCallback((dustRemoval: ConversionSettings['dustRemoval']) => {
+    handleSettingsChange({
+      dustRemoval: resolveDustRemovalSettings(dustRemoval ?? DEFAULT_DUST_REMOVAL),
+    });
+  }, [handleSettingsChange]);
+
+  const handleDustOverlayChange = useCallback((marks: NonNullable<ConversionSettings['dustRemoval']>['marks']) => {
+    const resolvedDustRemoval = resolveDustRemovalSettings(documentState?.settings.dustRemoval ?? DEFAULT_DUST_REMOVAL);
+    handleSettingsChange({
+      dustRemoval: {
+        ...resolvedDustRemoval,
+        marks,
+      },
+    });
+  }, [documentState?.settings.dustRemoval, handleSettingsChange]);
+
+  const handleDustBrushActiveChange = useCallback((active: boolean) => {
+    setDustBrushActive(active);
+    if (!active) {
+      return;
+    }
+
+    setIsCropOverlayVisible(false);
+    setIsPickingFilmBase(false);
+    setActivePointPicker(null);
+    setSidebarTab('dust');
+  }, []);
+
+  const handleSetActivePointPicker = useCallback((mode: PointPickerMode | null) => {
+    if (mode) {
+      setDustBrushActive(false);
+      setIsPickingFilmBase(false);
+      setIsCropOverlayVisible(false);
+    }
+    setActivePointPicker(mode);
+  }, []);
+
+  const handleFilmBasePickerToggle = useCallback(() => {
+    setDustBrushActive(false);
+    handleToggleFilmBasePicker();
+  }, [handleToggleFilmBasePicker]);
+
+  const handleToggleDustBrush = useCallback(() => {
+    handleDustBrushActiveChange(!dustBrushActive);
+  }, [dustBrushActive, handleDustBrushActiveChange]);
+
+  const handleAdjustDustBrushRadius = useCallback((delta: number) => {
+    const dustRemoval = resolveDustRemovalSettings(documentState?.settings.dustRemoval ?? DEFAULT_DUST_REMOVAL);
+    handleSettingsChange({
+      dustRemoval: {
+        ...dustRemoval,
+        manualBrushRadius: Math.min(50, Math.max(2, dustRemoval.manualBrushRadius + delta)),
+      },
+    });
+  }, [documentState?.settings.dustRemoval, handleSettingsChange]);
+
+  const handleRemoveLastDustMark = useCallback(() => {
+    if (!documentState) {
+      return;
+    }
+    const dustRemoval = resolveDustRemovalSettings(documentState?.settings.dustRemoval ?? DEFAULT_DUST_REMOVAL);
+    const manualMarks = dustRemoval.marks.filter((mark) => mark.source === 'manual');
+    const lastManual = manualMarks[manualMarks.length - 1];
+    if (!lastManual) {
+      return;
+    }
+
+    pushHistoryEntry(createDocumentHistoryEntry(documentState));
+    handleSettingsChange({
+      dustRemoval: {
+        ...dustRemoval,
+        marks: dustRemoval.marks.filter((mark) => mark.id !== lastManual.id),
+      },
+    });
+  }, [documentState, handleSettingsChange, pushHistoryEntry]);
+
+  const handleDetectDust = useCallback(async () => {
+    const worker = workerClientRef.current;
+    if (!worker || !documentState || isDetectingDust) {
+      return;
+    }
+
+    const dustRemoval = resolveDustRemovalSettings(documentState.settings.dustRemoval ?? DEFAULT_DUST_REMOVAL);
+    setIsDetectingDust(true);
+    try {
+      const detectedMarks = await worker.detectDust(
+        documentState.id,
+        dustRemoval.autoSensitivity,
+        dustRemoval.autoMaxRadius,
+        dustRemoval.autoDetectMode,
+      );
+      const latestDocument = tabsRef.current.find((tab) => tab.id === documentState.id)?.document ?? null;
+      if (!latestDocument) {
+        return;
+      }
+
+      const latestDustRemoval = resolveDustRemovalSettings(latestDocument.settings.dustRemoval ?? DEFAULT_DUST_REMOVAL);
+      const manualMarks = latestDustRemoval.marks.filter((mark) => mark.source === 'manual');
+      pushHistoryEntry(createDocumentHistoryEntry(latestDocument));
+      handleSettingsChange({
+        dustRemoval: {
+          ...latestDustRemoval,
+          marks: [...manualMarks, ...detectedMarks],
+        },
+      });
+    } catch (error) {
+      showTransientNotice(formatError(error));
+    } finally {
+      setIsDetectingDust(false);
+    }
+  }, [documentState, formatError, handleSettingsChange, isDetectingDust, pushHistoryEntry, showTransientNotice, tabsRef]);
+
+  const lastAutoDustDetectionKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const dustRemoval = documentState?.settings.dustRemoval;
+    if (!documentState || !dustRemoval?.autoEnabled) {
+      lastAutoDustDetectionKeyRef.current = null;
+      return;
+    }
+
+    const key = [
+      documentState.id,
+      dustRemoval.autoDetectMode,
+      dustRemoval.autoSensitivity,
+      dustRemoval.autoMaxRadius,
+    ].join(':');
+
+    if (lastAutoDustDetectionKeyRef.current === null) {
+      lastAutoDustDetectionKeyRef.current = key;
+      return;
+    }
+
+    if (lastAutoDustDetectionKeyRef.current === key) {
+      return;
+    }
+
+    lastAutoDustDetectionKeyRef.current = key;
+    void handleDetectDust();
+  }, [documentState?.id, documentState?.settings.dustRemoval, handleDetectDust]);
 
   const handleToggleLeftPane = useCallback(() => {
     setIsLeftPaneOpen((current) => {
@@ -2438,6 +2600,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     setActiveTabId,
     documentStatePresent: Boolean(documentState),
     isCropOverlayVisible,
+    dustBrushActive,
     usesNativeFileDialogs,
     setShowBatchModal,
     setShowSettingsModal,
@@ -2456,6 +2619,11 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onToggleComparison: handleToggleComparison,
     onAutoAdjust: () => { void handleAutoAdjust(); },
     onToggleCropOverlay: handleToggleCropOverlay,
+    onToggleDustBrush: handleToggleDustBrush,
+    onDecreaseDustBrushRadius: () => handleAdjustDustBrushRadius(-2),
+    onIncreaseDustBrushRadius: () => handleAdjustDustBrushRadius(2),
+    onRemoveLastDustMark: handleRemoveLastDustMark,
+    onDeactivateDustBrush: () => handleDustBrushActiveChange(false),
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleRightPane,
 onToggleScanningSession: toggleScanningWindow,
@@ -2496,6 +2664,8 @@ onToggleScanningSession: toggleScanningWindow,
       presetFolders={presetFolders}
       savePresetTags={savePresetTags}
       sidebarTab={sidebarTab}
+      dustBrushActive={dustBrushActive}
+      isDetectingDust={isDetectingDust}
       cropTab={cropTab}
       comparisonMode={comparisonMode}
       isLeftPaneOpen={isLeftPaneOpen}
@@ -2600,13 +2770,14 @@ onToggleScanningSession: toggleScanningWindow,
       onToggleScanningSession={toggleScanningWindow}
       onOpenContactSheet={handleOpenContactSheet}
       onSettingsChange={handleSettingsChange}
+      onDustRemovalChange={handleDustRemovalChange}
       defaultExportOptions={defaultExportOptions}
       onExportOptionsChange={wrappedHandleExportOptionsChange}
       onColorManagementChange={handleColorManagementChange}
       onInteractionStart={handleInteractionStart}
       onInteractionEnd={handleInteractionEnd}
       onLevelInteractionChange={setIsAdjustingLevel}
-      onToggleFilmBasePicker={handleToggleFilmBasePicker}
+      onToggleFilmBasePicker={handleFilmBasePickerToggle}
       onExportClick={handleExportClick}
       onQuickExport={(preset) => { void handleQuickExport(preset); }}
       onSaveQuickExportPreset={handleSaveQuickExportPreset}
@@ -2618,7 +2789,11 @@ onToggleScanningSession: toggleScanningWindow,
       onRedetectFrame={handleRedetectFrame}
       onCropDone={handleCropDone}
       onResetCrop={handleResetCrop}
-      onSetActivePointPicker={setActivePointPicker}
+      onDetectDust={() => { void handleDetectDust(); }}
+      onDustBrushActiveChange={handleDustBrushActiveChange}
+      onDustBrushInteractionStart={handleDustBrushInteractionStart}
+      onDustBrushInteractionEnd={handleDustBrushInteractionEnd}
+      onSetActivePointPicker={handleSetActivePointPicker}
       onOpenSettingsModal={handleOpenSettingsModal}
       onLightSourceChange={handleLightSourceChange}
       onLabStyleChange={handleLabStyleChange}
@@ -2666,6 +2841,7 @@ onToggleScanningSession: toggleScanningWindow,
       onCropInteractionStart={handleCropInteractionStart}
       onCropInteractionEnd={handleCropInteractionEnd}
       onCropOverlayChange={handleCropOverlayChange}
+      onDustOverlayChange={handleDustOverlayChange}
       onDropFile={handleDrop}
       onTitleBarMouseDown={handleTitleBarMouseDown}
       zoomToFit={zoomToFitWithDraft}

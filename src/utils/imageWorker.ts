@@ -11,6 +11,7 @@ import {
   ConversionSettings,
   DecodeRequest,
   DecodedImage,
+  DustDetectRequest,
   ExportRequest,
   ExportResult,
   FilmBaseSample,
@@ -49,13 +50,15 @@ import {
   selectPreviewLevel,
 } from './imagePipeline';
 import { analyzeChannelFloors, analyzeColorBalance, analyzeExposure, analyzeMidtoneContrast } from './autoAnalysis';
-import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS } from '../constants';
+import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS, resolveDustRemovalSettings } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
 import { getColorProfileIdFromName, identifyIccProfile, convertImageDataColorProfile } from './colorProfiles';
 import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata';
+import { detectDustMarks } from './dustDetection';
 import { applyFlatFieldCorrection } from './flatField';
 import { detectFrame } from './frameDetection';
 import { estimateFlare } from './flareEstimation';
+import { applyDustRemoval } from './dustRemoval';
 import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
@@ -710,6 +713,59 @@ function applyActiveFlatFieldIfNeeded(imageData: ImageData, enabled: boolean | u
   applyFlatFieldCorrection(imageData.data, imageData.width, imageData.height, activeFlatField.data, activeFlatField.size);
 }
 
+function applyDustRemovalIfNeeded(
+  imageData: ImageData,
+  settings: ConversionSettings,
+) {
+  const dustRemoval = resolveDustRemovalSettings(settings.dustRemoval);
+  if (dustRemoval.marks.length === 0) {
+    return;
+  }
+  applyDustRemoval(imageData, dustRemoval);
+}
+
+function cloneCanvas(sourceCanvas: OffscreenCanvas) {
+  const canvas = new OffscreenCanvas(sourceCanvas.width, sourceCanvas.height);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Could not clone canvas.');
+  }
+  context.drawImage(sourceCanvas, 0, 0);
+  return canvas;
+}
+
+function createDustRemovedCanvas(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
+  const dustRemoval = resolveDustRemovalSettings(settings.dustRemoval);
+  if (dustRemoval.marks.length === 0) {
+    return sourceCanvas;
+  }
+
+  const canvas = cloneCanvas(sourceCanvas);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Could not read dust removal canvas.');
+  }
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  applyDustRemovalIfNeeded(imageData, settings);
+  context.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+function handleDustDetect(payload: DustDetectRequest) {
+  const document = getStoredDocument(payload.documentId);
+  const context = document.sourceCanvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Could not read source image for dust detection.');
+  }
+
+  const imageData = context.getImageData(0, 0, document.sourceCanvas.width, document.sourceCanvas.height);
+  return {
+    type: 'dust-detect',
+    detectedMarks: detectDustMarks(imageData, payload.sensitivity, payload.maxRadius, payload.mode),
+  } as const;
+}
+
 async function handleDecode(payload: DecodeRequest) {
   if (payload.mime === 'image/x-raw-rgba') {
     if (!payload.rawDimensions) {
@@ -852,6 +908,40 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
   const document = getStoredDocument(payload.documentId);
   clearTileJob(payload.jobId);
   const source = getTileSource(document, payload);
+  const hasDustRemoval = payload.comparisonMode === 'processed'
+    && resolveDustRemovalSettings(payload.settings.dustRemoval).marks.length > 0;
+
+  if (hasDustRemoval) {
+    const dustCleanedCanvas = createDustRemovedCanvas(source.canvas, payload.settings);
+    const rotatedCanvas = renderRotatedCanvasForJob(dustCleanedCanvas, payload.settings);
+    const transformed = renderCroppedCanvasForJob(rotatedCanvas, payload.settings);
+    releaseCanvas(dustCleanedCanvas);
+    releaseCanvas(rotatedCanvas);
+    tileJobs.set(payload.jobId, {
+      documentId: payload.documentId,
+      sourceKind: payload.sourceKind,
+      previewLevelId: source.previewLevelId,
+      transformedCanvas: transformed.canvas,
+      width: transformed.width,
+      height: transformed.height,
+      halo: getHalo(payload.settings, payload.comparisonMode),
+      comparisonMode: payload.comparisonMode,
+      flatFieldHandledInWorker: payload.flatFieldHandledInWorker ?? true,
+    });
+
+    return {
+      documentId: payload.documentId,
+      jobId: payload.jobId,
+      sourceKind: payload.sourceKind,
+      width: transformed.width,
+      height: transformed.height,
+      previewLevelId: source.previewLevelId,
+      tileSize: TILE_SIZE,
+      halo: getHalo(payload.settings, payload.comparisonMode),
+      geometryCacheHit: false,
+    } satisfies PreparedTileJobResult;
+  }
+
   const prepared = prepareGeometryCacheEntry({
     rotationCache: document.rotationCache,
     cropCache: document.cropCache,
@@ -1111,7 +1201,13 @@ function handleRender(payload: RenderRequest) {
   const document = getStoredDocument(payload.documentId);
   const level = selectPreviewLevel(document.previews.map((preview) => preview.level), payload.targetMaxDimension);
   const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
-  const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
+  const previewSource = payload.comparisonMode === 'processed'
+    ? createDustRemovedCanvas(preview.canvas, payload.settings)
+    : preview.canvas;
+  const transformed = renderTransformedCanvas(previewSource, payload.settings);
+  if (previewSource !== preview.canvas) {
+    releaseCanvas(previewSource);
+  }
   const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not read rendered preview.');
 
@@ -1171,7 +1267,11 @@ function handleSampleFilmBase(payload: SampleRequest) {
 
 async function handleExport(payload: ExportRequest) {
   const document = getStoredDocument(payload.documentId);
-  const transformed = renderTransformedCanvas(document.sourceCanvas, payload.settings);
+  const exportSource = createDustRemovedCanvas(document.sourceCanvas, payload.settings);
+  const transformed = renderTransformedCanvas(exportSource, payload.settings);
+  if (exportSource !== document.sourceCanvas) {
+    releaseCanvas(exportSource);
+  }
   const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not create export canvas.');
 
@@ -1270,7 +1370,11 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       payload.cellMaxDimension,
     );
     const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
-    const transformed = renderTransformedCanvas(preview.canvas, settings);
+    const previewSource = createDustRemovedCanvas(preview.canvas, settings);
+    const transformed = renderTransformedCanvas(previewSource, settings);
+    if (previewSource !== preview.canvas) {
+      releaseCanvas(previewSource);
+    }
     const sourceContext = transformed.canvas.getContext('2d', { willReadFrequently: true });
     if (!sourceContext) {
       throw new Error('Could not render contact sheet cell.');
@@ -1392,6 +1496,9 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         return;
       case 'clear-flat-field':
         reply(request, handleClearFlatField());
+        return;
+      case 'dust-detect':
+        reply(request, handleDustDetect(request.payload));
         return;
       case 'export':
         reply(request, await handleExport(request.payload));

@@ -1,6 +1,6 @@
 import React, { Dispatch, MutableRefObject, SetStateAction, useCallback, useEffect } from 'react';
 import { flushSync } from 'react-dom';
-import { MAX_OPEN_TABS, resolveLightSourceIdForProfile } from '../constants';
+import { createDefaultSettings, MAX_OPEN_TABS, resolveLightSourceIdForProfile } from '../constants';
 import { useFileImport } from './useFileImport';
 import { appendDiagnostic, getDiagnosticsReport } from '../utils/diagnostics';
 import {
@@ -122,7 +122,7 @@ type UseWorkspaceCommandsOptions = {
   savePresetTags: string[];
   notificationSettings: NotificationSettings;
   renderBackendDiagnostics: RenderBackendDiagnostics;
-  setSidebarTab: SetState<'adjust' | 'curves' | 'crop' | 'export'>;
+  setSidebarTab: SetState<'adjust' | 'curves' | 'crop' | 'dust' | 'export'>;
   setCropTab: SetState<CropTab>;
   isPickingFilmBase: boolean;
   activePointPicker: PointPickerMode | null;
@@ -454,7 +454,7 @@ export function useWorkspaceCommands({
     }));
   }, [updateDocument]);
 
-  const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'export') => {
+  const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => {
     setSidebarTab(tab);
     setIsCropOverlayVisible((current) => {
       if (tab !== 'crop' && current) {
@@ -843,7 +843,7 @@ export function useWorkspaceCommands({
       ? (profile.labStyleId ?? null)
       : undefined;
 
-    const nextSettings = structuredClone(profile.defaultSettings);
+    const nextSettings = createDefaultSettings(structuredClone(profile.defaultSettings));
     if (profile.includesFraming === false) {
       preserveCurrentFraming(nextSettings, documentState?.settings);
     }
@@ -935,7 +935,7 @@ export function useWorkspaceCommands({
 
   const handleReset = useCallback(() => {
     if (!documentState) return;
-    const nextSettings = structuredClone(activeProfile.defaultSettings);
+    const nextSettings = createDefaultSettings(structuredClone(activeProfile.defaultSettings));
     if (activeProfile.includesFraming === false) {
       preserveCurrentFraming(nextSettings, documentState.settings);
     }

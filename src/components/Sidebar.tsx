@@ -23,8 +23,10 @@ import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
 import { Slider } from './Slider';
+import { DustPane } from './DustPane';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
+import { DEFAULT_DUST_REMOVAL, resolveDustRemovalSettings } from '../constants';
 
 const ADJUST_PANE_INITIAL = { opacity: 0, x: -10 };
 const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0 };
@@ -147,8 +149,8 @@ interface SidebarProps {
   isExporting: boolean;
   contentScrollTop?: number;
   onContentScrollTopChange?: (scrollTop: number) => void;
-  activeTab: 'adjust' | 'curves' | 'crop' | 'export';
-  onTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'export') => void;
+  activeTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
+  onTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => void;
   cropTab: CropTab;
   onCropTabChange: (tab: CropTab) => void;
   onRedetectFrame?: () => void;
@@ -160,6 +162,11 @@ interface SidebarProps {
   onLightSourceChange?: (lightSourceId: string | null) => void;
   onLabStyleChange?: (labStyleId: string | null) => void;
   onAutoAdjust?: () => void;
+  onDustRemovalChange?: (dustRemoval: ConversionSettings['dustRemoval']) => void;
+  onDetectDust?: () => void;
+  isDetectingDust?: boolean;
+  dustBrushActive?: boolean;
+  onDustBrushActiveChange?: (active: boolean) => void;
 }
 
 export const Sidebar = memo(function Sidebar({
@@ -205,6 +212,11 @@ export const Sidebar = memo(function Sidebar({
   onLightSourceChange,
   onLabStyleChange,
   onAutoAdjust,
+  onDustRemovalChange,
+  onDetectDust,
+  isDetectingDust = false,
+  dustBrushActive = false,
+  onDustBrushActiveChange,
   onOpenBatchExport,
   contentScrollTop = 0,
   onContentScrollTopChange,
@@ -377,6 +389,10 @@ export const Sidebar = memo(function Sidebar({
   const handleLightSourceSelect = useCallback((value: string) => {
     onLightSourceChange?.(value === 'auto' ? null : value);
   }, [onLightSourceChange]);
+  const dustRemoval = useMemo(
+    () => resolveDustRemovalSettings(settings.dustRemoval ?? DEFAULT_DUST_REMOVAL),
+    [settings.dustRemoval],
+  );
 
   const isWebpExport = exportOptions.format === 'image/webp';
   const showQualityControl = exportOptions.format !== 'image/png' && exportOptions.format !== 'image/tiff';
@@ -391,7 +407,7 @@ export const Sidebar = memo(function Sidebar({
       </div>
 
       <div className="flex px-6 pt-4 gap-4 shrink-0">
-        {(['adjust', 'curves', 'crop', 'export'] as const).map((tab) => (
+        {(['adjust', 'curves', 'crop', 'dust', 'export'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => onTabChange(tab)}
@@ -726,6 +742,24 @@ export const Sidebar = memo(function Sidebar({
                   onRedetectFrame={onRedetectFrame}
                   onDone={onCropDone}
                   onResetCrop={onResetCrop}
+                />
+              </motion.div>
+            ) : activeTab === 'dust' ? (
+              <motion.div
+                key="dust"
+                initial={VERTICAL_PANE_INITIAL}
+                animate={VERTICAL_PANE_ANIMATE}
+                exit={VERTICAL_PANE_EXIT}
+              >
+                <DustPane
+                  dustRemoval={dustRemoval}
+                  onSettingsChange={(nextDustRemoval) => onDustRemovalChange?.(nextDustRemoval)}
+                  onDetectNow={() => onDetectDust?.()}
+                  isDetecting={isDetectingDust}
+                  onInteractionStart={onInteractionStart}
+                  onInteractionEnd={onInteractionEnd}
+                  brushActive={dustBrushActive}
+                  onBrushActiveChange={(active) => onDustBrushActiveChange?.(active)}
                 />
               </motion.div>
             ) : (

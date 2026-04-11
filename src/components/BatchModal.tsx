@@ -115,6 +115,7 @@ export function BatchModal({
   const [selectedCustomProfileId, setSelectedCustomProfileId] = useState(customProfiles[0]?.id ?? '');
   const [ignorePresetCropAndRotation, setIgnorePresetCropAndRotation] = useState(false);
   const [batchAutoCrop, setBatchAutoCrop] = useState(true);
+  const [batchAutoDustRemoval, setBatchAutoDustRemoval] = useState(currentSettings?.dustRemoval?.autoEnabled ?? false);
   const [batchFlareMode, setBatchFlareMode] = useState<'per-image' | 'first-frame'>('per-image');
   const [batchAutoMode, setBatchAutoMode] = useState<'off' | 'per-image' | 'first-frame'>('off');
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
@@ -155,6 +156,7 @@ export function BatchModal({
     setColorManagement(currentColorManagement ?? DEFAULT_COLOR_MANAGEMENT);
     setIgnorePresetCropAndRotation(false);
     setBatchAutoCrop(true);
+    setBatchAutoDustRemoval(currentSettings?.dustRemoval?.autoEnabled ?? false);
     setBatchFlareMode('per-image');
     setBatchAutoMode('off');
   }, [currentColorManagement, currentProfile, currentSettings, isOpen]);
@@ -366,6 +368,7 @@ export function BatchModal({
         cancelTokenRef.current,
         {
           autoCrop: batchAutoCrop,
+          autoDustRemoval: batchAutoDustRemoval,
           flareMode: batchFlareMode,
           autoMode: batchAutoMode,
         },
@@ -645,6 +648,9 @@ export function BatchModal({
                       <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
                         <CheckOption checked={batchAutoCrop} disabled={isRunning} onChange={setBatchAutoCrop}>
                           Auto-crop each scan after decode
+                        </CheckOption>
+                        <CheckOption checked={batchAutoDustRemoval} disabled={isRunning} onChange={setBatchAutoDustRemoval}>
+                          Auto dust / scratch / hair removal
                         </CheckOption>
                       </div>
                     </section>

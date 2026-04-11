@@ -35,6 +35,13 @@ export function customProfileHasEmbeddedCropOrRotation(profile: FilmProfile | nu
 export function getBatchEffectiveSettings(settings: ConversionSettings, ignoreCropAndRotation: boolean) {
   const effectiveSettings = structuredClone(settings);
 
+  if (effectiveSettings.dustRemoval) {
+    effectiveSettings.dustRemoval = {
+      ...effectiveSettings.dustRemoval,
+      marks: [],
+    };
+  }
+
   if (!ignoreCropAndRotation) {
     return effectiveSettings;
   }

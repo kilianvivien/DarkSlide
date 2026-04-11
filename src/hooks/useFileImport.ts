@@ -10,6 +10,7 @@ import {
   WorkspaceDocument,
 } from '../types';
 import {
+  createDefaultSettings,
   DEFAULT_COLOR_NEGATIVE_INVERSION,
   DEFAULT_COLOR_MANAGEMENT,
   DEFAULT_EXPORT_OPTIONS,
@@ -218,7 +219,7 @@ export function useFileImport({
       },
       previewLevels: [],
       settings: {
-        ...structuredClone(initialProfile.defaultSettings),
+        ...createDefaultSettings(structuredClone(initialProfile.defaultSettings)),
         inversionMethod: initialInversionMethod,
         filmBaseSample: roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample,
         flatFieldEnabled: defaultFlatFieldEnabled,
@@ -255,7 +256,7 @@ export function useFileImport({
     try {
       let decoded: DecodedImage;
       let initialSettings: ConversionSettings = {
-        ...structuredClone(initialProfile.defaultSettings),
+        ...createDefaultSettings(structuredClone(initialProfile.defaultSettings)),
         inversionMethod: initialInversionMethod,
         filmBaseSample: roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample,
         flatFieldEnabled: defaultFlatFieldEnabled,
@@ -271,13 +272,13 @@ export function useFileImport({
             size: sourceFileSize,
           });
           const estimatedFilmBase = estimateFilmBaseSample(rawResult.data, rawResult.width, rawResult.height);
-          initialSettings = buildRawInitialSettings(
+          initialSettings = createDefaultSettings(buildRawInitialSettings(
             initialProfile.defaultSettings,
             rawResult.data,
             rawResult.width,
             rawResult.height,
             rawResult.orientation,
-          );
+          ));
           initialSettings = {
             ...initialSettings,
             flatFieldEnabled: defaultFlatFieldEnabled,
@@ -423,7 +424,7 @@ export function useFileImport({
         },
         previewLevels: decoded.previewLevels,
         settings: activeSidecar
-          ? structuredClone(activeSidecar.settings)
+          ? createDefaultSettings(structuredClone(activeSidecar.settings))
           : initialSettings,
         colorManagement: createDocumentColorManagement(decoded.metadata, {
           ...DEFAULT_EXPORT_OPTIONS,

@@ -5,6 +5,8 @@ export type ColorProfileId = 'srgb' | 'display-p3' | 'adobe-rgb';
 export type FilmProfileType = 'negative' | 'slide';
 export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'Lomography' | 'Foma' | 'Rollei' | 'Generic';
 export type CropSource = 'auto' | 'manual';
+export type DustMarkSource = 'auto' | 'manual';
+export type DustAutoDetectMode = 'spots' | 'scratches' | 'both';
 export type UpdateChannel = 'stable' | 'beta';
 export type ZoomLevel = number | 'fit';
 export type InversionMethod = 'standard' | 'advanced-hd';
@@ -27,6 +29,23 @@ export interface CropSettings {
   width: number;
   height: number;
   aspectRatio: number | null;
+}
+
+export interface DustMark {
+  id: string;
+  cx: number;
+  cy: number;
+  radius: number;
+  source: DustMarkSource;
+}
+
+export interface DustRemovalSettings {
+  autoEnabled: boolean;
+  autoDetectMode: DustAutoDetectMode;
+  autoSensitivity: number;
+  autoMaxRadius: number;
+  manualBrushRadius: number;
+  marks: DustMark[];
 }
 
 export interface DetectedFrame {
@@ -151,6 +170,7 @@ export interface ConversionSettings {
   blackAndWhite: BlackAndWhiteSettings;
   sharpen: SharpenSettings;
   noiseReduction: NoiseReductionSettings;
+  dustRemoval?: DustRemovalSettings;
 }
 
 export interface ColorManagementSettings {
@@ -633,6 +653,18 @@ export interface AutoAnalyzeRequest {
   highlightDensityEstimate?: number;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
+}
+
+export interface DustDetectRequest {
+  documentId: string;
+  sensitivity: number;
+  maxRadius: number;
+  mode: DustAutoDetectMode;
+}
+
+export interface DustDetectResult {
+  type: 'dust-detect';
+  detectedMarks: DustMark[];
 }
 
 export interface AutoAnalyzeResult {

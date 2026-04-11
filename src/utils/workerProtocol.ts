@@ -7,6 +7,8 @@ import type {
   DecodeRequest,
   DecodedImage,
   DetectedFrame,
+  DustDetectRequest,
+  DustDetectResult,
   ExportRequest,
   ExportResult,
   FilmBaseSample,
@@ -65,6 +67,7 @@ export type WorkerRequest =
   | { type: 'compute-flare'; payload: ComputeFlarePayload }
   | { type: 'load-flat-field'; payload: LoadFlatFieldPayload }
   | { type: 'clear-flat-field'; payload: Record<string, never> }
+  | { type: 'dust-detect'; payload: DustDetectRequest }
   | { type: 'export'; payload: ExportRequest }
   | { type: 'contact-sheet'; payload: ContactSheetRequest }
   | { type: 'diagnostics'; payload: Record<string, never> }
@@ -75,6 +78,7 @@ export type WorkerSuccessPayload =
   | DecodedImage
   | RenderResult
   | AutoAnalyzeResult
+  | DustDetectResult
   | PreparedTileJobResult
   | PreparedPreviewBitmapResult
   | ReadTileResult

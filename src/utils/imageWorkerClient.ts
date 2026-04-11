@@ -8,6 +8,7 @@ import {
   DecodeRequest,
   DecodedImage,
   DetectedFrame,
+  DustMark,
   ExportRequest,
   ExportResult,
   FilmBaseSample,
@@ -79,6 +80,7 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   'compute-flare': 10_000,
   'load-flat-field': 10_000,
   'clear-flat-field': 5_000,
+  'dust-detect': 10_000,
   export: 30_000,
   'contact-sheet': 30_000,
   diagnostics: 5_000,
@@ -1526,6 +1528,19 @@ export class ImageWorkerClient {
       () => this.request<[number, number, number]>('compute-flare', { documentId }),
       true,
     );
+  }
+
+  async detectDust(documentId: string, sensitivity: number, maxRadius: number, mode: 'spots' | 'scratches' | 'both'): Promise<DustMark[]> {
+    await this.ensureDocumentLoaded(documentId);
+    const result = await this.requestWithDocumentRecovery<{ type: 'dust-detect'; detectedMarks: DustMark[] }>(
+      documentId,
+      () => this.request<{ type: 'dust-detect'; detectedMarks: DustMark[] }>(
+        'dust-detect',
+        { documentId, sensitivity, maxRadius, mode },
+      ),
+      true,
+    );
+    return result.detectedMarks;
   }
 
   async loadFlatField(name: string, data: Float32Array, size: number) {

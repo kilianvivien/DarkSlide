@@ -10,7 +10,7 @@ export interface UserPreferences {
   defaultColorNegativeInversion: InversionMethod;
   exportOptions: ExportOptions;
   notificationSettings: NotificationSettings;
-  sidebarTab: 'adjust' | 'curves' | 'crop' | 'export';
+  sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
   cropTab?: CropTab;
   isLeftPaneOpen: boolean;
   isRightPaneOpen: boolean;

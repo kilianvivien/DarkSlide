@@ -1,4 +1,4 @@
-import { AdvancedInversionProfile, ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, ExportOptions, FilmProfile, InversionMethod, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
+import { AdvancedInversionProfile, ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, DustRemovalSettings, ExportOptions, FilmProfile, InversionMethod, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -14,6 +14,26 @@ const DEFAULT_CURVES: Curves = {
   green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
   blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
 };
+
+export const DEFAULT_DUST_REMOVAL: DustRemovalSettings = {
+  autoEnabled: false,
+  autoDetectMode: 'both',
+  autoSensitivity: 50,
+  autoMaxRadius: 8,
+  manualBrushRadius: 10,
+  marks: [],
+};
+
+export function resolveDustRemovalSettings(dustRemoval?: Partial<DustRemovalSettings> | null): DustRemovalSettings {
+  return {
+    autoEnabled: dustRemoval?.autoEnabled ?? DEFAULT_DUST_REMOVAL.autoEnabled,
+    autoDetectMode: dustRemoval?.autoDetectMode ?? DEFAULT_DUST_REMOVAL.autoDetectMode,
+    autoSensitivity: dustRemoval?.autoSensitivity ?? DEFAULT_DUST_REMOVAL.autoSensitivity,
+    autoMaxRadius: dustRemoval?.autoMaxRadius ?? DEFAULT_DUST_REMOVAL.autoMaxRadius,
+    manualBrushRadius: dustRemoval?.manualBrushRadius ?? DEFAULT_DUST_REMOVAL.manualBrushRadius,
+    marks: structuredClone(dustRemoval?.marks ?? DEFAULT_DUST_REMOVAL.marks),
+  };
+}
 
 export const DEFAULT_COLOR_NEGATIVE_INVERSION: InversionMethod = 'standard';
 
@@ -102,6 +122,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
 };
 
 export function createDefaultSettings(overrides: Partial<ConversionSettings> = {}): ConversionSettings {
+  const resolvedDustRemoval = resolveDustRemovalSettings(overrides.dustRemoval);
   return {
     inversionMethod: DEFAULT_COLOR_NEGATIVE_INVERSION,
     exposure: 0,
@@ -134,6 +155,7 @@ export function createDefaultSettings(overrides: Partial<ConversionSettings> = {
     sharpen: { enabled: false, radius: 1.0, amount: 50 },
     noiseReduction: { enabled: false, luminanceStrength: 0 },
     ...overrides,
+    dustRemoval: resolvedDustRemoval,
   };
 }
 

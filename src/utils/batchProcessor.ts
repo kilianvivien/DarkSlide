@@ -31,6 +31,7 @@ export interface BatchJobEntry {
 
 export interface BatchRunOptions {
   autoCrop?: boolean;
+  autoDustRemoval?: boolean;
   flareMode?: 'per-image' | 'first-frame';
   autoMode?: 'off' | 'per-image' | 'first-frame';
 }
@@ -232,6 +233,13 @@ export async function* runBatch(
       yield { type: 'progress', entryId: entry.id, progress: 0.55 };
 
       const entrySettings = structuredClone(sharedSettings);
+      if (entrySettings.dustRemoval) {
+        entrySettings.dustRemoval = {
+          ...entrySettings.dustRemoval,
+          autoEnabled: options.autoDustRemoval ?? entrySettings.dustRemoval.autoEnabled,
+          marks: [],
+        };
+      }
       if (entry.detectedFrame && options.autoCrop !== false) {
         entrySettings.crop = {
           x: entry.detectedFrame.left,
@@ -241,6 +249,19 @@ export async function* runBatch(
           aspectRatio: null,
         };
         entrySettings.levelAngle = entry.detectedFrame.angle;
+      }
+
+      if ((options.autoDustRemoval ?? entrySettings.dustRemoval?.autoEnabled) && entrySettings.dustRemoval?.autoEnabled) {
+        const autoDustMarks = await workerClient.detectDust(
+          documentId,
+          entrySettings.dustRemoval.autoSensitivity,
+          entrySettings.dustRemoval.autoMaxRadius,
+          entrySettings.dustRemoval.autoDetectMode,
+        ).catch(() => []);
+        entrySettings.dustRemoval = {
+          ...entrySettings.dustRemoval,
+          marks: autoDustMarks,
+        };
       }
 
       const flareFloor: [number, number, number] | null = options.flareMode === 'first-frame'

@@ -10,6 +10,7 @@ type UseAppShortcutsOptions = {
   setActiveTabId: (value: string | null) => void;
   documentStatePresent: boolean;
   isCropOverlayVisible: boolean;
+  dustBrushActive: boolean;
   usesNativeFileDialogs: boolean;
   setShowBatchModal: Dispatch<SetStateAction<boolean>>;
   setShowSettingsModal: Dispatch<SetStateAction<boolean>>;
@@ -28,6 +29,11 @@ type UseAppShortcutsOptions = {
   onToggleComparison: () => void;
   onAutoAdjust: () => void;
   onToggleCropOverlay: () => void;
+  onToggleDustBrush: () => void;
+  onDecreaseDustBrushRadius: () => void;
+  onIncreaseDustBrushRadius: () => void;
+  onRemoveLastDustMark: () => void;
+  onDeactivateDustBrush: () => void;
   onToggleLeftPane: () => void;
   onToggleRightPane: () => void;
 onToggleScanningSession: () => void;
@@ -44,6 +50,7 @@ export function useAppShortcuts({
   setActiveTabId,
   documentStatePresent,
   isCropOverlayVisible,
+  dustBrushActive,
   usesNativeFileDialogs,
   setShowBatchModal,
   setShowSettingsModal,
@@ -62,6 +69,11 @@ export function useAppShortcuts({
   onToggleComparison,
   onAutoAdjust,
   onToggleCropOverlay,
+  onToggleDustBrush,
+  onDecreaseDustBrushRadius,
+  onIncreaseDustBrushRadius,
+  onRemoveLastDustMark,
+  onDeactivateDustBrush,
   onToggleLeftPane,
   onToggleRightPane,
 onToggleScanningSession,
@@ -89,6 +101,11 @@ onToggleScanningSession,
       quickExport3: { key: '3', meta: true, shift: true, when: () => Boolean(documentStatePresent && quickExportPresets[2]), handler: () => { void onQuickExport(quickExportPresets[2]!); } },
       quickExport4: { key: '4', meta: true, shift: true, when: () => Boolean(documentStatePresent && quickExportPresets[3]), handler: () => { void onQuickExport(quickExportPresets[3]!); } },
       autoAdjust: { key: 'a', meta: true, shift: true, when: () => documentStatePresent, handler: onAutoAdjust },
+      toggleDustBrush: { key: 'd', when: () => documentStatePresent && !isCropOverlayVisible, handler: onToggleDustBrush },
+      decreaseDustBrush: { key: '[', when: () => dustBrushActive, handler: onDecreaseDustBrushRadius },
+      increaseDustBrush: { key: ']', when: () => dustBrushActive, handler: onIncreaseDustBrushRadius },
+      removeLastDustMark: { key: 'backspace', when: () => dustBrushActive, handler: onRemoveLastDustMark },
+      deactivateDustBrush: { key: 'escape', when: () => dustBrushActive, handler: onDeactivateDustBrush },
       batchExport: { key: 'e', meta: true, shift: true, handler: () => setShowBatchModal(true) },
       toggleScanningSession: { key: 'w', meta: true, shift: true, when: () => usesNativeFileDialogs, handler: onToggleScanningSession },
 previousTab: {

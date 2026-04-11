@@ -24,6 +24,7 @@ import {
 import { Sidebar } from './Sidebar';
 import { PresetsPane } from './PresetsPane';
 import { CropOverlay } from './CropOverlay';
+import { DustOverlay } from './DustOverlay';
 import { SettingsModal } from './SettingsModal';
 import { BatchModal } from './BatchModal';
 import { ContactSheetModal } from './ContactSheetModal';
@@ -85,7 +86,9 @@ type AppShellProps = {
   customPresets: FilmProfile[];
   presetFolders: PresetFolder[];
   savePresetTags: string[];
-  sidebarTab: 'adjust' | 'curves' | 'crop' | 'export';
+  sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
+  dustBrushActive: boolean;
+  isDetectingDust: boolean;
   cropTab: CropTab;
   comparisonMode: 'processed' | 'original';
   isLeftPaneOpen: boolean;
@@ -198,6 +201,7 @@ type AppShellProps = {
   }) => void;
   defaultExportOptions: WorkspaceDocument['exportOptions'];
   onSettingsChange: (newSettings: Partial<ConversionSettings>) => void;
+  onDustRemovalChange: (dustRemoval: ConversionSettings['dustRemoval']) => void;
   onExportOptionsChange: (options: Partial<WorkspaceDocument['exportOptions']>) => void;
   onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
   onInteractionStart: () => void;
@@ -210,12 +214,16 @@ type AppShellProps = {
   onDeleteQuickExportPreset: (presetId: string) => void;
   onOpenBatchExport: () => void;
   onSidebarScrollTopChange: (scrollTop: number) => void;
-  onSidebarTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'export') => void;
+  onSidebarTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => void;
   onCropTabChange: (tab: CropTab) => void;
   onRedetectFrame: () => void;
   onCropDone: () => void;
   onResetCrop: () => void;
-  onSetActivePointPicker: React.Dispatch<React.SetStateAction<PointPickerMode | null>>;
+  onDetectDust: () => void;
+  onDustBrushActiveChange: (active: boolean) => void;
+  onDustBrushInteractionStart: () => void;
+  onDustBrushInteractionEnd: () => void;
+  onSetActivePointPicker: (mode: PointPickerMode | null) => void;
   onOpenSettingsModal: () => void;
   onLightSourceChange: (lightSourceId: string | null) => void;
   onLabStyleChange: (labStyleId: string | null) => void;
@@ -274,6 +282,7 @@ type AppShellProps = {
   onCropInteractionStart: () => void;
   onCropInteractionEnd: () => void;
   onCropOverlayChange: (crop: ConversionSettings['crop']) => void;
+  onDustOverlayChange: (marks: NonNullable<ConversionSettings['dustRemoval']>['marks']) => void;
   onDropFile: (event: React.DragEvent<HTMLDivElement>) => Promise<void>;
   onTitleBarMouseDown: (event: React.MouseEvent<HTMLDivElement>) => void;
   zoomToFit: () => void;
@@ -307,6 +316,8 @@ export function AppShell({
   presetFolders,
   savePresetTags,
   sidebarTab,
+  dustBrushActive,
+  isDetectingDust,
   cropTab,
   comparisonMode,
   isLeftPaneOpen,
@@ -412,6 +423,7 @@ export function AppShell({
   onOpenContactSheet,
   defaultExportOptions,
   onSettingsChange,
+  onDustRemovalChange,
   onExportOptionsChange,
   onColorManagementChange,
   onInteractionStart,
@@ -429,6 +441,10 @@ export function AppShell({
   onRedetectFrame,
   onCropDone,
   onResetCrop,
+  onDetectDust,
+  onDustBrushActiveChange,
+  onDustBrushInteractionStart,
+  onDustBrushInteractionEnd,
   onSetActivePointPicker,
   onOpenSettingsModal,
   onLightSourceChange,
@@ -477,6 +493,7 @@ export function AppShell({
   onCropInteractionStart,
   onCropInteractionEnd,
   onCropOverlayChange,
+  onDustOverlayChange,
   onDropFile,
   onTitleBarMouseDown,
   zoomToFit,
@@ -599,6 +616,11 @@ export function AppShell({
                   onRedetectFrame={onRedetectFrame}
                   onCropDone={onCropDone}
                   onResetCrop={onResetCrop}
+                  onDustRemovalChange={onDustRemovalChange}
+                  onDetectDust={onDetectDust}
+                  isDetectingDust={isDetectingDust}
+                  dustBrushActive={dustBrushActive}
+                  onDustBrushActiveChange={onDustBrushActiveChange}
                   activePointPicker={activePointPicker}
                   onSetPointPicker={onSetActivePointPicker}
                   onOpenSettings={onOpenSettingsModal}
@@ -794,7 +816,11 @@ export function AppShell({
                       ref={previewContainerRef}
                       className="relative w-full flex-1 overflow-hidden border border-zinc-800 bg-black"
                       onMouseDown={(event) => {
-                        const canPan = (zoom !== 'fit' || isSpaceHeld) && !isPickingFilmBase && !activePointPicker && !isCropOverlayVisible;
+                        const canPan = (zoom !== 'fit' || isSpaceHeld)
+                          && !isPickingFilmBase
+                          && !activePointPicker
+                          && !isCropOverlayVisible
+                          && !dustBrushActive;
                         if (canPan && event.button === 0) {
                           event.preventDefault();
                           onSetIsPanDragging(true);
@@ -825,7 +851,7 @@ export function AppShell({
                           onEndPan();
                         }
                       }}
-                      style={{ cursor: isPanDragging ? 'grabbing' : (zoom !== 'fit' && !isPickingFilmBase && !activePointPicker ? 'grab' : undefined) }}
+                      style={{ cursor: isPanDragging ? 'grabbing' : (zoom !== 'fit' && !isPickingFilmBase && !activePointPicker && !dustBrushActive ? 'grab' : undefined) }}
                     >
                       <div className="absolute right-4 top-4 z-20">
                         <ZoomBar
@@ -897,6 +923,19 @@ export function AppShell({
                               onInteractionStart={onCropInteractionStart}
                               onInteractionEnd={onCropInteractionEnd}
                               onChange={onCropOverlayChange}
+                            />
+                          )}
+                          {comparisonMode === 'processed' && sidebarTab === 'dust' && documentState.settings.dustRemoval && (
+                            <DustOverlay
+                              settings={documentState.settings}
+                              sourceWidth={documentState.source.width}
+                              sourceHeight={documentState.source.height}
+                              brushActive={dustBrushActive}
+                              marks={documentState.settings.dustRemoval.marks}
+                              manualBrushRadiusPx={documentState.settings.dustRemoval.manualBrushRadius}
+                              onChange={onDustOverlayChange}
+                              onInteractionStart={onDustBrushInteractionStart}
+                              onInteractionEnd={onDustBrushInteractionEnd}
                             />
                           )}
                         </div>
