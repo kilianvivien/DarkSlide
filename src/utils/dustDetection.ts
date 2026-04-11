@@ -4,10 +4,23 @@ import { clamp } from './math';
 const LUMA_R = 0.299;
 const LUMA_G = 0.587;
 const LUMA_B = 0.114;
-const MAX_AUTO_MARKS = 36;
+const MAX_AUTO_MARKS = 64;
+const MAX_MARKS_PER_COMPONENT = 24;
 
 function lerp(start: number, end: number, amount: number) {
   return start + (end - start) * amount;
+}
+
+function evenlySubsample<T>(items: T[], maxCount: number): T[] {
+  if (items.length <= maxCount) {
+    return items;
+  }
+  const step = (items.length - 1) / (maxCount - 1);
+  const result: T[] = [];
+  for (let index = 0; index < maxCount; index += 1) {
+    result.push(items[Math.round(index * step)]);
+  }
+  return result;
 }
 
 function computeLuminance(data: Uint8ClampedArray, width: number, height: number) {
@@ -164,6 +177,58 @@ function dedupeMarks(marks: Array<DustMark & { score: number }>, diagonal: numbe
   }));
 }
 
+/**
+ * Orders component points by walking a nearest-neighbor chain from one extremity.
+ * This follows curved shapes naturally, unlike axis-aligned sorting.
+ */
+function orderPointsAlongCurve(points: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+  if (points.length <= 2) {
+    return points;
+  }
+
+  // Start from the point with the smallest coordinate sum (one extremity)
+  let startIndex = 0;
+  let minSum = Infinity;
+  for (let index = 0; index < points.length; index += 1) {
+    const sum = points[index].x + points[index].y;
+    if (sum < minSum) {
+      minSum = sum;
+      startIndex = index;
+    }
+  }
+
+  const ordered: Array<{ x: number; y: number }> = [];
+  const used = new Uint8Array(points.length);
+  let current = startIndex;
+
+  for (let step = 0; step < points.length; step += 1) {
+    ordered.push(points[current]);
+    used[current] = 1;
+
+    let bestDistance = Infinity;
+    let bestIndex = -1;
+    for (let index = 0; index < points.length; index += 1) {
+      if (used[index]) {
+        continue;
+      }
+      const dx = points[index].x - points[current].x;
+      const dy = points[index].y - points[current].y;
+      const distance = dx * dx + dy * dy;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    }
+
+    if (bestIndex === -1) {
+      break;
+    }
+    current = bestIndex;
+  }
+
+  return ordered;
+}
+
 function classifyAndBuildMarks(
   stats: ComponentStats,
   width: number,
@@ -186,14 +251,17 @@ function classifyAndBuildMarks(
   const canEmitSpots = mode === 'spots' || mode === 'both';
   const canEmitScratches = mode === 'scratches' || mode === 'both';
 
+  const spotMinArea = Math.round(lerp(8, 2, normalizedSensitivity));
+  const spotMeanMultiplier = lerp(2.5, 1.2, normalizedSensitivity);
+  const spotMaxMultiplier = lerp(3.0, 1.4, normalizedSensitivity);
   const isSpotCandidate = (
-    stats.area >= (normalizedSensitivity >= 0.8 ? 1 : (normalizedSensitivity >= 0.55 ? 2 : 3))
+    stats.area >= spotMinArea
     && stats.area <= Math.PI * maxRadius * maxRadius
     && aspectRatio <= 2.8
     && fillRatio >= 0.22
     && circularity >= 0.05
-    && meanDeviation > adaptiveThreshold * 1.08
-    && stats.maxDeviation > adaptiveThreshold * 1.25
+    && meanDeviation > adaptiveThreshold * spotMeanMultiplier
+    && stats.maxDeviation > adaptiveThreshold * spotMaxMultiplier
   );
 
   if (canEmitSpots && isSpotCandidate) {
@@ -212,72 +280,207 @@ function classifyAndBuildMarks(
 
   const longSide = Math.max(blobWidth, blobHeight);
   const shortSide = Math.min(blobWidth, blobHeight);
+
+  // Reject components running entirely within a narrow margin of a single image
+  // border — these are scanner edge artifacts, not real defects.
+  const borderMargin = Math.max(maxRadius * 2, 6);
+  const hugsBorder = (
+    stats.maxX < borderMargin
+    || stats.minX >= width - borderMargin
+    || stats.maxY < borderMargin
+    || stats.minY >= height - borderMargin
+  );
+
+  const linearMeanMultiplier = lerp(1.4, 0.6, normalizedSensitivity);
+  const linearMaxMultiplier = lerp(1.8, 0.85, normalizedSensitivity);
   const isScratchCandidate = (
     canEmitScratches
     && !stats.touchesBorder
+    && !hugsBorder
     && stats.area >= Math.max(4, Math.round(maxRadius))
     && aspectRatio >= 2
     && longSide >= Math.max(8, Math.round(maxRadius * 1.4))
     && shortSide <= Math.max(maxRadius * 1.2, 10)
     && fillRatio >= 0.04
     && fillRatio <= 0.55
-    && meanDeviation > adaptiveThreshold * 0.72
-    && stats.maxDeviation > adaptiveThreshold * 0.95
+    && meanDeviation > adaptiveThreshold * linearMeanMultiplier
+    && stats.maxDeviation > adaptiveThreshold * linearMaxMultiplier
   );
 
-  if (!isScratchCandidate) {
+  // Hair/fiber candidate: thin curving structures whose bounding box is too square
+  // for scratch classification. Detected by low average width (area / longest side).
+  // Hairs may touch image edges, but border-hugging artifacts are rejected above.
+  const averageWidth = stats.area / Math.max(longSide, 1);
+  const isHairCandidate = (
+    canEmitScratches
+    && !isSpotCandidate
+    && !hugsBorder
+    && stats.area >= Math.max(6, Math.round(maxRadius * 1.5))
+    && averageWidth <= Math.max(maxRadius * 0.8, 4)
+    && longSide >= Math.max(12, Math.round(maxRadius * 2))
+    && meanDeviation > adaptiveThreshold * linearMeanMultiplier
+    && stats.maxDeviation > adaptiveThreshold * linearMaxMultiplier
+  );
+
+  if (!isScratchCandidate && !isHairCandidate) {
     return marks;
   }
 
-  const horizontal = blobWidth >= blobHeight;
-  const sortedPoints = [...stats.points].sort((left, right) => (
-    horizontal ? left.x - right.x : left.y - right.y
-  ));
-  const sampleStep = Math.max(2, Math.round(Math.max(shortSide, maxRadius * 0.6)));
-  let bucketAnchor = horizontal ? sortedPoints[0]?.x ?? 0 : sortedPoints[0]?.y ?? 0;
-  let bucket: Array<{ x: number; y: number }> = [];
-  const bucketCenters: Array<{ x: number; y: number }> = [];
+  if (isScratchCandidate) {
+    // Straight scratch: bucket along dominant axis
+    const horizontal = blobWidth >= blobHeight;
+    const sortedPoints = [...stats.points].sort((left, right) => (
+      horizontal ? left.x - right.x : left.y - right.y
+    ));
+    const sampleStep = Math.max(2, Math.round(Math.max(shortSide, maxRadius * 0.6)));
+    let bucketAnchor = horizontal ? sortedPoints[0]?.x ?? 0 : sortedPoints[0]?.y ?? 0;
+    let bucket: Array<{ x: number; y: number }> = [];
+    const bucketCenters: Array<{ x: number; y: number }> = [];
 
-  const flushBucket = () => {
-    if (bucket.length === 0) {
-      return;
+    const flushBucket = () => {
+      if (bucket.length === 0) {
+        return;
+      }
+      const total = bucket.reduce((accumulator, point) => ({
+        x: accumulator.x + point.x,
+        y: accumulator.y + point.y,
+      }), { x: 0, y: 0 });
+      bucketCenters.push({
+        x: total.x / bucket.length,
+        y: total.y / bucket.length,
+      });
+      bucket = [];
+    };
+
+    for (const point of sortedPoints) {
+      const axisValue = horizontal ? point.x : point.y;
+      if (axisValue - bucketAnchor > sampleStep) {
+        flushBucket();
+        bucketAnchor = axisValue;
+      }
+      bucket.push(point);
     }
-    const total = bucket.reduce((accumulator, point) => ({
-      x: accumulator.x + point.x,
-      y: accumulator.y + point.y,
-    }), { x: 0, y: 0 });
-    bucketCenters.push({
-      x: total.x / bucket.length,
-      y: total.y / bucket.length,
-    });
-    bucket = [];
-  };
+    flushBucket();
 
-  for (const point of sortedPoints) {
-    const axisValue = horizontal ? point.x : point.y;
-    if (axisValue - bucketAnchor > sampleStep) {
-      flushBucket();
-      bucketAnchor = axisValue;
+    const scratchRadiusPx = clamp(Math.max(shortSide * 0.95, maxRadius * 0.55), 1.5, maxRadius * 1.15) * scale;
+    const score = meanDeviation * stats.area * 0.9;
+
+    // Evenly subsample if too many centers to prevent one component monopolizing the budget
+    const scratchCenters = evenlySubsample(bucketCenters, MAX_MARKS_PER_COMPONENT);
+    for (const center of scratchCenters) {
+      marks.push({
+        id: `dust-auto-${crypto.randomUUID()}`,
+        cx: clamp(((center.x + 0.5) * scale) / (width * scale), 0, 1),
+        cy: clamp(((center.y + 0.5) * scale) / (height * scale), 0, 1),
+        radius: clamp(scratchRadiusPx / diagonal, 0, 1),
+        source: 'auto',
+        score,
+      });
     }
-    bucket.push(point);
-  }
-  flushBucket();
+  } else {
+    // Curved hair/fiber: walk along the shape using nearest-neighbor chain,
+    // then emit marks at regular intervals along the path.
+    const orderedPoints = orderPointsAlongCurve(stats.points);
+    const stepPx = Math.max(3, Math.round(Math.max(averageWidth * 3, maxRadius * 0.8)));
+    let accumulated = 0;
+    let bucket: Array<{ x: number; y: number }> = [];
+    const bucketCenters: Array<{ x: number; y: number }> = [];
 
-  const scratchRadiusPx = clamp(Math.max(shortSide * 0.95, maxRadius * 0.55), 1.5, maxRadius * 1.15) * scale;
-  const score = meanDeviation * stats.area * 0.9;
+    const flushBucket = () => {
+      if (bucket.length === 0) {
+        return;
+      }
+      const total = bucket.reduce((accumulator, point) => ({
+        x: accumulator.x + point.x,
+        y: accumulator.y + point.y,
+      }), { x: 0, y: 0 });
+      bucketCenters.push({
+        x: total.x / bucket.length,
+        y: total.y / bucket.length,
+      });
+      bucket = [];
+    };
 
-  for (const center of bucketCenters) {
-    marks.push({
-      id: `dust-auto-${crypto.randomUUID()}`,
-      cx: clamp(((center.x + 0.5) * scale) / (width * scale), 0, 1),
-      cy: clamp(((center.y + 0.5) * scale) / (height * scale), 0, 1),
-      radius: clamp(scratchRadiusPx / diagonal, 0, 1),
-      source: 'auto',
-      score,
-    });
+    bucket.push(orderedPoints[0]);
+    for (let index = 1; index < orderedPoints.length; index += 1) {
+      const dx = orderedPoints[index].x - orderedPoints[index - 1].x;
+      const dy = orderedPoints[index].y - orderedPoints[index - 1].y;
+      accumulated += Math.sqrt(dx * dx + dy * dy);
+      bucket.push(orderedPoints[index]);
+      if (accumulated >= stepPx) {
+        flushBucket();
+        accumulated = 0;
+      }
+    }
+    flushBucket();
+
+    const hairRadiusPx = clamp(Math.max(averageWidth * 2.5, maxRadius * 0.6), 2.5, maxRadius * 1.5) * scale;
+    const score = meanDeviation * stats.area * 0.85;
+
+    const hairCenters = evenlySubsample(bucketCenters, MAX_MARKS_PER_COMPONENT);
+    for (const center of hairCenters) {
+      marks.push({
+        id: `dust-auto-${crypto.randomUUID()}`,
+        cx: clamp(((center.x + 0.5) * scale) / (width * scale), 0, 1),
+        cy: clamp(((center.y + 0.5) * scale) / (height * scale), 0, 1),
+        radius: clamp(hairRadiusPx / diagonal, 0, 1),
+        source: 'auto',
+        score,
+      });
+    }
   }
 
   return marks;
+}
+
+/**
+ * Computes adaptive threshold and binary mask for a single-polarity deviation map.
+ */
+function computeDeviationPass(
+  luminance: Float32Array,
+  blurred: Float32Array,
+  normalizedSensitivity: number,
+  mode: DustAutoDetectMode,
+  polarity: 'bright' | 'dark',
+) {
+  const length = luminance.length;
+  const deviations = new Float32Array(length);
+  const mask = new Uint8Array(length);
+
+  let deviationSum = 0;
+  for (let index = 0; index < length; index += 1) {
+    const raw = polarity === 'bright'
+      ? luminance[index] - blurred[index]
+      : blurred[index] - luminance[index];
+    const deviation = Math.max(0, raw);
+    deviations[index] = deviation;
+    deviationSum += deviation;
+  }
+
+  const deviationMean = length > 0 ? deviationSum / length : 0;
+  let deviationVariance = 0;
+  for (let index = 0; index < length; index += 1) {
+    const delta = deviations[index] - deviationMean;
+    deviationVariance += delta * delta;
+  }
+  const deviationStd = length > 0 ? Math.sqrt(deviationVariance / length) : 0;
+
+  const fixedFloor = lerp(0.06, 0.012, normalizedSensitivity);
+  const adaptiveThreshold = Math.max(
+    fixedFloor,
+    deviationMean + deviationStd * lerp(3.5, 0.8, normalizedSensitivity),
+  );
+
+  const binaryMultiplier = mode === 'spots'
+    ? 1.0
+    : lerp(0.9, 0.5, normalizedSensitivity);
+  const binaryThreshold = adaptiveThreshold * binaryMultiplier;
+
+  for (let index = 0; index < length; index += 1) {
+    mask[index] = deviations[index] > binaryThreshold ? 1 : 0;
+  }
+
+  return { deviations, mask, adaptiveThreshold };
 }
 
 function detectDustMarksAtScale(
@@ -289,38 +492,23 @@ function detectDustMarksAtScale(
 ) {
   const { width, height, data } = imageData;
   const normalizedSensitivity = clamp(sensitivity, 0, 100) / 100;
-  const threshold = lerp(0.22, 0.06, normalizedSensitivity);
-  const blurRadius = Math.max(1, Math.round(maxRadius * 2));
+  const blurRadius = Math.max(2, Math.round(maxRadius * 3.5));
   const luminance = computeLuminance(data, width, height);
   const blurred = boxBlur(luminance, width, height, blurRadius);
+
+  // Two independent passes: bright anomalies (dust holes) and dark anomalies (hairs/fibers).
+  // Each pass computes its own statistics and threshold so one polarity's noise
+  // doesn't inflate the other's baseline.
+  const bright = computeDeviationPass(luminance, blurred, normalizedSensitivity, mode, 'bright');
+  const dark = computeDeviationPass(luminance, blurred, normalizedSensitivity, mode, 'dark');
+
+  // Merge: use the higher deviation from either pass, and union the masks.
   const deviations = new Float32Array(luminance.length);
   const mask = new Uint8Array(luminance.length);
-
-  let deviationSum = 0;
+  const adaptiveThreshold = Math.min(bright.adaptiveThreshold, dark.adaptiveThreshold);
   for (let index = 0; index < luminance.length; index += 1) {
-    const deviation = Math.max(0, luminance[index] - blurred[index]);
-    deviations[index] = deviation;
-    deviationSum += deviation;
-  }
-
-  const deviationMean = deviations.length > 0 ? deviationSum / deviations.length : 0;
-  let deviationVariance = 0;
-  for (let index = 0; index < deviations.length; index += 1) {
-    const delta = deviations[index] - deviationMean;
-    deviationVariance += delta * delta;
-  }
-  const deviationStd = deviations.length > 0 ? Math.sqrt(deviationVariance / deviations.length) : 0;
-  const adaptiveThreshold = Math.max(
-    threshold,
-    deviationMean + deviationStd * lerp(2.1, 0.95, normalizedSensitivity),
-  );
-
-  const binaryThreshold = mode === 'spots'
-    ? adaptiveThreshold
-    : adaptiveThreshold * 0.55;
-
-  for (let index = 0; index < deviations.length; index += 1) {
-    mask[index] = deviations[index] > binaryThreshold ? 1 : 0;
+    deviations[index] = Math.max(bright.deviations[index], dark.deviations[index]);
+    mask[index] = (bright.mask[index] || dark.mask[index]) ? 1 : 0;
   }
 
   const visited = new Uint8Array(mask.length);
