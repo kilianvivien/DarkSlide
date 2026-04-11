@@ -10,17 +10,18 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
+## What's New in v0.8.0
+
+- **Film base preserved on profile switch** — switching film stock profiles no longer discards the scan's film base sample or resets the inversion method, so colors stay consistent as you browse profiles
+- **Improved density balance and base correction** — profile-based density balance is more accurate, especially for RAW imports with per-channel base estimation
+- **Redesigned Dust pane** — cleaner layout with improved repair quality
+- **Better dust & hair detection** — auto-marking is more reliable and visible in the viewer
+
 ## What's New in v0.7.2
 
 - **Improved auto-adjust for camera-scanned color negatives** — per-channel shadow floor correction clips and rescales haze rather than compressing it, preserving midtone brightness after auto-adjust
 - **Midtone lift curve in auto-adjust** — dense negatives now get an automatic RGB midtone boost (triggered when the post-inversion median is dark), preventing the "too dark after auto" problem on stocks like Ektar
 - **Default lab style setting** — `Settings > Calibration` has a new "Default Lab Style" dropdown so new imports start with your preferred style without manual selection
-
-## What's New in v0.7.1
-
-- **Advanced H&D inversion** — density-domain inversion path for supported color negatives, with a global default in `Settings > Color`
-- **Automatic film-base estimation** — DarkSlide samples image borders to estimate orange mask density and reuses that data across preview, export, batch, and contact sheet rendering
-- **Safer profile fallback behavior** — unsupported stocks stay on standard inversion, while supported built-in color-negative profiles include tuned advanced inversion metadata
 
 ## Features
 
