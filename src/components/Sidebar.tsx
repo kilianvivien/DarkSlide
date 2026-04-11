@@ -406,12 +406,12 @@ export const Sidebar = memo(function Sidebar({
         <Histogram data={histogramData} />
       </div>
 
-      <div className="flex px-6 pt-4 gap-4 shrink-0">
+      <div className="flex px-6 pt-4 justify-between shrink-0">
         {(['adjust', 'curves', 'crop', 'dust', 'export'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => onTabChange(tab)}
-            className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all ${
+            className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all shrink-0 ${
               activeTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
             }`}
           >

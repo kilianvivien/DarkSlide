@@ -135,79 +135,88 @@ function getBoundaryMean(samples: BoundarySample[]) {
   };
 }
 
-function getNearestBoundarySample(
-  samples: BoundarySample[],
-  x: number,
-  y: number,
-) {
-  let closestSample: BoundarySample | null = null;
-  let closestDistanceSquared = Number.POSITIVE_INFINITY;
-
-  for (const sample of samples) {
-    const dx = sample.x - x;
-    const dy = sample.y - y;
-    const distanceSquared = dx * dx + dy * dy;
-    if (distanceSquared < closestDistanceSquared) {
-      closestDistanceSquared = distanceSquared;
-      closestSample = sample;
-    }
-  }
-
-  if (!closestSample) {
-    return null;
-  }
-
-  return closestSample;
-}
-
-function selectTextureSample(
-  samples: BoundarySample[],
+/**
+ * Compute the mean color of a circular region in the image.
+ */
+function computePatchMean(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
   cx: number,
   cy: number,
-  x: number,
-  y: number,
-  salt: number,
-) {
-  if (samples.length === 0) {
-    return null;
-  }
+  radiusPx: number,
+): { r: number; g: number; b: number } | null {
+  const r = Math.ceil(radiusPx);
+  let totalR = 0, totalG = 0, totalB = 0, count = 0;
+  const rSq = radiusPx * radiusPx;
 
-  const baseAngle = Math.atan2(y - cy, x - cx);
-  const jitter = Math.sin((x * 12.9898 + y * 78.233 + salt * 37.719) * 0.0174533) * 0.45;
-  const targetAngle = baseAngle + jitter;
-  let bestSample: BoundarySample | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
-
-  for (const sample of samples) {
-    const sampleAngle = Math.atan2(sample.y - cy, sample.x - cx);
-    const angleDelta = Math.atan2(Math.sin(sampleAngle - targetAngle), Math.cos(sampleAngle - targetAngle));
-    const score = Math.abs(angleDelta) + (1 - sample.weight) * 0.35;
-    if (score < bestScore) {
-      bestScore = score;
-      bestSample = sample;
+  for (let dy = -r; dy <= r; dy += 2) {
+    for (let dx = -r; dx <= r; dx += 2) {
+      if (dx * dx + dy * dy > rSq) continue;
+      const px = Math.round(cx + dx);
+      const py = Math.round(cy + dy);
+      if (px < 0 || py < 0 || px >= width || py >= height) continue;
+      const idx = (py * width + px) * 4;
+      totalR += data[idx];
+      totalG += data[idx + 1];
+      totalB += data[idx + 2];
+      count++;
     }
   }
 
-  return bestSample;
+  if (count === 0) return null;
+  return { r: totalR / count, g: totalG / count, b: totalB / count };
 }
 
-function blendTextureSamples(samples: Array<BoundarySample | null>) {
-  const valid = samples.filter((sample): sample is BoundarySample => sample !== null);
-  if (valid.length === 0) {
-    return null;
+/**
+ * Find the best-matching patch offset from the original image.
+ * Searches candidate positions around the mark, scores by color similarity to the boundary mean,
+ * and returns the (dx, dy) offset to copy pixels from.
+ */
+function findBestPatch(
+  originalData: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  radiusPx: number,
+  boundaryMean: { r: number; g: number; b: number },
+): { dx: number; dy: number } {
+  const candidateAngles = 16;
+  const searchRadii = [radiusPx * 2.2, radiusPx * 3.0, radiusPx * 4.0];
+  let bestDx = 0;
+  let bestDy = 0;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const searchRadius of searchRadii) {
+    for (let i = 0; i < candidateAngles; i++) {
+      const angle = (i / candidateAngles) * TAU;
+      const dx = Math.round(Math.cos(angle) * searchRadius);
+      const dy = Math.round(Math.sin(angle) * searchRadius);
+      const pcx = cx + dx;
+      const pcy = cy + dy;
+
+      // Skip if patch center is outside image
+      if (pcx < 0 || pcy < 0 || pcx >= width || pcy >= height) continue;
+
+      const patchMean = computePatchMean(originalData, width, height, pcx, pcy, radiusPx);
+      if (!patchMean) continue;
+
+      const score = (
+        Math.abs(patchMean.r - boundaryMean.r)
+        + Math.abs(patchMean.g - boundaryMean.g)
+        + Math.abs(patchMean.b - boundaryMean.b)
+      );
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestDx = dx;
+        bestDy = dy;
+      }
+    }
   }
 
-  const totals = valid.reduce((accumulator, sample) => ({
-    r: accumulator.r + sample.r,
-    g: accumulator.g + sample.g,
-    b: accumulator.b + sample.b,
-  }), { r: 0, g: 0, b: 0 });
-
-  return {
-    r: totals.r / valid.length,
-    g: totals.g / valid.length,
-    b: totals.b / valid.length,
-  };
+  return { dx: bestDx, dy: bestDy };
 }
 
 export function applyDustRemoval(
@@ -223,13 +232,19 @@ export function applyDustRemoval(
   const diagonal = Math.hypot(width, height);
   const marks = sortMarksLargestFirst(resolved.marks);
 
+  // Snapshot of original pixels — used for boundary sampling and patch copying.
+  // This ensures overlapping marks don't contaminate each other's reference data,
+  // and that painting over a repaired area always compounds toward full repair.
+  const originalData = new Uint8ClampedArray(data);
+
   for (const mark of marks) {
-    const markSource = new Uint8ClampedArray(data);
     const radiusPx = Math.max(1, mark.radius * diagonal);
     const cx = clamp(mark.cx * width, 0, Math.max(width - 1, 0));
     const cy = clamp(mark.cy * height, 0, Math.max(height - 1, 0));
+
+    // Build boundary from original data so prior repairs don't contaminate the reference.
     const boundarySamples = filterBoundarySamples(
-      buildBoundarySamples(data, width, height, cx, cy, radiusPx),
+      buildBoundarySamples(originalData, width, height, cx, cy, radiusPx),
     );
     if (boundarySamples.length === 0) {
       continue;
@@ -238,7 +253,14 @@ export function applyDustRemoval(
     if (!boundaryMean) {
       continue;
     }
-    const markFeather = mark.source === 'manual' ? 0.42 : 0.5;
+
+    // Find the best nearby patch in original data and compute its mean.
+    const patch = findBestPatch(originalData, width, height, cx, cy, radiusPx, boundaryMean);
+    const patchMean = computePatchMean(
+      originalData, width, height, cx + patch.dx, cy + patch.dy, radiusPx,
+    );
+
+    const markFeather = mark.source === 'manual' ? 0.4 : 0.5;
     const markReach = mark.source === 'manual' ? 1.02 : 1.12;
     const padding = Math.ceil(radiusPx * (mark.source === 'manual' ? 1.12 : 1.35));
     const left = clamp(Math.floor(cx - padding), 0, Math.max(width - 1, 0));
@@ -257,60 +279,39 @@ export function applyDustRemoval(
           continue;
         }
 
+        const mask = Math.exp(-(distance * distance) / (2 * sigmaSquared));
+        const pixelIndex = (y * width + x) * 4;
+
+        // Low-frequency color target from boundary interpolation.
         const interpolated = interpolateBoundary(boundarySamples, x, y);
         if (!interpolated) {
           continue;
         }
 
-        const mask = Math.exp(-(distance * distance) / (2 * sigmaSquared));
-        const pixelIndex = (y * width + x) * 4;
-        const nearestSample = getNearestBoundarySample(boundarySamples, x, y);
-        const textureSampleA = selectTextureSample(boundarySamples, cx, cy, x, y, 1);
-        const textureSampleB = selectTextureSample(boundarySamples, cx, cy, x, y, 2);
-        const textureSampleC = selectTextureSample(boundarySamples, cx, cy, x, y, 3);
-        const textureSample = blendTextureSamples([nearestSample, textureSampleA, textureSampleB, textureSampleC]);
-        const textureResidual = textureSample && boundaryMean
-          ? {
-            r: textureSample.r - boundaryMean.r,
-            g: textureSample.g - boundaryMean.g,
-            b: textureSample.b - boundaryMean.b,
-          }
-          : { r: 0, g: 0, b: 0 };
-        const nearestResidual = nearestSample && boundaryMean
-          ? {
-            r: nearestSample.r - boundaryMean.r,
-            g: nearestSample.g - boundaryMean.g,
-            b: nearestSample.b - boundaryMean.b,
-          }
-          : { r: 0, g: 0, b: 0 };
-        const centerWeight = Math.max(0, 1 - distance / Math.max(radiusPx, 1));
-        const grainWeight = (mark.source === 'manual' ? 1.55 : 0.95) * mask * (0.65 + centerWeight * 0.7);
-        const localWeight = (mark.source === 'manual' ? 0.65 : 0.35) * mask;
-        const textureBias = textureSample
-          ? {
-            r: boundaryMean.r + textureResidual.r * grainWeight + nearestResidual.r * localWeight,
-            g: boundaryMean.g + textureResidual.g * grainWeight + nearestResidual.g * localWeight,
-            b: boundaryMean.b + textureResidual.b * grainWeight + nearestResidual.b * localWeight,
-          }
-          : interpolated;
-        const lowFrequencyMix = mark.source === 'manual' ? 0.35 : 0.7;
-        const reconstructed = {
-          r: interpolated.r * lowFrequencyMix + textureBias.r * (1 - lowFrequencyMix),
-          g: interpolated.g * lowFrequencyMix + textureBias.g * (1 - lowFrequencyMix),
-          b: interpolated.b * lowFrequencyMix + textureBias.b * (1 - lowFrequencyMix),
-        };
-        data[pixelIndex] = clamp(Math.round(
-          markSource[pixelIndex] * (1 - mask)
-          + reconstructed.r * mask,
-        ), 0, 255);
-        data[pixelIndex + 1] = clamp(Math.round(
-          markSource[pixelIndex + 1] * (1 - mask)
-          + reconstructed.g * mask,
-        ), 0, 255);
-        data[pixelIndex + 2] = clamp(Math.round(
-          markSource[pixelIndex + 2] * (1 - mask)
-          + reconstructed.b * mask,
-        ), 0, 255);
+        // Patch-copy synthesis: lift grain from the best nearby patch in the original image,
+        // then shift it to match the interpolated local color.
+        // reconstructed = interpolated_color + (patch_pixel - patch_mean)
+        const srcX = Math.round(x + patch.dx);
+        const srcY = Math.round(y + patch.dy);
+
+        let reconstructed: { r: number; g: number; b: number };
+
+        if (srcX >= 0 && srcY >= 0 && srcX < width && srcY < height && patchMean) {
+          const srcIdx = (srcY * width + srcX) * 4;
+          reconstructed = {
+            r: interpolated.r + (originalData[srcIdx]     - patchMean.r),
+            g: interpolated.g + (originalData[srcIdx + 1] - patchMean.g),
+            b: interpolated.b + (originalData[srcIdx + 2] - patchMean.b),
+          };
+        } else {
+          reconstructed = interpolated;
+        }
+
+        // Write to data (not originalData) so successive overlapping marks compound:
+        // each pass blends the current (progressively repaired) value further toward reconstructed.
+        data[pixelIndex]     = clamp(Math.round(data[pixelIndex]     * (1 - mask) + reconstructed.r * mask), 0, 255);
+        data[pixelIndex + 1] = clamp(Math.round(data[pixelIndex + 1] * (1 - mask) + reconstructed.g * mask), 0, 255);
+        data[pixelIndex + 2] = clamp(Math.round(data[pixelIndex + 2] * (1 - mask) + reconstructed.b * mask), 0, 255);
       }
     }
   }

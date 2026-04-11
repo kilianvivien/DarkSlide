@@ -237,35 +237,69 @@ export const DustOverlay = memo(function DustOverlay({
       onMouseLeave={() => setHoverPoint(null)}
       onContextMenu={handleOverlayContextMenu}
     >
+      {/* SVG layer — visuals only, no pointer events */}
+      <svg
+        className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+        viewBox="0 0 1 1"
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <filter id="dust-shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="0" stdDeviation="0.003" floodColor="rgba(0,0,0,0.6)" />
+          </filter>
+        </defs>
+        {transformedMarks.map((mark) => {
+          const isAuto = mark.source === 'auto';
+          return (
+            <circle
+              key={mark.id}
+              cx={mark.cx}
+              cy={mark.cy}
+              r={mark.radius}
+              fill="none"
+              stroke={isAuto ? 'rgba(125,211,252,0.7)' : 'rgba(252,165,165,0.8)'}
+              strokeWidth={isAuto ? '0.0012' : '0.0014'}
+              strokeDasharray={isAuto ? '0.008 0.005' : undefined}
+              vectorEffect="non-scaling-stroke"
+              filter="url(#dust-shadow)"
+            />
+          );
+        })}
+      </svg>
+
+      {/* Invisible hit targets for interaction */}
       {transformedMarks.map((mark) => (
         <button
           key={mark.id}
           type="button"
           onMouseDown={(event) => handleMarkMouseDown(event, mark)}
-          className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border ${
-            mark.source === 'auto'
-              ? 'border-sky-400/80 bg-sky-400/10 border-dashed'
-              : 'border-red-400/80 bg-red-400/10'
-          }`}
+          className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
           style={{
             left: `${mark.cx * 100}%`,
             top: `${mark.cy * 100}%`,
             width: `${mark.radius * 200}%`,
             height: `${mark.radius * 200}%`,
             pointerEvents: 'auto',
+            background: 'transparent',
+            border: 'none',
           }}
         />
       ))}
+
       {brushActive && hoverPoint && (
         <div
-          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-dotted border-red-300/90 bg-red-300/5"
+          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
           style={{
             left: `${hoverPoint.x * 100}%`,
             top: `${hoverPoint.y * 100}%`,
             width: `${currentBrushRadius * 200}%`,
             height: `${currentBrushRadius * 200}%`,
+            border: '1px solid rgba(255,255,255,0.8)',
+            boxShadow: '0 0 0 0.5px rgba(0,0,0,0.5)',
           }}
-        />
+        >
+          <div className="absolute left-1/2 top-1/2 h-[3px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/80" style={{ boxShadow: '0 0 0 0.5px rgba(0,0,0,0.5)' }} />
+        </div>
       )}
     </div>
   );
