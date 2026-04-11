@@ -17,12 +17,6 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **Redesigned Dust pane** — cleaner layout with improved repair quality
 - **Better dust & hair detection** — auto-marking is more reliable and visible in the viewer
 
-## What's New in v0.7.2
-
-- **Improved auto-adjust for camera-scanned color negatives** — per-channel shadow floor correction clips and rescales haze rather than compressing it, preserving midtone brightness after auto-adjust
-- **Midtone lift curve in auto-adjust** — dense negatives now get an automatic RGB midtone boost (triggered when the post-inversion median is dark), preventing the "too dark after auto" problem on stocks like Ektar
-- **Default lab style setting** — `Settings > Calibration` has a new "Default Lab Style" dropdown so new imports start with your preferred style without manual selection
-
 ## Features
 
 ### Convert & Edit
