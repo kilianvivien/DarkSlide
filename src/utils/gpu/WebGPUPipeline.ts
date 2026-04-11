@@ -4,6 +4,7 @@ import {
   ColorMatrix,
   ConversionSettings,
   CurvePoint,
+  DensityBalance,
   FilmBaseSample,
   FilmProfileType,
   MaskTuning,
@@ -524,6 +525,7 @@ export class WebGPUPipeline {
     filmType: FilmProfileType = 'negative',
     advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
+    estimatedDensityBalance?: DensityBalance | null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
@@ -582,6 +584,7 @@ export class WebGPUPipeline {
       filmType,
       advancedInversion,
       estimatedFilmBaseSample,
+      estimatedDensityBalance,
       flareFloor,
       lightSourceBias,
     );
@@ -725,6 +728,7 @@ export class WebGPUPipeline {
     filmType: FilmProfileType = 'negative',
     advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
+    estimatedDensityBalance?: DensityBalance | null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
@@ -751,6 +755,7 @@ export class WebGPUPipeline {
       filmType,
       advancedInversion,
       estimatedFilmBaseSample,
+      estimatedDensityBalance,
       flareFloor,
       lightSourceBias,
     );
@@ -775,6 +780,7 @@ export class WebGPUPipeline {
     filmType: FilmProfileType = 'negative',
     advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
+    estimatedDensityBalance?: DensityBalance | null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
@@ -797,6 +803,7 @@ export class WebGPUPipeline {
       filmType,
       advancedInversion,
       estimatedFilmBaseSample,
+      estimatedDensityBalance,
       flareFloor,
       lightSourceBias,
     );
@@ -890,6 +897,7 @@ export class WebGPUPipeline {
     filmType: FilmProfileType = 'negative',
     advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
+    estimatedDensityBalance?: DensityBalance | null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
   ) {
@@ -912,6 +920,7 @@ export class WebGPUPipeline {
       filmType,
       advancedInversion,
       estimatedFilmBaseSample,
+      estimatedDensityBalance,
       flareFloor,
       lightSourceBias,
     );

@@ -27,7 +27,6 @@ import {
   buildRawInitialSettings,
   createRawImportProfile,
   decodeDesktopRawForWorker,
-  estimateFilmBaseSample,
   rotationFromExifOrientation,
 } from '../utils/rawImport';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
@@ -227,6 +226,7 @@ export function useFileImport({
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
       estimatedFlare: null,
       estimatedFilmBaseSample: null,
+      estimatedDensityBalance: null,
       lightSourceId: null,
       cropSource: null,
       profileId: initialProfile.id,
@@ -271,13 +271,14 @@ export function useFileImport({
             path: nativePath!,
             size: sourceFileSize,
           });
-          const estimatedFilmBase = estimateFilmBaseSample(rawResult.data, rawResult.width, rawResult.height);
+          const estimatedFilmBase = decodeRequest.precomputedFilmBaseSample ?? null;
           initialSettings = createDefaultSettings(buildRawInitialSettings(
             initialProfile.defaultSettings,
             rawResult.data,
             rawResult.width,
             rawResult.height,
             rawResult.orientation,
+            estimatedFilmBase,
           ));
           initialSettings = {
             ...initialSettings,
@@ -293,6 +294,16 @@ export function useFileImport({
               level: 'info',
               code: 'RAW_FILM_BASE_ESTIMATED',
               message: `${estimatedFilmBase.r}/${estimatedFilmBase.g}/${estimatedFilmBase.b}`,
+              context: {
+                documentId,
+                fileName: file.name,
+              },
+            });
+          } else {
+            appendDiagnostic({
+              level: 'info',
+              code: 'RAW_FILM_BASE_ESTIMATION_FAILED',
+              message: file.name,
               context: {
                 documentId,
                 fileName: file.name,
@@ -381,6 +392,13 @@ export function useFileImport({
         return null;
       }
 
+      if (rawImport && initialSettings.inversionMethod !== 'advanced-hd' && !initialSettings.filmBaseSample && decoded.estimatedFilmBaseSample) {
+        initialSettings = {
+          ...initialSettings,
+          filmBaseSample: structuredClone(decoded.estimatedFilmBaseSample),
+        };
+      }
+
       const savedExportOptions = parsedPrefs?.exportOptions;
       const savedLightSourceId = typeof window !== 'undefined'
         ? window.localStorage.getItem('darkslide_default_light_source')
@@ -432,6 +450,7 @@ export function useFileImport({
         }),
         estimatedFlare: decoded.estimatedFlare,
         estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
+        estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
         lightSourceId: resolveLightSourceIdForProfile(resolvedProfile, savedLightSourceId),
         cropSource: null,
         rawImportProfile,

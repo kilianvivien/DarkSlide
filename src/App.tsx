@@ -1223,6 +1223,7 @@ export default function App() {
         isColor,
         filmType,
         advancedInversion,
+        estimatedDensityBalance: documentState?.estimatedDensityBalance ?? null,
         inputProfileId,
         outputProfileId,
         revision,

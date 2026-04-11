@@ -79,6 +79,13 @@ export interface FilmBaseSample {
   b: number;
 }
 
+export interface DensityBalance {
+  scaleR: number;
+  scaleG: number;
+  scaleB: number;
+  source: 'auto-histogram' | 'film-stock-preset' | 'manual';
+}
+
 export type PointPickerMode = 'black' | 'white' | 'grey';
 
 export type ColorMatrix = [
@@ -328,6 +335,7 @@ export interface DecodedImage {
   previewLevels: PreviewLevel[];
   estimatedFlare?: [number, number, number] | null;
   estimatedFilmBaseSample?: FilmBaseSample | null;
+  estimatedDensityBalance?: DensityBalance | null;
 }
 
 export interface RawDecodeResult {
@@ -347,6 +355,7 @@ export interface WorkspaceDocument {
   colorManagement: ColorManagementSettings;
   estimatedFlare?: [number, number, number] | null;
   estimatedFilmBaseSample?: FilmBaseSample | null;
+  estimatedDensityBalance?: DensityBalance | null;
   lightSourceId?: string | null;
   cropSource?: CropSource | null;
   rawImportProfile?: FilmProfile | null;
@@ -385,6 +394,7 @@ export interface DecodeRequest {
   size: number;
   displayScaleFactor?: number;
   rawDimensions?: { width: number; height: number };
+  precomputedFilmBaseSample?: FilmBaseSample | null;
   declaredColorProfileName?: string | null;
   declaredColorProfileId?: ColorProfileId | null;
 }
@@ -396,6 +406,7 @@ export interface RenderRequest {
   filmType?: FilmProfileType;
   advancedInversion?: AdvancedInversionProfile | null;
   estimatedFilmBaseSample?: FilmBaseSample | null;
+  estimatedDensityBalance?: DensityBalance | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   revision: number;
@@ -447,6 +458,7 @@ export interface ExportRequest {
   isColor: boolean;
   filmType?: FilmProfileType;
   advancedInversion?: AdvancedInversionProfile | null;
+  estimatedDensityBalance?: DensityBalance | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   options: ExportOptions;

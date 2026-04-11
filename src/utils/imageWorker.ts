@@ -10,6 +10,7 @@ import {
   ContactSheetResult,
   ConversionSettings,
   DecodeRequest,
+  DensityBalance,
   DecodedImage,
   DustDetectRequest,
   ExportRequest,
@@ -36,6 +37,7 @@ import {
   applyLightSourceCorrection,
   assertSupportedDimensions,
   buildEmptyHistogram,
+  computeDensityBalance,
   computeHighlightDensity,
   getExtensionFromFormat,
   getFilmBaseBalance,
@@ -83,6 +85,7 @@ interface StoredDocument {
   rotationCache: Map<string, OffscreenCanvas>;
   cropCache: Map<string, StoredTileJob>;
   estimatedFilmBaseSample: FilmBaseSample | null;
+  estimatedDensityBalance: DensityBalance | null;
   lastAccessedAt: number;
 }
 
@@ -200,6 +203,20 @@ function estimateCanvasFilmBase(canvas: OffscreenCanvas) {
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   return estimateFilmBaseSampleFromRgba(imageData.data, canvas.width, canvas.height);
+}
+
+function estimateCanvasDensityBalance(canvas: OffscreenCanvas, filmBaseSample: FilmBaseSample | null) {
+  if (!filmBaseSample) {
+    return null;
+  }
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    return null;
+  }
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return computeDensityBalance(imageData, filmBaseSample);
 }
 
 function decodeTiff(buffer: ArrayBuffer) {
@@ -785,7 +802,8 @@ async function handleDecode(payload: DecodeRequest) {
     assertSupportedDimensions(canvas.width, canvas.height);
 
     const previewStore = buildPreviewLevels(canvas, payload.displayScaleFactor);
-    const estimatedFilmBaseSample = estimateCanvasFilmBase(canvas);
+    const estimatedFilmBaseSample = payload.precomputedFilmBaseSample ?? estimateCanvasFilmBase(canvas);
+    const estimatedDensityBalance = estimateCanvasDensityBalance(canvas, estimatedFilmBaseSample);
     const metadata: SourceMetadata = {
       id: payload.documentId,
       name: payload.fileName,
@@ -803,6 +821,7 @@ async function handleDecode(payload: DecodeRequest) {
       rotationCache: new Map(),
       cropCache: new Map(),
       estimatedFilmBaseSample,
+      estimatedDensityBalance,
       lastAccessedAt: Date.now(),
     });
 
@@ -813,6 +832,7 @@ async function handleDecode(payload: DecodeRequest) {
       previewLevels: previewStore.map((preview) => preview.level),
       estimatedFlare,
       estimatedFilmBaseSample,
+      estimatedDensityBalance,
     } satisfies DecodedImage;
   }
 
@@ -864,6 +884,7 @@ async function handleDecode(payload: DecodeRequest) {
 
   const previewStore = buildPreviewLevels(decodedCanvas, payload.displayScaleFactor);
   const estimatedFilmBaseSample = estimateCanvasFilmBase(decodedCanvas);
+  const estimatedDensityBalance = estimateCanvasDensityBalance(decodedCanvas, estimatedFilmBaseSample);
   const decoderColorProfileId = payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName);
   const declaredUnsupportedColorProfileName = payload.declaredColorProfileName && !decoderColorProfileId
     ? payload.declaredColorProfileName
@@ -891,6 +912,7 @@ async function handleDecode(payload: DecodeRequest) {
     rotationCache: new Map(),
     cropCache: new Map(),
     estimatedFilmBaseSample,
+    estimatedDensityBalance,
     lastAccessedAt: Date.now(),
   });
 
@@ -901,6 +923,7 @@ async function handleDecode(payload: DecodeRequest) {
     previewLevels: previewStore.map((preview) => preview.level),
     estimatedFlare,
     estimatedFilmBaseSample,
+    estimatedDensityBalance,
   } satisfies DecodedImage;
 }
 
@@ -1082,6 +1105,7 @@ function applyAutoWhiteBalanceAnalysisStage(
   imageData: ImageData,
   payload: AutoAnalyzeRequest,
   estimatedFilmBaseSample: FilmBaseSample | null,
+  estimatedDensityBalance: DensityBalance | null,
 ) {
   applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
@@ -1096,6 +1120,7 @@ function applyAutoWhiteBalanceAnalysisStage(
     filmType,
     payload.advancedInversion ?? null,
     estimatedFilmBaseSample,
+    estimatedDensityBalance,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     lightSourceBias as [number, number, number],
@@ -1115,16 +1140,19 @@ function applyAutoWhiteBalanceAnalysisStage(
         r,
         advancedHd.baseDensity[0],
         advancedHd.gamma[0],
+        advancedHd.densityBalance?.scaleR ?? 1,
       ) * payload.settings.redBalance;
       g = applyAdvancedHdInversion(
         g,
         advancedHd.baseDensity[1],
         advancedHd.gamma[1],
+        advancedHd.densityBalance?.scaleG ?? 1,
       ) * payload.settings.greenBalance;
       b = applyAdvancedHdInversion(
         b,
         advancedHd.baseDensity[2],
         advancedHd.gamma[2],
+        advancedHd.densityBalance?.scaleB ?? 1,
       ) * payload.settings.blueBalance;
     } else {
       if (filmType !== 'slide') {
@@ -1174,12 +1202,18 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.filmType ?? 'negative',
     payload.advancedInversion ?? null,
     document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
 
   const whiteBalanceImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  applyAutoWhiteBalanceAnalysisStage(whiteBalanceImageData, payload, document.estimatedFilmBaseSample);
+  applyAutoWhiteBalanceAnalysisStage(
+    whiteBalanceImageData,
+    payload,
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
+  );
 
   const isColorNegative = payload.isColor && (payload.filmType ?? 'negative') === 'negative';
   const channelFloors = analyzeChannelFloors(whiteBalanceImageData);
@@ -1236,6 +1270,7 @@ function handleRender(payload: RenderRequest) {
       payload.filmType ?? 'negative',
       payload.advancedInversion ?? null,
       document.estimatedFilmBaseSample,
+      payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
     );
@@ -1309,6 +1344,7 @@ async function handleExport(payload: ExportRequest) {
     payload.filmType ?? 'negative',
     payload.advancedInversion ?? null,
     document.estimatedFilmBaseSample,
+    payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
   );
@@ -1401,6 +1437,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       profile.filmType ?? 'negative',
       profile.advancedInversion ?? null,
       payload.estimatedFilmBaseSamplePerCell?.[index] ?? document.estimatedFilmBaseSample,
+      document.estimatedDensityBalance,
       payload.flareFloorPerCell?.[index] ?? null,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
     );

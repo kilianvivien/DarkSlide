@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
 import { convertRgbBetweenProfiles } from './colorProfiles';
-import { ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET, ADVANCED_HD_BLUE_GAMMA_SCALE, buildProcessingUniforms, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, resolveAdvancedHdParameters, rotateCropClockwise } from './imagePipeline';
+import { ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET, ADVANCED_HD_BLUE_GAMMA_SCALE, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, resolveAdvancedHdParameters, rotateCropClockwise } from './imagePipeline';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -149,6 +149,7 @@ describe('buildProcessingUniforms', () => {
       'negative',
       profile?.advancedInversion,
       { r: 200, g: 180, b: 150 },
+      { scaleR: 1.1, scaleG: 1, scaleB: 0.65, source: 'auto-histogram' },
     );
 
     expect(uniforms[68]).toBe(1);
@@ -158,6 +159,33 @@ describe('buildProcessingUniforms', () => {
     expect(uniforms[72]).toBeGreaterThan(0);
     expect(uniforms[73]).toBeGreaterThan(0);
     expect(uniforms[74]).toBeGreaterThan(0);
+    expect(uniforms[75]).toBe(1);
+    expect(uniforms[76]).toBeCloseTo(1.1, 5);
+    expect(uniforms[77]).toBeCloseTo(1, 5);
+    expect(uniforms[78]).toBeCloseTo(0.65, 5);
+  });
+});
+
+describe('computeDensityBalance', () => {
+  it('computes per-channel scales from midtone densities', () => {
+    const imageData = createGrid(12, [
+      [210, 180, 120],
+      [195, 170, 115],
+      [180, 160, 110],
+      [165, 150, 105],
+      [150, 140, 100],
+      [135, 128, 96],
+    ]);
+
+    const balance = computeDensityBalance(imageData, { r: 240, g: 210, b: 150 });
+
+    expect(balance.source).toBe('auto-histogram');
+    expect(balance.scaleG).toBe(1);
+    expect(balance.scaleR).toBeGreaterThan(0.4);
+    expect(balance.scaleR).toBeLessThan(2);
+    expect(balance.scaleB).toBeGreaterThan(0.4);
+    expect(balance.scaleB).toBeLessThan(2);
+    expect(balance.scaleB).toBeLessThan(balance.scaleR);
   });
 });
 
@@ -172,9 +200,11 @@ describe('advanced H&D inversion', () => {
       'negative',
       profile?.advancedInversion,
       { r: 200, g: 180, b: 150 },
+      { scaleR: 1.05, scaleG: 1, scaleB: 0.62, source: 'auto-histogram' },
     );
 
     expect(params.enabled).toBe(true);
+    expect(params.densityBalance).toEqual({ scaleR: 1.05, scaleG: 1, scaleB: 0.62, source: 'auto-histogram' });
     expect(params.baseDensity[0]).toBeGreaterThan(0);
     expect(params.baseDensity).not.toEqual(profile!.advancedInversion!.baseDensityFallback);
     expect(params.gamma[2]).toBeCloseTo(profile!.advancedInversion!.gamma[2] * ADVANCED_HD_BLUE_GAMMA_SCALE, 5);
@@ -192,6 +222,7 @@ describe('advanced H&D inversion', () => {
       'negative',
       profile?.advancedInversion,
       estimatedFilmBaseSample,
+      null,
       'adobe-rgb',
       'srgb',
     );
@@ -223,6 +254,7 @@ describe('advanced H&D inversion', () => {
       'negative',
       profile?.advancedInversion,
       null,
+      null,
     );
 
     expect(params.enabled).toBe(true);
@@ -243,6 +275,7 @@ describe('advanced H&D inversion', () => {
       'negative',
       profile?.advancedInversion,
       { r: 200, g: 180, b: 150 },
+      { scaleR: 1.08, scaleG: 1, scaleB: 0.61, source: 'auto-histogram' },
     );
 
     expect(params.enabled).toBe(true);
@@ -260,12 +293,14 @@ describe('advanced H&D inversion', () => {
       'slide',
       profile?.advancedInversion,
       { r: 200, g: 180, b: 150 },
+      { scaleR: 1.08, scaleG: 1, scaleB: 0.61, source: 'auto-histogram' },
     );
 
     expect(params).toEqual({
       enabled: false,
       gamma: [0, 0, 0],
       baseDensity: [0, 0, 0],
+      densityBalance: null,
       baseSampleSource: null,
     });
   });

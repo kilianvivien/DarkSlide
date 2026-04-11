@@ -18,6 +18,13 @@ function createRawRgb(width: number, height: number, border: [number, number, nu
   return data;
 }
 
+function setRgbPixel(data: Uint8Array, width: number, x: number, y: number, pixel: [number, number, number]) {
+  const index = (y * width + x) * 3;
+  data[index] = pixel[0];
+  data[index + 1] = pixel[1];
+  data[index + 2] = pixel[2];
+}
+
 describe('rawImport', () => {
   it('estimates the film base from bright border pixels', () => {
     const rgb = createRawRgb(64, 48, [168, 151, 134], [40, 60, 120]);
@@ -33,6 +40,45 @@ describe('rawImport', () => {
     const rgba = rgbToRgba(createRawRgb(64, 48, [168, 151, 134], [40, 60, 120]), 64, 48);
 
     expect(estimateFilmBaseSampleFromRgba(rgba, 64, 48)).toEqual({
+      r: 168,
+      g: 151,
+      b: 134,
+    });
+  });
+
+  it('ignores bright border outliers when estimating the film base', () => {
+    const clean = createRawRgb(128, 96, [168, 151, 134], [40, 60, 120]);
+    const withOutlier = clean.slice();
+
+    for (let y = 0; y < 16; y += 1) {
+      for (let x = 0; x < 16; x += 1) {
+        setRgbPixel(withOutlier, 128, x, y, [255, 255, 255]);
+      }
+    }
+
+    expect(estimateFilmBaseSample(clean, 128, 96)).toEqual({
+      r: 168,
+      g: 151,
+      b: 134,
+    });
+    expect(estimateFilmBaseSample(withOutlier, 128, 96)).toEqual({
+      r: 168,
+      g: 151,
+      b: 134,
+    });
+  });
+
+  it('still finds the bright film base when much of the border is dark carrier', () => {
+    const rgb = createRawRgb(128, 96, [168, 151, 134], [40, 60, 120]);
+
+    for (let y = 0; y < 96; y += 1) {
+      for (let x = 0; x < 10; x += 1) {
+        setRgbPixel(rgb, 128, x, y, [8, 8, 8]);
+        setRgbPixel(rgb, 128, 127 - x, y, [8, 8, 8]);
+      }
+    }
+
+    expect(estimateFilmBaseSample(rgb, 128, 96)).toEqual({
       r: 168,
       g: 151,
       b: 134,
@@ -114,9 +160,9 @@ describe('rawImport', () => {
 
   it('builds a worker decode request from RAW decoder output', () => {
     const rawResult = {
-      width: 2,
-      height: 1,
-      data: new Uint8Array([10, 20, 30, 40, 50, 60]),
+      width: 64,
+      height: 48,
+      data: createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]),
       color_space: 'Adobe RGB (1998)',
     };
 
@@ -128,13 +174,18 @@ describe('rawImport', () => {
       mime: 'image/x-raw-rgba',
       size: 1234,
       rawDimensions: {
-        width: 2,
-        height: 1,
+        width: 64,
+        height: 48,
       },
       declaredColorProfileName: 'Adobe RGB (1998)',
       declaredColorProfileId: 'adobe-rgb',
+      precomputedFilmBaseSample: {
+        r: 160,
+        g: 150,
+        b: 140,
+      },
     });
-    expect(Array.from(new Uint8Array(request.buffer))).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
+    expect(Array.from(new Uint8Array(request.buffer).slice(0, 8))).toEqual([160, 150, 140, 255, 160, 150, 140, 255]);
   });
 
   it('expands RGB RAW pixels to RGBA for the worker', () => {

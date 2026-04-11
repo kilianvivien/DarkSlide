@@ -54,6 +54,8 @@ export function createWorkerDecodeRequestFromRaw(
   size: number,
   rawResult: RawDecodeResult,
 ): DecodeRequest {
+  const precomputedFilmBaseSample = estimateFilmBaseSample(rawResult.data, rawResult.width, rawResult.height);
+
   return {
     documentId,
     buffer: rgbToRgba(rawResult.data, rawResult.width, rawResult.height).buffer,
@@ -64,6 +66,7 @@ export function createWorkerDecodeRequestFromRaw(
       width: rawResult.width,
       height: rawResult.height,
     },
+    precomputedFilmBaseSample,
     declaredColorProfileName: rawResult.color_space,
     declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
   };
@@ -94,6 +97,10 @@ function estimateFilmBaseSampleWithStride(
     return null;
   }
 
+  const BIN_COUNT = 64;
+  const BIN_WIDTH = 256 / BIN_COUNT;
+  const CLUSTER_RADIUS = 10;
+  const MIN_CLUSTER_SIZE = 12;
   const borderThickness = Math.max(8, Math.min(160, Math.round(Math.min(width, height) * 0.03)));
   const borderPixels = width * borderThickness * 2 + Math.max(0, height - borderThickness * 2) * borderThickness * 2;
   const step = Math.max(1, Math.round(Math.sqrt(borderPixels / 4096)));
@@ -130,39 +137,60 @@ function estimateFilmBaseSampleWithStride(
     return null;
   }
 
-  samples.sort((left, right) => right.lum - left.lum);
-  const takeCount = Math.max(24, Math.min(256, Math.round(samples.length * 0.12)));
-  const topSamples = samples.slice(0, takeCount);
+  const candidateSamples = [...samples]
+    .sort((left, right) => right.lum - left.lum)
+    .slice(0, Math.max(24, Math.min(512, Math.round(samples.length * 0.2))));
+  const result = { r: 0, g: 0, b: 0 } satisfies FilmBaseSample;
 
-  const sums = topSamples.reduce((acc, sample) => ({
-    r: acc.r + sample.r,
-    g: acc.g + sample.g,
-    b: acc.b + sample.b,
-  }), { r: 0, g: 0, b: 0 });
+  for (const channel of ['r', 'g', 'b'] as const) {
+    const bins = new Uint32Array(BIN_COUNT);
+    for (const sample of candidateSamples) {
+      const bin = Math.min(BIN_COUNT - 1, Math.floor(sample[channel] / BIN_WIDTH));
+      bins[bin] += 1;
+    }
 
-  const average = {
-    r: sums.r / topSamples.length,
-    g: sums.g / topSamples.length,
-    b: sums.b / topSamples.length,
-  };
+    let modeBin = 0;
+    for (let index = 1; index < BIN_COUNT; index += 1) {
+      if (bins[index] > bins[modeBin]) {
+        modeBin = index;
+      }
+    }
 
-  const averageDeviation = topSamples.reduce((acc, sample) => (
-    acc + (
-      Math.abs(sample.r - average.r)
-      + Math.abs(sample.g - average.g)
-      + Math.abs(sample.b - average.b)
-    ) / 3
-  ), 0) / topSamples.length;
+    const modeCenter = (modeBin + 0.5) * BIN_WIDTH;
+    let sum = 0;
+    let count = 0;
 
-  if (averageDeviation > 24) {
+    for (const sample of candidateSamples) {
+      if (Math.abs(sample[channel] - modeCenter) <= CLUSTER_RADIUS) {
+        sum += sample[channel];
+        count += 1;
+      }
+    }
+
+    if (count < MIN_CLUSTER_SIZE) {
+      const takeCount = Math.max(24, Math.min(256, Math.round(samples.length * 0.12)));
+      const topSamples = [...samples].sort((left, right) => right.lum - left.lum).slice(0, takeCount);
+      const sums = topSamples.reduce((acc, sample) => ({
+        r: acc.r + sample.r,
+        g: acc.g + sample.g,
+        b: acc.b + sample.b,
+      }), { r: 0, g: 0, b: 0 });
+
+      return {
+        r: clamp(Math.round(sums.r / topSamples.length), 1, 255),
+        g: clamp(Math.round(sums.g / topSamples.length), 1, 255),
+        b: clamp(Math.round(sums.b / topSamples.length), 1, 255),
+      };
+    }
+
+    result[channel] = clamp(Math.round(sum / count), 1, 255);
+  }
+
+  if (Math.min(result.r, result.g, result.b) < 5) {
     return null;
   }
 
-  return {
-    r: clamp(Math.round(average.r), 1, 255),
-    g: clamp(Math.round(average.g), 1, 255),
-    b: clamp(Math.round(average.b), 1, 255),
-  };
+  return result;
 }
 
 export function estimateFilmBaseSample(rgb: ArrayLike<number>, width: number, height: number): FilmBaseSample | null {
@@ -218,12 +246,11 @@ export function buildRawInitialSettings(
   width: number,
   height: number,
   orientation: number | null | undefined,
+  estimatedFilmBaseSample: FilmBaseSample | null = estimateFilmBaseSample(rgb, width, height),
 ) {
-  const estimatedFilmBase = estimateFilmBaseSample(rgb, width, height);
-
   return {
     ...structuredClone(baseSettings),
-    filmBaseSample: baseSettings.inversionMethod === 'advanced-hd' ? null : estimatedFilmBase,
+    filmBaseSample: baseSettings.inversionMethod === 'advanced-hd' ? null : estimatedFilmBaseSample,
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
 }
