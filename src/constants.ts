@@ -1,4 +1,5 @@
-import { AdvancedInversionProfile, ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, DensityBalance, DustRemovalSettings, ExportOptions, FilmProfile, InversionMethod, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
+import { AdvancedInversionProfile, ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, DensityBalance, DustMark, DustRemovalSettings, ExportOptions, FilmProfile, InversionMethod, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
+import { clamp } from './utils/math';
 
 const DEFAULT_CROP: CropSettings = {
   x: 0,
@@ -24,6 +25,49 @@ export const DEFAULT_DUST_REMOVAL: DustRemovalSettings = {
   marks: [],
 };
 
+function normalizeDustMark(mark: DustMark | (Partial<DustMark> & Record<string, unknown>)): DustMark | null {
+  const source = mark.source === 'auto' ? 'auto' : 'manual';
+  const kind = mark.kind === 'path' ? 'path' : 'spot';
+
+  if (kind === 'path') {
+    const rawPoints = 'points' in mark && Array.isArray(mark.points) ? mark.points : [];
+    const points = rawPoints
+      .map((point: unknown) => {
+        const candidate = point as { x?: number; y?: number } | null;
+        return {
+          x: clamp(Number(candidate?.x ?? 0), 0, 1),
+          y: clamp(Number(candidate?.y ?? 0), 0, 1),
+        };
+      })
+      .filter((point, index, all) => (
+          index === 0
+          || point.x !== all[index - 1].x
+          || point.y !== all[index - 1].y
+      ));
+
+    if (points.length < 2) {
+      return null;
+    }
+
+    return {
+      id: String(mark.id ?? `dust-path-${crypto.randomUUID()}`),
+      kind: 'path',
+      points,
+      radius: clamp(Number(mark.radius ?? 0), 0, 1),
+      source,
+    };
+  }
+
+  return {
+    id: String(mark.id ?? `dust-spot-${crypto.randomUUID()}`),
+    kind: 'spot',
+    cx: clamp(Number(('cx' in mark ? mark.cx : 0) ?? 0), 0, 1),
+    cy: clamp(Number(('cy' in mark ? mark.cy : 0) ?? 0), 0, 1),
+    radius: clamp(Number(mark.radius ?? 0), 0, 1),
+    source,
+  };
+}
+
 export function resolveDustRemovalSettings(dustRemoval?: Partial<DustRemovalSettings> | null): DustRemovalSettings {
   return {
     autoEnabled: dustRemoval?.autoEnabled ?? DEFAULT_DUST_REMOVAL.autoEnabled,
@@ -31,7 +75,9 @@ export function resolveDustRemovalSettings(dustRemoval?: Partial<DustRemovalSett
     autoSensitivity: dustRemoval?.autoSensitivity ?? DEFAULT_DUST_REMOVAL.autoSensitivity,
     autoMaxRadius: dustRemoval?.autoMaxRadius ?? DEFAULT_DUST_REMOVAL.autoMaxRadius,
     manualBrushRadius: dustRemoval?.manualBrushRadius ?? DEFAULT_DUST_REMOVAL.manualBrushRadius,
-    marks: structuredClone(dustRemoval?.marks ?? DEFAULT_DUST_REMOVAL.marks),
+    marks: (dustRemoval?.marks ?? DEFAULT_DUST_REMOVAL.marks)
+      .map((mark) => normalizeDustMark(mark))
+      .filter((mark): mark is DustMark => mark !== null),
   };
 }
 

@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ConversionSettings, DustMark } from '../types';
+import { ConversionSettings, DustMark, PathDustMark } from '../types';
 import { getDustGeometry, projectDustMarkFromTransformedSpace, projectDustMarksToTransformedSpace } from '../utils/dustGeometry';
 
 interface DustOverlayProps {
@@ -9,6 +9,8 @@ interface DustOverlayProps {
   brushActive: boolean;
   marks: DustMark[];
   manualBrushRadiusPx: number;
+  selectedMarkId: string | null;
+  onSelectedMarkIdChange: (markId: string | null) => void;
   onChange: (marks: DustMark[]) => void;
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
@@ -18,6 +20,48 @@ type DragState =
   | { mode: 'paint' }
   | { mode: 'move'; markId: string };
 
+function distancePointToSegment(
+  pointX: number,
+  pointY: number,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+) {
+  const dx = endX - startX;
+  const dy = endY - startY;
+  if (dx === 0 && dy === 0) {
+    return Math.hypot(pointX - startX, pointY - startY);
+  }
+
+  const t = Math.max(0, Math.min(1, ((pointX - startX) * dx + (pointY - startY) * dy) / (dx * dx + dy * dy)));
+  const projX = startX + dx * t;
+  const projY = startY + dy * t;
+  return Math.hypot(pointX - projX, pointY - projY);
+}
+
+function distancePointToPath(point: { x: number; y: number }, mark: PathDustMark) {
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < mark.points.length; index += 1) {
+    bestDistance = Math.min(
+      bestDistance,
+      distancePointToSegment(
+        point.x,
+        point.y,
+        mark.points[index - 1].x,
+        mark.points[index - 1].y,
+        mark.points[index].x,
+        mark.points[index].y,
+      ),
+    );
+  }
+  return bestDistance;
+}
+
+function buildPath(mark: PathDustMark) {
+  return mark.points.map((point) => `${point.x},${point.y}`).join(' ');
+}
+
 export const DustOverlay = memo(function DustOverlay({
   settings,
   sourceWidth,
@@ -25,6 +69,8 @@ export const DustOverlay = memo(function DustOverlay({
   brushActive,
   marks,
   manualBrushRadiusPx,
+  selectedMarkId,
+  onSelectedMarkIdChange,
   onChange,
   onInteractionStart,
   onInteractionEnd,
@@ -35,6 +81,7 @@ export const DustOverlay = memo(function DustOverlay({
   const dragStateRef = useRef<DragState | null>(null);
   const lastPaintPointRef = useRef<{ x: number; y: number } | null>(null);
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null);
+  const [hoveredMarkId, setHoveredMarkId] = useState<string | null>(null);
   const transformedMarks = useMemo(
     () => projectDustMarksToTransformedSpace(marks, settings, sourceWidth, sourceHeight),
     [marks, settings, sourceHeight, sourceWidth],
@@ -56,6 +103,8 @@ export const DustOverlay = memo(function DustOverlay({
     }
   }, [onChange]);
 
+  const getLatestMarks = useCallback(() => pendingMarksRef.current ?? marks, [marks]);
+
   const scheduleMarksChange = useCallback((nextMarks: DustMark[]) => {
     pendingMarksRef.current = nextMarks;
     if (frameRequestRef.current !== null) {
@@ -70,6 +119,10 @@ export const DustOverlay = memo(function DustOverlay({
       }
     });
   }, [onChange]);
+
+  const mutateMarks = useCallback((updater: (current: DustMark[]) => DustMark[]) => {
+    scheduleMarksChange(updater(getLatestMarks()));
+  }, [getLatestMarks, scheduleMarksChange]);
 
   const getNormalizedPoint = useCallback((clientX: number, clientY: number) => {
     const frame = frameRef.current;
@@ -88,6 +141,30 @@ export const DustOverlay = memo(function DustOverlay({
     };
   }, []);
 
+  const getLatestTransformedMarks = useCallback(() => (
+    projectDustMarksToTransformedSpace(getLatestMarks(), settings, sourceWidth, sourceHeight)
+  ), [getLatestMarks, settings, sourceHeight, sourceWidth]);
+
+  const findMarkAtPoint = useCallback((point: { x: number; y: number }) => {
+    let bestMatch: { mark: DustMark; score: number } | null = null;
+
+    for (const mark of getLatestTransformedMarks()) {
+      const distance = mark.kind === 'path'
+        ? distancePointToPath(point, mark)
+        : Math.hypot(point.x - mark.cx, point.y - mark.cy);
+      const effectiveRadius = mark.radius * (mark.kind === 'path' ? 1.2 : 1);
+      const score = distance / Math.max(effectiveRadius, 0.001);
+      if (score > 1) {
+        continue;
+      }
+      if (!bestMatch || score < bestMatch.score) {
+        bestMatch = { mark, score };
+      }
+    }
+
+    return bestMatch?.mark ?? null;
+  }, [getLatestTransformedMarks]);
+
   const upsertManualMarkAtPoint = useCallback((point: { x: number; y: number }) => {
     const lastPaintPoint = lastPaintPointRef.current;
     const minSpacing = Math.max(currentBrushRadius * 0.28, 0.0015);
@@ -97,14 +174,16 @@ export const DustOverlay = memo(function DustOverlay({
 
     const nextMark = projectDustMarkFromTransformedSpace({
       id: `dust-manual-${crypto.randomUUID()}`,
+      kind: 'spot',
       cx: point.x,
       cy: point.y,
       radius: currentBrushRadius * 1.18,
       source: 'manual',
     }, settings, sourceWidth, sourceHeight);
     lastPaintPointRef.current = point;
-    scheduleMarksChange([...marks, nextMark]);
-  }, [currentBrushRadius, marks, scheduleMarksChange, settings, sourceHeight, sourceWidth]);
+    onSelectedMarkIdChange(nextMark.id);
+    mutateMarks((current) => [...current, nextMark]);
+  }, [currentBrushRadius, mutateMarks, onSelectedMarkIdChange, settings, sourceHeight, sourceWidth]);
 
   useEffect(() => {
     const handleMove = (event: MouseEvent) => {
@@ -114,6 +193,7 @@ export const DustOverlay = memo(function DustOverlay({
       }
 
       setHoverPoint(point);
+      setHoveredMarkId(findMarkAtPoint(point)?.id ?? null);
       const dragState = dragStateRef.current;
       if (!dragState) {
         return;
@@ -124,8 +204,8 @@ export const DustOverlay = memo(function DustOverlay({
         return;
       }
 
-      const targetMark = transformedMarks.find((mark) => mark.id === dragState.markId);
-      if (!targetMark) {
+      const targetMark = getLatestTransformedMarks().find((mark) => mark.id === dragState.markId);
+      if (!targetMark || targetMark.kind !== 'spot') {
         return;
       }
 
@@ -135,7 +215,7 @@ export const DustOverlay = memo(function DustOverlay({
         cy: point.y,
       }, settings, sourceWidth, sourceHeight);
 
-      scheduleMarksChange(marks.map((mark) => (mark.id === dragState.markId ? nextMark : mark)));
+      mutateMarks((current) => current.map((mark) => (mark.id === dragState.markId ? nextMark : mark)));
     };
 
     const handleUp = () => {
@@ -155,15 +235,15 @@ export const DustOverlay = memo(function DustOverlay({
       window.removeEventListener('mouseup', handleUp);
     };
   }, [
+    findMarkAtPoint,
     flushPending,
+    getLatestTransformedMarks,
     getNormalizedPoint,
-    marks,
+    mutateMarks,
     onInteractionEnd,
-    scheduleMarksChange,
     settings,
     sourceHeight,
     sourceWidth,
-    transformedMarks,
     upsertManualMarkAtPoint,
   ]);
 
@@ -172,12 +252,36 @@ export const DustOverlay = memo(function DustOverlay({
   }, [flushPending]);
 
   const handleOverlayMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!brushActive || event.button !== 0) {
+    const point = getNormalizedPoint(event.clientX, event.clientY);
+    if (!point) {
       return;
     }
 
-    const point = getNormalizedPoint(event.clientX, event.clientY);
-    if (!point) {
+    const hitMark = findMarkAtPoint(point);
+    if (hitMark) {
+      onSelectedMarkIdChange(hitMark.source === 'manual' ? hitMark.id : null);
+
+      if (event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        onInteractionStart?.();
+        onChange(getLatestMarks().filter((mark) => mark.id !== hitMark.id));
+        onInteractionEnd?.();
+        return;
+      }
+
+      if (brushActive && event.button === 0 && hitMark.source === 'manual' && hitMark.kind === 'spot') {
+        event.preventDefault();
+        event.stopPropagation();
+        onInteractionStart?.();
+        dragStateRef.current = { mode: 'move', markId: hitMark.id };
+      }
+      return;
+    }
+
+    onSelectedMarkIdChange(null);
+
+    if (!brushActive || event.button !== 0) {
       return;
     }
 
@@ -187,7 +291,17 @@ export const DustOverlay = memo(function DustOverlay({
     dragStateRef.current = { mode: 'paint' };
     lastPaintPointRef.current = null;
     upsertManualMarkAtPoint(point);
-  }, [brushActive, getNormalizedPoint, onInteractionStart, upsertManualMarkAtPoint]);
+  }, [
+    brushActive,
+    findMarkAtPoint,
+    getLatestMarks,
+    getNormalizedPoint,
+    onChange,
+    onInteractionEnd,
+    onInteractionStart,
+    onSelectedMarkIdChange,
+    upsertManualMarkAtPoint,
+  ]);
 
   const handleOverlayContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!brushActive) {
@@ -195,49 +309,37 @@ export const DustOverlay = memo(function DustOverlay({
     }
 
     event.preventDefault();
-    const manualMarks = marks.filter((mark) => mark.source === 'manual');
-    const lastManual = manualMarks[manualMarks.length - 1];
-    if (!lastManual) {
+    const point = getNormalizedPoint(event.clientX, event.clientY);
+    const hitMark = point ? findMarkAtPoint(point) : null;
+    if (!hitMark || hitMark.source !== 'manual') {
       return;
     }
 
     onInteractionStart?.();
-    onChange(marks.filter((mark) => mark.id !== lastManual.id));
+    onChange(getLatestMarks().filter((mark) => mark.id !== hitMark.id));
+    if (selectedMarkId === hitMark.id) {
+      onSelectedMarkIdChange(null);
+    }
     onInteractionEnd?.();
-  }, [brushActive, marks, onChange, onInteractionEnd, onInteractionStart]);
-
-  const handleMarkMouseDown = useCallback((event: React.MouseEvent<HTMLButtonElement>, mark: DustMark) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (event.altKey) {
-      onInteractionStart?.();
-      onChange(marks.filter((candidate) => candidate.id !== mark.id));
-      onInteractionEnd?.();
-      return;
-    }
-
-    if (!brushActive || mark.source !== 'manual') {
-      return;
-    }
-
-    onInteractionStart?.();
-    dragStateRef.current = { mode: 'move', markId: mark.id };
-  }, [brushActive, marks, onChange, onInteractionEnd, onInteractionStart]);
+  }, [brushActive, findMarkAtPoint, getLatestMarks, getNormalizedPoint, onChange, onInteractionEnd, onInteractionStart, onSelectedMarkIdChange, selectedMarkId]);
 
   return (
     <div
       ref={frameRef}
-      className={`absolute inset-0 ${brushActive ? 'cursor-none' : 'pointer-events-none'}`}
+      data-testid="dust-overlay"
+      className={`absolute inset-0 ${brushActive ? 'cursor-none' : 'pointer-events-auto'}`}
       onMouseDown={handleOverlayMouseDown}
       onMouseMove={(event) => {
         const point = getNormalizedPoint(event.clientX, event.clientY);
         setHoverPoint(point);
+        setHoveredMarkId(point ? findMarkAtPoint(point)?.id ?? null : null);
       }}
-      onMouseLeave={() => setHoverPoint(null)}
+      onMouseLeave={() => {
+        setHoverPoint(null);
+        setHoveredMarkId(null);
+      }}
       onContextMenu={handleOverlayContextMenu}
     >
-      {/* SVG layer — visuals only, no pointer events */}
       <svg
         className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
         viewBox="0 0 1 1"
@@ -250,41 +352,51 @@ export const DustOverlay = memo(function DustOverlay({
         </defs>
         {transformedMarks.map((mark) => {
           const isAuto = mark.source === 'auto';
+          const isSelected = mark.id === selectedMarkId;
+          const isHovered = mark.id === hoveredMarkId;
+          const stroke = isSelected
+            ? 'rgba(250,204,21,0.95)'
+            : (isAuto ? 'rgba(125,211,252,0.85)' : 'rgba(252,165,165,0.8)');
+          const fill = isAuto ? 'rgba(125,211,252,0.12)' : 'none';
+          const strokeWidth = mark.kind === 'path'
+            ? `${Math.max(mark.radius * 2, 0.0024)}`
+            : (isSelected ? '0.0022' : (isAuto ? '0.002' : '0.0014'));
+
+          if (mark.kind === 'path') {
+            return (
+              <polyline
+                key={mark.id}
+                points={buildPath(mark)}
+                fill="none"
+                stroke={stroke}
+                strokeWidth={strokeWidth}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray={isAuto ? '0.012 0.008' : undefined}
+                vectorEffect="non-scaling-stroke"
+                opacity={isHovered ? 1 : 0.92}
+                filter="url(#dust-shadow)"
+              />
+            );
+          }
+
           return (
             <circle
               key={mark.id}
               cx={mark.cx}
               cy={mark.cy}
               r={mark.radius}
-              fill={isAuto ? 'rgba(125,211,252,0.12)' : 'none'}
-              stroke={isAuto ? 'rgba(125,211,252,0.85)' : 'rgba(252,165,165,0.8)'}
-              strokeWidth={isAuto ? '0.002' : '0.0014'}
+              fill={fill}
+              stroke={stroke}
+              strokeWidth={strokeWidth}
               strokeDasharray={isAuto ? '0.008 0.005' : undefined}
               vectorEffect="non-scaling-stroke"
+              opacity={isHovered ? 1 : 0.92}
               filter="url(#dust-shadow)"
             />
           );
         })}
       </svg>
-
-      {/* Invisible hit targets for interaction */}
-      {transformedMarks.map((mark) => (
-        <button
-          key={mark.id}
-          type="button"
-          onMouseDown={(event) => handleMarkMouseDown(event, mark)}
-          className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
-          style={{
-            left: `${mark.cx * 100}%`,
-            top: `${mark.cy * 100}%`,
-            width: `${mark.radius * 200}%`,
-            height: `${mark.radius * 200}%`,
-            pointerEvents: 'auto',
-            background: 'transparent',
-            border: 'none',
-          }}
-        />
-      ))}
 
       {brushActive && hoverPoint && (
         <div

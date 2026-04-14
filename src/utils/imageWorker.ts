@@ -62,6 +62,7 @@ import { applyFlatFieldCorrection } from './flatField';
 import { detectFrame } from './frameDetection';
 import { estimateFlare } from './flareEstimation';
 import { applyDustRemoval } from './dustRemoval';
+import { projectDustMarkFromTransformedSpace } from './dustGeometry';
 import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
@@ -770,17 +771,133 @@ function createDustRemovedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
   return canvas;
 }
 
+function applyDustAnalysisStage(
+  imageData: ImageData,
+  payload: DustDetectRequest,
+  estimatedFilmBaseSample: FilmBaseSample | null,
+  estimatedDensityBalance: DensityBalance | null,
+  residualBaseOffset: [number, number, number] | null,
+) {
+  convertImageDataColorProfile(imageData, 'srgb', 'srgb');
+
+  const { data } = imageData;
+  const filmBaseBalance = getFilmBaseBalance(payload.settings.filmBaseSample);
+  const lightSourceBias = payload.lightSourceBias ?? [1, 1, 1];
+  const filmType = payload.filmType ?? 'negative';
+  const advancedHd = resolveAdvancedHdParameters(
+    payload.settings,
+    payload.isColor,
+    filmType,
+    payload.advancedInversion ?? null,
+    estimatedFilmBaseSample,
+    estimatedDensityBalance,
+    payload.profileId ?? null,
+    'srgb',
+    'srgb',
+    lightSourceBias,
+  );
+
+  for (let index = 0; index < data.length; index += 4) {
+    let r = data[index] / 255;
+    let g = data[index + 1] / 255;
+    let b = data[index + 2] / 255;
+
+    r = applyLightSourceCorrection(r, lightSourceBias[0]);
+    g = applyLightSourceCorrection(g, lightSourceBias[1]);
+    b = applyLightSourceCorrection(b, lightSourceBias[2]);
+
+    if (advancedHd.enabled) {
+      r = decodeProfileChannel('srgb', r);
+      g = decodeProfileChannel('srgb', g);
+      b = decodeProfileChannel('srgb', b);
+
+      r = applyAdvancedHdInversion(
+        r,
+        advancedHd.baseDensity[0],
+        advancedHd.gamma[0],
+        advancedHd.densityBalance?.scaleR ?? 1,
+      ) * payload.settings.redBalance;
+      g = applyAdvancedHdInversion(
+        g,
+        advancedHd.baseDensity[1],
+        advancedHd.gamma[1],
+        advancedHd.densityBalance?.scaleG ?? 1,
+      ) * payload.settings.greenBalance;
+      b = applyAdvancedHdInversion(
+        b,
+        advancedHd.baseDensity[2],
+        advancedHd.gamma[2],
+        advancedHd.densityBalance?.scaleB ?? 1,
+      ) * payload.settings.blueBalance;
+    } else {
+      if (filmType !== 'slide') {
+        r = 1 - r;
+        g = 1 - g;
+        b = 1 - b;
+      }
+
+      r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
+      g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
+      b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
+    }
+
+    if (residualBaseOffset) {
+      r = Math.max(0, r - residualBaseOffset[0]);
+      g = Math.max(0, g - residualBaseOffset[1]);
+      b = Math.max(0, b - residualBaseOffset[2]);
+    }
+
+    data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
+    data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
+    data[index + 2] = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
+  }
+}
+
 function handleDustDetect(payload: DustDetectRequest) {
   const document = getStoredDocument(payload.documentId);
-  const context = document.sourceCanvas.getContext('2d', { willReadFrequently: true });
+  const analysisTargetDimension = 1600;
+  const level = selectPreviewLevel(document.previews.map((preview) => preview.level), analysisTargetDimension);
+  const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
+  const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
+  const context = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!context) {
-    throw new Error('Could not read source image for dust detection.');
+    throw new Error('Could not read transformed image for dust detection.');
   }
 
-  const imageData = context.getImageData(0, 0, document.sourceCanvas.width, document.sourceCanvas.height);
+  const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
+  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
+  const residualBaseOffset = computeResidualBaseOffset(
+    imageData,
+    payload.settings,
+    payload.isColor,
+    payload.filmType ?? 'negative',
+    payload.advancedInversion ?? null,
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
+    payload.profileId ?? null,
+    'srgb',
+    'srgb',
+    payload.lightSourceBias ?? [1, 1, 1],
+    payload.flareFloor ?? null,
+  );
+  applyDustAnalysisStage(
+    imageData,
+    payload,
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
+    residualBaseOffset,
+  );
+  const detectedMarks = detectDustMarks(imageData, payload.sensitivity, payload.maxRadius, payload.mode)
+    .map((mark) => projectDustMarkFromTransformedSpace(
+      mark,
+      payload.settings,
+      document.sourceCanvas.width,
+      document.sourceCanvas.height,
+    ));
+
   return {
     type: 'dust-detect',
-    detectedMarks: detectDustMarks(imageData, payload.sensitivity, payload.maxRadius, payload.mode),
+    detectedMarks,
   } as const;
 }
 

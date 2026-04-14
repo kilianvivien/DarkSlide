@@ -88,6 +88,7 @@ type AppShellProps = {
   savePresetTags: string[];
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
   dustBrushActive: boolean;
+  selectedDustMarkId: string | null;
   isDetectingDust: boolean;
   cropTab: CropTab;
   comparisonMode: 'processed' | 'original';
@@ -221,6 +222,7 @@ type AppShellProps = {
   onResetCrop: () => void;
   onDetectDust: () => void;
   onDustBrushActiveChange: (active: boolean) => void;
+  onSelectedDustMarkIdChange: (markId: string | null) => void;
   onDustBrushInteractionStart: () => void;
   onDustBrushInteractionEnd: () => void;
   onSetActivePointPicker: (mode: PointPickerMode | null) => void;
@@ -317,6 +319,7 @@ export function AppShell({
   savePresetTags,
   sidebarTab,
   dustBrushActive,
+  selectedDustMarkId,
   isDetectingDust,
   cropTab,
   comparisonMode,
@@ -443,6 +446,7 @@ export function AppShell({
   onResetCrop,
   onDetectDust,
   onDustBrushActiveChange,
+  onSelectedDustMarkIdChange,
   onDustBrushInteractionStart,
   onDustBrushInteractionEnd,
   onSetActivePointPicker,
@@ -933,6 +937,8 @@ export function AppShell({
                               brushActive={dustBrushActive}
                               marks={documentState.settings.dustRemoval.marks}
                               manualBrushRadiusPx={documentState.settings.dustRemoval.manualBrushRadius}
+                              selectedMarkId={selectedDustMarkId}
+                              onSelectedMarkIdChange={onSelectedDustMarkIdChange}
                               onChange={onDustOverlayChange}
                               onInteractionStart={onDustBrushInteractionStart}
                               onInteractionEnd={onDustBrushInteractionEnd}

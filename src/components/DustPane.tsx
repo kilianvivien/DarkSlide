@@ -28,6 +28,14 @@ export const DustPane = memo(function DustPane({
     () => dustRemoval.marks.filter((mark) => mark.source === 'auto').length,
     [dustRemoval.marks],
   );
+  const autoSpotCount = useMemo(
+    () => dustRemoval.marks.filter((mark) => mark.source === 'auto' && mark.kind === 'spot').length,
+    [dustRemoval.marks],
+  );
+  const autoPathCount = useMemo(
+    () => dustRemoval.marks.filter((mark) => mark.source === 'auto' && mark.kind === 'path').length,
+    [dustRemoval.marks],
+  );
   const manualCount = dustRemoval.marks.length - autoCount;
 
   const updateDustRemoval = useCallback((next: Partial<DustRemovalSettings>) => {
@@ -68,7 +76,7 @@ export const DustPane = memo(function DustPane({
           onInteractionEnd={onInteractionEnd}
         />
         <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-          Paint over dust or scratches — grain from a nearby patch fills the repair. <span className="text-zinc-600">Alt-click to remove a mark, Backspace for the last.</span>
+          Paint over dust or scratches, then click a manual mark to fine-tune it with the same brush-size shortcuts. <span className="text-zinc-600">Alt-click removes a mark, and Backspace removes the last manual one.</span>
         </p>
         {manualCount > 0 && (
           <button
@@ -115,7 +123,7 @@ export const DustPane = memo(function DustPane({
         </div>
 
         <Slider
-          label="Sensitivity"
+          label="Detection Bias"
           value={dustRemoval.autoSensitivity}
           min={0}
           max={100}
@@ -123,8 +131,11 @@ export const DustPane = memo(function DustPane({
           onInteractionStart={onInteractionStart}
           onInteractionEnd={onInteractionEnd}
         />
+        <p className="mt-2 text-[10px] uppercase tracking-widest text-zinc-500">
+          Conservative on the left, aggressive on the right.
+        </p>
         <Slider
-          label="Max Spot Size"
+          label="Maximum Defect Width"
           value={dustRemoval.autoMaxRadius}
           min={1}
           max={30}
@@ -146,7 +157,7 @@ export const DustPane = memo(function DustPane({
           </button>
           {autoCount > 0 && (
             <span className="text-[10px] uppercase tracking-widest text-zinc-500">
-              {autoCount} found
+              {autoSpotCount} spots · {autoPathCount} paths
             </span>
           )}
         </div>

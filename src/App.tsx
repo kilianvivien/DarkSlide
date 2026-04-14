@@ -98,6 +98,7 @@ export default function App() {
   const [isPanDragging, setIsPanDragging] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'dust' | 'export'>('adjust');
   const [dustBrushActive, setDustBrushActive] = useState(false);
+  const [selectedDustMarkId, setSelectedDustMarkId] = useState<string | null>(null);
   const [isDetectingDust, setIsDetectingDust] = useState(false);
   const [cropTab, setCropTab] = useState<CropTab>(() => initialPreferences?.cropTab ?? 'Film');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -2023,13 +2024,16 @@ export default function App() {
 
   const handleDustOverlayChange = useCallback((marks: NonNullable<ConversionSettings['dustRemoval']>['marks']) => {
     const resolvedDustRemoval = resolveDustRemovalSettings(documentState?.settings.dustRemoval ?? DEFAULT_DUST_REMOVAL);
+    if (selectedDustMarkId && !marks.some((mark) => mark.id === selectedDustMarkId)) {
+      setSelectedDustMarkId(null);
+    }
     handleSettingsChange({
       dustRemoval: {
         ...resolvedDustRemoval,
         marks,
       },
     });
-  }, [documentState?.settings.dustRemoval, handleSettingsChange]);
+  }, [documentState?.settings.dustRemoval, handleSettingsChange, selectedDustMarkId]);
 
   const handleDustBrushActiveChange = useCallback((active: boolean) => {
     setDustBrushActive(active);
@@ -2063,13 +2067,32 @@ export default function App() {
 
   const handleAdjustDustBrushRadius = useCallback((delta: number) => {
     const dustRemoval = resolveDustRemovalSettings(documentState?.settings.dustRemoval ?? DEFAULT_DUST_REMOVAL);
+    const selectedMark = selectedDustMarkId
+      ? dustRemoval.marks.find((mark) => mark.id === selectedDustMarkId && mark.kind === 'spot' && mark.source === 'manual')
+      : null;
+    if (selectedMark && documentState) {
+      const nextRadiusPx = Math.min(50, Math.max(2, Math.round(selectedMark.radius * Math.hypot(documentState.source.width, documentState.source.height) + delta)));
+      handleSettingsChange({
+        dustRemoval: {
+          ...dustRemoval,
+          manualBrushRadius: nextRadiusPx,
+          marks: dustRemoval.marks.map((mark) => (
+            mark.id === selectedMark.id && mark.kind === 'spot'
+              ? { ...mark, radius: nextRadiusPx / Math.hypot(documentState.source.width, documentState.source.height) }
+              : mark
+          )),
+        },
+      });
+      return;
+    }
+
     handleSettingsChange({
       dustRemoval: {
         ...dustRemoval,
         manualBrushRadius: Math.min(50, Math.max(2, dustRemoval.manualBrushRadius + delta)),
       },
     });
-  }, [documentState?.settings.dustRemoval, handleSettingsChange]);
+  }, [documentState, documentState?.settings.dustRemoval, handleSettingsChange, selectedDustMarkId]);
 
   const handleRemoveLastDustMark = useCallback(() => {
     if (!documentState) {
@@ -2080,6 +2103,9 @@ export default function App() {
     const lastManual = manualMarks[manualMarks.length - 1];
     if (!lastManual) {
       return;
+    }
+    if (selectedDustMarkId === lastManual.id) {
+      setSelectedDustMarkId(null);
     }
 
     pushHistoryEntry(createDocumentHistoryEntry(documentState));
@@ -2101,10 +2127,19 @@ export default function App() {
     setIsDetectingDust(true);
     try {
       const detectedMarks = await worker.detectDust(
-        documentState.id,
-        dustRemoval.autoSensitivity,
-        dustRemoval.autoMaxRadius,
-        dustRemoval.autoDetectMode,
+        {
+          documentId: documentState.id,
+          settings: documentState.settings,
+          isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+          profileId: activeProfile.id,
+          filmType: activeProfile.filmType,
+          advancedInversion: activeProfile.advancedInversion ?? null,
+          flareFloor: documentState.estimatedFlare ?? null,
+          lightSourceBias: lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1],
+          sensitivity: dustRemoval.autoSensitivity,
+          maxRadius: dustRemoval.autoMaxRadius,
+          mode: dustRemoval.autoDetectMode,
+        },
       );
       const latestDocument = tabsRef.current.find((tab) => tab.id === documentState.id)?.document ?? null;
       if (!latestDocument) {
@@ -2125,7 +2160,7 @@ export default function App() {
     } finally {
       setIsDetectingDust(false);
     }
-  }, [documentState, formatError, handleSettingsChange, isDetectingDust, pushHistoryEntry, showTransientNotice, tabsRef]);
+  }, [activeProfile.advancedInversion, activeProfile.filmType, activeProfile.id, activeProfile.type, documentState, formatError, handleSettingsChange, isDetectingDust, lightSourceProfilesById, pushHistoryEntry, showTransientNotice, tabsRef]);
 
   const lastAutoDustDetectionKeyRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2144,6 +2179,7 @@ export default function App() {
 
     if (lastAutoDustDetectionKeyRef.current === null) {
       lastAutoDustDetectionKeyRef.current = key;
+      void handleDetectDust();
       return;
     }
 
@@ -2154,6 +2190,13 @@ export default function App() {
     lastAutoDustDetectionKeyRef.current = key;
     void handleDetectDust();
   }, [documentState?.id, documentState?.settings.dustRemoval, handleDetectDust]);
+
+  useEffect(() => {
+    const marks = documentState?.settings.dustRemoval?.marks ?? [];
+    if (selectedDustMarkId && !marks.some((mark) => mark.id === selectedDustMarkId)) {
+      setSelectedDustMarkId(null);
+    }
+  }, [documentState?.settings.dustRemoval?.marks, selectedDustMarkId]);
 
   const handleToggleLeftPane = useCallback(() => {
     setIsLeftPaneOpen((current) => {
@@ -2670,6 +2713,7 @@ onToggleScanningSession: toggleScanningWindow,
       savePresetTags={savePresetTags}
       sidebarTab={sidebarTab}
       dustBrushActive={dustBrushActive}
+      selectedDustMarkId={selectedDustMarkId}
       isDetectingDust={isDetectingDust}
       cropTab={cropTab}
       comparisonMode={comparisonMode}
@@ -2796,6 +2840,7 @@ onToggleScanningSession: toggleScanningWindow,
       onResetCrop={handleResetCrop}
       onDetectDust={() => { void handleDetectDust(); }}
       onDustBrushActiveChange={handleDustBrushActiveChange}
+      onSelectedDustMarkIdChange={setSelectedDustMarkId}
       onDustBrushInteractionStart={handleDustBrushInteractionStart}
       onDustBrushInteractionEnd={handleDustBrushInteractionEnd}
       onSetActivePointPicker={handleSetActivePointPicker}

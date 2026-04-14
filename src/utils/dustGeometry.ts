@@ -73,41 +73,94 @@ export function projectDustMarksToTransformedSpace(
   }
 
   const geometry = getDustGeometry(settings, imageWidth, imageHeight);
-  return marks.flatMap((mark) => {
-    const rotated = sourcePointToRotatedPoint(
-      mark.cx,
-      mark.cy,
-      imageWidth,
-      imageHeight,
-      geometry.rotatedWidth,
-      geometry.rotatedHeight,
-      geometry.radians,
-    );
+  return marks.reduce<DustMark[]>((result, mark) => {
     const pixelRadius = mark.radius * geometry.sourceDiagonal;
-    const croppedX = rotated.x - geometry.cropBounds.x;
-    const croppedY = rotated.y - geometry.cropBounds.y;
-    const withinHorizontal = croppedX + pixelRadius >= 0 && croppedX - pixelRadius <= geometry.cropBounds.width;
-    const withinVertical = croppedY + pixelRadius >= 0 && croppedY - pixelRadius <= geometry.cropBounds.height;
+    const transformedPoints = mark.kind === 'path'
+      ? mark.points.map((point) => sourcePointToRotatedPoint(
+        point.x,
+        point.y,
+        imageWidth,
+        imageHeight,
+        geometry.rotatedWidth,
+        geometry.rotatedHeight,
+        geometry.radians,
+      ))
+      : [sourcePointToRotatedPoint(
+        mark.cx,
+        mark.cy,
+        imageWidth,
+        imageHeight,
+        geometry.rotatedWidth,
+        geometry.rotatedHeight,
+        geometry.radians,
+      )];
+
+    const xs = transformedPoints.map((point) => point.x - geometry.cropBounds.x);
+    const ys = transformedPoints.map((point) => point.y - geometry.cropBounds.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const withinHorizontal = maxX + pixelRadius >= 0 && minX - pixelRadius <= geometry.cropBounds.width;
+    const withinVertical = maxY + pixelRadius >= 0 && minY - pixelRadius <= geometry.cropBounds.height;
     if (!withinHorizontal || !withinVertical) {
-      return [];
+      return result;
     }
 
-    return [{
+    if (mark.kind === 'path') {
+      result.push({
+        ...mark,
+        points: transformedPoints.map((point) => ({
+          x: (point.x - geometry.cropBounds.x) / geometry.cropBounds.width,
+          y: (point.y - geometry.cropBounds.y) / geometry.cropBounds.height,
+        })),
+        radius: pixelRadius / geometry.transformedDiagonal,
+      });
+      return result;
+    }
+
+    result.push({
       ...mark,
-      cx: croppedX / geometry.cropBounds.width,
-      cy: croppedY / geometry.cropBounds.height,
+      cx: xs[0] / geometry.cropBounds.width,
+      cy: ys[0] / geometry.cropBounds.height,
       radius: pixelRadius / geometry.transformedDiagonal,
-    }];
-  });
+    });
+    return result;
+  }, []);
 }
 
 export function projectDustMarkFromTransformedSpace(
-  mark: Omit<DustMark, 'cx' | 'cy' | 'radius'> & { cx: number; cy: number; radius: number },
+  mark: DustMark,
   settings: ConversionSettings,
   imageWidth: number,
   imageHeight: number,
 ): DustMark {
   const geometry = getDustGeometry(settings, imageWidth, imageHeight);
+  const sourceRadius = clamp((mark.radius * geometry.transformedDiagonal) / geometry.sourceDiagonal, 0, 1);
+
+  if (mark.kind === 'path') {
+    return {
+      ...mark,
+      points: mark.points.map((point) => {
+        const rotatedX = geometry.cropBounds.x + point.x * geometry.cropBounds.width;
+        const rotatedY = geometry.cropBounds.y + point.y * geometry.cropBounds.height;
+        return rotatedPointToSourcePoint(
+          rotatedX,
+          rotatedY,
+          imageWidth,
+          imageHeight,
+          geometry.rotatedWidth,
+          geometry.rotatedHeight,
+          geometry.radians,
+        );
+      }).map((point) => ({
+        x: clamp(point.x, 0, 1),
+        y: clamp(point.y, 0, 1),
+      })),
+      radius: sourceRadius,
+    };
+  }
+
   const rotatedX = geometry.cropBounds.x + mark.cx * geometry.cropBounds.width;
   const rotatedY = geometry.cropBounds.y + mark.cy * geometry.cropBounds.height;
   const sourcePoint = rotatedPointToSourcePoint(
@@ -124,6 +177,6 @@ export function projectDustMarkFromTransformedSpace(
     ...mark,
     cx: clamp(sourcePoint.x, 0, 1),
     cy: clamp(sourcePoint.y, 0, 1),
-    radius: clamp((mark.radius * geometry.transformedDiagonal) / geometry.sourceDiagonal, 0, 1),
+    radius: sourceRadius,
   };
 }

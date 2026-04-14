@@ -7,6 +7,7 @@ export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'L
 export type CropSource = 'auto' | 'manual';
 export type DustMarkSource = 'auto' | 'manual';
 export type DustAutoDetectMode = 'spots' | 'scratches' | 'both';
+export type DustMarkKind = 'spot' | 'path';
 export type UpdateChannel = 'stable' | 'beta';
 export type ZoomLevel = number | 'fit';
 export type InversionMethod = 'standard' | 'advanced-hd';
@@ -31,13 +32,29 @@ export interface CropSettings {
   aspectRatio: number | null;
 }
 
-export interface DustMark {
+export interface DustPathPoint {
+  x: number;
+  y: number;
+}
+
+export interface SpotDustMark {
   id: string;
+  kind: 'spot';
   cx: number;
   cy: number;
   radius: number;
   source: DustMarkSource;
 }
+
+export interface PathDustMark {
+  id: string;
+  kind: 'path';
+  points: DustPathPoint[];
+  radius: number;
+  source: DustMarkSource;
+}
+
+export type DustMark = SpotDustMark | PathDustMark;
 
 export interface DustRemovalSettings {
   autoEnabled: boolean;
@@ -673,6 +690,13 @@ export interface AutoAnalyzeRequest {
 
 export interface DustDetectRequest {
   documentId: string;
+  settings: ConversionSettings;
+  isColor: boolean;
+  profileId?: string | null;
+  filmType?: FilmProfileType;
+  advancedInversion?: AdvancedInversionProfile | null;
+  flareFloor?: [number, number, number] | null;
+  lightSourceBias?: [number, number, number];
   sensitivity: number;
   maxRadius: number;
   mode: DustAutoDetectMode;

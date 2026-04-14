@@ -451,11 +451,11 @@ export function useFileImport({
         estimatedFlare: decoded.estimatedFlare,
         estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
         estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
-        // RAW camera scans benefit from the saved capture light-source profile,
-        // but rendered TIFFs are typically already balanced and should start neutral.
-        lightSourceId: rawImport
-          ? resolveLightSourceIdForProfile(resolvedProfile, savedLightSourceId)
-          : null,
+        lightSourceId: resolveLightSourceIdForProfile(
+          resolvedProfile,
+          activeSidecar?.lightSourceProfileId ?? savedLightSourceId,
+          { blackAndWhiteEnabled: initialSettings.blackAndWhite.enabled },
+        ),
         cropSource: null,
         rawImportProfile,
         profileId: activeSidecar?.profileId ?? resolvedProfile.id,
@@ -477,7 +477,6 @@ export function useFileImport({
           ...nextDocument.colorManagement,
           ...activeSidecar.colorManagement,
         };
-        nextDocument.lightSourceId = activeSidecar.lightSourceProfileId ?? nextDocument.lightSourceId;
         if (roll?.filmBaseSample && !nextDocument.settings.filmBaseSample) {
           nextDocument.settings.filmBaseSample = structuredClone(roll.filmBaseSample);
         }

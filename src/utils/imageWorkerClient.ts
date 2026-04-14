@@ -1621,13 +1621,25 @@ export class ImageWorkerClient {
     );
   }
 
-  async detectDust(documentId: string, sensitivity: number, maxRadius: number, mode: 'spots' | 'scratches' | 'both'): Promise<DustMark[]> {
-    await this.ensureDocumentLoaded(documentId);
+  async detectDust(payload: {
+    documentId: string;
+    settings: ConversionSettings;
+    isColor: boolean;
+    profileId?: string | null;
+    filmType?: FilmProfileType;
+    advancedInversion?: AdvancedInversionProfile | null;
+    flareFloor?: [number, number, number] | null;
+    lightSourceBias?: [number, number, number];
+    sensitivity: number;
+    maxRadius: number;
+    mode: 'spots' | 'scratches' | 'both';
+  }): Promise<DustMark[]> {
+    await this.ensureDocumentLoaded(payload.documentId);
     const result = await this.requestWithDocumentRecovery<{ type: 'dust-detect'; detectedMarks: DustMark[] }>(
-      documentId,
+      payload.documentId,
       () => this.request<{ type: 'dust-detect'; detectedMarks: DustMark[] }>(
         'dust-detect',
-        { documentId, sensitivity, maxRadius, mode },
+        payload,
       ),
       true,
     );

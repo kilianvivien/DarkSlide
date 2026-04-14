@@ -100,10 +100,16 @@ function buildProfileSettingsForDocument(
     ? currentDocument.rawImportProfile.defaultSettings
     : profile.defaultSettings;
   const nextSettings = createDefaultSettings(structuredClone(profileDefaults));
+  const isSwitchingAwayFromRawImportProfile = Boolean(
+    currentDocument?.rawImportProfile
+    && currentDocument.profileId === currentDocument.rawImportProfile.id
+    && profile.id !== currentDocument.rawImportProfile.id,
+  );
 
-  const scanFilmBaseSample = currentDocument?.settings.filmBaseSample
+  const scanFilmBaseSample = isSwitchingAwayFromRawImportProfile
+    ? null
+    : currentDocument?.settings.filmBaseSample
     ?? currentDocument?.estimatedFilmBaseSample
-    ?? currentDocument?.rawImportProfile?.defaultSettings.filmBaseSample
     ?? null;
 
   if (nextSettings.inversionMethod !== 'advanced-hd' && !nextSettings.filmBaseSample && scanFilmBaseSample) {

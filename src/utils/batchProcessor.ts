@@ -252,12 +252,19 @@ export async function* runBatch(
       }
 
       if ((options.autoDustRemoval ?? entrySettings.dustRemoval?.autoEnabled) && entrySettings.dustRemoval?.autoEnabled) {
-        const autoDustMarks = await workerClient.detectDust(
+        const autoDustMarks = await workerClient.detectDust({
           documentId,
-          entrySettings.dustRemoval.autoSensitivity,
-          entrySettings.dustRemoval.autoMaxRadius,
-          entrySettings.dustRemoval.autoDetectMode,
-        ).catch(() => []);
+          settings: entrySettings,
+          isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
+          profileId: sharedProfile.id,
+          filmType: sharedProfile.filmType,
+          advancedInversion: sharedProfile.advancedInversion ?? null,
+          flareFloor: entry.estimatedFlare ?? null,
+          lightSourceBias: sharedLightSourceBias ?? [1, 1, 1],
+          sensitivity: entrySettings.dustRemoval.autoSensitivity,
+          maxRadius: entrySettings.dustRemoval.autoMaxRadius,
+          mode: entrySettings.dustRemoval.autoDetectMode,
+        }).catch(() => []);
         entrySettings.dustRemoval = {
           ...entrySettings.dustRemoval,
           marks: autoDustMarks,

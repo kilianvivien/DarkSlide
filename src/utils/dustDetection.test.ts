@@ -1,148 +1,129 @@
 import { describe, expect, it } from 'vitest';
 import { detectDustMarks } from './dustDetection';
 
+function createFlatField(width: number, height: number, value = 96) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let index = 0; index < data.length; index += 4) {
+    data[index] = value;
+    data[index + 1] = value - 6;
+    data[index + 2] = value - 12;
+    data[index + 3] = 255;
+  }
+  return data;
+}
+
+function hasSpotNear(marks: ReturnType<typeof detectDustMarks>, width: number, height: number, targetX: number, targetY: number) {
+  return marks.some((mark) => (
+    mark.kind === 'spot'
+    && Math.hypot(mark.cx * width - targetX, mark.cy * height - targetY) < 5
+  ));
+}
+
 describe('detectDustMarks', () => {
-  it('detects bright dust-like specks in a flat field', () => {
+  it('detects bright dust-like specks on a flat field as spot marks', () => {
     const width = 64;
     const height = 64;
-    const data = new Uint8ClampedArray(width * height * 4);
+    const data = createFlatField(width, height, 84);
 
-    for (let index = 0; index < data.length; index += 4) {
-      data[index] = 80;
-      data[index + 1] = 70;
-      data[index + 2] = 60;
-      data[index + 3] = 255;
-    }
-
-    const spots = [
-      { x: 18, y: 22 },
-      { x: 44, y: 38 },
-    ];
-    for (const spot of spots) {
+    for (const spot of [{ x: 18, y: 22 }, { x: 44, y: 38 }]) {
       for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
         for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
           const x = spot.x + offsetX;
           const y = spot.y + offsetY;
           const pixelIndex = (y * width + x) * 4;
-          data[pixelIndex] = 245;
-          data[pixelIndex + 1] = 245;
-          data[pixelIndex + 2] = 245;
+          data[pixelIndex] = 240;
+          data[pixelIndex + 1] = 240;
+          data[pixelIndex + 2] = 240;
         }
       }
     }
 
-    const marks = detectDustMarks(new ImageData(data, width, height), 70, 6, 'spots');
+    const marks = detectDustMarks(new ImageData(data, width, height), 68, 6, 'spots');
 
-    expect(marks.length).toBeGreaterThanOrEqual(2);
     expect(marks.every((mark) => mark.source === 'auto')).toBe(true);
-
-    const hasSpotNear = (targetX: number, targetY: number) => marks.some((mark) => {
-      const cx = mark.cx * width;
-      const cy = mark.cy * height;
-      return Math.hypot(cx - targetX, cy - targetY) < 4;
-    });
-
-    expect(hasSpotNear(18, 22)).toBe(true);
-    expect(hasSpotNear(44, 38)).toBe(true);
+    expect(marks.filter((mark) => mark.kind === 'spot').length).toBeGreaterThanOrEqual(2);
+    expect(hasSpotNear(marks, width, height, 18, 22)).toBe(true);
+    expect(hasSpotNear(marks, width, height, 44, 38)).toBe(true);
   });
 
-  it('detects long scratch-like fragments when scratch mode is enabled', () => {
+  it('rejects a strong image edge instead of flagging it as dust', () => {
     const width = 96;
     const height = 96;
-    const data = new Uint8ClampedArray(width * height * 4);
+    const data = createFlatField(width, height, 80);
 
-    for (let index = 0; index < data.length; index += 4) {
-      data[index] = 96;
-      data[index + 1] = 88;
-      data[index + 2] = 82;
-      data[index + 3] = 255;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 48; x < width; x += 1) {
+        const pixelIndex = (y * width + x) * 4;
+        data[pixelIndex] = 220;
+        data[pixelIndex + 1] = 215;
+        data[pixelIndex + 2] = 210;
+      }
     }
 
-    for (let x = 12; x < 82; x += 1) {
-      const y = 40 + Math.round(Math.sin(x / 8) * 2);
-      const pixelIndex = (y * width + x) * 4;
-      data[pixelIndex] = 230;
-      data[pixelIndex + 1] = 230;
-      data[pixelIndex + 2] = 230;
-    }
-
-    const grainPixels = [
-      { x: 14, y: 14 },
-      { x: 72, y: 20 },
-      { x: 66, y: 76 },
-    ];
-    for (const grain of grainPixels) {
-      const pixelIndex = (grain.y * width + grain.x) * 4;
-      data[pixelIndex] = 220;
-      data[pixelIndex + 1] = 220;
-      data[pixelIndex + 2] = 220;
-    }
-
-    const marks = detectDustMarks(new ImageData(data, width, height), 55, 8, 'scratches');
-
-    expect(marks.length).toBeGreaterThanOrEqual(4);
-    expect(marks.some((mark) => {
-      const cx = mark.cx * width;
-      const cy = mark.cy * height;
-      return cx > 20 && cx < 70 && cy > 34 && cy < 46;
-    })).toBe(true);
-  });
-
-  it('also detects long scratch-like fragments in both mode', () => {
-    const width = 96;
-    const height = 96;
-    const data = new Uint8ClampedArray(width * height * 4);
-
-    for (let index = 0; index < data.length; index += 4) {
-      data[index] = 96;
-      data[index + 1] = 88;
-      data[index + 2] = 82;
-      data[index + 3] = 255;
-    }
-
-    for (let x = 16; x < 80; x += 1) {
-      const y = 30 + Math.round(Math.sin(x / 7) * 3);
-      const pixelIndex = (y * width + x) * 4;
-      data[pixelIndex] = 230;
-      data[pixelIndex + 1] = 230;
-      data[pixelIndex + 2] = 230;
-    }
-
-    const marks = detectDustMarks(new ImageData(data, width, height), 55, 8, 'both');
-    expect(marks.length).toBeGreaterThan(0);
-    expect(marks.some((mark) => {
-      const cx = mark.cx * width;
-      const cy = mark.cy * height;
-      return cx > 20 && cx < 75 && cy > 24 && cy < 38;
-    })).toBe(true);
-  });
-
-  it('does not turn isolated grain into scratch marks in scratch mode', () => {
-    const width = 64;
-    const height = 64;
-    const data = new Uint8ClampedArray(width * height * 4);
-
-    for (let index = 0; index < data.length; index += 4) {
-      data[index] = 96;
-      data[index + 1] = 88;
-      data[index + 2] = 82;
-      data[index + 3] = 255;
-    }
-
-    const grainPixels = [
-      { x: 14, y: 14 },
-      { x: 20, y: 18 },
-      { x: 44, y: 24 },
-      { x: 28, y: 41 },
-    ];
-    for (const grain of grainPixels) {
-      const pixelIndex = (grain.y * width + grain.x) * 4;
-      data[pixelIndex] = 220;
-      data[pixelIndex + 1] = 220;
-      data[pixelIndex + 2] = 220;
-    }
-
-    const marks = detectDustMarks(new ImageData(data, width, height), 55, 8, 'scratches');
+    const marks = detectDustMarks(new ImageData(data, width, height), 45, 8, 'spots');
     expect(marks).toHaveLength(0);
+  });
+
+  it('detects a long straight scratch as a single path mark', () => {
+    const width = 120;
+    const height = 120;
+    const data = createFlatField(width, height, 96);
+
+    for (let x = 18; x < 102; x += 1) {
+      const y = 58 + Math.round(Math.sin(x / 12));
+      const pixelIndex = (y * width + x) * 4;
+      data[pixelIndex] = 232;
+      data[pixelIndex + 1] = 232;
+      data[pixelIndex + 2] = 232;
+    }
+
+    const marks = detectDustMarks(new ImageData(data, width, height), 52, 8, 'scratches');
+    const pathMarks = marks.filter((mark) => mark.kind === 'path');
+
+    expect(pathMarks.length).toBeGreaterThanOrEqual(1);
+    expect(pathMarks.some((mark) => (
+      mark.points[0].x < 0.3
+      && mark.points[mark.points.length - 1].x > 0.7
+    ))).toBe(true);
+  });
+
+  it('detects a curved border-near hair as a path mark', () => {
+    const width = 110;
+    const height = 110;
+    const data = createFlatField(width, height, 90);
+
+    for (let y = 16; y < 94; y += 1) {
+      const x = 8 + Math.round(Math.sin(y / 10) * 5);
+      const pixelIndex = (y * width + x) * 4;
+      data[pixelIndex] = 18;
+      data[pixelIndex + 1] = 18;
+      data[pixelIndex + 2] = 18;
+    }
+
+    const marks = detectDustMarks(new ImageData(data, width, height), 58, 9, 'scratches');
+    expect(marks.some((mark) => (
+      mark.kind === 'path'
+      && mark.points.some((point) => point.x < 0.15)
+    ))).toBe(true);
+  });
+
+  it('preserves subtle speck detection on high-resolution scans after downsampling', () => {
+    const width = 4096;
+    const height = 3072;
+    const data = createFlatField(width, height, 82);
+    const centerX = 1740;
+    const centerY = 1290;
+
+    for (let offsetY = -2; offsetY <= 2; offsetY += 1) {
+      for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
+        const pixelIndex = ((centerY + offsetY) * width + centerX + offsetX) * 4;
+        data[pixelIndex] = 240;
+        data[pixelIndex + 1] = 240;
+        data[pixelIndex + 2] = 240;
+      }
+    }
+
+    const marks = detectDustMarks(new ImageData(data, width, height), 70, 10, 'spots');
+    expect(hasSpotNear(marks, width, height, centerX, centerY)).toBe(true);
   });
 });

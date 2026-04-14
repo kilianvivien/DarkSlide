@@ -24,6 +24,7 @@ class MockImageBitmap {
 
 const workerState = vi.hoisted(() => ({
   decode: vi.fn(),
+  detectDust: vi.fn(),
   detectFrame: vi.fn(),
   render: vi.fn(),
   autoAnalyze: vi.fn(),
@@ -159,6 +160,7 @@ vi.mock('./components/Sidebar', () => ({
     onInteractionEnd,
     onOpenSettings,
     onSettingsChange,
+    onDustRemovalChange,
     onLightSourceChange,
     onAutoAdjust,
     onExportOptionsChange,
@@ -171,6 +173,7 @@ vi.mock('./components/Sidebar', () => ({
     onInteractionEnd?: () => void;
     onOpenSettings: () => void;
     onSettingsChange: (settings: Record<string, unknown>) => void;
+    onDustRemovalChange?: (dustRemoval: Record<string, unknown>) => void;
     onLightSourceChange?: (lightSourceId: string | null) => void;
     onAutoAdjust?: () => void;
     onExportOptionsChange: (options: { filenameBase?: string }) => void;
@@ -205,6 +208,19 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={onAutoAdjust}>
           Auto
+        </button>
+        <button
+          type="button"
+          onClick={() => onDustRemovalChange?.({
+            autoEnabled: true,
+            autoDetectMode: 'both',
+            autoSensitivity: 50,
+            autoMaxRadius: 8,
+            manualBrushRadius: 10,
+            marks: [],
+          })}
+        >
+          Enable Auto Dust
         </button>
         <button
           type="button"
@@ -416,6 +432,10 @@ vi.mock('./utils/imageWorkerClient', () => ({
       return workerState.decode(...args);
     }
 
+    detectDust(...args: Parameters<typeof workerState.detectDust>) {
+      return workerState.detectDust(...args);
+    }
+
     detectFrame(...args: Parameters<typeof workerState.detectFrame>) {
       return workerState.detectFrame(...args);
     }
@@ -618,6 +638,7 @@ describe('App import and preview pipeline', () => {
     webviewWindowState.getByLabel.mockReset();
     webviewWindowState.constructorCalls.length = 0;
     workerState.decode.mockReset();
+    workerState.detectDust.mockReset();
     workerState.detectFrame.mockReset();
     workerState.render.mockReset();
     workerState.autoAnalyze.mockReset();
@@ -635,6 +656,7 @@ describe('App import and preview pipeline', () => {
     workerState.getGPUDiagnostics.mockClear();
     workerState.terminate.mockClear();
     workerState.constructorOptions = [];
+    workerState.detectDust.mockResolvedValue([]);
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     fileBridgeState.openImageFile.mockReset();
     fileBridgeState.openImageFileByPath.mockReset();
@@ -2491,6 +2513,34 @@ describe('App import and preview pipeline', () => {
     expect(drawImage).toHaveBeenCalledTimes(1);
     expect((drawImage.mock.calls[0]?.[0] as { width: number }).width).toBe(80);
     expect((drawImage.mock.calls[0]?.[0] as { height: number }).height).toBe(60);
+  });
+
+  it('runs auto dust detection the first time auto detection is enabled for a document', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 60)
+    ));
+    workerState.detectDust.mockResolvedValue([]);
+
+    render(<App />);
+    await uploadFile(createFile('auto-dust-on-load.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Enable Auto Dust'));
+    });
+    await flushMicrotasks();
+
+    expect(workerState.detectDust).toHaveBeenCalledTimes(1);
+    expect(workerState.detectDust.mock.calls[0]?.[0]).toMatchObject({
+      documentId: expect.any(String),
+      isColor: true,
+      mode: 'both',
+    });
   });
 
   it('falls back to a plain 2d context when WebKit rejects willReadFrequently', async () => {
