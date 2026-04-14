@@ -5,6 +5,7 @@ import {
   ColorMatrix,
   ColorProfileId,
   ConversionSettings,
+  DensityBalance,
   FilmProfile,
   HistogramMode,
   InversionMethod,
@@ -246,10 +247,14 @@ export type QueuedPreviewRender = {
   documentId: string;
   settings: ConversionSettings;
   isColor: boolean;
+  profileId: string | null;
   filmType?: 'negative' | 'slide';
   advancedInversion?: AdvancedInversionProfile | null;
+  estimatedDensityBalance?: DensityBalance | null;
   comparisonMode: 'processed' | 'original';
   targetMaxDimension: number;
+  inputProfileId: ColorProfileId;
+  outputProfileId: ColorProfileId;
   previewMode: 'draft' | 'settled';
   interactionQuality: InteractionQuality | null;
   histogramMode: HistogramMode;

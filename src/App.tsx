@@ -298,6 +298,7 @@ export default function App() {
     documentId: string;
     settings: ConversionSettings;
     isColor: boolean;
+    profileId: string | null;
     filmType?: 'negative' | 'slide';
     advancedInversion?: FilmProfile['advancedInversion'] | null;
     comparisonMode: 'processed' | 'original';
@@ -1130,38 +1131,39 @@ export default function App() {
     };
   }, [calculateTargetMaxDimension]);
 
-  const executePreviewRender = useCallback(async (
-    documentId: string,
-    settings: ConversionSettings,
-    isColor: boolean,
-    filmType: 'negative' | 'slide',
-    advancedInversion: FilmProfile['advancedInversion'] | null,
-    nextComparisonMode: 'processed' | 'original',
-    nextTargetMaxDimension: number,
-    previewMode: 'draft' | 'settled',
-    interactionQuality: InteractionQuality | null,
-    histogramMode: HistogramMode,
-    maskTuning?: MaskTuning,
-    colorMatrix?: ColorMatrix,
-    tonalCharacter?: TonalCharacter,
-    labStyleToneCurve?: FilmProfile['toneCurve'],
-    labStyleChannelCurves?: { r?: FilmProfile['toneCurve']; g?: FilmProfile['toneCurve']; b?: FilmProfile['toneCurve'] },
-    labTonalCharacterOverride?: Partial<TonalCharacter>,
-    labSaturationBias?: number,
-    labTemperatureBias?: number,
-    highlightDensityEstimate?: number,
-    flareFloor?: [number, number, number] | null,
-    lightSourceBias?: [number, number, number],
-  ) => {
+  const executePreviewRender = useCallback(async (request: QueuedPreviewRender) => {
     const worker = workerClientRef.current;
     if (!worker) return;
 
+    const {
+      documentId,
+      settings,
+      isColor,
+      profileId,
+      filmType = 'negative',
+      advancedInversion = null,
+      estimatedDensityBalance = null,
+      comparisonMode: nextComparisonMode,
+      targetMaxDimension: nextTargetMaxDimension,
+      inputProfileId,
+      outputProfileId,
+      previewMode,
+      interactionQuality,
+      histogramMode,
+      maskTuning,
+      colorMatrix,
+      tonalCharacter,
+      labStyleToneCurve,
+      labStyleChannelCurves,
+      labTonalCharacterOverride,
+      labSaturationBias,
+      labTemperatureBias,
+      highlightDensityEstimate,
+      flareFloor,
+      lightSourceBias,
+    } = request;
     const activeTabDocument = tabsRef.current.find((tab) => tab.id === documentId)?.document ?? null;
     const revision = (activeTabDocument?.renderRevision ?? 0) + 1;
-    const inputProfileId = activeTabDocument
-      ? getResolvedInputProfileId(activeTabDocument.source, activeTabDocument.colorManagement)
-      : 'srgb';
-    const outputProfileId = activeTabDocument?.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     const shouldTrackHeavyRenderIndicator = previewMode === 'settled' && interactionQuality === null;
     const adaptiveState = getSettledAdaptiveState(documentId);
     const resolvedHighlightDensityEstimate = shouldTrackHeavyRenderIndicator && nextComparisonMode === 'processed'
@@ -1172,6 +1174,7 @@ export default function App() {
       documentId,
       settings,
       isColor,
+      profileId,
       filmType,
       advancedInversion,
       comparisonMode: nextComparisonMode,
@@ -1222,10 +1225,10 @@ export default function App() {
         documentId,
         settings,
         isColor,
-        profileId: activeTabDocument?.profileId ?? null,
+        profileId,
         filmType,
         advancedInversion,
-        estimatedDensityBalance: activeTabDocument?.estimatedDensityBalance ?? null,
+        estimatedDensityBalance,
         inputProfileId,
         outputProfileId,
         revision,
@@ -1361,10 +1364,14 @@ export default function App() {
             documentId,
             settings,
             isColor,
+            profileId,
             filmType,
             advancedInversion,
+            estimatedDensityBalance,
             comparisonMode: nextComparisonMode,
             targetMaxDimension: nextTargetMaxDimension,
+            inputProfileId,
+            outputProfileId,
             previewMode: 'settled',
             interactionQuality: null,
             histogramMode,
@@ -1422,29 +1429,7 @@ export default function App() {
     cancelPending: cancelPendingPreviewRender,
   } = useRenderQueue<QueuedPreviewRender>({
     render: async (next) => {
-      await executePreviewRender(
-        next.documentId,
-        next.settings,
-        next.isColor,
-        next.filmType ?? 'negative',
-        next.advancedInversion ?? null,
-        next.comparisonMode,
-        next.targetMaxDimension,
-        next.previewMode,
-        next.interactionQuality,
-        next.histogramMode,
-        next.maskTuning,
-        next.colorMatrix,
-        next.tonalCharacter,
-        next.labStyleToneCurve,
-        next.labStyleChannelCurves,
-        next.labTonalCharacterOverride,
-        next.labSaturationBias,
-        next.labTemperatureBias,
-        next.highlightDensityEstimate,
-        next.flareFloor,
-        next.lightSourceBias,
-      );
+      await executePreviewRender(next);
     },
     cancelActive: (next) => {
       void workerClientRef.current?.cancelActivePreviewRender(next.documentId);
@@ -1494,6 +1479,8 @@ export default function App() {
     const highlightDensityEstimate = getSettledAdaptiveState(documentId).committedHighlightDensity;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const flareFloor = documentState.estimatedFlare;
+    const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
+    const outputProfileId = documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     const previewMode = isDraftPreview ? 'draft' : 'settled';
     const interactionQuality: InteractionQuality | null = comparisonMode === 'processed'
       ? (
@@ -1513,10 +1500,14 @@ export default function App() {
       documentId,
       settings,
       isColor,
+      profileId: activeProfile.id,
       filmType: profileFilmType,
       advancedInversion: profileAdvancedInversion,
+      estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
       comparisonMode,
       targetMaxDimension: renderTargetDimension,
+      inputProfileId,
+      outputProfileId,
       previewMode,
       interactionQuality,
       histogramMode,
@@ -1537,12 +1528,13 @@ export default function App() {
         documentId,
         settings,
         isColor,
+        profileId: activeProfile.id,
         filmType: profileFilmType,
         advancedInversion: profileAdvancedInversion,
         comparisonMode,
         targetMaxDimension: renderTargetDimension,
-        inputProfileId: getResolvedInputProfileId(documentState.source, documentState.colorManagement),
-        outputProfileId: documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId,
+        inputProfileId,
+        outputProfileId,
         maskTuning: profileMaskTuning,
         colorMatrix: profileColorMatrix,
         tonalCharacter: profileTonalCharacter,
@@ -1562,29 +1554,33 @@ export default function App() {
 
       const switchDraftTargetDimension = Math.min(fullRenderTargetDimension, ultraSmoothDragEnabled ? 768 : 1280);
 
-      void executePreviewRender(
+      void executePreviewRender({
         documentId,
         settings,
         isColor,
-        profileFilmType,
-        profileAdvancedInversion,
+        profileId: activeProfile.id,
+        filmType: profileFilmType,
+        advancedInversion: profileAdvancedInversion,
+        estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
         comparisonMode,
-        switchDraftTargetDimension,
-        'draft',
-        'balanced',
-        'throttled',
-        profileMaskTuning,
-        profileColorMatrix,
-        profileTonalCharacter,
-        activeLabStyle?.toneCurve,
-        activeLabStyle?.channelCurves,
-        activeLabStyle?.tonalCharacterOverride,
-        activeLabStyle?.saturationBias ?? 0,
-        activeLabStyle?.temperatureBias ?? 0,
+        targetMaxDimension: switchDraftTargetDimension,
+        inputProfileId,
+        outputProfileId,
+        previewMode: 'draft',
+        interactionQuality: 'balanced',
+        histogramMode: 'throttled',
+        maskTuning: profileMaskTuning,
+        colorMatrix: profileColorMatrix,
+        tonalCharacter: profileTonalCharacter,
+        labStyleToneCurve: activeLabStyle?.toneCurve,
+        labStyleChannelCurves: activeLabStyle?.channelCurves,
+        labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
+        labSaturationBias: activeLabStyle?.saturationBias ?? 0,
+        labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
         highlightDensityEstimate,
         flareFloor,
         lightSourceBias,
-      ).finally(() => {
+      }).finally(() => {
         if (activeDocumentIdRef.current !== documentId) {
           return;
         }
@@ -1657,6 +1653,7 @@ export default function App() {
     activeProfile.advancedInversion,
     activeProfile.colorMatrix,
     activeProfile.filmType,
+    activeProfile.id,
     activeProfile.maskTuning,
     activeProfile.tonalCharacter,
     activeProfile.type,
@@ -1666,6 +1663,7 @@ export default function App() {
     displaySettings,
     documentState?.id,
     documentState?.colorManagement,
+    documentState?.estimatedDensityBalance,
     documentState?.estimatedFlare,
     documentState?.lightSourceId,
     documentState?.previewLevels.length,

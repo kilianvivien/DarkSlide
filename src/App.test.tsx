@@ -988,7 +988,7 @@ describe('App import and preview pipeline', () => {
         rotation: number;
       };
     };
-    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
+    expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 200, g: 180, b: 150 });
     expect(latestRenderCall.settings.rotation).toBe(0);
 
     const renderCallsAfterGeneric = workerState.render.mock.calls.length;
@@ -1008,6 +1008,97 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 200, g: 180, b: 150 });
     expect(latestRenderCall.settings.rotation).toBe(90);
+  });
+
+  it('keeps the first RAW preset switch self-consistent while the import preview render is still in flight', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('scan.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/scan.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [135, 163, 107][index % 3]),
+      color_space: 'sRGB',
+      orientation: 1,
+    });
+    workerState.decode.mockResolvedValue(createDecodedImage(8, 8));
+
+    const importRender = deferred<ReturnType<typeof createRenderResult>>();
+    const switchedRender = deferred<ReturnType<typeof createRenderResult>>();
+    workerState.render
+      .mockReturnValueOnce(importRender.promise)
+      .mockReturnValueOnce(switchedRender.promise);
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'CineStill 400D' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+
+    const firstPayload = workerState.render.mock.calls[0]?.[0] as {
+      documentId: string;
+      revision: number;
+    };
+    importRender.resolve(createRenderResult(firstPayload.documentId, firstPayload.revision, 8, 8));
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(2);
+
+    const secondPayload = workerState.render.mock.calls[1]?.[0] as {
+      profileId: string | null;
+      settings: {
+        exposure: number;
+        contrast: number;
+        saturation: number;
+        temperature: number;
+        tint: number;
+        redBalance: number;
+        blueBalance: number;
+        blackPoint: number;
+        highlightProtection: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+    };
+
+    expect(secondPayload.profileId).toBe('cinestill-400d');
+    expect(secondPayload.settings).toMatchObject({
+      exposure: 5,
+      contrast: 11,
+      saturation: 108,
+      temperature: 1,
+      tint: -1,
+      redBalance: 1.1,
+      blueBalance: 0.96,
+      blackPoint: 7,
+      highlightProtection: 38,
+      filmBaseSample: { r: 135, g: 163, b: 107 },
+    });
+
+    const secondRenderPayload = workerState.render.mock.calls[1]?.[0] as {
+      documentId: string;
+      revision: number;
+    };
+    switchedRender.resolve(createRenderResult(secondRenderPayload.documentId, secondRenderPayload.revision, 8, 8));
+    await flushMicrotasks();
   });
 
   it('auto-maps CS-LITE to cool, white, and warm modes as film profiles change', async () => {
