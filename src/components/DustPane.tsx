@@ -56,7 +56,7 @@ export const DustPane = memo(function DustPane({
         <button
           type="button"
           onClick={() => onBrushActiveChange(!brushActive)}
-          className={`mb-4 flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-[11px] font-medium transition-all ${
+          className={`mb-4 flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium transition-all ${
             brushActive
               ? 'border-red-500 bg-red-500/15 text-red-300'
               : 'border-zinc-800 bg-zinc-900 text-zinc-200 hover:bg-zinc-800'
@@ -75,8 +75,8 @@ export const DustPane = memo(function DustPane({
           onInteractionStart={onInteractionStart}
           onInteractionEnd={onInteractionEnd}
         />
-        <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-          Paint over dust or scratches, then click a manual mark to fine-tune it with the same brush-size shortcuts. <span className="text-zinc-600">Alt-click removes a mark, and Backspace removes the last manual one.</span>
+        <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+          Paint over dust or scratches directly on the image. Click a manual mark to resize it with the brush shortcuts. <span className="text-zinc-600">Alt-click removes a mark, and Backspace removes the last manual one.</span>
         </p>
         {manualCount > 0 && (
           <button
@@ -92,14 +92,16 @@ export const DustPane = memo(function DustPane({
 
       {/* ── Auto Detection (Experimental) ── */}
       <section>
-        <h2 className="mb-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
-          <Sparkles size={12} /> Auto Detection
+        <div className="mb-4 flex items-center gap-2">
+          <h2 className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+            <Sparkles size={12} /> Auto Detection
+          </h2>
           <span className="ml-1 flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400">
             <FlaskConical size={8} /> Experimental
           </span>
-        </h2>
+        </div>
 
-        <div className="mb-4">
+        <div className="space-y-4">
           <div className="grid grid-cols-3 gap-2">
             {([
               ['spots', 'Spots'],
@@ -120,68 +122,77 @@ export const DustPane = memo(function DustPane({
               </button>
             ))}
           </div>
-        </div>
 
-        <Slider
-          label="Detection Bias"
-          value={dustRemoval.autoSensitivity}
-          min={0}
-          max={100}
-          onChange={(value) => updateDustRemoval({ autoSensitivity: value })}
-          onInteractionStart={onInteractionStart}
-          onInteractionEnd={onInteractionEnd}
-        />
-        <p className="mt-2 text-[10px] uppercase tracking-widest text-zinc-500">
-          Conservative on the left, aggressive on the right.
-        </p>
-        <Slider
-          label="Maximum Defect Width"
-          value={dustRemoval.autoMaxRadius}
-          min={1}
-          max={30}
-          unit="px"
-          onChange={(value) => updateDustRemoval({ autoMaxRadius: value })}
-          onInteractionStart={onInteractionStart}
-          onInteractionEnd={onInteractionEnd}
-        />
+          <div className="space-y-0.5">
+            <Slider
+              label="Detection Bias"
+              value={dustRemoval.autoSensitivity}
+              min={0}
+              max={100}
+              onChange={(value) => updateDustRemoval({ autoSensitivity: value })}
+              onInteractionStart={onInteractionStart}
+              onInteractionEnd={onInteractionEnd}
+            />
+            <p className="-mt-1 text-[11px] leading-relaxed text-zinc-500">
+              Lower favors precision. Higher tries to catch more defects.
+            </p>
+          </div>
 
-        <div className="mt-2 flex items-center gap-3">
+          <Slider
+            label="Maximum Defect Width"
+            value={dustRemoval.autoMaxRadius}
+            min={1}
+            max={30}
+            unit="px"
+            onChange={(value) => updateDustRemoval({ autoMaxRadius: value })}
+            onInteractionStart={onInteractionStart}
+            onInteractionEnd={onInteractionEnd}
+          />
+
           <button
             type="button"
             onClick={onDetectNow}
             disabled={isDetecting}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-[11px] font-medium text-zinc-200 transition-all hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm font-medium text-zinc-200 transition-all hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60"
           >
             <Sparkles size={13} />
             {isDetecting ? 'Detecting…' : 'Detect Now'}
           </button>
-          {autoCount > 0 && (
-            <span className="text-[10px] uppercase tracking-widest text-zinc-500">
-              {autoSpotCount} spots · {autoPathCount} paths
-            </span>
+
+          {(autoCount > 0 || dustRemoval.autoEnabled) && (
+            <div className="flex items-center justify-between gap-3">
+              <span>
+                {autoCount > 0 ? (
+                  <span className="text-[10px] uppercase tracking-widest text-zinc-500">
+                    {autoSpotCount} spots · {autoPathCount} paths
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-zinc-500">Runs automatically when enabled below.</span>
+                )}
+              </span>
+              {autoCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => updateDustRemoval({ marks: dustRemoval.marks.filter((mark) => mark.source !== 'auto') })}
+                  className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 font-semibold text-zinc-500 transition-all hover:text-zinc-300"
+                >
+                  <Eraser size={11} />
+                  Clear
+                </button>
+              )}
+            </div>
           )}
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={dustRemoval.autoEnabled}
+              onChange={(event) => updateDustRemoval({ autoEnabled: event.target.checked })}
+              className="accent-zinc-200"
+            />
+            <span className="text-[11px] text-zinc-400">Auto-detect on image load</span>
+          </label>
         </div>
-
-        {autoCount > 0 && (
-          <button
-            type="button"
-            onClick={() => updateDustRemoval({ marks: dustRemoval.marks.filter((mark) => mark.source !== 'auto') })}
-            className="mt-3 flex items-center gap-2 rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-500 transition-all hover:text-zinc-300"
-          >
-            <Eraser size={11} />
-            Clear {autoCount} auto {autoCount === 1 ? 'mark' : 'marks'}
-          </button>
-        )}
-
-        <label className="mt-4 flex items-center gap-2 text-[11px] text-zinc-500">
-          <input
-            type="checkbox"
-            checked={dustRemoval.autoEnabled}
-            onChange={(event) => updateDustRemoval({ autoEnabled: event.target.checked })}
-            className="accent-zinc-200"
-          />
-          Auto-detect on image load
-        </label>
       </section>
 
     </div>
