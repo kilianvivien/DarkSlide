@@ -257,10 +257,14 @@ export function buildRawInitialSettings(
     } satisfies ConversionSettings;
   }
 
+  const channelBalance = getFilmBaseChannelBalance(estimatedFilmBaseSample);
+
   return {
     ...nextSettings,
-    ...getFilmBaseCorrectionSettings(estimatedFilmBaseSample),
-    exposure: getFilmBaseExposure(estimatedFilmBaseSample),
+    filmBaseSample: null,
+    redBalance: clamp(nextSettings.redBalance * channelBalance.redBalance, 0.01, 8),
+    greenBalance: clamp(nextSettings.greenBalance * channelBalance.greenBalance, 0.01, 8),
+    blueBalance: clamp(nextSettings.blueBalance * channelBalance.blueBalance, 0.01, 8),
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
 }

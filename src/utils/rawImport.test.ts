@@ -148,17 +148,40 @@ describe('rawImport', () => {
     expect(rotationFromExifOrientation(1)).toBe(0);
   });
 
-  it('builds RAW startup settings with derived balance, exposure, and rotation defaults', () => {
+  it('builds RAW startup settings with derived balance and rotation defaults', () => {
     const base = createDefaultSettings();
     const rgb = createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]);
 
     expect(buildRawInitialSettings(base, rgb, 64, 48, 6)).toMatchObject({
       rotation: 90,
       filmBaseSample: null,
-      exposure: getFilmBaseExposure({ r: 160, g: 150, b: 140 }),
+      exposure: base.exposure,
       redBalance: (255 - 150) / (255 - 160),
       greenBalance: 1,
       blueBalance: (255 - 150) / (255 - 140),
+    });
+  });
+
+  it('keeps stock-specific tuning while layering border-derived balance correction on top', () => {
+    const base = createDefaultSettings({
+      exposure: 6,
+      temperature: 8,
+      tint: -2,
+      redBalance: 1.16,
+      blueBalance: 0.86,
+      filmBaseSample: { r: 200, g: 180, b: 150 },
+    });
+    const rgb = createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]);
+
+    expect(buildRawInitialSettings(base, rgb, 64, 48, 6)).toMatchObject({
+      rotation: 90,
+      filmBaseSample: null,
+      exposure: 6,
+      temperature: 8,
+      tint: -2,
+      redBalance: 1.16 * ((255 - 150) / (255 - 160)),
+      greenBalance: 1,
+      blueBalance: 0.86 * ((255 - 150) / (255 - 140)),
     });
   });
 
@@ -225,7 +248,7 @@ describe('rawImport', () => {
     );
   });
 
-  it('uses RAW startup settings that retain midtone spread and reduce blue dominance versus subtractive film-base startup', () => {
+  it('uses RAW startup settings that avoid subtractive film-base startup while keeping a controlled channel balance', () => {
     const width = 80;
     const height = 56;
     const estimatedFilmBaseSample = { r: 76, g: 73, b: 68 } as const;
@@ -244,16 +267,12 @@ describe('rawImport', () => {
 
     const startupHistogram = processImageData(startupImage, startupSettings, true, 'processed');
     const legacyHistogram = processImageData(legacyImage, legacySettings, true, 'processed');
-    const startupMidtones = sumBins(startupHistogram.l.slice(32, 224));
-    const startupEdges = sumBins(startupHistogram.l.slice(0, 16)) + sumBins(startupHistogram.l.slice(240));
-    const legacyMidtones = sumBins(legacyHistogram.l.slice(32, 224));
     const startupMeans = meanInnerChannels(startupImage);
-    const legacyMeans = meanInnerChannels(legacyImage);
 
-    expect(startupMidtones).toBeGreaterThan(legacyMidtones);
-    expect(startupMidtones).toBeGreaterThan(startupEdges);
-    expect(startupMeans.r).toBeGreaterThan(legacyMeans.r);
-    expect(startupMeans.g).toBeGreaterThan(legacyMeans.g);
+    expect(startupSettings.exposure).toBe(baseSettings.exposure);
+    expect(startupSettings.redBalance).toBeCloseTo(1.12 * ((255 - 73) / (255 - 76)));
+    expect(startupSettings.blueBalance).toBeCloseTo(0.9 * ((255 - 73) / (255 - 68)));
+    expect(sumBins(startupHistogram.l.slice(240))).toBeLessThanOrEqual(sumBins(legacyHistogram.l.slice(240)));
     expect(startupMeans.b / Math.max(startupMeans.r, 1)).toBeLessThan(1.35);
     expect(startupMeans.b / Math.max(startupMeans.g, 1)).toBeLessThan(1.35);
   });

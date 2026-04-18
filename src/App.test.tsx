@@ -1018,13 +1018,204 @@ describe('App import and preview pipeline', () => {
       };
     };
     expect(latestRenderCall.settings.filmBaseSample).toBeNull();
-    expect(latestRenderCall.settings.exposure).toBe(
-      Math.round(50 * Math.log2((245 / 255) / ((255 - 180) / 255))),
-    );
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo((255 - 180) / (255 - 200));
+    expect(latestRenderCall.settings.exposure).toBe(0);
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * ((255 - 180) / (255 - 200)));
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo((255 - 180) / (255 - 150));
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * ((255 - 180) / (255 - 150)));
     expect(latestRenderCall.settings.rotation).toBe(90);
+  });
+
+  it('activates an already open document instead of importing the same file into a duplicate tab', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile
+      .mockResolvedValueOnce({
+        file: createFile('scan.nef', 'application/octet-stream'),
+        path: '/Users/tester/Desktop/scan.nef',
+        size: 12_345_678,
+      })
+      .mockResolvedValueOnce({
+        file: createFile('scan.nef', 'application/octet-stream'),
+        path: '/Users/tester/Desktop/scan.nef',
+        size: 12_345_678,
+      });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 89, g: 105, b: 55 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.decode).toHaveBeenCalledTimes(1);
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(fileBridgeState.openImageFile).toHaveBeenCalledTimes(2);
+    expect(workerState.decode).toHaveBeenCalledTimes(1);
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the initial RAW import render on stock-aware startup settings without reapplying the estimated film base', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('startup.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/startup.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [76, 73, 68][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        filmBaseSample: { r: number; g: number; b: number } | null;
+        exposure: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        rotation: number;
+      };
+    };
+
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
+    expect(latestRenderCall.settings.exposure).toBe(0);
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * ((255 - 73) / (255 - 76)));
+    expect(latestRenderCall.settings.greenBalance).toBe(1);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * ((255 - 73) / (255 - 68)));
+    expect(latestRenderCall.settings.rotation).toBe(90);
+  });
+
+  it('uses the roll film stock to seed RAW startup from the matching profile before layering the border correction', async () => {
+    localStorage.setItem('darkslide_rolls_v2', JSON.stringify({
+      version: 2,
+      rolls: [{
+        id: 'roll-gold-200',
+        name: 'Gold Kayseri',
+        filmStock: 'Gold200',
+        profileId: 'generic-color',
+        camera: null,
+        date: null,
+        notes: '',
+        filmBaseSample: { r: 81, g: 94, b: 47 },
+        createdAt: 1,
+        directory: '/Users/tester/Desktop',
+      }],
+    }));
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('gold.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/gold.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 89, g: 105, b: 55 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        contrast: number;
+        saturation: number;
+        temperature: number;
+        tint: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        blackPoint: number;
+        highlightProtection: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+        rotation: number;
+      };
+      profileId: string | null;
+      labStyleId: string | null;
+      lightSourceId: string | null;
+    };
+
+    expect(latestRenderCall.profileId).toBe('raw-import-result');
+    expect(latestRenderCall.settings).toMatchObject({
+      exposure: 6,
+      contrast: 18,
+      saturation: 125,
+      temperature: 8,
+      tint: -2,
+      greenBalance: 1,
+      blackPoint: 10,
+      highlightProtection: 20,
+      filmBaseSample: null,
+      rotation: 90,
+    });
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.16 * ((255 - 105) / (255 - 89)));
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.86 * ((255 - 105) / (255 - 55)));
   });
 
   it('keeps the first RAW preset switch self-consistent while the import preview render is still in flight', async () => {
@@ -1119,6 +1310,87 @@ describe('App import and preview pipeline', () => {
     };
     switchedRender.resolve(createRenderResult(secondRenderPayload.documentId, secondRenderPayload.revision, 8, 8));
     await flushMicrotasks();
+  });
+
+  it('resets back to the exact Raw Import Result startup state when that preset is selected', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('reset-raw.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/reset-raw.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [76, 73, 68][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+    workerState.autoAnalyze.mockResolvedValue({
+      exposure: 6,
+      blackPoint: 4,
+      whitePoint: 238,
+      temperature: 22,
+      tint: 3,
+    });
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset adjustments to current preset' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        filmBaseSample: { r: number; g: number; b: number } | null;
+        exposure: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        blackPoint: number;
+        whitePoint: number;
+        temperature: number;
+        tint: number;
+        rotation: number;
+      };
+    };
+
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
+    expect(latestRenderCall.settings.exposure).toBe(0);
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * ((255 - 73) / (255 - 76)));
+    expect(latestRenderCall.settings.greenBalance).toBe(1);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * ((255 - 73) / (255 - 68)));
+    expect(latestRenderCall.settings.blackPoint).toBe(8);
+    expect(latestRenderCall.settings.whitePoint).toBe(245);
+    expect(latestRenderCall.settings.temperature).toBe(0);
+    expect(latestRenderCall.settings.tint).toBe(0);
+    expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
   it('auto-maps CS-LITE to cool, white, and warm modes as film profiles change', async () => {

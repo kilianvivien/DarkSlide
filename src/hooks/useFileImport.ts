@@ -46,6 +46,8 @@ type TransientNoticeState = {
 type TabsApi = {
   openDocument: (document: WorkspaceDocument, options?: { activate?: boolean }) => void;
   replaceDocument: (documentId: string, document: WorkspaceDocument) => void;
+  activateDocument: (documentId: string) => void;
+  findDocumentBySourcePath: (nativePath: string) => DocumentTab | null;
   removeDocument: (documentId: string) => {
     removedTab: DocumentTab | null;
     remainingTabs: DocumentTab[];
@@ -79,6 +81,51 @@ type UseFileImportOptions = {
   resolveRollId?: (nativePath: string | null | undefined, fileName: string) => string | null;
   getRollById?: (rollId: string | null) => Roll | null;
 };
+
+const RAW_GENERIC_PROFILE_ID = 'generic-color';
+
+function normalizeProfileLookupValue(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function resolveRawStartupProfile(
+  roll: Roll | null,
+  persistedProfiles: FilmProfile[],
+  fallbackProfile: FilmProfile,
+) {
+  const genericProfile = FILM_PROFILES.find((profile) => profile.id === RAW_GENERIC_PROFILE_ID) ?? fallbackProfile;
+  const availableProfiles = [...persistedProfiles, ...FILM_PROFILES];
+
+  const rollStockKey = normalizeProfileLookupValue(roll?.filmStock);
+  if (!rollStockKey) {
+    if (roll?.profileId && roll.profileId !== RAW_GENERIC_PROFILE_ID) {
+      const exactProfile = availableProfiles.find((profile) => profile.id === roll.profileId);
+      if (exactProfile) {
+        return exactProfile;
+      }
+    }
+    return genericProfile;
+  }
+
+  const stockMatchedProfile = availableProfiles.find((profile) => (
+    normalizeProfileLookupValue(profile.filmStock) === rollStockKey
+    || normalizeProfileLookupValue(profile.name) === rollStockKey
+    || normalizeProfileLookupValue(profile.id) === rollStockKey
+  ));
+
+  if (stockMatchedProfile) {
+    return stockMatchedProfile;
+  }
+
+  if (roll?.profileId && roll.profileId !== RAW_GENERIC_PROFILE_ID) {
+    const exactProfile = availableProfiles.find((profile) => profile.id === roll.profileId);
+    if (exactProfile) {
+      return exactProfile;
+    }
+  }
+
+  return genericProfile;
+}
 
 export function useFileImport({
   workerClientRef,
@@ -160,6 +207,15 @@ export function useFileImport({
     setImportError(null);
     resetUiForImport();
 
+    if (nativePath) {
+      const existingTab = tabsApi.findDocumentBySourcePath(nativePath);
+      if (existingTab) {
+        tabsApi.activateDocument(existingTab.id);
+        setBlockingOverlay(null);
+        return existingTab.id;
+      }
+    }
+
     const evictedTab = tabsApi.evictOldestCleanTab(maxTabs);
     if (evictedTab === 'all-dirty') {
       const message = `You already have ${maxTabs} tabs open. Close a dirty tab before importing another image.`;
@@ -178,7 +234,8 @@ export function useFileImport({
 
     const documentId = crypto.randomUUID();
     const rollId = resolveRollId?.(nativePath, file.name) ?? null;
-    const rawDefaultProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? fallbackProfile;
+    const roll = getRollById?.(rollId) ?? null;
+    const rawDefaultProfile = resolveRawStartupProfile(roll, persistedProfilesRef.current, fallbackProfile);
     const parsedPrefs = loadPreferences();
     const preferredColorNegativeInversion = parsedPrefs?.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION;
     const initialProfile = rawImport
@@ -189,7 +246,6 @@ export function useFileImport({
           : fallbackProfile
       );
     const initialInversionMethod = resolveDefaultInversionMethodForProfile(initialProfile, preferredColorNegativeInversion);
-    const roll = getRollById?.(rollId) ?? null;
     activeDocumentIdRef.current = documentId;
 
     appendDiagnostic({
@@ -220,7 +276,9 @@ export function useFileImport({
       settings: {
         ...createDefaultSettings(structuredClone(initialProfile.defaultSettings)),
         inversionMethod: initialInversionMethod,
-        filmBaseSample: roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample,
+        filmBaseSample: rawImport
+          ? null
+          : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample),
         flatFieldEnabled: defaultFlatFieldEnabled,
       },
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
@@ -258,7 +316,9 @@ export function useFileImport({
       let initialSettings: ConversionSettings = {
         ...createDefaultSettings(structuredClone(initialProfile.defaultSettings)),
         inversionMethod: initialInversionMethod,
-        filmBaseSample: roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample,
+        filmBaseSample: rawImport
+          ? null
+          : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample),
         flatFieldEnabled: defaultFlatFieldEnabled,
       };
       let rawImportProfile: FilmProfile | null = null;
@@ -284,9 +344,6 @@ export function useFileImport({
             ...initialSettings,
             flatFieldEnabled: defaultFlatFieldEnabled,
           };
-          if (roll?.filmBaseSample) {
-            initialSettings.filmBaseSample = structuredClone(roll.filmBaseSample);
-          }
           rawImportProfile = createRawImportProfile(initialProfile, initialSettings);
 
           if (estimatedFilmBase) {
@@ -392,7 +449,7 @@ export function useFileImport({
         return null;
       }
 
-      if (initialSettings.inversionMethod !== 'advanced-hd' && !initialSettings.filmBaseSample && decoded.estimatedFilmBaseSample) {
+      if (!rawImport && initialSettings.inversionMethod !== 'advanced-hd' && !initialSettings.filmBaseSample && decoded.estimatedFilmBaseSample) {
         initialSettings = {
           ...initialSettings,
           filmBaseSample: structuredClone(decoded.estimatedFilmBaseSample),
@@ -453,13 +510,13 @@ export function useFileImport({
         estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
         lightSourceId: resolveLightSourceIdForProfile(
           resolvedProfile,
-          activeSidecar?.lightSourceProfileId ?? savedLightSourceId,
+          activeSidecar?.lightSourceProfileId ?? resolvedProfile.lightSourceId ?? savedLightSourceId,
           { blackAndWhiteEnabled: initialSettings.blackAndWhite.enabled },
         ),
         cropSource: null,
         rawImportProfile,
         profileId: activeSidecar?.profileId ?? resolvedProfile.id,
-        labStyleId: activeSidecar?.labStyleId ?? savedLabStyleId ?? null,
+        labStyleId: activeSidecar?.labStyleId ?? resolvedProfile.labStyleId ?? savedLabStyleId ?? null,
         rollId,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
@@ -557,6 +614,7 @@ export function useFileImport({
     setTransientNotice,
     tabsApi,
     workerClientRef,
+    getRollById,
     resolveRollId,
   ]);
 

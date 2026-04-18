@@ -445,6 +445,10 @@ export function useWorkspaceCommands({
     tabsApi: {
       openDocument,
       replaceDocument,
+      activateDocument: setActiveTabId,
+      findDocumentBySourcePath: (nativePath) => (
+        tabsRef.current.find((tab) => tab.document.source.nativePath === nativePath) ?? null
+      ),
       removeDocument,
       evictOldestCleanTab,
     },
@@ -982,6 +986,11 @@ export function useWorkspaceCommands({
   const handleReset = useCallback(() => {
     if (!documentState) return;
     const nextSettings = buildProfileSettingsForDocument(activeProfile, documentState);
+    const nextInversionMethod = resolveProfileSwitchInversionMethod(
+      activeProfile,
+      documentState,
+      prefsSnapshotRef.current.defaultColorNegativeInversion,
+    );
     if (activeProfile.includesFraming === false) {
       preserveCurrentFraming(nextSettings, documentState.settings);
     }
@@ -990,7 +999,7 @@ export function useWorkspaceCommands({
       ...current,
       settings: {
         ...nextSettings,
-        inversionMethod: resolveDefaultInversionMethodForProfile(activeProfile, prefsSnapshotRef.current.defaultColorNegativeInversion),
+        inversionMethod: nextInversionMethod,
       },
       dirty: false,
     }));
