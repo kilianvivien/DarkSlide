@@ -56,7 +56,6 @@ import { decodeTiffRaster, TiffDecodeError } from './tiff';
 import { convertImageDataColorProfile, getColorProfileIdFromName, identifyIccProfile } from './colorProfiles';
 import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata';
 import { detectDustMarks } from './dustDetection';
-import { applyFlatFieldCorrection } from './flatField';
 import { detectFrame } from './frameDetection';
 import { estimateFlare } from './flareEstimation';
 import { applyDustRemoval } from './dustRemoval';
@@ -98,14 +97,7 @@ interface StoredTileJob {
   height: number;
   halo: number;
   comparisonMode?: 'processed' | 'original';
-  flatFieldHandledInWorker?: boolean;
 }
-
-type LoadedFlatField = {
-  name: string;
-  size: number;
-  data: Float32Array;
-};
 
 const documents = new Map<string, StoredDocument>();
 const tileJobs = new Map<string, StoredTileJob>();
@@ -113,7 +105,6 @@ const cancelledJobs = new Map<string, number>();
 let rotateCanvas: OffscreenCanvas | null = null;
 let outputCanvas: OffscreenCanvas | null = null;
 let previewPresentationCanvas: OffscreenCanvas | null = null;
-let activeFlatField: LoadedFlatField | null = null;
 const TILE_SIZE = 1024;
 const CANCELLED_JOB_TTL_MS = 2_000;
 
@@ -684,20 +675,6 @@ function handleComputeFlare(documentId: string) {
   return flare;
 }
 
-function handleLoadFlatField(name: string, size: number, data: Float32Array) {
-  activeFlatField = {
-    name,
-    size,
-    data: new Float32Array(data.buffer.slice(0)),
-  };
-  return { loaded: true } as const;
-}
-
-function handleClearFlatField() {
-  activeFlatField = null;
-  return { cleared: true } as const;
-}
-
 function handlePreparePreviewBitmap(payload: PreparePreviewBitmapRequest) {
   previewPresentationCanvas = ensureCanvas(
     previewPresentationCanvas,
@@ -720,14 +697,6 @@ function handlePreparePreviewBitmap(payload: PreparePreviewBitmapRequest) {
     revision: payload.revision,
     imageBitmap: previewPresentationCanvas.transferToImageBitmap(),
   } satisfies PreparedPreviewBitmapResult;
-}
-
-function applyActiveFlatFieldIfNeeded(imageData: ImageData, enabled: boolean | undefined) {
-  if (!activeFlatField || !enabled) {
-    return;
-  }
-
-  applyFlatFieldCorrection(imageData.data, imageData.width, imageData.height, activeFlatField.data, activeFlatField.size);
 }
 
 function applyDustRemovalIfNeeded(
@@ -824,7 +793,6 @@ function handleDustDetect(payload: DustDetectRequest) {
   }
 
   const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
-  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   const residualBaseOffset = computeResidualBaseOffset(
     imageData,
     payload.settings,
@@ -1020,7 +988,6 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
       height: transformed.height,
       halo: getHalo(payload.settings, payload.comparisonMode),
       comparisonMode: payload.comparisonMode,
-      flatFieldHandledInWorker: payload.flatFieldHandledInWorker ?? true,
     });
 
     return {
@@ -1054,7 +1021,6 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
         height: transformed.height,
         halo: 0,
         comparisonMode: payload.comparisonMode,
-        flatFieldHandledInWorker: payload.flatFieldHandledInWorker ?? true,
       } satisfies StoredTileJob;
     },
   });
@@ -1103,9 +1069,6 @@ function handleReadTile(payload: ReadTileRequest) {
   const readWidth = payload.width + haloLeft + haloRight;
   const readHeight = payload.height + haloTop + haloBottom;
   const imageData = ctx.getImageData(readX, readY, readWidth, readHeight);
-  if (job.comparisonMode === 'processed' && job.flatFieldHandledInWorker !== false) {
-    applyActiveFlatFieldIfNeeded(imageData, true);
-  }
 
   if (isRecentlyCancelledJob(payload.jobId)) {
     throw createError('JOB_CANCELLED', 'The tile job was cancelled.');
@@ -1140,7 +1103,6 @@ function sampleRegionFromTransformedCanvas(
   const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not sample image region.');
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
   ctx.putImageData(imageData, 0, 0);
 
@@ -1177,7 +1139,6 @@ function applyAutoWhiteBalanceAnalysisStage(
   payload: AutoAnalyzeRequest,
   residualBaseOffset: [number, number, number] | null,
 ) {
-  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
 
   const { data } = imageData;
@@ -1226,7 +1187,6 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   if (!ctx) throw new Error('Could not analyze auto adjustments.');
 
   const toneImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  applyActiveFlatFieldIfNeeded(toneImageData, payload.settings.flatFieldEnabled);
   const residualBaseOffset = computeResidualBaseOffset(
     toneImageData,
     payload.settings,
@@ -1298,9 +1258,6 @@ function handleRender(payload: RenderRequest) {
   if (!ctx) throw new Error('Could not read rendered preview.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  if (payload.comparisonMode === 'processed') {
-    applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
-  }
   const residualBaseOffset = payload.skipProcessing || payload.comparisonMode !== 'processed'
     ? null
     : computeResidualBaseOffset(
@@ -1375,7 +1332,6 @@ async function handleExport(payload: ExportRequest) {
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
-  applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
   const residualBaseOffset = computeResidualBaseOffset(
     imageData,
     payload.settings,
@@ -1489,7 +1445,6 @@ async function handleContactSheet(payload: ContactSheetRequest) {
     }
 
     const imageData = sourceContext.getImageData(0, 0, transformed.width, transformed.height);
-    applyActiveFlatFieldIfNeeded(imageData, settings.flatFieldEnabled);
     const residualBaseOffset = computeResidualBaseOffset(
       imageData,
       settings,
@@ -1608,12 +1563,6 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         return;
       case 'compute-flare':
         reply(request, handleComputeFlare(request.payload.documentId));
-        return;
-      case 'load-flat-field':
-        reply(request, handleLoadFlatField(request.payload.name, request.payload.size, request.payload.data));
-        return;
-      case 'clear-flat-field':
-        reply(request, handleClearFlatField());
         return;
       case 'dust-detect':
         reply(request, handleDustDetect(request.payload));

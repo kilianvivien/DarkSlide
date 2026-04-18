@@ -137,7 +137,6 @@ interface SidebarProps {
   lightSourceId?: string | null;
   cropSource?: 'auto' | 'manual' | null;
   lightSourceProfiles?: LightSourceProfile[];
-  hasActiveFlatFieldProfile?: boolean;
   histogramData: HistogramData | null;
   isPickingFilmBase: boolean;
   onTogglePicker: () => void;
@@ -190,7 +189,6 @@ export const Sidebar = memo(function Sidebar({
   lightSourceId = null,
   cropSource = null,
   lightSourceProfiles = [],
-  hasActiveFlatFieldProfile = false,
   histogramData,
   isPickingFilmBase,
   onTogglePicker,
@@ -459,30 +457,6 @@ export const Sidebar = memo(function Sidebar({
                     <span className="text-sm font-medium">{filmBaseInstruction}</span>
                   </button>
                 </section>
-
-                {hasActiveFlatFieldProfile && (
-                  <section>
-                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
-                      <Focus size={12} /> Flat-Field Correction
-                    </h2>
-                    <div className="rounded-xl border border-zinc-800/70 bg-zinc-900/30 p-4">
-                      <label className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-zinc-100">Apply flat-field reference</p>
-                          <p className="mt-1 text-xs leading-relaxed text-zinc-500">
-                            Corrects light falloff and uneven illumination before inversion.
-                          </p>
-                        </div>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(settings.flatFieldEnabled)}
-                          onChange={(event) => onSettingsChange({ flatFieldEnabled: event.target.checked })}
-                          className="mt-1 accent-zinc-200"
-                        />
-                      </label>
-                    </div>
-                  </section>
-                )}
 
                 <section>
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">

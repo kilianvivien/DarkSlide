@@ -649,22 +649,6 @@ export async function confirmReplacePresetLibrary(): Promise<boolean> {
   return window.confirm(message);
 }
 
-export async function confirmDeleteFlatFieldProfile(name: string): Promise<boolean> {
-  const message = `Delete "${name}"?`;
-
-  if (isDesktopShell()) {
-    const { ask } = await import('@tauri-apps/plugin-dialog');
-    return ask(message, {
-      title: 'Delete Flat-Field Profile',
-      kind: 'warning',
-      okLabel: 'Delete',
-      cancelLabel: 'Cancel',
-    });
-  }
-
-  return window.confirm(message);
-}
-
 export async function confirmRestoreSidecar(filename: string): Promise<boolean> {
   const message = `Settings sidecar found for "${filename}". Restore those settings?`;
 

@@ -705,7 +705,7 @@ export function buildProcessingUniforms(
     lightSourceBias[0],
     lightSourceBias[1],
     lightSourceBias[2],
-    settings.flatFieldEnabled ? 1 : 0,
+    0,
 
     residualBaseOffset?.[0] ?? 0,
     residualBaseOffset?.[1] ?? 0,

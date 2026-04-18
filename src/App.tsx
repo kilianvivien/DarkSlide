@@ -11,7 +11,6 @@ import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
 import { useRenderQueue } from './hooks/useRenderQueue';
 import { useWorkspaceCommands } from './hooks/useWorkspaceCommands';
-import { useCalibration } from './hooks/useCalibration';
 import { useCustomLightSources } from './hooks/useCustomLightSources';
 import { useViewportZoom } from './hooks/useViewportZoom';
 import { useRolls } from './hooks/useRolls';
@@ -169,7 +168,6 @@ export default function App() {
   });
 
   const [displayScaleFactor, setDisplayScaleFactor] = useState(() => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1));
-  const [workerReadyVersion, setWorkerReadyVersion] = useState(0);
   const [defaultLightSourceId, setDefaultLightSourceId] = useState<string>(() => (
     typeof window !== 'undefined'
       ? window.localStorage.getItem('darkslide_default_light_source') ?? 'auto'
@@ -390,7 +388,6 @@ export default function App() {
     const map = new Map(allLightSourceProfiles.map((profile) => [profile.id, profile] as const));
     return map;
   }, [allLightSourceProfiles]);
-  const calibration = useCalibration(workerClientRef, workerReadyVersion);
   const {
     rolls,
     createRoll,
@@ -814,7 +811,6 @@ export default function App() {
         showTransientNotice(message || 'GPU unavailable — retrying on the next render');
       },
     });
-    setWorkerReadyVersion((current) => current + 1);
     void workerClientRef.current.getGPUDiagnostics().then(setRenderBackendDiagnostics).catch(() => {
       // Ignore diagnostics refresh failures during startup.
     });
@@ -1745,7 +1741,6 @@ export default function App() {
     activePointPicker,
     usesNativeFileDialogs,
     lightSourceProfiles: allLightSourceProfiles,
-    defaultFlatFieldEnabled: calibration.activeProfileLoaded,
     displayScaleFactor,
     persistedProfilesRef,
     prefsSnapshotRef,
@@ -1841,45 +1836,6 @@ export default function App() {
     };
   }, [documentState, handleSettingsChange, showTransientNotice]);
 
-  const handleSelectFlatFieldProfile = useCallback(async (name: string | null) => {
-    await calibration.selectActiveProfile(name);
-    if (!documentState) {
-      return;
-    }
-
-    updateDocument((current) => ({
-      ...current,
-      settings: {
-        ...current.settings,
-        flatFieldEnabled: Boolean(name),
-      },
-      dirty: true,
-    }));
-  }, [calibration, documentState, updateDocument]);
-
-  const handleImportFlatFieldReference = useCallback(async (file: File) => {
-    const importedName = await calibration.importFlatFieldFile(file);
-    if (documentState) {
-      updateDocument((current) => ({
-        ...current,
-        settings: {
-          ...current.settings,
-          flatFieldEnabled: true,
-        },
-        dirty: true,
-      }));
-    }
-    return importedName;
-  }, [calibration, documentState, updateDocument]);
-
-  const handleDeleteFlatFieldProfile = useCallback(async (name: string) => {
-    await calibration.removeProfile(name);
-  }, [calibration]);
-
-  const handleRenameFlatFieldProfile = useCallback(async (currentName: string, nextName: string) => {
-    return calibration.renameProfile(currentName, nextName);
-  }, [calibration]);
-
   const handleSaveCustomLightSource = useCallback(async (draft: Parameters<typeof saveCustomLightSource>[0]) => {
     return saveCustomLightSource(draft);
   }, [saveCustomLightSource]);
@@ -1974,21 +1930,6 @@ export default function App() {
       }
     }
   }, []);
-
-  useEffect(() => {
-    if (!documentState || calibration.activeProfileLoaded || !documentState.settings.flatFieldEnabled) {
-      return;
-    }
-
-    updateDocument((current) => ({
-      ...current,
-      settings: {
-        ...current.settings,
-        flatFieldEnabled: false,
-      },
-      dirty: current.dirty,
-    }));
-  }, [calibration.activeProfileLoaded, documentState, updateDocument]);
 
   const handleToggleComparison = useCallback(() => {
     setComparisonMode((current) => current === 'processed' ? 'original' : 'processed');
@@ -2725,10 +2666,6 @@ onToggleScanningSession: toggleScanningWindow,
       defaultLightSourceId={defaultLightSourceId}
       defaultLabStyleId={defaultLabStyleId}
       onDefaultLabStyleChange={handleDefaultLabStyleChange}
-      flatFieldProfileNames={calibration.profileNames}
-      activeFlatFieldProfileName={calibration.activeProfileName}
-      activeFlatFieldLoaded={calibration.activeProfileLoaded}
-      activeFlatFieldPreview={calibration.activeProfilePreview}
       maxResidentDocs={maxResidentDocs}
       externalEditorPath={externalEditorPath}
       externalEditorName={externalEditorName}
@@ -2841,10 +2778,6 @@ onToggleScanningSession: toggleScanningWindow,
       onMaxResidentDocsChange={handleMaxResidentDocsChange}
       onNotificationSettingsChange={handleNotificationSettingsChange}
       onDefaultLightSourceChange={handleDefaultLightSourceChange}
-      onSelectFlatFieldProfile={handleSelectFlatFieldProfile}
-      onImportFlatFieldReference={handleImportFlatFieldReference}
-      onDeleteFlatFieldProfile={handleDeleteFlatFieldProfile}
-      onRenameFlatFieldProfile={handleRenameFlatFieldProfile}
       onChooseExternalEditor={handleChooseExternalEditor}
       onClearExternalEditor={handleClearExternalEditor}
       onChooseOpenInEditorOutputPath={handleChooseOpenInEditorOutputPath}

@@ -59,7 +59,6 @@ type UseFileImportOptions = {
   activeDocumentIdRef: MutableRefObject<string | null>;
   persistedProfilesRef: MutableRefObject<FilmProfile[]>;
   fallbackProfile: FilmProfile;
-  defaultFlatFieldEnabled?: boolean;
   displayScaleFactor: number;
   tabsApi: TabsApi;
   maxTabs: number;
@@ -130,7 +129,6 @@ export function useFileImport({
   activeDocumentIdRef,
   persistedProfilesRef,
   fallbackProfile,
-  defaultFlatFieldEnabled = false,
   displayScaleFactor,
   tabsApi,
   maxTabs,
@@ -274,7 +272,6 @@ export function useFileImport({
         filmBaseSample: rawImport
           ? null
           : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample),
-        flatFieldEnabled: defaultFlatFieldEnabled,
       },
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
       estimatedFlare: null,
@@ -313,7 +310,6 @@ export function useFileImport({
         filmBaseSample: rawImport
           ? null
           : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample),
-        flatFieldEnabled: defaultFlatFieldEnabled,
       };
       let rawImportProfile: FilmProfile | null = null;
 
@@ -334,10 +330,6 @@ export function useFileImport({
             rawResult.orientation,
             estimatedFilmBase,
           ));
-          initialSettings = {
-            ...initialSettings,
-            flatFieldEnabled: defaultFlatFieldEnabled,
-          };
           rawImportProfile = createRawImportProfile(initialProfile, initialSettings);
 
           if (estimatedFilmBase) {
@@ -593,7 +585,6 @@ export function useFileImport({
     activeDocumentIdRef,
     createDocumentColorManagement,
     displayScaleFactor,
-    defaultFlatFieldEnabled,
     disposeDocument,
     fallbackProfile,
     formatError,

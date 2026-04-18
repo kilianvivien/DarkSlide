@@ -43,12 +43,6 @@ export interface ComputeFlarePayload {
   documentId: string;
 }
 
-export interface LoadFlatFieldPayload {
-  name: string;
-  size: number;
-  data: Float32Array;
-}
-
 export interface WorkerError {
   code: string;
   message: string;
@@ -65,8 +59,6 @@ export type WorkerRequest =
   | { type: 'sample-film-base'; payload: SampleRequest }
   | { type: 'detect-frame'; payload: DetectFramePayload }
   | { type: 'compute-flare'; payload: ComputeFlarePayload }
-  | { type: 'load-flat-field'; payload: LoadFlatFieldPayload }
-  | { type: 'clear-flat-field'; payload: Record<string, never> }
   | { type: 'dust-detect'; payload: DustDetectRequest }
   | { type: 'export'; payload: ExportRequest }
   | { type: 'contact-sheet'; payload: ContactSheetRequest }

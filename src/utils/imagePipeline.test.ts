@@ -111,15 +111,6 @@ describe('buildProcessingUniforms', () => {
     expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(72);
   });
 
-  it('stores the flat-field flag in the correct slot', () => {
-    const uniforms = buildProcessingUniforms(
-      createDefaultSettings({ flatFieldEnabled: true }),
-      true,
-      'processed',
-    );
-
-    expect(uniforms[67]).toBe(1);
-  });
 });
 
 describe('computeDensityBalance', () => {

@@ -22,19 +22,6 @@ const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
 const TILE_SIZE = 1024;
 const INTERMEDIATE_FORMAT = 'rgba16float';
-const FLAT_FIELD_FORMAT = 'rgba16float';
-
-type GPUSamplerResource = GPUBindingResource;
-
-type GPUDeviceWithSampler = GPUDevice & {
-  createSampler: (descriptor?: {
-    magFilter?: 'linear' | 'nearest';
-    minFilter?: 'linear' | 'nearest';
-    mipmapFilter?: 'linear' | 'nearest';
-    addressModeU?: 'clamp-to-edge' | 'repeat' | 'mirror-repeat';
-    addressModeV?: 'clamp-to-edge' | 'repeat' | 'mirror-repeat';
-  }) => GPUSamplerResource;
-};
 
 function alignTo256(value: number) {
   return Math.ceil(value / 256) * 256;
@@ -110,16 +97,6 @@ export class WebGPUPipeline {
 
   private readonly effectUniformBuffer: GPUBuffer;
 
-  private readonly flatFieldSampler: GPUSamplerResource;
-
-  private readonly fallbackFlatFieldTexture: GPUTexture;
-
-  private readonly fallbackFlatFieldTextureView: GPUTextureView;
-
-  private flatFieldTexture: GPUTexture | null = null;
-
-  private flatFieldTextureView: GPUTextureView | null = null;
-
   private sourceTexture: GPUTexture | null = null;
 
   private sourceTextureView: GPUTextureView | null = null;
@@ -184,26 +161,6 @@ export class WebGPUPipeline {
       size: EFFECT_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.flatFieldSampler = (device as GPUDeviceWithSampler).createSampler({
-      magFilter: 'linear',
-      minFilter: 'linear',
-      mipmapFilter: 'linear',
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge',
-    });
-    this.fallbackFlatFieldTexture = device.createTexture({
-      size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-      format: FLAT_FIELD_FORMAT,
-      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
-    });
-    this.fallbackFlatFieldTextureView = this.fallbackFlatFieldTexture.createView();
-    this.device.queue.writeTexture(
-      { texture: this.fallbackFlatFieldTexture },
-      new Float32Array([1, 1, 1, 1]),
-      { bytesPerRow: 16, rowsPerImage: 1 },
-      { width: 1, height: 1, depthOrArrayLayers: 1 },
-    );
-
     this.conversionPipeline = device.createRenderPipeline({
       layout: 'auto',
       vertex: { module, entryPoint: 'fullscreenVertex' },
@@ -614,8 +571,6 @@ export class WebGPUPipeline {
       [
         { binding: 1, resource: { buffer: this.processingUniformBuffer } },
         { binding: 2, resource: { buffer: this.curveLutBuffer } },
-        { binding: 3, resource: this.flatFieldTextureView ?? this.fallbackFlatFieldTextureView },
-        { binding: 4, resource: this.flatFieldSampler },
       ],
     );
 
@@ -848,41 +803,6 @@ export class WebGPUPipeline {
     );
   }
 
-  loadFlatFieldTexture(data: Float32Array, size: number) {
-    this.assertUsable();
-
-    const texture = this.device.createTexture({
-      size: { width: size, height: size, depthOrArrayLayers: 1 },
-      format: FLAT_FIELD_FORMAT,
-      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
-    });
-    const expanded = new Float32Array(size * size * 4);
-    for (let index = 0, source = 0; source < data.length; index += 4, source += 3) {
-      expanded[index] = data[source];
-      expanded[index + 1] = data[source + 1];
-      expanded[index + 2] = data[source + 2];
-      expanded[index + 3] = 1;
-    }
-    this.device.queue.writeTexture(
-      { texture },
-      expanded,
-      { bytesPerRow: size * 16, rowsPerImage: size },
-      { width: size, height: size, depthOrArrayLayers: 1 },
-    );
-
-    this.flatFieldTexture?.destroy();
-    this.flatFieldTexture = texture;
-    this.flatFieldTextureView = texture.createView();
-    this.lastProcessingUniformsHash = null;
-  }
-
-  clearFlatFieldTexture() {
-    this.flatFieldTexture?.destroy();
-    this.flatFieldTexture = null;
-    this.flatFieldTextureView = null;
-    this.lastProcessingUniformsHash = null;
-  }
-
   async processTile(
     tile: ReadTileResult,
     settings: ConversionSettings,
@@ -953,8 +873,6 @@ export class WebGPUPipeline {
     this.workTextureB?.destroy();
     this.workTextureC?.destroy();
     this.outputTexture?.destroy();
-    this.flatFieldTexture?.destroy();
-    this.fallbackFlatFieldTexture.destroy();
     this.readbackBuffer?.destroy();
     this.processingUniformBuffer.destroy();
     this.curveLutBuffer.destroy();

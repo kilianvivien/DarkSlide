@@ -105,17 +105,6 @@ describe('SettingsModal', () => {
       flareCharacteristic: 'medium' as const,
     })),
     onDeleteCustomLightSource: vi.fn(),
-    flatFieldProfileNames: ['Studio Panel'],
-    activeFlatFieldProfileName: 'Studio Panel',
-    activeFlatFieldLoaded: true,
-    activeFlatFieldPreview: {
-      data: new Float32Array([1, 1, 1, 0.8, 0.8, 0.8, 0.6, 0.6, 0.6, 0.4, 0.4, 0.4]),
-      size: 2,
-    },
-    onSelectFlatFieldProfile: vi.fn(async () => undefined),
-    onImportFlatFieldReference: vi.fn(async () => 'Studio Panel'),
-    onDeleteFlatFieldProfile: vi.fn(async () => undefined),
-    onRenameFlatFieldProfile: vi.fn(async () => 'Studio Panel Renamed'),
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     onExportOptionsChange: vi.fn(),
     externalEditorPath: null,
@@ -177,25 +166,16 @@ describe('SettingsModal', () => {
     expect(onNotificationSettingsChange).toHaveBeenCalledWith({ batchComplete: false });
   });
 
-  it('renders the calibration tab and lets the user switch the active flat-field profile', () => {
+  it('renders the calibration tab and lets the user change the default light source', () => {
     const props = createProps();
-    const onSelectFlatFieldProfile = vi.fn(async () => undefined);
     const onDefaultLightSourceChange = vi.fn();
-    props.onSelectFlatFieldProfile = onSelectFlatFieldProfile;
     props.onDefaultLightSourceChange = onDefaultLightSourceChange;
-    props.flatFieldProfileNames = ['Studio Panel', 'Tablet Light'];
 
     render(
       <SettingsModal {...props} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Calibration' }));
-    expect(screen.getByText('Flat-Field Profiles')).toBeInTheDocument();
-    expect(screen.getByLabelText('Flat-field preview')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByDisplayValue('Studio Panel'), { target: { value: 'Tablet Light' } });
-    expect(onSelectFlatFieldProfile).toHaveBeenCalledWith('Tablet Light');
-
     fireEvent.change(screen.getByDisplayValue('Auto (no correction)'), { target: { value: 'daylight' } });
     expect(onDefaultLightSourceChange).toHaveBeenCalledWith('daylight');
   });

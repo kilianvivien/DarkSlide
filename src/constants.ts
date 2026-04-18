@@ -174,7 +174,6 @@ export function createDefaultSettings(overrides: Partial<ConversionSettings> = {
     shadowRecovery: 0,
     midtoneContrast: 0,
     flareCorrection: 50,
-    flatFieldEnabled: false,
     temperature: 0,
     tint: 0,
     redBalance: 1,

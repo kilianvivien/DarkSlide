@@ -170,7 +170,6 @@ export interface ConversionSettings {
   shadowRecovery?: number;
   midtoneContrast?: number;
   flareCorrection?: number;
-  flatFieldEnabled?: boolean;
   temperature: number;
   tint: number;
   redBalance: number;
@@ -267,7 +266,6 @@ export interface SidecarFile {
     date: string | null;
     notes: string;
   };
-  flatFieldProfileId?: string;
   lightSourceProfileId?: string;
   labStyleId?: string;
 }
@@ -548,7 +546,6 @@ export interface PrepareTileJobRequest {
   sourceKind: TileSourceKind;
   settings: ConversionSettings;
   comparisonMode: 'processed' | 'original';
-  flatFieldHandledInWorker?: boolean;
   targetMaxDimension?: number;
 }
 

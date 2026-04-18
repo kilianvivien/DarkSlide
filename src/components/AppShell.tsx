@@ -7,7 +7,6 @@ import {
   Download,
   ExternalLink,
   FileWarning,
-  Grid3x3,
   Image as ImageIcon,
   Loader2,
   PanelLeft,
@@ -122,10 +121,6 @@ type AppShellProps = {
   defaultLightSourceId: string;
   defaultLabStyleId: string;
   onDefaultLabStyleChange: (labStyleId: string) => void;
-  flatFieldProfileNames: string[];
-  activeFlatFieldProfileName: string | null;
-  activeFlatFieldLoaded: boolean;
-  activeFlatFieldPreview: { data: Float32Array; size: number } | null;
   maxResidentDocs: MaxResidentDocs;
   externalEditorPath: string | null;
   externalEditorName: string | null;
@@ -256,10 +251,6 @@ type AppShellProps = {
   onMaxResidentDocsChange: (value: MaxResidentDocs) => void;
   onNotificationSettingsChange: (options: Partial<NotificationSettings>) => void;
   onDefaultLightSourceChange: (lightSourceId: string) => void;
-  onSelectFlatFieldProfile: (name: string | null) => Promise<void>;
-  onImportFlatFieldReference: (file: File) => Promise<string>;
-  onDeleteFlatFieldProfile: (name: string) => Promise<void>;
-  onRenameFlatFieldProfile: (currentName: string, nextName: string) => Promise<string>;
   onChooseExternalEditor: () => Promise<void>;
   onClearExternalEditor: () => void;
   onChooseOpenInEditorOutputPath: () => Promise<void>;
@@ -351,10 +342,6 @@ export function AppShell({
   defaultLightSourceId,
   defaultLabStyleId,
   onDefaultLabStyleChange,
-  flatFieldProfileNames,
-  activeFlatFieldProfileName,
-  activeFlatFieldLoaded,
-  activeFlatFieldPreview,
   maxResidentDocs,
   externalEditorPath,
   externalEditorName,
@@ -467,10 +454,6 @@ export function AppShell({
   onMaxResidentDocsChange,
   onNotificationSettingsChange,
   onDefaultLightSourceChange,
-  onSelectFlatFieldProfile,
-  onImportFlatFieldReference,
-  onDeleteFlatFieldProfile,
-  onRenameFlatFieldProfile,
   onChooseExternalEditor,
   onClearExternalEditor,
   onChooseOpenInEditorOutputPath,
@@ -597,7 +580,6 @@ export function AppShell({
                   lightSourceId={documentState?.lightSourceId ?? null}
                   cropSource={documentState?.cropSource ?? null}
                   lightSourceProfiles={lightSourceProfiles}
-                  hasActiveFlatFieldProfile={activeFlatFieldLoaded}
                   histogramData={documentState?.histogram ?? null}
                   isPickingFilmBase={isPickingFilmBase}
                   onTogglePicker={onToggleFilmBasePicker}
@@ -953,14 +935,6 @@ export function AppShell({
                           {documentState.source.width.toLocaleString()} × {documentState.source.height.toLocaleString()} px
                         </span>
                       </div>
-                      {documentState.settings.flatFieldEnabled && activeFlatFieldLoaded && (
-                        <div className="flex items-center gap-2 rounded-2xl border border-emerald-900/60 bg-emerald-950/35 px-3 py-2 shadow-2xl backdrop-blur-md">
-                          <Grid3x3 size={14} className="text-emerald-300" />
-                          <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-200">
-                            {activeFlatFieldProfileName ? `Flat-field · ${activeFlatFieldProfileName}` : 'Flat-field active'}
-                          </span>
-                        </div>
-                      )}
                       {activeLabStyle && (
                         <div className="flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 shadow-2xl backdrop-blur-md">
                           <Building2 size={14} className="text-zinc-500" />
@@ -1161,14 +1135,6 @@ export function AppShell({
           labStyleProfiles={labStyleProfiles}
           onSaveCustomLightSource={onSaveCustomLightSource}
           onDeleteCustomLightSource={onDeleteCustomLightSource}
-          flatFieldProfileNames={flatFieldProfileNames}
-          activeFlatFieldProfileName={activeFlatFieldProfileName}
-          activeFlatFieldLoaded={activeFlatFieldLoaded}
-          activeFlatFieldPreview={activeFlatFieldPreview}
-          onSelectFlatFieldProfile={onSelectFlatFieldProfile}
-          onImportFlatFieldReference={onImportFlatFieldReference}
-          onDeleteFlatFieldProfile={onDeleteFlatFieldProfile}
-          onRenameFlatFieldProfile={onRenameFlatFieldProfile}
           exportOptions={documentState?.exportOptions ?? defaultExportOptions}
           onExportOptionsChange={onExportOptionsChange}
           externalEditorPath={externalEditorPath}

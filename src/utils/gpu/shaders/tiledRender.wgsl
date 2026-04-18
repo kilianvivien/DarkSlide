@@ -86,7 +86,7 @@ struct Uniforms {
   lightSourceBiasR: f32,
   lightSourceBiasG: f32,
   lightSourceBiasB: f32,
-  hasFlatField: f32,
+  _pad16: f32,
 
   residualBaseOffsetR: f32,
   residualBaseOffsetG: f32,
@@ -265,8 +265,6 @@ fn textureCoord(position: vec4<f32>) -> vec2<i32> {
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> uniforms: Uniforms;
 @group(0) @binding(2) var<storage, read> curveLuts: array<f32>;
-@group(0) @binding(3) var flatFieldTexture: texture_2d<f32>;
-@group(0) @binding(4) var flatFieldSampler: sampler;
 
 fn lookupCurve(channel: u32, value: f32) -> f32 {
   let idx = clamp(u32(round(clampF(value, 0.0, 1.0) * 255.0)), 0u, 255u);
@@ -283,18 +281,6 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
   var b = converted.z;
 
   if (uniforms.processMode > 0.5) {
-    if (uniforms.hasFlatField > 0.5) {
-      let dims = vec2<f32>(textureDimensions(inputTexture));
-      let uv = vec2<f32>(
-        position.x / max(dims.x - 1.0, 1.0),
-        position.y / max(dims.y - 1.0, 1.0),
-      );
-      let ff = textureSampleLevel(flatFieldTexture, flatFieldSampler, uv, 0.0);
-      r = clampF(r / max(ff.r, 0.05), 0.0, 1.0);
-      g = clampF(g / max(ff.g, 0.05), 0.0, 1.0);
-      b = clampF(b / max(ff.b, 0.05), 0.0, 1.0);
-    }
-
     r = max(r - uniforms.flareFloorR * uniforms.flareStrength, 0.0);
     g = max(g - uniforms.flareFloorG * uniforms.flareStrength, 0.0);
     b = max(b - uniforms.flareFloorB * uniforms.flareStrength, 0.0);

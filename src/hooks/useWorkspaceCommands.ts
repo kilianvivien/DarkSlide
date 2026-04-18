@@ -162,7 +162,6 @@ type UseWorkspaceCommandsOptions = {
   activePointPicker: PointPickerMode | null;
   usesNativeFileDialogs: boolean;
   lightSourceProfiles: LightSourceProfile[];
-  defaultFlatFieldEnabled?: boolean;
   displayScaleFactor: number;
   persistedProfilesRef: MutableRefObject<FilmProfile[]>;
   prefsSnapshotRef: MutableRefObject<UserPreferences>;
@@ -273,7 +272,6 @@ export function useWorkspaceCommands({
   renderBackendDiagnostics,
   usesNativeFileDialogs,
   lightSourceProfiles,
-  defaultFlatFieldEnabled = false,
   displayScaleFactor,
   persistedProfilesRef,
   prefsSnapshotRef,
@@ -431,7 +429,6 @@ export function useWorkspaceCommands({
     activeDocumentIdRef,
     persistedProfilesRef,
     fallbackProfile,
-    defaultFlatFieldEnabled,
     displayScaleFactor,
     tabsApi: {
       openDocument,

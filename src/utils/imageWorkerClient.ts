@@ -62,11 +62,6 @@ type CachedDecodeRequest = {
   evictionTimeout: number | null;
 };
 
-type ActiveFlatFieldState = {
-  name: string;
-  size: number;
-  data: Float32Array;
-} | null;
 
 const MISSING_DOCUMENT_MESSAGE = 'The image document is no longer available.';
 const DECODE_CACHE_TTL_MS = 60_000;
@@ -81,8 +76,6 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   'sample-film-base': 10_000,
   'detect-frame': 10_000,
   'compute-flare': 10_000,
-  'load-flat-field': 10_000,
-  'clear-flat-field': 5_000,
   'dust-detect': 10_000,
   export: 30_000,
   'contact-sheet': 30_000,
@@ -252,8 +245,6 @@ export class ImageWorkerClient {
 
   private gpuDeviceLostNotified = false;
 
-  private activeFlatField: ActiveFlatFieldState = null;
-
   private backendMode: RenderBackendDiagnostics['backendMode'] = 'cpu-worker';
 
   private sourceKind: TileSourceKind | null = null;
@@ -349,21 +340,6 @@ export class ImageWorkerClient {
     worker.onmessageerror = () => {
       this.handleWorkerFailure(new FatalImageWorkerError('The image worker produced an unreadable message and was restarted.'));
     };
-
-    if (this.activeFlatField) {
-      const payload = {
-        name: this.activeFlatField.name,
-        size: this.activeFlatField.size,
-        data: new Float32Array(this.activeFlatField.data.buffer.slice(0)),
-      };
-      const id = `load-flat-field-${crypto.randomUUID()}`;
-      worker.postMessage({
-        id,
-        epoch: this.workerEpoch,
-        type: 'load-flat-field',
-        payload,
-      } as WorkerMessage, [payload.data.buffer]);
-    }
 
     return worker;
   }
@@ -710,11 +686,6 @@ export class ImageWorkerClient {
     this.gpuDisabledReason = null;
     this.lastGPUError = null;
     this.gpuDeviceLostNotified = false;
-    if (this.activeFlatField) {
-      this.gpuPipeline.loadFlatFieldTexture?.(this.activeFlatField.data, this.activeFlatField.size);
-    } else {
-      this.gpuPipeline.clearFlatFieldTexture?.();
-    }
     this.emitBackendDiagnosticsChange();
     return this.gpuPipeline;
   }
@@ -815,7 +786,6 @@ export class ImageWorkerClient {
         sourceKind: 'preview',
         settings,
         comparisonMode: 'processed',
-        flatFieldHandledInWorker: false,
         targetMaxDimension: 512,
       });
       const rawPreview = await this.readTile({
@@ -1404,7 +1374,6 @@ export class ImageWorkerClient {
         sourceKind: 'preview',
         settings: payload.settings,
         comparisonMode: payload.comparisonMode,
-        flatFieldHandledInWorker: false,
         targetMaxDimension: payload.targetMaxDimension,
       });
       phaseTimings.geometryPrepareMs = Math.round(performance.now() - prepareStartedAt);
@@ -1627,29 +1596,6 @@ export class ImageWorkerClient {
     return result.detectedMarks;
   }
 
-  async loadFlatField(name: string, data: Float32Array, size: number) {
-    this.activeFlatField = {
-      name,
-      size,
-      data: new Float32Array(data.buffer.slice(0)),
-    };
-    const payload = {
-      name,
-      size,
-      data: new Float32Array(data.buffer.slice(0)),
-    };
-    const result = await this.request<{ loaded: true }>('load-flat-field', payload, [payload.data.buffer]);
-    this.gpuPipeline?.loadFlatFieldTexture?.(this.activeFlatField.data, this.activeFlatField.size);
-    return result;
-  }
-
-  async clearFlatField() {
-    this.activeFlatField = null;
-    const result = await this.request<{ cleared: true }>('clear-flat-field', {});
-    this.gpuPipeline?.clearFlatFieldTexture?.();
-    return result;
-  }
-
   async export(payload: ExportRequest) {
     await this.ensureDocumentLoaded(payload.documentId);
     const result = await this.exportInternal(payload, true);
@@ -1724,7 +1670,6 @@ export class ImageWorkerClient {
         sourceKind: 'source',
         settings: payload.settings,
         comparisonMode: 'processed',
-        flatFieldHandledInWorker: false,
       });
       const assembled = await this.assembleTileJob(
         prepared,
