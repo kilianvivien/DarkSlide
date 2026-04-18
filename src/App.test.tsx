@@ -1846,6 +1846,199 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.blueBalance).toBeCloseTo((255 - 151) / (255 - 134));
   });
 
+  it('uses film-base sampling to rerun standard RAW color-negative conversion with the sampled base', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('sampled-raw.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/sampled-raw.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 89, g: 105, b: 55 },
+    });
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      settings: {
+        exposure: number;
+        redBalance: number;
+        blueBalance: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+    }) => createRenderResult(payload.documentId, payload.revision, 8, 8));
+    workerState.sampleFilmBase.mockResolvedValue({ r: 81, g: 94, b: 47 });
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Kodak Gold 200' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const beforeSampleRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+    };
+
+    fireEvent.click(screen.getByText('Toggle Film Base Picker'));
+
+    const canvas = document.querySelector('canvas');
+    expect(canvas).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(canvas as HTMLCanvasElement, { clientX: 100, clientY: 50 });
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+    };
+
+    expect(latestRenderCall.settings.exposure).toBe(6);
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(beforeSampleRenderCall.settings.redBalance);
+    expect(latestRenderCall.settings.greenBalance).toBeCloseTo(beforeSampleRenderCall.settings.greenBalance);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(beforeSampleRenderCall.settings.blueBalance);
+    expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 81, g: 94, b: 47 });
+  });
+
+  it('uses film-base sampling to rerun advanced-hd RAW color-negative conversion with the sampled base', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('sampled-raw-advanced.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/sampled-raw-advanced.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 89, g: 105, b: 55 },
+    });
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      settings: {
+        exposure: number;
+        inversionMethod: string;
+        redBalance: number;
+        blueBalance: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+      advancedInversion?: unknown;
+    }) => createRenderResult(payload.documentId, payload.revision, 8, 8));
+    workerState.sampleFilmBase.mockResolvedValue({ r: 81, g: 94, b: 47 });
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Open Settings'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Color' }));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Advanced inversion'), { target: { value: 'advanced-hd' } });
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const beforeSampleRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        inversionMethod: string;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+      advancedInversion?: unknown;
+    };
+
+    expect(beforeSampleRenderCall.settings.inversionMethod).toBe('advanced-hd');
+
+    fireEvent.click(screen.getByText('Toggle Film Base Picker'));
+
+    const canvas = document.querySelector('canvas');
+    expect(canvas).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(canvas as HTMLCanvasElement, { clientX: 100, clientY: 50 });
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        exposure: number;
+        inversionMethod: string;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+      advancedInversion?: unknown;
+    };
+
+    expect(latestRenderCall.settings.inversionMethod).toBe('advanced-hd');
+    expect(latestRenderCall.advancedInversion).toEqual(expect.any(Object));
+    expect(latestRenderCall.settings.exposure).toBe(beforeSampleRenderCall.settings.exposure);
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(beforeSampleRenderCall.settings.redBalance);
+    expect(latestRenderCall.settings.greenBalance).toBeCloseTo(beforeSampleRenderCall.settings.greenBalance);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(beforeSampleRenderCall.settings.blueBalance);
+    expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 81, g: 94, b: 47 });
+  });
+
   it('keeps advanced inversion auto mode and applies the film-base picker as a standard color-balance correction', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: {

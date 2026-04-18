@@ -133,6 +133,21 @@ function resolveProfileSwitchInversionMethod(
   return resolveDefaultInversionMethodForProfile(profile, preferred);
 }
 
+function shouldSampleDirectFilmBase(
+  document: WorkspaceDocument,
+  profile: FilmProfile,
+) {
+  const isRawDocument = document.source.mime === 'image/x-raw-rgba'
+    || Boolean(document.rawImportProfile)
+    || ['.dng', '.cr3', '.nef', '.arw', '.raf', '.rw2'].includes(document.source.extension.toLowerCase());
+
+  return isRawDocument
+    && (document.settings.inversionMethod === 'standard' || document.settings.inversionMethod === 'advanced-hd')
+    && profile.type === 'color'
+    && (profile.filmType ?? 'negative') === 'negative'
+    && !document.settings.blackAndWhite.enabled;
+}
+
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
 type TauriWindowHandle = {
@@ -1391,7 +1406,13 @@ export function useWorkspaceCommands({
           y,
         });
 
-        handleSettingsChange(getFilmBaseCorrectionSettings(sample));
+        if (shouldSampleDirectFilmBase(documentState, activeProfile)) {
+          handleSettingsChange({
+            filmBaseSample: sample,
+          });
+        } else {
+          handleSettingsChange(getFilmBaseCorrectionSettings(sample));
+        }
         setIsPickingFilmBase(false);
         appendDiagnostic({
           level: 'info',
@@ -1460,6 +1481,7 @@ export function useWorkspaceCommands({
     formatError,
     handleSettingsChange,
     isPickingFilmBase,
+    activeProfile,
     setActivePointPicker,
     setError,
     setIsPickingFilmBase,

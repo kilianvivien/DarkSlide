@@ -333,7 +333,10 @@ export function useFileImport({
           });
           const estimatedFilmBase = decodeRequest.precomputedFilmBaseSample ?? null;
           initialSettings = createDefaultSettings(buildRawInitialSettings(
-            initialProfile.defaultSettings,
+            {
+              ...initialProfile.defaultSettings,
+              inversionMethod: initialInversionMethod,
+            },
             rawResult.data,
             rawResult.width,
             rawResult.height,
