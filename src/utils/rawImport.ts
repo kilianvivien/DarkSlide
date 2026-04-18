@@ -248,9 +248,19 @@ export function buildRawInitialSettings(
   orientation: number | null | undefined,
   estimatedFilmBaseSample: FilmBaseSample | null = estimateFilmBaseSample(rgb, width, height),
 ) {
+  const nextSettings = structuredClone(baseSettings);
+
+  if (nextSettings.inversionMethod === 'advanced-hd') {
+    return {
+      ...nextSettings,
+      rotation: rotationFromExifOrientation(orientation),
+    } satisfies ConversionSettings;
+  }
+
   return {
-    ...structuredClone(baseSettings),
-    filmBaseSample: baseSettings.inversionMethod === 'advanced-hd' ? null : estimatedFilmBaseSample,
+    ...nextSettings,
+    ...getFilmBaseCorrectionSettings(estimatedFilmBaseSample),
+    exposure: getFilmBaseExposure(estimatedFilmBaseSample),
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
 }

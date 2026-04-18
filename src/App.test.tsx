@@ -955,7 +955,10 @@ describe('App import and preview pipeline', () => {
       color_space: 'sRGB',
       orientation: 6,
     });
-    workerState.decode.mockResolvedValue(createDecodedImage(8, 8));
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 200, g: 180, b: 150 },
+    });
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
       createRenderResult(payload.documentId, payload.revision, 8, 8)
     ));
@@ -986,6 +989,10 @@ describe('App import and preview pipeline', () => {
       settings: {
         filmBaseSample: { r: number; g: number; b: number } | null;
         rotation: number;
+        exposure: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
       };
     };
     expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 200, g: 180, b: 150 });
@@ -1004,9 +1011,19 @@ describe('App import and preview pipeline', () => {
       settings: {
         filmBaseSample: { r: number; g: number; b: number } | null;
         rotation: number;
+        exposure: number;
+        redBalance: number;
+        greenBalance: number;
+        blueBalance: number;
       };
     };
-    expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 200, g: 180, b: 150 });
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
+    expect(latestRenderCall.settings.exposure).toBe(
+      Math.round(50 * Math.log2((245 / 255) / ((255 - 180) / 255))),
+    );
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo((255 - 180) / (255 - 200));
+    expect(latestRenderCall.settings.greenBalance).toBe(1);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo((255 - 180) / (255 - 150));
     expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
@@ -1024,7 +1041,10 @@ describe('App import and preview pipeline', () => {
       color_space: 'sRGB',
       orientation: 1,
     });
-    workerState.decode.mockResolvedValue(createDecodedImage(8, 8));
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 135, g: 163, b: 107 },
+    });
 
     const importRender = deferred<ReturnType<typeof createRenderResult>>();
     const switchedRender = deferred<ReturnType<typeof createRenderResult>>();

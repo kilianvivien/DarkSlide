@@ -96,15 +96,17 @@ function buildProfileSettingsForDocument(
   profile: FilmProfile,
   currentDocument: WorkspaceDocument | null,
 ) {
-  const profileDefaults = currentDocument?.rawImportProfile && profile.id === currentDocument.rawImportProfile.id
-    ? currentDocument.rawImportProfile.defaultSettings
+  const rawImportProfile = currentDocument?.rawImportProfile ?? null;
+  const usesRawImportProfileDefaults = Boolean(rawImportProfile && profile.id === rawImportProfile.id);
+  const profileDefaults = usesRawImportProfileDefaults && rawImportProfile
+    ? rawImportProfile.defaultSettings
     : profile.defaultSettings;
   const nextSettings = createDefaultSettings(structuredClone(profileDefaults));
   const scanFilmBaseSample = currentDocument?.settings.filmBaseSample
     ?? currentDocument?.estimatedFilmBaseSample
     ?? null;
 
-  if (nextSettings.inversionMethod !== 'advanced-hd' && !nextSettings.filmBaseSample && scanFilmBaseSample) {
+  if (!usesRawImportProfileDefaults && nextSettings.inversionMethod !== 'advanced-hd' && !nextSettings.filmBaseSample && scanFilmBaseSample) {
     nextSettings.filmBaseSample = structuredClone(scanFilmBaseSample);
   }
 

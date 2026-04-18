@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
+import { processImageData } from './imagePipeline';
 import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, RAW_IMPORT_PROFILE_ID, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 
 function createRawRgb(width: number, height: number, border: [number, number, number], center: [number, number, number]) {
@@ -23,6 +24,55 @@ function setRgbPixel(data: Uint8Array, width: number, x: number, y: number, pixe
   data[index] = pixel[0];
   data[index + 1] = pixel[1];
   data[index + 2] = pixel[2];
+}
+
+function createRawNegativeScene(width: number, height: number, border: [number, number, number]) {
+  const data = createRawRgb(width, height, border, [142, 136, 98]);
+  const usableWidth = Math.max(1, width - 16);
+  const usableHeight = Math.max(1, height - 16);
+
+  for (let y = 8; y < height - 8; y += 1) {
+    for (let x = 8; x < width - 8; x += 1) {
+      const nx = (x - 8) / usableWidth;
+      const ny = (y - 8) / usableHeight;
+      const shadowBias = (1 - nx) * 8 + (1 - ny) * 5;
+      const pixel: [number, number, number] = [
+        Math.max(20, Math.min(255, Math.round(174 - nx * 56 - ny * 20 + shadowBias))),
+        Math.max(20, Math.min(255, Math.round(168 - nx * 46 - (1 - ny) * 18 + shadowBias * 0.8))),
+        Math.max(10, Math.min(255, Math.round(118 - nx * 36 + ny * 12))),
+      ];
+      setRgbPixel(data, width, x, y, pixel);
+    }
+  }
+
+  return data;
+}
+
+function sumBins(bins: number[]) {
+  return bins.reduce((sum, value) => sum + value, 0);
+}
+
+function meanInnerChannels(imageData: ImageData, margin = 8) {
+  let totalR = 0;
+  let totalG = 0;
+  let totalB = 0;
+  let count = 0;
+
+  for (let y = margin; y < imageData.height - margin; y += 1) {
+    for (let x = margin; x < imageData.width - margin; x += 1) {
+      const index = (y * imageData.width + x) * 4;
+      totalR += imageData.data[index];
+      totalG += imageData.data[index + 1];
+      totalB += imageData.data[index + 2];
+      count += 1;
+    }
+  }
+
+  return {
+    r: totalR / count,
+    g: totalG / count,
+    b: totalB / count,
+  };
 }
 
 describe('rawImport', () => {
@@ -98,20 +148,37 @@ describe('rawImport', () => {
     expect(rotationFromExifOrientation(1)).toBe(0);
   });
 
-  it('builds RAW startup settings with film-base and rotation defaults', () => {
+  it('builds RAW startup settings with derived balance, exposure, and rotation defaults', () => {
     const base = createDefaultSettings();
     const rgb = createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]);
 
     expect(buildRawInitialSettings(base, rgb, 64, 48, 6)).toMatchObject({
       rotation: 90,
-      filmBaseSample: {
-        r: 160,
-        g: 150,
-        b: 140,
-      },
-      redBalance: 1,
+      filmBaseSample: null,
+      exposure: getFilmBaseExposure({ r: 160, g: 150, b: 140 }),
+      redBalance: (255 - 150) / (255 - 160),
       greenBalance: 1,
-      blueBalance: 1,
+      blueBalance: (255 - 150) / (255 - 140),
+    });
+  });
+
+  it('keeps advanced-hd startup on the estimated-sample path without applying standard correction settings', () => {
+    const base = createDefaultSettings({
+      inversionMethod: 'advanced-hd',
+      exposure: 7,
+      redBalance: 1.2,
+      greenBalance: 1.05,
+      blueBalance: 0.85,
+    });
+    const rgb = createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]);
+
+    expect(buildRawInitialSettings(base, rgb, 64, 48, 6)).toMatchObject({
+      rotation: 90,
+      filmBaseSample: null,
+      exposure: 7,
+      redBalance: 1.2,
+      greenBalance: 1.05,
+      blueBalance: 0.85,
     });
   });
 
@@ -156,6 +223,39 @@ describe('rawImport', () => {
     expect(getFilmBaseExposure({ r: 168, g: 151, b: 134 })).toBe(
       Math.round(50 * Math.log2((245 / 255) / ((255 - 151) / 255))),
     );
+  });
+
+  it('uses RAW startup settings that retain midtone spread and reduce blue dominance versus subtractive film-base startup', () => {
+    const width = 80;
+    const height = 56;
+    const estimatedFilmBaseSample = { r: 76, g: 73, b: 68 } as const;
+    const rgb = createRawNegativeScene(width, height, [estimatedFilmBaseSample.r, estimatedFilmBaseSample.g, estimatedFilmBaseSample.b]);
+    const baseSettings = createDefaultSettings({ contrast: 15, redBalance: 1.12, blueBalance: 0.9, highlightProtection: 26 });
+    const startupSettings = buildRawInitialSettings(baseSettings, rgb, width, height, 1, estimatedFilmBaseSample);
+    const legacySettings = createDefaultSettings({
+      contrast: 15,
+      redBalance: 1.12,
+      blueBalance: 0.9,
+      highlightProtection: 26,
+      filmBaseSample: estimatedFilmBaseSample,
+    });
+    const startupImage = new ImageData(new Uint8ClampedArray(rgbToRgba(rgb, width, height)), width, height);
+    const legacyImage = new ImageData(new Uint8ClampedArray(rgbToRgba(rgb, width, height)), width, height);
+
+    const startupHistogram = processImageData(startupImage, startupSettings, true, 'processed');
+    const legacyHistogram = processImageData(legacyImage, legacySettings, true, 'processed');
+    const startupMidtones = sumBins(startupHistogram.l.slice(32, 224));
+    const startupEdges = sumBins(startupHistogram.l.slice(0, 16)) + sumBins(startupHistogram.l.slice(240));
+    const legacyMidtones = sumBins(legacyHistogram.l.slice(32, 224));
+    const startupMeans = meanInnerChannels(startupImage);
+    const legacyMeans = meanInnerChannels(legacyImage);
+
+    expect(startupMidtones).toBeGreaterThan(legacyMidtones);
+    expect(startupMidtones).toBeGreaterThan(startupEdges);
+    expect(startupMeans.r).toBeGreaterThan(legacyMeans.r);
+    expect(startupMeans.g).toBeGreaterThan(legacyMeans.g);
+    expect(startupMeans.b / Math.max(startupMeans.r, 1)).toBeLessThan(1.35);
+    expect(startupMeans.b / Math.max(startupMeans.g, 1)).toBeLessThan(1.35);
   });
 
   it('builds a worker decode request from RAW decoder output', () => {
