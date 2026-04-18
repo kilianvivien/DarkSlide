@@ -12,10 +12,10 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 
 ## What's New in v0.8.2
 
-- **RAW film-base sampling in advanced-hd mode** — per-channel base sampling now works when using the advanced-hd inversion method on RAW imports
-- **Fixed RAW import startup and duplicate tab handling** — opening RAW files no longer creates duplicate tabs or stalls on first launch
-- **Fixed RAW preset auto-apply** — switching presets on a RAW import correctly reuses the existing import basis instead of re-running conversion from scratch
-- **Improved dust removal** — more precise repair and better handling of fine hairs
+- **RAW import fixes** — fixed a startup crash when opening RAW files before any image was loaded, and duplicate tab creation on import
+- **Fixed preset auto-apply on RAW imports** — presets now apply correctly on RAW files, with import settings propagating as expected
+- **Removed flat-field correction** — the feature added complexity with no meaningful real-world benefit
+- **Removed H&D inversion pipeline** — simplifies the conversion pipeline and removes an under-used code path
 
 ### Earlier in v0.8.0
 
