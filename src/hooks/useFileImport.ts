@@ -11,7 +11,6 @@ import {
 } from '../types';
 import {
   createDefaultSettings,
-  DEFAULT_COLOR_NEGATIVE_INVERSION,
   DEFAULT_COLOR_MANAGEMENT,
   DEFAULT_EXPORT_OPTIONS,
   FILM_PROFILES,
@@ -31,7 +30,6 @@ import {
 } from '../utils/rawImport';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getSidecarCandidatePaths, parseSidecar } from '../utils/sidecarSettings';
-import { resolveDefaultInversionMethodForProfile } from '../utils/appHelpers';
 
 type BlockingOverlayState = {
   title: string;
@@ -237,7 +235,6 @@ export function useFileImport({
     const roll = getRollById?.(rollId) ?? null;
     const rawDefaultProfile = resolveRawStartupProfile(roll, persistedProfilesRef.current, fallbackProfile);
     const parsedPrefs = loadPreferences();
-    const preferredColorNegativeInversion = parsedPrefs?.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION;
     const initialProfile = rawImport
       ? rawDefaultProfile
       : (
@@ -245,7 +242,6 @@ export function useFileImport({
           ? (persistedProfilesRef.current.find((profile) => profile.id === parsedPrefs.lastProfileId) ?? fallbackProfile)
           : fallbackProfile
       );
-    const initialInversionMethod = resolveDefaultInversionMethodForProfile(initialProfile, preferredColorNegativeInversion);
     activeDocumentIdRef.current = documentId;
 
     appendDiagnostic({
@@ -275,7 +271,6 @@ export function useFileImport({
       previewLevels: [],
       settings: {
         ...createDefaultSettings(structuredClone(initialProfile.defaultSettings)),
-        inversionMethod: initialInversionMethod,
         filmBaseSample: rawImport
           ? null
           : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample),
@@ -315,7 +310,6 @@ export function useFileImport({
       let decoded: DecodedImage;
       let initialSettings: ConversionSettings = {
         ...createDefaultSettings(structuredClone(initialProfile.defaultSettings)),
-        inversionMethod: initialInversionMethod,
         filmBaseSample: rawImport
           ? null
           : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample),
@@ -333,10 +327,7 @@ export function useFileImport({
           });
           const estimatedFilmBase = decodeRequest.precomputedFilmBaseSample ?? null;
           initialSettings = createDefaultSettings(buildRawInitialSettings(
-            {
-              ...initialProfile.defaultSettings,
-              inversionMethod: initialInversionMethod,
-            },
+            initialProfile.defaultSettings,
             rawResult.data,
             rawResult.width,
             rawResult.height,
@@ -452,7 +443,7 @@ export function useFileImport({
         return null;
       }
 
-      if (!rawImport && initialSettings.inversionMethod !== 'advanced-hd' && !initialSettings.filmBaseSample && decoded.estimatedFilmBaseSample) {
+      if (!rawImport && !initialSettings.filmBaseSample && decoded.estimatedFilmBaseSample) {
         initialSettings = {
           ...initialSettings,
           filmBaseSample: structuredClone(decoded.estimatedFilmBaseSample),

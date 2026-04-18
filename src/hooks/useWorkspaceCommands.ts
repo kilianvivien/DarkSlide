@@ -15,8 +15,7 @@ import {
   saveToDirectory,
   writeTextFileByPath,
 } from '../utils/fileBridge';
-import { getCanvas2dContext, getNativePathFromFile, getOpenInEditorErrorContext, getResolvedInversionPipelineSummary, getResolvedInputProfileId, TransientNoticeState, waitForNextPaint } from '../utils/appHelpers';
-import { resolveDefaultInversionMethodForProfile } from '../utils/appHelpers';
+import { getCanvas2dContext, getNativePathFromFile, getOpenInEditorErrorContext, getResolvedInputProfileId, TransientNoticeState, waitForNextPaint } from '../utils/appHelpers';
 import { savePreferences, UserPreferences } from '../utils/preferenceStore';
 import { saveMaxResidentDocs, MaxResidentDocs } from '../utils/residentDocsStore';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
@@ -106,31 +105,11 @@ function buildProfileSettingsForDocument(
     ?? currentDocument?.estimatedFilmBaseSample
     ?? null;
 
-  if (!usesRawImportProfileDefaults && nextSettings.inversionMethod !== 'advanced-hd' && !nextSettings.filmBaseSample && scanFilmBaseSample) {
+  if (!usesRawImportProfileDefaults && !nextSettings.filmBaseSample && scanFilmBaseSample) {
     nextSettings.filmBaseSample = structuredClone(scanFilmBaseSample);
   }
 
   return nextSettings;
-}
-
-function resolveProfileSwitchInversionMethod(
-  profile: FilmProfile,
-  currentDocument: WorkspaceDocument | null,
-  preferred: 'standard' | 'advanced-hd',
-) {
-  const rawImportProfileId = currentDocument?.rawImportProfile?.id ?? null;
-  const isRawDocument = currentDocument?.source.mime === 'image/x-raw-rgba';
-
-  if (rawImportProfileId && profile.id === rawImportProfileId) {
-    return currentDocument?.rawImportProfile?.defaultSettings.inversionMethod
-      ?? profile.defaultSettings.inversionMethod;
-  }
-
-  if (isRawDocument && currentDocument) {
-    return currentDocument.settings.inversionMethod;
-  }
-
-  return resolveDefaultInversionMethodForProfile(profile, preferred);
 }
 
 function shouldSampleDirectFilmBase(
@@ -142,7 +121,6 @@ function shouldSampleDirectFilmBase(
     || ['.dng', '.cr3', '.nef', '.arw', '.raf', '.rw2'].includes(document.source.extension.toLowerCase());
 
   return isRawDocument
-    && (document.settings.inversionMethod === 'standard' || document.settings.inversionMethod === 'advanced-hd')
     && profile.type === 'color'
     && (profile.filmType ?? 'negative') === 'negative'
     && !document.settings.blackAndWhite.enabled;
@@ -251,7 +229,6 @@ type UseWorkspaceCommandsOptions = {
   setUltraSmoothDragEnabled: SetState<boolean>;
   setNotificationSettings: SetState<NotificationSettings>;
   setMaxResidentDocs: SetState<MaxResidentDocs>;
-  setDefaultColorNegativeInversion: SetState<'standard' | 'advanced-hd'>;
   setExternalEditorPath: SetState<string | null>;
   setExternalEditorName: SetState<string | null>;
   setOpenInEditorOutputPath: SetState<string | null>;
@@ -354,7 +331,6 @@ export function useWorkspaceCommands({
   setUltraSmoothDragEnabled,
   setNotificationSettings,
   setMaxResidentDocs,
-  setDefaultColorNegativeInversion,
   setExternalEditorPath,
   setExternalEditorName,
   setOpenInEditorOutputPath,
@@ -489,9 +465,6 @@ export function useWorkspaceCommands({
         ...current.settings,
         ...newSettings,
       };
-      if (blackAndWhiteEnabled) {
-        nextSettings.inversionMethod = 'standard';
-      }
       const nextLightSourceId = blackAndWhiteEnabled === undefined
         ? current.lightSourceId
         : resolveLightSourceIdForProfile(activeProfile, current.lightSourceId, { blackAndWhiteEnabled });
@@ -889,11 +862,6 @@ export function useWorkspaceCommands({
     });
   }, [activeTabId, refreshRenderBackendDiagnostics, setMaxResidentDocs, workerClientRef]);
 
-  const handleDefaultColorNegativeInversionChange = useCallback((value: 'standard' | 'advanced-hd') => {
-    setDefaultColorNegativeInversion(value);
-    savePreferences({ ...prefsSnapshotRef.current, defaultColorNegativeInversion: value });
-  }, [prefsSnapshotRef, setDefaultColorNegativeInversion]);
-
   const handleProfileChange = useCallback((profile: FilmProfile) => {
     const nextLightSourceId = Object.prototype.hasOwnProperty.call(profile, 'lightSourceId')
       ? (profile.lightSourceId ?? null)
@@ -904,11 +872,6 @@ export function useWorkspaceCommands({
       : undefined;
 
     const nextSettings = buildProfileSettingsForDocument(profile, documentState);
-    const nextInversionMethod = resolveProfileSwitchInversionMethod(
-      profile,
-      documentState,
-      prefsSnapshotRef.current.defaultColorNegativeInversion,
-    );
     if (profile.includesFraming === false) {
       preserveCurrentFraming(nextSettings, documentState?.settings);
     }
@@ -919,18 +882,12 @@ export function useWorkspaceCommands({
       lightSourceId: nextLightSourceId !== undefined
         ? nextLightSourceId
         : resolveLightSourceIdForProfile(profile, current.lightSourceId),
-      settings: {
-        ...nextSettings,
-        inversionMethod: nextInversionMethod,
-      },
+      settings: nextSettings,
       ...(nextLabStyleId !== undefined ? { labStyleId: nextLabStyleId } : {}),
       dirty: true,
     }));
     const resolvedLabStyleId = nextLabStyleId !== undefined ? nextLabStyleId : (documentState?.labStyleId ?? null);
-    resetHistory(createHistoryEntry({
-      ...nextSettings,
-      inversionMethod: nextInversionMethod,
-    }, resolvedLabStyleId));
+    resetHistory(createHistoryEntry(nextSettings, resolvedLabStyleId));
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [documentState, prefsSnapshotRef, resetHistory, updateDocument]);
 
@@ -1001,24 +958,16 @@ export function useWorkspaceCommands({
   const handleReset = useCallback(() => {
     if (!documentState) return;
     const nextSettings = buildProfileSettingsForDocument(activeProfile, documentState);
-    const nextInversionMethod = resolveProfileSwitchInversionMethod(
-      activeProfile,
-      documentState,
-      prefsSnapshotRef.current.defaultColorNegativeInversion,
-    );
     if (activeProfile.includesFraming === false) {
       preserveCurrentFraming(nextSettings, documentState.settings);
     }
     pushHistoryEntry(createHistoryEntry(documentState.settings, documentState.labStyleId));
     updateDocument((current) => ({
       ...current,
-      settings: {
-        ...nextSettings,
-        inversionMethod: nextInversionMethod,
-      },
+      settings: nextSettings,
       dirty: false,
     }));
-  }, [activeProfile, documentState, prefsSnapshotRef, pushHistoryEntry, updateDocument]);
+  }, [activeProfile, documentState, pushHistoryEntry, updateDocument]);
 
   const runExport = useCallback(async (params?: {
     settings?: ConversionSettings;
@@ -1046,7 +995,6 @@ export function useWorkspaceCommands({
         isColor: activeProfile.type === 'color' && !exportSettings.blackAndWhite.enabled,
         profileId: activeProfile.id,
         filmType: activeProfile.filmType,
-        advancedInversion: activeProfile.advancedInversion ?? null,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
@@ -1131,7 +1079,7 @@ export function useWorkspaceCommands({
       void refreshRenderBackendDiagnostics();
     }
     return null;
-  }, [activeLabStyle, activeProfile.advancedInversion, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.name, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, getRollById, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.name, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, getRollById, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleDownload = useCallback(async () => {
     await runExport();
@@ -1188,7 +1136,6 @@ export function useWorkspaceCommands({
         isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
         profileId: activeProfile.id,
         filmType: activeProfile.filmType,
-        advancedInversion: activeProfile.advancedInversion ?? null,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
         inputProfileId,
         outputProfileId: documentState.exportOptions.outputProfileId,
@@ -1240,7 +1187,7 @@ export function useWorkspaceCommands({
       setError(`Open in editor failed. ${message}`);
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'OPEN_IN_EDITOR_FAILED' } : current);
     }
-  }, [activeLabStyle, activeProfile.advancedInversion, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleLightSourceChange = useCallback((lightSourceId: string | null) => {
     updateDocument((current) => {
@@ -1501,12 +1448,19 @@ export function useWorkspaceCommands({
         activeDocumentId: activeDocumentIdRef.current,
         activeImportSession: importSessionRef.current,
         activeRenderRequest: activeRenderRequestRef.current,
-        colorInversion: documentState ? getResolvedInversionPipelineSummary(documentState.settings, {
+        colorInversion: documentState ? {
+          activePipeline: 'standard',
           profileType: activeProfile.type,
-          filmType: activeProfile.filmType,
-          advancedInversion: activeProfile.advancedInversion ?? null,
-          estimatedFilmBaseSample: documentState.estimatedFilmBaseSample ?? null,
-        }) : null,
+          filmType: activeProfile.filmType ?? 'negative',
+          blackAndWhiteEnabled: documentState.settings.blackAndWhite.enabled,
+          usedEstimatedFilmBaseSample: !documentState.settings.filmBaseSample && Boolean(documentState.estimatedFilmBaseSample),
+          baseSampleSource: documentState.settings.filmBaseSample
+            ? 'manual-picker'
+            : documentState.estimatedFilmBaseSample
+              ? 'auto-estimated-border-sample'
+              : null,
+          reason: 'standard only',
+        } : null,
         fitScale,
         targetMaxDimension,
         effectiveRenderTarget: fullRenderTargetDimension,
@@ -1571,7 +1525,6 @@ export function useWorkspaceCommands({
     handleGPURenderingChange,
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
-    handleDefaultColorNegativeInversionChange,
     handleProfileChange,
     handleLightSourceChange,
     handleRedetectFrame,

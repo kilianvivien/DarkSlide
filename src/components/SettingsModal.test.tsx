@@ -200,22 +200,6 @@ describe('SettingsModal', () => {
     expect(onDefaultLightSourceChange).toHaveBeenCalledWith('daylight');
   });
 
-  it('renders the advanced inversion preference and persists selection changes', () => {
-    const props = createProps();
-    const onDefaultColorNegativeInversionChange = vi.fn();
-    props.onDefaultColorNegativeInversionChange = onDefaultColorNegativeInversionChange;
-
-    render(
-      <SettingsModal {...props} />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Color' }));
-    expect(screen.getByText('Advanced inversion')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('Advanced inversion'), { target: { value: 'advanced-hd' } });
-    expect(onDefaultColorNegativeInversionChange).toHaveBeenCalledWith('advanced-hd');
-  });
-
   it('renders the backup tab and triggers preset backup actions', () => {
     const props = createProps();
     const onExportPresetBackup = vi.fn(async () => 'saved' as const);

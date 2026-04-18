@@ -185,26 +185,6 @@ describe('rawImport', () => {
     });
   });
 
-  it('keeps advanced-hd startup on the estimated-sample path without applying standard correction settings', () => {
-    const base = createDefaultSettings({
-      inversionMethod: 'advanced-hd',
-      exposure: 7,
-      redBalance: 1.2,
-      greenBalance: 1.05,
-      blueBalance: 0.85,
-    });
-    const rgb = createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]);
-
-    expect(buildRawInitialSettings(base, rgb, 64, 48, 6)).toMatchObject({
-      rotation: 90,
-      filmBaseSample: null,
-      exposure: 7,
-      redBalance: 1.2,
-      greenBalance: 1.05,
-      blueBalance: 0.85,
-    });
-  });
-
   it('builds a transient profile for the import-time RAW result', () => {
     const settings = createDefaultSettings({ rotation: 90, filmBaseSample: { r: 160, g: 150, b: 140 } });
 

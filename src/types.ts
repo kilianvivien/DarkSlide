@@ -10,7 +10,6 @@ export type DustAutoDetectMode = 'spots' | 'scratches' | 'both';
 export type DustMarkKind = 'spot' | 'path';
 export type UpdateChannel = 'stable' | 'beta';
 export type ZoomLevel = number | 'fit';
-export type InversionMethod = 'standard' | 'advanced-hd';
 
 export interface CurvePoint {
   x: number;
@@ -117,11 +116,6 @@ export interface TonalCharacter {
   midtoneAnchor: number;
 }
 
-export interface AdvancedInversionProfile {
-  gamma: [number, number, number];
-  baseDensityFallback: [number, number, number];
-}
-
 export interface LabStyleProfile {
   id: string;
   name: string;
@@ -170,7 +164,6 @@ export interface LightSourceProfile {
 }
 
 export interface ConversionSettings {
-  inversionMethod: InversionMethod;
   exposure: number;
   contrast: number;
   saturation: number;
@@ -291,7 +284,6 @@ export interface FilmProfile {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
-  advancedInversion?: AdvancedInversionProfile;
   toneCurve?: CurvePoint[];
   isCustom?: boolean;
   tags?: string[];
@@ -423,7 +415,6 @@ export interface RenderRequest {
   isColor: boolean;
   profileId?: string | null;
   filmType?: FilmProfileType;
-  advancedInversion?: AdvancedInversionProfile | null;
   estimatedFilmBaseSample?: FilmBaseSample | null;
   estimatedDensityBalance?: DensityBalance | null;
   inputProfileId?: ColorProfileId;
@@ -477,7 +468,6 @@ export interface ExportRequest {
   isColor: boolean;
   profileId?: string | null;
   filmType?: FilmProfileType;
-  advancedInversion?: AdvancedInversionProfile | null;
   estimatedDensityBalance?: DensityBalance | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
@@ -671,7 +661,6 @@ export interface AutoAnalyzeRequest {
   isColor: boolean;
   profileId?: string | null;
   filmType?: FilmProfileType;
-  advancedInversion?: AdvancedInversionProfile | null;
   inputProfileId?: ColorProfileId;
   outputProfileId?: ColorProfileId;
   targetMaxDimension: number;
@@ -694,7 +683,6 @@ export interface DustDetectRequest {
   isColor: boolean;
   profileId?: string | null;
   filmType?: FilmProfileType;
-  advancedInversion?: AdvancedInversionProfile | null;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
   sensitivity: number;

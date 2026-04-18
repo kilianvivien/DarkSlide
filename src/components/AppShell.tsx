@@ -118,7 +118,6 @@ type AppShellProps = {
   gpuRenderingEnabled: boolean;
   ultraSmoothDragEnabled: boolean;
   notificationSettings: NotificationSettings;
-  defaultColorNegativeInversion: 'standard' | 'advanced-hd';
   renderBackendDiagnostics: RenderBackendDiagnostics;
   defaultLightSourceId: string;
   defaultLabStyleId: string;
@@ -256,7 +255,6 @@ type AppShellProps = {
   onToggleUltraSmoothDrag: (enabled: boolean) => void;
   onMaxResidentDocsChange: (value: MaxResidentDocs) => void;
   onNotificationSettingsChange: (options: Partial<NotificationSettings>) => void;
-  onDefaultColorNegativeInversionChange: (value: 'standard' | 'advanced-hd') => void;
   onDefaultLightSourceChange: (lightSourceId: string) => void;
   onSelectFlatFieldProfile: (name: string | null) => Promise<void>;
   onImportFlatFieldReference: (file: File) => Promise<string>;
@@ -349,7 +347,6 @@ export function AppShell({
   gpuRenderingEnabled,
   ultraSmoothDragEnabled,
   notificationSettings,
-  defaultColorNegativeInversion,
   renderBackendDiagnostics,
   defaultLightSourceId,
   defaultLabStyleId,
@@ -469,7 +466,6 @@ export function AppShell({
   onToggleUltraSmoothDrag,
   onMaxResidentDocsChange,
   onNotificationSettingsChange,
-  onDefaultColorNegativeInversionChange,
   onDefaultLightSourceChange,
   onSelectFlatFieldProfile,
   onImportFlatFieldReference,
@@ -1154,8 +1150,6 @@ export function AppShell({
           onMaxResidentDocsChange={onMaxResidentDocsChange}
           notificationSettings={notificationSettings}
           onNotificationSettingsChange={onNotificationSettingsChange}
-          defaultColorNegativeInversion={defaultColorNegativeInversion}
-          onDefaultColorNegativeInversionChange={onDefaultColorNegativeInversionChange}
           colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
           sourceMetadata={documentState?.source ?? null}
           onColorManagementChange={onColorManagementChange}

@@ -88,21 +88,6 @@ struct Uniforms {
   lightSourceBiasB: f32,
   hasFlatField: f32,
 
-  inversionMode: f32,
-  advancedGammaR: f32,
-  advancedGammaG: f32,
-  advancedGammaB: f32,
-
-  advancedBaseDensityR: f32,
-  advancedBaseDensityG: f32,
-  advancedBaseDensityB: f32,
-  densityBalanceEnabled: f32,
-
-  densityBalanceScaleR: f32,
-  densityBalanceScaleG: f32,
-  densityBalanceScaleB: f32,
-  _pad16: f32,
-
   residualBaseOffsetR: f32,
   residualBaseOffsetG: f32,
   residualBaseOffsetB: f32,
@@ -142,28 +127,6 @@ fn fullscreenVertex(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 fn clampF(value: f32, minValue: f32, maxValue: f32) -> f32 {
   return max(minValue, min(maxValue, value));
-}
-
-fn log10(value: f32) -> f32 {
-  return log(value) / log(10.0);
-}
-
-fn applyAdvancedHdInversion(value: f32, baseDensity: f32, gamma: f32) -> f32 {
-  let transmittance = clampF(value, 1e-6, 1.0);
-  let density = -log10(transmittance);
-  let imageDensity = max(0.0, density - baseDensity);
-  return clampF(1.0 - pow(10.0, -imageDensity / max(gamma, 0.01)), 0.0, 1.0);
-}
-
-fn applyDensityBalanceToDensity(value: f32, slope: f32) -> f32 {
-  return max(0.0, value * slope);
-}
-
-fn applyAdvancedHdInversionWithDensityBalance(value: f32, baseDensity: f32, gamma: f32, slope: f32) -> f32 {
-  let transmittance = clampF(value, 1e-6, 1.0);
-  let density = -log10(transmittance);
-  let imageDensity = applyDensityBalanceToDensity(max(0.0, density - baseDensity), slope);
-  return clampF(1.0 - pow(10.0, -imageDensity / max(gamma, 0.01)), 0.0, 1.0);
 }
 
 fn decodeTransfer(value: f32, mode: f32) -> f32 {
@@ -340,40 +303,19 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
     g = clampF(g / max(uniforms.lightSourceBiasG, 0.05), 0.0, 1.0);
     b = clampF(b / max(uniforms.lightSourceBiasB, 0.05), 0.0, 1.0);
 
-    if (uniforms.inversionMode > 0.5) {
-      r = applyAdvancedHdInversionWithDensityBalance(
-        decodeTransfer(r, uniforms.outputTransferMode),
-        uniforms.advancedBaseDensityR,
-        uniforms.advancedGammaR,
-        uniforms.densityBalanceScaleR,
-      );
-      g = applyAdvancedHdInversionWithDensityBalance(
-        decodeTransfer(g, uniforms.outputTransferMode),
-        uniforms.advancedBaseDensityG,
-        uniforms.advancedGammaG,
-        uniforms.densityBalanceScaleG,
-      );
-      b = applyAdvancedHdInversionWithDensityBalance(
-        decodeTransfer(b, uniforms.outputTransferMode),
-        uniforms.advancedBaseDensityB,
-        uniforms.advancedGammaB,
-        uniforms.densityBalanceScaleB,
-      );
-    } else {
-      if (uniforms.isSlide <= 0.5) {
-        r = 1.0 - r;
-        g = 1.0 - g;
-        b = 1.0 - b;
-      }
-
-      r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
-      g = applyFilmBaseCompensation(g, uniforms.filmBaseG);
-      b = applyFilmBaseCompensation(b, uniforms.filmBaseB);
-
-      r = applyShadowFloorCorrection(r, uniforms.shadowFloorR);
-      g = applyShadowFloorCorrection(g, uniforms.shadowFloorG);
-      b = applyShadowFloorCorrection(b, uniforms.shadowFloorB);
+    if (uniforms.isSlide <= 0.5) {
+      r = 1.0 - r;
+      g = 1.0 - g;
+      b = 1.0 - b;
     }
+
+    r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
+    g = applyFilmBaseCompensation(g, uniforms.filmBaseG);
+    b = applyFilmBaseCompensation(b, uniforms.filmBaseB);
+
+    r = applyShadowFloorCorrection(r, uniforms.shadowFloorR);
+    g = applyShadowFloorCorrection(g, uniforms.shadowFloorG);
+    b = applyShadowFloorCorrection(b, uniforms.shadowFloorB);
 
     r = max(0.0, r - uniforms.residualBaseOffsetR);
     g = max(0.0, g - uniforms.residualBaseOffsetG);

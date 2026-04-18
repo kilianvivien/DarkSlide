@@ -1,5 +1,4 @@
-import { DEFAULT_COLOR_NEGATIVE_INVERSION, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
-import { InversionMethod } from '../types';
+import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
 import { CropTab, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
@@ -7,7 +6,6 @@ const STORAGE_KEY = 'darkslide_preferences_v1';
 export interface UserPreferences {
   version: 7;
   lastProfileId: string;
-  defaultColorNegativeInversion: InversionMethod;
   exportOptions: ExportOptions;
   notificationSettings: NotificationSettings;
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
@@ -28,9 +26,9 @@ export interface UserPreferences {
   updateChannel: UpdateChannel;
 }
 
-type PreferencesV5 = Omit<UserPreferences, 'version' | 'defaultColorNegativeInversion' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 5 };
-type PreferencesV6 = Omit<UserPreferences, 'version' | 'defaultColorNegativeInversion'> & { version: 6 };
-type PreferencesV6Base = Omit<UserPreferences, 'version' | 'defaultColorNegativeInversion' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>
+type PreferencesV5 = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 5 };
+type PreferencesV6 = Omit<UserPreferences, 'version'> & { version: 6 };
+type PreferencesV6Base = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>
   & Partial<Pick<UserPreferences, 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>>;
 
 function isValidPreferences(value: unknown): value is UserPreferences {
@@ -42,7 +40,6 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     typeof prefs.notificationSettings === 'object' &&
     prefs.notificationSettings !== null &&
     typeof prefs.lastProfileId === 'string' &&
-    (prefs.defaultColorNegativeInversion === 'standard' || prefs.defaultColorNegativeInversion === 'advanced-hd') &&
     exportOptions !== undefined &&
     typeof exportOptions.format === 'string' &&
     typeof exportOptions.quality === 'number' &&
@@ -168,7 +165,6 @@ function withV6Defaults(base: PreferencesV6Base): UserPreferences {
   return {
     ...rest,
     version: 7,
-    defaultColorNegativeInversion: DEFAULT_COLOR_NEGATIVE_INVERSION,
     scanningWatchPath: scanningWatchPath ?? null,
     scanningAutoExport: scanningAutoExport ?? false,
     scanningAutoExportPath: scanningAutoExportPath ?? null,
@@ -388,7 +384,6 @@ export function loadPreferences(): UserPreferences | null {
       scanningAutoExport: parsed.scanningAutoExport ?? false,
       scanningAutoExportPath: parsed.scanningAutoExportPath ?? null,
       updateChannel: parsed.updateChannel ?? 'stable',
-      defaultColorNegativeInversion: parsed.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION,
     };
   } catch {
     return null;

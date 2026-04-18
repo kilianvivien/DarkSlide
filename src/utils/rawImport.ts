@@ -250,13 +250,6 @@ export function buildRawInitialSettings(
 ) {
   const nextSettings = structuredClone(baseSettings);
 
-  if (nextSettings.inversionMethod === 'advanced-hd') {
-    return {
-      ...nextSettings,
-      rotation: rotationFromExifOrientation(orientation),
-    } satisfies ConversionSettings;
-  }
-
   const channelBalance = getFilmBaseChannelBalance(estimatedFilmBaseSample);
 
   return {

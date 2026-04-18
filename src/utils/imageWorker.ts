@@ -32,7 +32,6 @@ import {
   WorkerMemoryDiagnostics,
 } from '../types';
 import {
-  applyAdvancedHdInversion,
   applyFilmBaseCompensation,
   applyLightSourceCorrection,
   assertSupportedDimensions,
@@ -48,14 +47,13 @@ import {
   normalizeCrop,
   processImageData,
   releaseScratchBuffers,
-  resolveAdvancedHdParameters,
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
 import { analyzeChannelFloors, analyzeColorBalance, analyzeExposure, analyzeMidtoneContrast } from './autoAnalysis';
 import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS, resolveDustRemovalSettings } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
-import { convertImageDataColorProfile, decodeProfileChannel, getColorProfileIdFromName, identifyIccProfile } from './colorProfiles';
+import { convertImageDataColorProfile, getColorProfileIdFromName, identifyIccProfile } from './colorProfiles';
 import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata';
 import { detectDustMarks } from './dustDetection';
 import { applyFlatFieldCorrection } from './flatField';
@@ -774,8 +772,6 @@ function createDustRemovedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
 function applyDustAnalysisStage(
   imageData: ImageData,
   payload: DustDetectRequest,
-  estimatedFilmBaseSample: FilmBaseSample | null,
-  estimatedDensityBalance: DensityBalance | null,
   residualBaseOffset: [number, number, number] | null,
 ) {
   convertImageDataColorProfile(imageData, 'srgb', 'srgb');
@@ -784,18 +780,6 @@ function applyDustAnalysisStage(
   const filmBaseBalance = getFilmBaseBalance(payload.settings.filmBaseSample);
   const lightSourceBias = payload.lightSourceBias ?? [1, 1, 1];
   const filmType = payload.filmType ?? 'negative';
-  const advancedHd = resolveAdvancedHdParameters(
-    payload.settings,
-    payload.isColor,
-    filmType,
-    payload.advancedInversion ?? null,
-    estimatedFilmBaseSample,
-    estimatedDensityBalance,
-    payload.profileId ?? null,
-    'srgb',
-    'srgb',
-    lightSourceBias,
-  );
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -806,40 +790,15 @@ function applyDustAnalysisStage(
     g = applyLightSourceCorrection(g, lightSourceBias[1]);
     b = applyLightSourceCorrection(b, lightSourceBias[2]);
 
-    if (advancedHd.enabled) {
-      r = decodeProfileChannel('srgb', r);
-      g = decodeProfileChannel('srgb', g);
-      b = decodeProfileChannel('srgb', b);
-
-      r = applyAdvancedHdInversion(
-        r,
-        advancedHd.baseDensity[0],
-        advancedHd.gamma[0],
-        advancedHd.densityBalance?.scaleR ?? 1,
-      ) * payload.settings.redBalance;
-      g = applyAdvancedHdInversion(
-        g,
-        advancedHd.baseDensity[1],
-        advancedHd.gamma[1],
-        advancedHd.densityBalance?.scaleG ?? 1,
-      ) * payload.settings.greenBalance;
-      b = applyAdvancedHdInversion(
-        b,
-        advancedHd.baseDensity[2],
-        advancedHd.gamma[2],
-        advancedHd.densityBalance?.scaleB ?? 1,
-      ) * payload.settings.blueBalance;
-    } else {
-      if (filmType !== 'slide') {
-        r = 1 - r;
-        g = 1 - g;
-        b = 1 - b;
-      }
-
-      r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
-      g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
-      b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
+    if (filmType !== 'slide') {
+      r = 1 - r;
+      g = 1 - g;
+      b = 1 - b;
     }
+
+    r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
+    g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
+    b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
 
     if (residualBaseOffset) {
       r = Math.max(0, r - residualBaseOffset[0]);
@@ -871,10 +830,6 @@ function handleDustDetect(payload: DustDetectRequest) {
     payload.settings,
     payload.isColor,
     payload.filmType ?? 'negative',
-    payload.advancedInversion ?? null,
-    document.estimatedFilmBaseSample,
-    document.estimatedDensityBalance,
-    payload.profileId ?? null,
     'srgb',
     'srgb',
     payload.lightSourceBias ?? [1, 1, 1],
@@ -883,8 +838,6 @@ function handleDustDetect(payload: DustDetectRequest) {
   applyDustAnalysisStage(
     imageData,
     payload,
-    document.estimatedFilmBaseSample,
-    document.estimatedDensityBalance,
     residualBaseOffset,
   );
   const detectedMarks = detectDustMarks(imageData, payload.sensitivity, payload.maxRadius, payload.mode)
@@ -1222,8 +1175,6 @@ function sampleRegionFromTransformedCanvas(
 function applyAutoWhiteBalanceAnalysisStage(
   imageData: ImageData,
   payload: AutoAnalyzeRequest,
-  estimatedFilmBaseSample: FilmBaseSample | null,
-  estimatedDensityBalance: DensityBalance | null,
   residualBaseOffset: [number, number, number] | null,
 ) {
   applyActiveFlatFieldIfNeeded(imageData, payload.settings.flatFieldEnabled);
@@ -1233,18 +1184,6 @@ function applyAutoWhiteBalanceAnalysisStage(
   const filmBaseBalance = getFilmBaseBalance(payload.settings.filmBaseSample);
   const lightSourceBias = payload.lightSourceBias ?? [1, 1, 1];
   const filmType = payload.filmType ?? 'negative';
-  const advancedHd = resolveAdvancedHdParameters(
-    payload.settings,
-    payload.isColor,
-    filmType,
-    payload.advancedInversion ?? null,
-    estimatedFilmBaseSample,
-    estimatedDensityBalance,
-    payload.profileId ?? null,
-    payload.inputProfileId ?? 'srgb',
-    payload.outputProfileId ?? 'srgb',
-    lightSourceBias as [number, number, number],
-  );
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -1255,40 +1194,15 @@ function applyAutoWhiteBalanceAnalysisStage(
     g = applyLightSourceCorrection(g, lightSourceBias[1]);
     b = applyLightSourceCorrection(b, lightSourceBias[2]);
 
-    if (advancedHd.enabled) {
-      r = decodeProfileChannel(payload.outputProfileId ?? 'srgb', r);
-      g = decodeProfileChannel(payload.outputProfileId ?? 'srgb', g);
-      b = decodeProfileChannel(payload.outputProfileId ?? 'srgb', b);
-
-      r = applyAdvancedHdInversion(
-        r,
-        advancedHd.baseDensity[0],
-        advancedHd.gamma[0],
-        advancedHd.densityBalance?.scaleR ?? 1,
-      ) * payload.settings.redBalance;
-      g = applyAdvancedHdInversion(
-        g,
-        advancedHd.baseDensity[1],
-        advancedHd.gamma[1],
-        advancedHd.densityBalance?.scaleG ?? 1,
-      ) * payload.settings.greenBalance;
-      b = applyAdvancedHdInversion(
-        b,
-        advancedHd.baseDensity[2],
-        advancedHd.gamma[2],
-        advancedHd.densityBalance?.scaleB ?? 1,
-      ) * payload.settings.blueBalance;
-    } else {
-      if (filmType !== 'slide') {
-        r = 1 - r;
-        g = 1 - g;
-        b = 1 - b;
-      }
-
-      r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
-      g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
-      b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
+    if (filmType !== 'slide') {
+      r = 1 - r;
+      g = 1 - g;
+      b = 1 - b;
     }
+
+    r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
+    g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
+    b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
 
     if (residualBaseOffset) {
       r = Math.max(0, r - residualBaseOffset[0]);
@@ -1318,10 +1232,6 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.settings,
     payload.isColor,
     payload.filmType ?? 'negative',
-    payload.advancedInversion ?? null,
-    document.estimatedFilmBaseSample,
-    document.estimatedDensityBalance,
-    payload.profileId ?? null,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     payload.lightSourceBias ?? [1, 1, 1],
@@ -1345,9 +1255,6 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.outputProfileId ?? 'srgb',
     payload.profileId ?? null,
     payload.filmType ?? 'negative',
-    payload.advancedInversion ?? null,
-    document.estimatedFilmBaseSample,
-    document.estimatedDensityBalance,
     residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
@@ -1357,8 +1264,6 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   applyAutoWhiteBalanceAnalysisStage(
     whiteBalanceImageData,
     payload,
-    document.estimatedFilmBaseSample,
-    document.estimatedDensityBalance,
     residualBaseOffset,
   );
 
@@ -1403,10 +1308,6 @@ function handleRender(payload: RenderRequest) {
       payload.settings,
       payload.isColor,
       payload.filmType ?? 'negative',
-      payload.advancedInversion ?? null,
-      document.estimatedFilmBaseSample,
-      payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
-      payload.profileId ?? null,
       payload.inputProfileId ?? 'srgb',
       payload.outputProfileId ?? 'srgb',
       payload.lightSourceBias ?? [1, 1, 1],
@@ -1432,9 +1333,6 @@ function handleRender(payload: RenderRequest) {
       payload.outputProfileId ?? 'srgb',
       payload.profileId ?? null,
       payload.filmType ?? 'negative',
-      payload.advancedInversion ?? null,
-      document.estimatedFilmBaseSample,
-      payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
       residualBaseOffset,
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
@@ -1483,10 +1381,6 @@ async function handleExport(payload: ExportRequest) {
     payload.settings,
     payload.isColor,
     payload.filmType ?? 'negative',
-    payload.advancedInversion ?? null,
-    document.estimatedFilmBaseSample,
-    payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
-    payload.profileId ?? null,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     payload.lightSourceBias ?? [1, 1, 1],
@@ -1522,9 +1416,6 @@ async function handleExport(payload: ExportRequest) {
     payload.outputProfileId ?? 'srgb',
     payload.profileId ?? null,
     payload.filmType ?? 'negative',
-    payload.advancedInversion ?? null,
-    document.estimatedFilmBaseSample,
-    payload.estimatedDensityBalance ?? document.estimatedDensityBalance,
     residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
@@ -1604,10 +1495,6 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       settings,
       profile.type === 'color' && !settings.blackAndWhite.enabled,
       profile.filmType ?? 'negative',
-      profile.advancedInversion ?? null,
-      payload.estimatedFilmBaseSamplePerCell?.[index] ?? document.estimatedFilmBaseSample,
-      document.estimatedDensityBalance,
-      profile.id,
       resolveStoredInputProfileId(document, colorManagement?.inputMode ?? 'auto', colorManagement?.inputProfileId ?? 'srgb'),
       payload.exportOptions.outputProfileId,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
@@ -1631,9 +1518,6 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       payload.exportOptions.outputProfileId,
       profile.id,
       profile.filmType ?? 'negative',
-      profile.advancedInversion ?? null,
-      payload.estimatedFilmBaseSamplePerCell?.[index] ?? document.estimatedFilmBaseSample,
-      document.estimatedDensityBalance,
       residualBaseOffset,
       payload.flareFloorPerCell?.[index] ?? null,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],

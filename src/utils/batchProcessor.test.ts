@@ -193,7 +193,7 @@ describe('runBatch auto-analysis', () => {
   });
 
   it('forwards the shared light source bias into auto-analysis and export', async () => {
-    const sharedSettings = createDefaultSettings({ inversionMethod: 'advanced-hd' });
+    const sharedSettings = createDefaultSettings();
     const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
     const sharedLightSourceBias: [number, number, number] = [0.92, 0.96, 1];
     const workerClient = {

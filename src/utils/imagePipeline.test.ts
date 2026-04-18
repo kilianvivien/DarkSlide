@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { convertRgbBetweenProfiles } from './colorProfiles';
-import { ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET, ADVANCED_HD_BLUE_GAMMA_SCALE, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, resolveAdvancedHdParameters, rotateCropClockwise } from './imagePipeline';
+import { buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -26,10 +25,6 @@ function luminance(imageData: ImageData, index = 0) {
 
 function midpointDeviation(imageData: ImageData, target = 128) {
   return Math.abs(luminance(imageData) - target);
-}
-
-function sampleChannelToDensity(sampleValue: number) {
-  return -Math.log10(Math.max(sampleValue / 255, 1e-6));
 }
 
 // Neutral settings that isolate a single parameter
@@ -112,11 +107,11 @@ describe('processImageData', () => {
 });
 
 describe('buildProcessingUniforms', () => {
-  it('keeps the GPU uniform payload aligned at 84 floats', () => {
-    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(84);
+  it('keeps the GPU uniform payload aligned at 72 floats', () => {
+    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(72);
   });
 
-  it('stores the flat-field flag in the correct slot before advanced inversion parameters', () => {
+  it('stores the flat-field flag in the correct slot', () => {
     const uniforms = buildProcessingUniforms(
       createDefaultSettings({ flatFieldEnabled: true }),
       true,
@@ -124,46 +119,6 @@ describe('buildProcessingUniforms', () => {
     );
 
     expect(uniforms[67]).toBe(1);
-  });
-
-  it('stores advanced inversion mode, gamma, and estimated base density in the uniform tail', () => {
-    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
-    expect(profile?.advancedInversion).toBeDefined();
-
-    const uniforms = buildProcessingUniforms(
-      {
-        ...neutralSettings,
-        inversionMethod: 'advanced-hd',
-      },
-      true,
-      'processed',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      0,
-      0,
-      0,
-      'srgb',
-      'srgb',
-      null,
-      'negative',
-      profile?.advancedInversion,
-      { r: 200, g: 180, b: 150 },
-      { scaleR: 1.1, scaleG: 1, scaleB: 0.65, source: 'auto-histogram' },
-    );
-
-    expect(uniforms[68]).toBe(1);
-    expect(uniforms[69]).toBeCloseTo(profile!.advancedInversion!.gamma[0], 5);
-    expect(uniforms[70]).toBeCloseTo(profile!.advancedInversion!.gamma[1], 5);
-    expect(uniforms[71]).toBeCloseTo(profile!.advancedInversion!.gamma[2] * ADVANCED_HD_BLUE_GAMMA_SCALE, 5);
-    expect(uniforms[72]).toBeGreaterThan(0);
-    expect(uniforms[73]).toBeGreaterThan(0);
-    expect(uniforms[74]).toBeGreaterThan(0);
-    expect(uniforms[75]).toBe(1);
-    expect(uniforms[76]).toBeCloseTo(1.1, 5);
-    expect(uniforms[77]).toBeCloseTo(1, 5);
-    expect(uniforms[78]).toBeCloseTo(0.65, 5);
   });
 });
 
@@ -188,148 +143,6 @@ describe('computeDensityBalance', () => {
     expect(balance.scaleB).toBeLessThan(2);
     expect(balance.scaleR).not.toBeCloseTo(1, 3);
     expect(balance.scaleB).not.toBeCloseTo(1, 3);
-  });
-});
-
-describe('advanced H&D inversion', () => {
-  it('uses the estimated film base when available', () => {
-    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
-    expect(profile?.advancedInversion).toBeDefined();
-
-    const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd', filmBaseSample: null },
-      true,
-      'negative',
-      profile?.advancedInversion,
-      { r: 200, g: 180, b: 150 },
-      { scaleR: 1.05, scaleG: 1, scaleB: 0.62, source: 'auto-histogram' },
-      null,
-    );
-
-    expect(params.enabled).toBe(true);
-    expect(params.densityBalance).toEqual({ scaleR: 1.05, scaleG: 1, scaleB: 0.62, source: 'auto-histogram' });
-    expect(params.baseDensity[0]).toBeGreaterThan(0);
-    expect(params.baseDensity).not.toEqual(profile!.advancedInversion!.baseDensityFallback);
-    expect(params.gamma[2]).toBeCloseTo(profile!.advancedInversion!.gamma[2] * ADVANCED_HD_BLUE_GAMMA_SCALE, 5);
-    expect(params.baseDensity[2]).toBeCloseTo(sampleChannelToDensity(150) + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET, 5);
-  });
-
-  it('converts the estimated film base into the working profile before deriving densities', () => {
-    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
-    expect(profile?.advancedInversion).toBeDefined();
-
-    const estimatedFilmBaseSample = { r: 240, g: 180, b: 60 };
-    const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd', filmBaseSample: null },
-      true,
-      'negative',
-      profile?.advancedInversion,
-      estimatedFilmBaseSample,
-      null,
-      null,
-      'adobe-rgb',
-      'srgb',
-    );
-    const [expectedR, expectedG, expectedB] = convertRgbBetweenProfiles(
-      estimatedFilmBaseSample.r / 255,
-      estimatedFilmBaseSample.g / 255,
-      estimatedFilmBaseSample.b / 255,
-      'adobe-rgb',
-      'srgb',
-    );
-    const expectedConvertedSample = {
-      r: Math.round(expectedR * 255),
-      g: Math.round(expectedG * 255),
-      b: Math.round(expectedB * 255),
-    };
-
-    expect(params.baseDensity[0]).toBeCloseTo(sampleChannelToDensity(expectedConvertedSample.r), 5);
-    expect(params.baseDensity[1]).toBeCloseTo(sampleChannelToDensity(expectedConvertedSample.g), 5);
-    expect(params.baseDensity[2]).toBeCloseTo(sampleChannelToDensity(expectedConvertedSample.b) + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET, 5);
-  });
-
-  it('falls back to the profile density when auto estimation is unavailable', () => {
-    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
-    expect(profile?.advancedInversion).toBeDefined();
-
-    const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd', filmBaseSample: null },
-      true,
-      'negative',
-      profile?.advancedInversion,
-      null,
-      null,
-    );
-
-    expect(params.enabled).toBe(true);
-    expect(params.baseDensity).toEqual([
-      profile!.advancedInversion!.baseDensityFallback[0],
-      profile!.advancedInversion!.baseDensityFallback[1],
-      profile!.advancedInversion!.baseDensityFallback[2] + ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET,
-    ]);
-  });
-
-  it('prefers a manual film-base sample over the estimated one', () => {
-    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
-    expect(profile?.advancedInversion).toBeDefined();
-
-    const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd', filmBaseSample: { r: 240, g: 230, b: 220 } },
-      true,
-      'negative',
-      profile?.advancedInversion,
-      { r: 200, g: 180, b: 150 },
-      { scaleR: 1.08, scaleG: 1, scaleB: 0.61, source: 'auto-histogram' },
-    );
-
-    expect(params.enabled).toBe(true);
-    expect(params.baseSampleSource).toBe('manual-picker');
-    expect(params.baseDensity[0]).toBeLessThan(profile!.advancedInversion!.baseDensityFallback[0]);
-  });
-
-  it('prefers built-in film-stock density presets over noisy auto estimates', () => {
-    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
-    expect(profile?.advancedInversion).toBeDefined();
-
-    const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd', filmBaseSample: null },
-      true,
-      'negative',
-      profile?.advancedInversion,
-      { r: 200, g: 180, b: 150 },
-      { scaleR: 1.22, scaleG: 1, scaleB: 0.84, source: 'auto-histogram' },
-      'portra-400',
-    );
-
-    expect(params.enabled).toBe(true);
-    expect(params.densityBalance).toEqual({
-      scaleR: 1,
-      scaleG: 1,
-      scaleB: 0.62,
-      source: 'film-stock-preset',
-    });
-  });
-
-  it('forces standard mode semantics for unsupported film types', () => {
-    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'portra-400');
-    expect(profile?.advancedInversion).toBeDefined();
-
-    const params = resolveAdvancedHdParameters(
-      { inversionMethod: 'advanced-hd', filmBaseSample: null },
-      true,
-      'slide',
-      profile?.advancedInversion,
-      { r: 200, g: 180, b: 150 },
-      { scaleR: 1.08, scaleG: 1, scaleB: 0.61, source: 'auto-histogram' },
-    );
-
-    expect(params).toEqual({
-      enabled: false,
-      gamma: [0, 0, 0],
-      baseDensity: [0, 0, 0],
-      densityBalance: null,
-      baseSampleSource: null,
-    });
   });
 });
 

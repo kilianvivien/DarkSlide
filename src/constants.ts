@@ -1,4 +1,4 @@
-import { AdvancedInversionProfile, ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, DensityBalance, DustMark, DustRemovalSettings, ExportOptions, FilmProfile, InversionMethod, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropSettings, CropTab, Curves, DensityBalance, DustMark, DustRemovalSettings, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings, QuickExportPreset, TonalCharacter } from './types';
 import { clamp } from './utils/math';
 
 const DEFAULT_CROP: CropSettings = {
@@ -80,8 +80,6 @@ export function resolveDustRemovalSettings(dustRemoval?: Partial<DustRemovalSett
       .filter((mark): mark is DustMark => mark !== null),
   };
 }
-
-export const DEFAULT_COLOR_NEGATIVE_INVERSION: InversionMethod = 'standard';
 
 export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   format: 'image/jpeg',
@@ -170,7 +168,6 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
 export function createDefaultSettings(overrides: Partial<ConversionSettings> = {}): ConversionSettings {
   const resolvedDustRemoval = resolveDustRemovalSettings(overrides.dustRemoval);
   return {
-    inversionMethod: DEFAULT_COLOR_NEGATIVE_INVERSION,
     exposure: 0,
     contrast: 10,
     saturation: 100,
@@ -310,32 +307,6 @@ const COLOR_MATRICES: Record<string, ColorMatrix> = {
   'lomo-800': [1.20, -0.12, -0.08, -0.05, 1.10, -0.05, -0.03, -0.08, 1.11],
 };
 
-const ADVANCED_INVERSION_PROFILES: Record<string, AdvancedInversionProfile> = {
-  'generic-color': { gamma: [0.62, 0.65, 0.58], baseDensityFallback: [0.72, 0.58, 0.33] },
-  'portra-400': { gamma: [0.60, 0.65, 0.55], baseDensityFallback: [0.78, 0.62, 0.35] },
-  'portra-160': { gamma: [0.58, 0.63, 0.53], baseDensityFallback: [0.75, 0.60, 0.33] },
-  'ektar-100': { gamma: [0.70, 0.75, 0.65], baseDensityFallback: [0.85, 0.68, 0.38] },
-  'gold-200': { gamma: [0.62, 0.67, 0.58], baseDensityFallback: [0.72, 0.58, 0.32] },
-  'fuji-400h': { gamma: [0.61, 0.65, 0.58], baseDensityFallback: [0.68, 0.55, 0.30] },
-  'superia-400': { gamma: [0.64, 0.68, 0.60], baseDensityFallback: [0.70, 0.55, 0.30] },
-  'cinestill-800t': { gamma: [0.63, 0.68, 0.58], baseDensityFallback: [0.77, 0.61, 0.35] },
-  'ultramax-400': { gamma: [0.63, 0.68, 0.58], baseDensityFallback: [0.74, 0.60, 0.34] },
-  'colorplus-200': { gamma: [0.60, 0.65, 0.56], baseDensityFallback: [0.70, 0.56, 0.30] },
-  'gold-100': { gamma: [0.61, 0.66, 0.57], baseDensityFallback: [0.71, 0.57, 0.31] },
-  'portra-800': { gamma: [0.62, 0.67, 0.57], baseDensityFallback: [0.79, 0.63, 0.36] },
-  'pro-image-100': { gamma: [0.59, 0.64, 0.54], baseDensityFallback: [0.73, 0.58, 0.32] },
-  'vision3-250d': { gamma: [0.60, 0.64, 0.56], baseDensityFallback: [0.74, 0.59, 0.33] },
-  'vision3-500t': { gamma: [0.63, 0.68, 0.59], baseDensityFallback: [0.79, 0.63, 0.37] },
-  'fuji-c200': { gamma: [0.61, 0.65, 0.57], baseDensityFallback: [0.67, 0.53, 0.29] },
-  'superia-xtra-400': { gamma: [0.64, 0.68, 0.60], baseDensityFallback: [0.71, 0.56, 0.31] },
-  'pro-160ns': { gamma: [0.58, 0.63, 0.55], baseDensityFallback: [0.69, 0.56, 0.30] },
-  'cinestill-50d': { gamma: [0.58, 0.63, 0.55], baseDensityFallback: [0.72, 0.58, 0.32] },
-  'cinestill-400d': { gamma: [0.61, 0.66, 0.57], baseDensityFallback: [0.75, 0.60, 0.34] },
-  'lomo-400': { gamma: [0.65, 0.70, 0.62], baseDensityFallback: [0.76, 0.61, 0.35] },
-  'lomo-800': { gamma: [0.66, 0.71, 0.63], baseDensityFallback: [0.78, 0.62, 0.36] },
-  'fujifilm-200': { gamma: [0.63, 0.66, 0.58], baseDensityFallback: [0.68, 0.54, 0.29] },
-};
-
 export const FILM_STOCK_DENSITY_PRESETS: Record<string, Omit<DensityBalance, 'source'>> = {
   'generic-color': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
   'portra-160': { scaleR: 1, scaleG: 1, scaleB: 0.63 },
@@ -424,10 +395,6 @@ export function resolveLightSourceIdForProfile(
 function createBuiltinProfile(profile: BuiltinProfileOptions): FilmProfile {
   return {
     version: 1,
-    advancedInversion: profile.advancedInversion
-      ?? (profile.type === 'color' && (profile.filmType ?? 'negative') === 'negative'
-        ? ADVANCED_INVERSION_PROFILES[profile.id]
-        : undefined),
     ...profile,
   };
 }

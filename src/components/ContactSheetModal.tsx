@@ -165,7 +165,6 @@ export function ContactSheetModal({
             settings: structuredClone(sharedSettings),
             isColor: sharedProfile.type === 'color',
             filmType: sharedProfile.filmType,
-            advancedInversion: sharedProfile.advancedInversion ?? null,
             inputProfileId: sharedColorManagement?.inputMode === 'override'
               ? sharedColorManagement.inputProfileId
               : undefined,

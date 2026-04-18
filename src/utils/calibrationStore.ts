@@ -108,12 +108,18 @@ function withRequest<T = void>(request: IDBRequest<T>) {
   });
 }
 
-async function saveDesktopProfile(name: string, data: Float32Array, size: number) {
-  const [{ appDataDir }, { mkdir, writeFile }] = await Promise.all([
+async function resolveCalibrationBaseDir() {
+  const [{ appDataDir, join }] = await Promise.all([
     import('@tauri-apps/api/path'),
+  ]);
+  return join(await appDataDir(), DESKTOP_DIR_NAME);
+}
+
+async function saveDesktopProfile(name: string, data: Float32Array, size: number) {
+  const [baseDir, { mkdir, writeFile }] = await Promise.all([
+    resolveCalibrationBaseDir(),
     import('@tauri-apps/plugin-fs'),
   ]);
-  const baseDir = `${await appDataDir()}${DESKTOP_DIR_NAME}`;
   const path = buildDesktopProfilePath(baseDir, name);
   const payload = new Uint8Array(
     new Uint32Array([size]).byteLength + data.byteLength,
@@ -125,11 +131,10 @@ async function saveDesktopProfile(name: string, data: Float32Array, size: number
 }
 
 async function loadDesktopProfile(name: string) {
-  const [{ appDataDir }, { readFile }] = await Promise.all([
-    import('@tauri-apps/api/path'),
+  const [baseDir, { readFile }] = await Promise.all([
+    resolveCalibrationBaseDir(),
     import('@tauri-apps/plugin-fs'),
   ]);
-  const baseDir = `${await appDataDir()}${DESKTOP_DIR_NAME}`;
 
   try {
     const bytes = await readFile(buildDesktopProfilePath(baseDir, name));
@@ -142,20 +147,18 @@ async function loadDesktopProfile(name: string) {
 }
 
 async function deleteDesktopProfile(name: string) {
-  const [{ appDataDir }, { remove }] = await Promise.all([
-    import('@tauri-apps/api/path'),
+  const [baseDir, { remove }] = await Promise.all([
+    resolveCalibrationBaseDir(),
     import('@tauri-apps/plugin-fs'),
   ]);
-  const baseDir = `${await appDataDir()}${DESKTOP_DIR_NAME}`;
   await remove(buildDesktopProfilePath(baseDir, name)).catch(() => undefined);
 }
 
 async function listDesktopProfiles() {
-  const [{ appDataDir }, { readDir }] = await Promise.all([
-    import('@tauri-apps/api/path'),
+  const [baseDir, { readDir }] = await Promise.all([
+    resolveCalibrationBaseDir(),
     import('@tauri-apps/plugin-fs'),
   ]);
-  const baseDir = `${await appDataDir()}${DESKTOP_DIR_NAME}`;
 
   try {
     const entries = await readDir(baseDir);

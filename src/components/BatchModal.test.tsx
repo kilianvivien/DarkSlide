@@ -405,7 +405,7 @@ describe('BatchModal', () => {
 
   it('forwards the current light source bias to batch export and contact sheet flows', async () => {
     const currentProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
-    const currentSettings = createDefaultSettings({ inversionMethod: 'advanced-hd' });
+    const currentSettings = createDefaultSettings();
     const currentLightSourceBias: [number, number, number] = [0.92, 0.96, 1];
     const onOpenContactSheet = vi.fn();
 

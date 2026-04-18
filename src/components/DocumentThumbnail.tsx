@@ -42,7 +42,6 @@ export function DocumentThumbnail({
           settings: document.settings,
           isColor: profile.type === 'color' && !document.settings.blackAndWhite.enabled,
           filmType: profile.filmType,
-          advancedInversion: profile.advancedInversion ?? null,
           inputProfileId: getResolvedInputProfileId(document.source, document.colorManagement),
           outputProfileId: document.colorManagement.outputProfileId,
           revision: document.renderRevision,

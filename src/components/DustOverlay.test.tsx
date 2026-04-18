@@ -5,7 +5,6 @@ import type { ConversionSettings, DustMark } from '../types';
 
 function createSettings(): ConversionSettings {
   return {
-    inversionMethod: 'standard',
     exposure: 0,
     contrast: 0,
     saturation: 100,

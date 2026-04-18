@@ -1,6 +1,5 @@
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, SUPPORTED_EXTENSIONS } from '../constants';
 import {
-  AdvancedInversionProfile,
   ColorManagementSettings,
   ColorMatrix,
   ColorProfileId,
@@ -8,7 +7,6 @@ import {
   DensityBalance,
   FilmProfile,
   HistogramMode,
-  InversionMethod,
   InteractionQuality,
   MaskTuning,
   SourceMetadata,
@@ -124,82 +122,6 @@ export function getPresetTags(
   ];
 }
 
-export function resolveDefaultInversionMethodForProfile(
-  profile: Pick<FilmProfile, 'type' | 'filmType' | 'advancedInversion'>,
-  preferred: InversionMethod,
-): InversionMethod {
-  const isColorNegative = profile.type === 'color' && (profile.filmType ?? 'negative') === 'negative';
-  return isColorNegative && profile.advancedInversion ? preferred : 'standard';
-}
-
-export function canUseAdvancedInversion(
-  settings: Pick<ConversionSettings, 'inversionMethod'>,
-  options: {
-    isColor: boolean;
-    filmType?: FilmProfile['filmType'];
-    advancedInversion?: AdvancedInversionProfile | null;
-  },
-) {
-  return settings.inversionMethod === 'advanced-hd'
-    && options.isColor
-    && (options.filmType ?? 'negative') === 'negative'
-    && Boolean(options.advancedInversion);
-}
-
-export function getResolvedInversionPipelineSummary(
-  settings: Pick<ConversionSettings, 'inversionMethod' | 'blackAndWhite' | 'filmBaseSample'>,
-  options: {
-    profileType: FilmProfile['type'];
-    filmType?: FilmProfile['filmType'];
-    advancedInversion?: AdvancedInversionProfile | null;
-    estimatedFilmBaseSample?: ConversionSettings['filmBaseSample'] | null;
-  },
-) {
-  const isColor = options.profileType === 'color' && !settings.blackAndWhite.enabled;
-  const filmType = options.filmType ?? 'negative';
-  const advancedActive = canUseAdvancedInversion(
-    { inversionMethod: settings.inversionMethod },
-    {
-      isColor,
-      filmType,
-      advancedInversion: options.advancedInversion,
-    },
-  );
-
-  const baseSampleSource = advancedActive
-    ? settings.filmBaseSample
-      ? 'manual-picker'
-      : options.estimatedFilmBaseSample
-        ? 'auto-estimated-border-sample'
-        : 'profile-fallback'
-    : null;
-
-  const reason = advancedActive
-    ? 'advanced-hd requested and supported'
-    : settings.inversionMethod === 'standard'
-      ? 'standard requested'
-      : !isColor
-        ? 'advanced-hd requested but document is not in a color-negative workflow'
-        : filmType !== 'negative'
-          ? 'advanced-hd requested but film type is not negative'
-          : !options.advancedInversion
-            ? 'advanced-hd requested but the active profile has no advanced inversion metadata'
-            : 'standard fallback';
-
-  return {
-    requestedMethod: settings.inversionMethod,
-    resolvedMethod: advancedActive ? 'advanced-hd' : 'standard',
-    activePipeline: advancedActive ? 'advanced-hd' : 'standard',
-    profileType: options.profileType,
-    filmType,
-    blackAndWhiteEnabled: settings.blackAndWhite.enabled,
-    advancedSupportedByProfile: Boolean(options.advancedInversion),
-    usedEstimatedFilmBaseSample: advancedActive && !settings.filmBaseSample && Boolean(options.estimatedFilmBaseSample),
-    baseSampleSource,
-    reason,
-  };
-}
-
 export function normalizePreviewImageData(imageData: ImageData, width: number, height: number) {
   if (imageData.width === width && imageData.height === height) {
     return imageData;
@@ -249,7 +171,6 @@ export type QueuedPreviewRender = {
   isColor: boolean;
   profileId: string | null;
   filmType?: 'negative' | 'slide';
-  advancedInversion?: AdvancedInversionProfile | null;
   estimatedDensityBalance?: DensityBalance | null;
   comparisonMode: 'processed' | 'original';
   targetMaxDimension: number;

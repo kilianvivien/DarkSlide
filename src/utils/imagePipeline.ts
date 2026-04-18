@@ -1,5 +1,4 @@
 import {
-  AdvancedInversionProfile,
   ColorProfileId,
   ColorMatrix,
   ConversionSettings,
@@ -14,7 +13,7 @@ import {
   PreviewLevel,
   TonalCharacter,
 } from '../types';
-import { FILM_STOCK_DENSITY_PRESETS, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
+import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
 import { convertRgbBetweenProfiles, decodeProfileChannel, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
 import { clamp } from './math';
 
@@ -22,8 +21,6 @@ const LUMA_R = 0.299;
 const LUMA_G = 0.587;
 const LUMA_B = 0.114;
 const DENSITY_EPSILON = 1e-6;
-export const ADVANCED_HD_BLUE_GAMMA_SCALE = 1.12;
-export const ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET = 0.04;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -35,8 +32,6 @@ type CurveChannelOverrides = {
 };
 
 type ResidualBaseOffset = [number, number, number];
-
-type ResolvedAdvancedHdParameters = ReturnType<typeof resolveAdvancedHdParameters>;
 
 export function getExtensionFromFormat(format: ExportFormat) {
   switch (format) {
@@ -306,10 +301,6 @@ function applyShadowFloorCorrection(value: number, floor: number) {
   return clamp((value - floor) / (1 - floor), 0, 1);
 }
 
-function sampleChannelToDensity(sampleValue: number) {
-  return -Math.log10(clamp(sampleValue / 255, DENSITY_EPSILON, 1));
-}
-
 function mean(values: number[], start: number, end: number) {
   const safeStart = clamp(start, 0, values.length);
   const safeEnd = clamp(end, safeStart + 1, values.length);
@@ -381,130 +372,6 @@ export function computeDensityBalance(
   };
 }
 
-function resolveDensityBalance(
-  profileId?: string | null,
-  estimatedDensityBalance?: DensityBalance | null,
-): DensityBalance {
-  const preset = profileId ? FILM_STOCK_DENSITY_PRESETS[profileId] : undefined;
-  if (preset) {
-    return {
-      ...preset,
-      source: 'film-stock-preset',
-    };
-  }
-
-  return estimatedDensityBalance ?? {
-    scaleR: 1,
-    scaleG: 1,
-    scaleB: 0.6,
-    source: 'auto-histogram',
-  };
-}
-
-function convertEstimatedFilmBaseSampleToWorkingProfile(
-  sample: FilmBaseSample,
-  inputProfileId: ColorProfileId,
-  outputProfileId: ColorProfileId,
-): FilmBaseSample {
-  const [r, g, b] = convertRgbBetweenProfiles(
-    sample.r / 255,
-    sample.g / 255,
-    sample.b / 255,
-    inputProfileId,
-    outputProfileId,
-  );
-
-  return {
-    r: clamp(Math.round(r * 255), 1, 255),
-    g: clamp(Math.round(g * 255), 1, 255),
-    b: clamp(Math.round(b * 255), 1, 255),
-  };
-}
-
-function applyRollCalibrationToDensity(value: number, slope: number, offset: number) {
-  return Math.max(0, value * slope + offset);
-}
-
-export function applyAdvancedHdInversion(
-  value: number,
-  baseDensity: number,
-  gamma: number,
-  slope = 1,
-  offset = 0,
-) {
-  const transmittance = clamp(value, DENSITY_EPSILON, 1);
-  const density = -Math.log10(transmittance);
-  const imageDensity = applyRollCalibrationToDensity(Math.max(0, density - baseDensity), slope, offset);
-  return clamp(1 - Math.pow(10, -imageDensity / Math.max(gamma, 0.01)), 0, 1);
-}
-
-export function resolveAdvancedHdParameters(
-  settings: Pick<ConversionSettings, 'inversionMethod' | 'filmBaseSample'>,
-  isColor: boolean,
-  filmType: FilmProfileType,
-  advancedInversion?: AdvancedInversionProfile | null,
-  estimatedFilmBaseSample?: FilmBaseSample | null,
-  estimatedDensityBalance?: DensityBalance | null,
-  profileId?: string | null,
-  inputProfileId: ColorProfileId = 'srgb',
-  outputProfileId: ColorProfileId = 'srgb',
-  lightSourceBias: [number, number, number] = [1, 1, 1],
-) {
-  const enabled = settings.inversionMethod === 'advanced-hd'
-    && isColor
-    && filmType === 'negative'
-    && Boolean(advancedInversion);
-
-  if (!enabled || !advancedInversion) {
-    return {
-      enabled: false,
-      gamma: [0, 0, 0] as [number, number, number],
-      baseDensity: [0, 0, 0] as [number, number, number],
-      densityBalance: null as DensityBalance | null,
-      baseSampleSource: null as 'manual-picker' | 'auto-estimated-border-sample' | 'profile-fallback' | null,
-    };
-  }
-
-  // Auto-estimated border samples are captured in the decoded image profile, so they
-  // need the same profile transform as the pixels before advanced density math.
-  const convertedEstimatedFilmBaseSample = estimatedFilmBaseSample
-    ? convertEstimatedFilmBaseSampleToWorkingProfile(estimatedFilmBaseSample, inputProfileId, outputProfileId)
-    : null;
-  const resolvedBaseSample = settings.filmBaseSample ?? convertedEstimatedFilmBaseSample ?? null;
-  const blueExcess = Math.max(0, (lightSourceBias[2] / Math.max(lightSourceBias[0], 0.01)) - 1);
-  const adaptiveBlueGammaScale = ADVANCED_HD_BLUE_GAMMA_SCALE + blueExcess * 0.15;
-  const adaptiveBlueDensityOffset = ADVANCED_HD_BLUE_BASE_DENSITY_OFFSET + blueExcess * 0.03;
-  const gamma: [number, number, number] = [
-    advancedInversion.gamma[0],
-    advancedInversion.gamma[1],
-    advancedInversion.gamma[2] * adaptiveBlueGammaScale,
-  ];
-  const baseDensity: [number, number, number] = resolvedBaseSample
-    ? [
-      sampleChannelToDensity(resolvedBaseSample.r),
-      sampleChannelToDensity(resolvedBaseSample.g),
-      sampleChannelToDensity(resolvedBaseSample.b) + adaptiveBlueDensityOffset,
-    ]
-    : [
-      advancedInversion.baseDensityFallback[0],
-      advancedInversion.baseDensityFallback[1],
-      advancedInversion.baseDensityFallback[2] + adaptiveBlueDensityOffset,
-    ];
-  const densityBalance = resolveDensityBalance(profileId, estimatedDensityBalance);
-
-  return {
-    enabled: true,
-    gamma,
-    baseDensity,
-    densityBalance,
-    baseSampleSource: settings.filmBaseSample
-      ? 'manual-picker'
-      : estimatedFilmBaseSample
-        ? 'auto-estimated-border-sample'
-        : 'profile-fallback',
-  };
-}
-
 function applyFlareCorrection(value: number, floor: number, strength: number) {
   return Math.max(0, value - floor * strength);
 }
@@ -518,9 +385,7 @@ function applyInversionStage(
   g: number,
   b: number,
   filmType: FilmProfileType,
-  outputProfileId: ColorProfileId,
   filmBaseBalance: ReturnType<typeof getFilmBaseBalance>,
-  advancedHd: ResolvedAdvancedHdParameters,
   redShadowFloor: number,
   greenShadowFloor: number,
   blueShadowFloor: number,
@@ -537,44 +402,19 @@ function applyInversionStage(
   g = applyLightSourceCorrection(g, lightSourceBias[1]);
   b = applyLightSourceCorrection(b, lightSourceBias[2]);
 
-  if (advancedHd.enabled) {
-    r = decodeProfileChannel(outputProfileId, r);
-    g = decodeProfileChannel(outputProfileId, g);
-    b = decodeProfileChannel(outputProfileId, b);
-
-    r = applyAdvancedHdInversion(
-      r,
-      advancedHd.baseDensity[0],
-      advancedHd.gamma[0],
-      advancedHd.densityBalance?.scaleR ?? 1,
-    );
-    g = applyAdvancedHdInversion(
-      g,
-      advancedHd.baseDensity[1],
-      advancedHd.gamma[1],
-      advancedHd.densityBalance?.scaleG ?? 1,
-    );
-    b = applyAdvancedHdInversion(
-      b,
-      advancedHd.baseDensity[2],
-      advancedHd.gamma[2],
-      advancedHd.densityBalance?.scaleB ?? 1,
-    );
-  } else {
-    if (filmType !== 'slide') {
-      r = 1 - r;
-      g = 1 - g;
-      b = 1 - b;
-    }
-
-    r = applyFilmBaseCompensation(r, filmBaseBalance.red);
-    g = applyFilmBaseCompensation(g, filmBaseBalance.green);
-    b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
-
-    r = applyShadowFloorCorrection(r, redShadowFloor);
-    g = applyShadowFloorCorrection(g, greenShadowFloor);
-    b = applyShadowFloorCorrection(b, blueShadowFloor);
+  if (filmType !== 'slide') {
+    r = 1 - r;
+    g = 1 - g;
+    b = 1 - b;
   }
+
+  r = applyFilmBaseCompensation(r, filmBaseBalance.red);
+  g = applyFilmBaseCompensation(g, filmBaseBalance.green);
+  b = applyFilmBaseCompensation(b, filmBaseBalance.blue);
+
+  r = applyShadowFloorCorrection(r, redShadowFloor);
+  g = applyShadowFloorCorrection(g, greenShadowFloor);
+  b = applyShadowFloorCorrection(b, blueShadowFloor);
 
   if (residualBaseOffset) {
     r = Math.max(0, r - residualBaseOffset[0]);
@@ -590,33 +430,12 @@ export function computeResidualBaseOffset(
   settings: ConversionSettings,
   isColor: boolean,
   filmType: FilmProfileType = 'negative',
-  advancedInversion?: AdvancedInversionProfile | null,
-  estimatedFilmBaseSample?: FilmBaseSample | null,
-  estimatedDensityBalance?: DensityBalance | null,
-  profileId?: string | null,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
   lightSourceBias: [number, number, number] = [1, 1, 1],
   flareFloor: [number, number, number] | null = null,
 ): ResidualBaseOffset | null {
   if (!isColor || filmType !== 'negative' || settings.residualBaseCorrection === false) {
-    return null;
-  }
-
-  const advancedHd = resolveAdvancedHdParameters(
-    settings,
-    isColor,
-    filmType,
-    advancedInversion,
-    estimatedFilmBaseSample,
-    estimatedDensityBalance,
-    profileId,
-    inputProfileId,
-    outputProfileId,
-    lightSourceBias,
-  );
-
-  if (!advancedHd.enabled) {
     return null;
   }
 
@@ -646,9 +465,7 @@ export function computeResidualBaseOffset(
       g,
       b,
       filmType,
-      outputProfileId,
       filmBaseBalance,
-      advancedHd,
       redShadowFloor,
       greenShadowFloor,
       blueShadowFloor,
@@ -782,11 +599,8 @@ export function buildProcessingUniforms(
   highlightDensityEstimate = 0,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
-  profileId: string | null = null,
+  _profileId: string | null = null,
   filmType: FilmProfileType = 'negative',
-  advancedInversion?: AdvancedInversionProfile | null,
-  estimatedFilmBaseSample?: FilmBaseSample | null,
-  estimatedDensityBalance?: DensityBalance | null,
   residualBaseOffset: ResidualBaseOffset | null = null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
@@ -800,18 +614,6 @@ export function buildProcessingUniforms(
       highlightRolloff: labTonalCharacterOverride.highlightRolloff ?? 0.5,
     } : undefined);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
-  const advancedHd = resolveAdvancedHdParameters(
-    effectiveSettings,
-    isColor,
-    filmType,
-    advancedInversion,
-    estimatedFilmBaseSample,
-    estimatedDensityBalance,
-    profileId,
-    inputProfileId,
-    outputProfileId,
-    lightSourceBias,
-  );
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
   const flareCorrection = effectiveSettings.flareCorrection ?? 50;
   const maxBase = Math.max(filmBaseBalance.red, filmBaseBalance.green, filmBaseBalance.blue);
@@ -904,21 +706,6 @@ export function buildProcessingUniforms(
     lightSourceBias[1],
     lightSourceBias[2],
     settings.flatFieldEnabled ? 1 : 0,
-
-    advancedHd.enabled ? 1 : 0,
-    advancedHd.gamma[0],
-    advancedHd.gamma[1],
-    advancedHd.gamma[2],
-
-    advancedHd.baseDensity[0],
-    advancedHd.baseDensity[1],
-    advancedHd.baseDensity[2],
-    advancedHd.densityBalance ? 1 : 0,
-
-    advancedHd.densityBalance?.scaleR ?? 1,
-    advancedHd.densityBalance?.scaleG ?? 1,
-    advancedHd.densityBalance?.scaleB ?? 1,
-    0,
 
     residualBaseOffset?.[0] ?? 0,
     residualBaseOffset?.[1] ?? 0,
@@ -1081,11 +868,8 @@ export function processImageData(
   highlightDensityEstimate = 0,
   inputProfileId: ColorProfileId = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
-  profileId: string | null = null,
+  _profileId: string | null = null,
   filmType: FilmProfileType = 'negative',
-  advancedInversion?: AdvancedInversionProfile | null,
-  estimatedFilmBaseSample?: FilmBaseSample | null,
-  estimatedDensityBalance?: DensityBalance | null,
   residualBaseOffset: ResidualBaseOffset | null = null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
@@ -1110,18 +894,6 @@ export function processImageData(
   const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
   const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
-  const advancedHd = resolveAdvancedHdParameters(
-    effectiveSettings,
-    isColor,
-    filmType,
-    advancedInversion,
-    estimatedFilmBaseSample,
-    estimatedDensityBalance,
-    profileId,
-    inputProfileId,
-    outputProfileId,
-    lightSourceBias,
-  );
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;
   const temperatureShift = clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1);
@@ -1155,9 +927,7 @@ export function processImageData(
         g,
         b,
         filmType,
-        outputProfileId,
         filmBaseBalance,
-        advancedHd,
         redShadowFloor,
         greenShadowFloor,
         blueShadowFloor,

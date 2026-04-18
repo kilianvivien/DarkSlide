@@ -1,5 +1,4 @@
 import {
-  AdvancedInversionProfile,
   ColorProfileId,
   ColorMatrix,
   ConversionSettings,
@@ -17,7 +16,7 @@ import {
 } from '../imagePipeline';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
-const PROCESSING_UNIFORM_BYTES = 84 * 4;
+const PROCESSING_UNIFORM_BYTES = 72 * 4;
 const CURVE_LUT_BYTES = 1024 * 4;
 const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
@@ -524,9 +523,8 @@ export class WebGPUPipeline {
     outputProfileId: ColorProfileId = 'srgb',
     profileId: string | null = null,
     filmType: FilmProfileType = 'negative',
-    advancedInversion?: AdvancedInversionProfile | null,
-    estimatedFilmBaseSample?: FilmBaseSample | null,
-    estimatedDensityBalance?: DensityBalance | null,
+    _estimatedFilmBaseSample?: FilmBaseSample | null,
+    _estimatedDensityBalance?: DensityBalance | null,
     residualBaseOffset: [number, number, number] | null = null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
@@ -585,9 +583,6 @@ export class WebGPUPipeline {
       outputProfileId,
       profileId,
       filmType,
-      advancedInversion,
-      estimatedFilmBaseSample,
-      estimatedDensityBalance,
       residualBaseOffset,
       flareFloor,
       lightSourceBias,
@@ -731,7 +726,6 @@ export class WebGPUPipeline {
     outputProfileId: ColorProfileId = 'srgb',
     profileId: string | null = null,
     filmType: FilmProfileType = 'negative',
-    advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
     estimatedDensityBalance?: DensityBalance | null,
     residualBaseOffset: [number, number, number] | null = null,
@@ -760,7 +754,6 @@ export class WebGPUPipeline {
       outputProfileId,
       profileId,
       filmType,
-      advancedInversion,
       estimatedFilmBaseSample,
       estimatedDensityBalance,
       residualBaseOffset,
@@ -787,7 +780,6 @@ export class WebGPUPipeline {
     outputProfileId: ColorProfileId = 'srgb',
     profileId: string | null = null,
     filmType: FilmProfileType = 'negative',
-    advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
     estimatedDensityBalance?: DensityBalance | null,
     residualBaseOffset: [number, number, number] | null = null,
@@ -812,7 +804,6 @@ export class WebGPUPipeline {
       outputProfileId,
       profileId,
       filmType,
-      advancedInversion,
       estimatedFilmBaseSample,
       estimatedDensityBalance,
       residualBaseOffset,
@@ -849,8 +840,8 @@ export class WebGPUPipeline {
       outputProfileId,
       null,
       'negative',
-      null,
       undefined,
+      null,
       null,
       null,
       [1, 1, 1],
@@ -910,7 +901,6 @@ export class WebGPUPipeline {
     outputProfileId: ColorProfileId = 'srgb',
     profileId: string | null = null,
     filmType: FilmProfileType = 'negative',
-    advancedInversion?: AdvancedInversionProfile | null,
     estimatedFilmBaseSample?: FilmBaseSample | null,
     estimatedDensityBalance?: DensityBalance | null,
     residualBaseOffset: [number, number, number] | null = null,
@@ -935,7 +925,6 @@ export class WebGPUPipeline {
       outputProfileId,
       profileId,
       filmType,
-      advancedInversion,
       estimatedFilmBaseSample,
       estimatedDensityBalance,
       residualBaseOffset,

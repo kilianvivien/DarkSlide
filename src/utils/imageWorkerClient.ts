@@ -1,5 +1,4 @@
 import {
-  AdvancedInversionProfile,
   AutoAnalyzeRequest,
   AutoAnalyzeResult,
   ColorProfileId,
@@ -803,11 +802,7 @@ export class ImageWorkerClient {
     isColor: boolean,
     inputProfileId: ColorProfileId,
     outputProfileId: ColorProfileId,
-    profileId?: string | null,
     filmType?: FilmProfileType,
-    advancedInversion?: AdvancedInversionProfile | null,
-    estimatedFilmBaseSample?: FilmBaseSample | null,
-    estimatedDensityBalance?: DensityBalance | null,
     flareFloor?: [number, number, number] | null,
     lightSourceBias?: [number, number, number],
   ) {
@@ -837,10 +832,6 @@ export class ImageWorkerClient {
         settings,
         isColor,
         filmType ?? 'negative',
-        advancedInversion,
-        estimatedFilmBaseSample,
-        estimatedDensityBalance,
-        profileId ?? null,
         inputProfileId,
         outputProfileId,
         lightSourceBias ?? [1, 1, 1],
@@ -869,7 +860,6 @@ export class ImageWorkerClient {
     labTemperatureBias?: RenderRequest['labTemperatureBias'],
     highlightDensityEstimate?: RenderRequest['highlightDensityEstimate'],
     filmType?: RenderRequest['filmType'],
-    advancedInversion?: RenderRequest['advancedInversion'],
     estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
     estimatedDensityBalance?: RenderRequest['estimatedDensityBalance'],
     residualBaseOffset?: [number, number, number] | null,
@@ -914,7 +904,6 @@ export class ImageWorkerClient {
           outputProfileId,
           profileId ?? null,
           filmType,
-          advancedInversion,
           estimatedFilmBaseSample,
           estimatedDensityBalance,
           residualBaseOffset ?? null,
@@ -954,7 +943,6 @@ export class ImageWorkerClient {
     labTemperatureBias?: RenderRequest['labTemperatureBias'],
     highlightDensityEstimate?: RenderRequest['highlightDensityEstimate'],
     filmType?: RenderRequest['filmType'],
-    advancedInversion?: RenderRequest['advancedInversion'],
     estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
     estimatedDensityBalance?: RenderRequest['estimatedDensityBalance'],
     flareFloor?: RenderRequest['flareFloor'],
@@ -978,10 +966,6 @@ export class ImageWorkerClient {
         settings,
         isColor,
         filmType ?? 'negative',
-        advancedInversion,
-        estimatedFilmBaseSample,
-        estimatedDensityBalance,
-        profileId ?? null,
         inputProfileId,
         outputProfileId,
         lightSourceBias ?? [1, 1, 1],
@@ -1009,7 +993,6 @@ export class ImageWorkerClient {
         outputProfileId,
         profileId ?? null,
         filmType,
-        advancedInversion,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
         residualBaseOffset,
@@ -1446,7 +1429,6 @@ export class ImageWorkerClient {
         payload.labTemperatureBias,
         payload.highlightDensityEstimate,
         payload.filmType,
-        payload.advancedInversion,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
         payload.flareFloor,
@@ -1627,7 +1609,6 @@ export class ImageWorkerClient {
     isColor: boolean;
     profileId?: string | null;
     filmType?: FilmProfileType;
-    advancedInversion?: AdvancedInversionProfile | null;
     flareFloor?: [number, number, number] | null;
     lightSourceBias?: [number, number, number];
     sensitivity: number;
@@ -1733,11 +1714,7 @@ export class ImageWorkerClient {
         payload.isColor,
         payload.inputProfileId ?? 'srgb',
         payload.outputProfileId ?? 'srgb',
-        payload.profileId ?? null,
         payload.filmType,
-        payload.advancedInversion,
-        estimatedFilmBaseSample,
-        estimatedDensityBalance,
         payload.flareFloor,
         payload.lightSourceBias,
       );
@@ -1767,7 +1744,6 @@ export class ImageWorkerClient {
         payload.labTemperatureBias,
         payload.highlightDensityEstimate,
         payload.filmType,
-        payload.advancedInversion,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
         residualBaseOffset,

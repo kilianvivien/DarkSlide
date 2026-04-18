@@ -74,7 +74,6 @@ async function analyzeBatchHighlightDensity(
     settings: ConversionSettings;
     isColor: boolean;
     filmType: FilmProfile['filmType'];
-    advancedInversion: FilmProfile['advancedInversion'] | null | undefined;
     inputProfileId: ColorProfileId;
     outputProfileId: ColorProfileId;
     maskTuning: FilmProfile['maskTuning'];
@@ -106,7 +105,6 @@ async function analyzeBatchHighlightDensity(
       settings: params.settings,
       isColor: params.isColor,
       filmType: params.filmType,
-      advancedInversion: params.advancedInversion ?? null,
       inputProfileId: params.inputProfileId,
       outputProfileId: params.outputProfileId,
       revision: pass + 1,
@@ -258,7 +256,6 @@ export async function* runBatch(
           isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
           profileId: sharedProfile.id,
           filmType: sharedProfile.filmType,
-          advancedInversion: sharedProfile.advancedInversion ?? null,
           flareFloor: entry.estimatedFlare ?? null,
           lightSourceBias: sharedLightSourceBias ?? [1, 1, 1],
           sensitivity: entrySettings.dustRemoval.autoSensitivity,
@@ -284,7 +281,6 @@ export async function* runBatch(
         settings: entrySettings,
         isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
         filmType: sharedProfile.filmType,
-        advancedInversion: sharedProfile.advancedInversion ?? null,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
         maskTuning: sharedProfile.maskTuning,
@@ -310,7 +306,6 @@ export async function* runBatch(
             settings: entrySettings,
             isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
             filmType: sharedProfile.filmType,
-            advancedInversion: sharedProfile.advancedInversion ?? null,
             inputProfileId,
             outputProfileId: exportOptions.outputProfileId,
             targetMaxDimension: 1024,
@@ -344,7 +339,6 @@ export async function* runBatch(
           settings: entrySettings,
           isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
           filmType: sharedProfile.filmType,
-          advancedInversion: sharedProfile.advancedInversion ?? null,
           inputProfileId,
           outputProfileId: exportOptions.outputProfileId,
           maskTuning: sharedProfile.maskTuning,
@@ -368,7 +362,6 @@ export async function* runBatch(
         settings: entrySettings,
         isColor: sharedProfile.type === 'color' && !sharedSettings.blackAndWhite.enabled,
         filmType: sharedProfile.filmType,
-        advancedInversion: sharedProfile.advancedInversion ?? null,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
         options: exportOptions,

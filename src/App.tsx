@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Analytics } from '@vercel/analytics/react';
-import { DEFAULT_COLOR_NEGATIVE_INVERSION, DEFAULT_DUST_REMOVAL, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES, resolveDustRemovalSettings } from './constants';
+import { DEFAULT_DUST_REMOVAL, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES, resolveDustRemovalSettings } from './constants';
 import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
 import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
@@ -125,7 +125,6 @@ export default function App() {
   const [scanningAutoExport, setScanningAutoExport] = useState(() => initialPreferences?.scanningAutoExport ?? false);
   const [scanningAutoExportPath, setScanningAutoExportPath] = useState<string | null>(() => initialPreferences?.scanningAutoExportPath ?? null);
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => initialPreferences?.updateChannel ?? 'stable');
-  const [defaultColorNegativeInversion, setDefaultColorNegativeInversion] = useState(() => initialPreferences?.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION);
   const [defaultExportOptions, setDefaultExportOptions] = useState<ExportOptions>(() => initialPreferences?.exportOptions ?? DEFAULT_EXPORT_OPTIONS);
   const [quickExportPresets, setQuickExportPresets] = useState(() => loadQuickExportPresets());
   const [isAdjustingCrop, setIsAdjustingCrop] = useState(false);
@@ -300,7 +299,6 @@ export default function App() {
     isColor: boolean;
     profileId: string | null;
     filmType?: 'negative' | 'slide';
-    advancedInversion?: FilmProfile['advancedInversion'] | null;
     comparisonMode: 'processed' | 'original';
     targetMaxDimension: number;
     inputProfileId: string;
@@ -416,7 +414,6 @@ export default function App() {
   const prefsSnapshotRef = useRef<UserPreferences>({
     version: 7,
     lastProfileId: fallbackProfile.id,
-    defaultColorNegativeInversion: initialPreferences?.defaultColorNegativeInversion ?? DEFAULT_COLOR_NEGATIVE_INVERSION,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     notificationSettings: initialPreferences?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: 'adjust',
@@ -439,7 +436,6 @@ export default function App() {
   prefsSnapshotRef.current = {
     version: 7,
     lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
-    defaultColorNegativeInversion,
     exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
     notificationSettings,
     sidebarTab,
@@ -1141,7 +1137,6 @@ export default function App() {
       isColor,
       profileId,
       filmType = 'negative',
-      advancedInversion = null,
       estimatedDensityBalance = null,
       comparisonMode: nextComparisonMode,
       targetMaxDimension: nextTargetMaxDimension,
@@ -1176,7 +1171,6 @@ export default function App() {
       isColor,
       profileId,
       filmType,
-      advancedInversion,
       comparisonMode: nextComparisonMode,
       targetMaxDimension: nextTargetMaxDimension,
       inputProfileId,
@@ -1227,7 +1221,6 @@ export default function App() {
         isColor,
         profileId,
         filmType,
-        advancedInversion,
         estimatedDensityBalance,
         inputProfileId,
         outputProfileId,
@@ -1366,7 +1359,6 @@ export default function App() {
             isColor,
             profileId,
             filmType,
-            advancedInversion,
             estimatedDensityBalance,
             comparisonMode: nextComparisonMode,
             targetMaxDimension: nextTargetMaxDimension,
@@ -1475,7 +1467,6 @@ export default function App() {
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
     const profileFilmType = activeProfile.filmType ?? 'negative';
-    const profileAdvancedInversion = activeProfile.advancedInversion ?? null;
     const highlightDensityEstimate = getSettledAdaptiveState(documentId).committedHighlightDensity;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const flareFloor = documentState.estimatedFlare;
@@ -1502,7 +1493,6 @@ export default function App() {
       isColor,
       profileId: activeProfile.id,
       filmType: profileFilmType,
-      advancedInversion: profileAdvancedInversion,
       estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
       comparisonMode,
       targetMaxDimension: renderTargetDimension,
@@ -1530,7 +1520,6 @@ export default function App() {
         isColor,
         profileId: activeProfile.id,
         filmType: profileFilmType,
-        advancedInversion: profileAdvancedInversion,
         comparisonMode,
         targetMaxDimension: renderTargetDimension,
         inputProfileId,
@@ -1560,7 +1549,6 @@ export default function App() {
         isColor,
         profileId: activeProfile.id,
         filmType: profileFilmType,
-        advancedInversion: profileAdvancedInversion,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
         comparisonMode,
         targetMaxDimension: switchDraftTargetDimension,
@@ -1650,7 +1638,6 @@ export default function App() {
 
     return () => window.clearTimeout(timer);
   }, [
-    activeProfile.advancedInversion,
     activeProfile.colorMatrix,
     activeProfile.filmType,
     activeProfile.id,
@@ -1706,7 +1693,6 @@ export default function App() {
     handleGPURenderingChange,
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
-    handleDefaultColorNegativeInversionChange,
     handleProfileChange,
     handleLightSourceChange,
     handleRedetectFrame,
@@ -1817,7 +1803,6 @@ export default function App() {
     setUltraSmoothDragEnabled,
     setNotificationSettings,
     setMaxResidentDocs,
-    setDefaultColorNegativeInversion,
     setExternalEditorPath,
     setExternalEditorName,
     setOpenInEditorOutputPath,
@@ -2131,7 +2116,6 @@ export default function App() {
           isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
           profileId: activeProfile.id,
           filmType: activeProfile.filmType,
-          advancedInversion: activeProfile.advancedInversion ?? null,
           flareFloor: documentState.estimatedFlare ?? null,
           lightSourceBias: lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1],
           sensitivity: dustRemoval.autoSensitivity,
@@ -2158,7 +2142,7 @@ export default function App() {
     } finally {
       setIsDetectingDust(false);
     }
-  }, [activeProfile.advancedInversion, activeProfile.filmType, activeProfile.id, activeProfile.type, documentState, formatError, handleSettingsChange, isDetectingDust, lightSourceProfilesById, pushHistoryEntry, showTransientNotice, tabsRef]);
+  }, [activeProfile.filmType, activeProfile.id, activeProfile.type, documentState, formatError, handleSettingsChange, isDetectingDust, lightSourceProfilesById, pushHistoryEntry, showTransientNotice, tabsRef]);
 
   const lastAutoDustDetectionKeyRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2240,7 +2224,6 @@ export default function App() {
       isColor: activeProfile.type === 'color',
       profileId: activeProfile.id,
       filmType: activeProfile.filmType,
-      advancedInversion: activeProfile.advancedInversion ?? null,
       inputProfileId,
       outputProfileId,
       targetMaxDimension: Math.min(targetMaxDimension, 1024),
@@ -2313,7 +2296,6 @@ export default function App() {
       showTransientNotice('Auto adjusted tone, but left white balance unchanged.');
     }
   }, [
-    activeProfile.advancedInversion,
     activeLabStyle?.channelCurves,
     activeLabStyle?.saturationBias,
     activeLabStyle?.temperatureBias,
@@ -2427,7 +2409,6 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       isColor: profile.type === 'color',
       profileId: profile.id,
       filmType: profile.filmType,
-      advancedInversion: profile.advancedInversion ?? null,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
       outputProfileId,
       targetMaxDimension: Math.min(targetMaxDimension, 1024),
@@ -2532,7 +2513,6 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       isColor: profile.type === 'color' && !tab.document.settings.blackAndWhite.enabled,
       profileId: profile.id,
       filmType: profile.filmType,
-      advancedInversion: profile.advancedInversion ?? null,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
       outputProfileId: tab.document.exportOptions.outputProfileId,
       options: tab.document.exportOptions,
@@ -2741,7 +2721,6 @@ onToggleScanningSession: toggleScanningWindow,
       gpuRenderingEnabled={gpuRenderingEnabled}
       ultraSmoothDragEnabled={ultraSmoothDragEnabled}
       notificationSettings={notificationSettings}
-      defaultColorNegativeInversion={defaultColorNegativeInversion}
       renderBackendDiagnostics={renderBackendDiagnostics}
       defaultLightSourceId={defaultLightSourceId}
       defaultLabStyleId={defaultLabStyleId}
@@ -2861,7 +2840,6 @@ onToggleScanningSession: toggleScanningWindow,
       onToggleUltraSmoothDrag={handleUltraSmoothDragChange}
       onMaxResidentDocsChange={handleMaxResidentDocsChange}
       onNotificationSettingsChange={handleNotificationSettingsChange}
-      onDefaultColorNegativeInversionChange={handleDefaultColorNegativeInversionChange}
       onDefaultLightSourceChange={handleDefaultLightSourceChange}
       onSelectFlatFieldProfile={handleSelectFlatFieldProfile}
       onImportFlatFieldReference={handleImportFlatFieldReference}
