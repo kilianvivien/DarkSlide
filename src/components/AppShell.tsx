@@ -120,6 +120,8 @@ type AppShellProps = {
   renderBackendDiagnostics: RenderBackendDiagnostics;
   defaultLightSourceId: string;
   defaultLabStyleId: string;
+  defaultImportPresetId: string | null;
+  onDefaultImportPresetChange: (presetId: string | null) => void;
   onDefaultLabStyleChange: (labStyleId: string) => void;
   maxResidentDocs: MaxResidentDocs;
   externalEditorPath: string | null;
@@ -341,6 +343,8 @@ export function AppShell({
   renderBackendDiagnostics,
   defaultLightSourceId,
   defaultLabStyleId,
+  defaultImportPresetId,
+  onDefaultImportPresetChange,
   onDefaultLabStyleChange,
   maxResidentDocs,
   externalEditorPath,
@@ -1132,6 +1136,10 @@ export function AppShell({
           onDefaultLightSourceChange={onDefaultLightSourceChange}
           defaultLabStyleId={defaultLabStyleId}
           onDefaultLabStyleChange={onDefaultLabStyleChange}
+          builtinProfiles={builtinProfiles}
+          customPresets={customPresets}
+          defaultImportPresetId={defaultImportPresetId}
+          onDefaultImportPresetChange={onDefaultImportPresetChange}
           labStyleProfiles={labStyleProfiles}
           onSaveCustomLightSource={onSaveCustomLightSource}
           onDeleteCustomLightSource={onDeleteCustomLightSource}

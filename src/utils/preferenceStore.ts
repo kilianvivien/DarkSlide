@@ -2,10 +2,12 @@ import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../consta
 import { CropTab, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
+export const AUTO_APPLY_NONE_PRESET_ID = '__none__';
 
 export interface UserPreferences {
-  version: 7;
+  version: 8;
   lastProfileId: string;
+  autoApplyPresetId: string | null;
   exportOptions: ExportOptions;
   notificationSettings: NotificationSettings;
   sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
@@ -27,19 +29,21 @@ export interface UserPreferences {
 }
 
 type PreferencesV5 = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 5 };
-type PreferencesV6 = Omit<UserPreferences, 'version'> & { version: 6 };
-type PreferencesV6Base = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>
-  & Partial<Pick<UserPreferences, 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>>;
+type PreferencesV6 = Omit<UserPreferences, 'version' | 'autoApplyPresetId'> & { version: 6 };
+type PreferencesV7 = Omit<UserPreferences, 'version' | 'autoApplyPresetId'> & { version: 7 };
+type PreferencesV6Base = Omit<UserPreferences, 'version' | 'autoApplyPresetId' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>
+  & Partial<Pick<UserPreferences, 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel' | 'autoApplyPresetId'>>;
 
 function isValidPreferences(value: unknown): value is UserPreferences {
   if (!value || typeof value !== 'object') return false;
   const prefs = value as Partial<UserPreferences>;
   const exportOptions = prefs.exportOptions as Partial<ExportOptions> | undefined;
   return (
-    prefs.version === 7 &&
+    prefs.version === 8 &&
     typeof prefs.notificationSettings === 'object' &&
     prefs.notificationSettings !== null &&
     typeof prefs.lastProfileId === 'string' &&
+    (prefs.autoApplyPresetId === null || typeof prefs.autoApplyPresetId === 'string') &&
     exportOptions !== undefined &&
     typeof exportOptions.format === 'string' &&
     typeof exportOptions.quality === 'number' &&
@@ -153,18 +157,20 @@ function isVersion5Preferences(value: unknown): value is PreferencesV5 {
     && typeof prefs.isRightPaneOpen === 'boolean';
 }
 
-function withV6Defaults(base: PreferencesV6Base): UserPreferences {
+function withCurrentDefaults(base: PreferencesV6Base): UserPreferences {
   const {
     scanningWatchPath,
     scanningAutoExport,
     scanningAutoExportPath,
     updateChannel,
+    autoApplyPresetId,
     ...rest
   } = base;
 
   return {
     ...rest,
-    version: 7,
+    version: 8,
+    autoApplyPresetId: autoApplyPresetId ?? null,
     scanningWatchPath: scanningWatchPath ?? null,
     scanningAutoExport: scanningAutoExport ?? false,
     scanningAutoExportPath: scanningAutoExportPath ?? null,
@@ -193,8 +199,9 @@ function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPr
     return null;
   }
 
-  return withV6Defaults({
+  return withCurrentDefaults({
     lastProfileId: legacy.lastProfileId,
+    autoApplyPresetId: null,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
       format: legacy.exportOptions.format,
@@ -225,8 +232,9 @@ function migrateVersion2Preferences(legacy: ReturnType<typeof JSON.parse>): User
     return null;
   }
 
-  return withV6Defaults({
+  return withCurrentDefaults({
     lastProfileId: legacy.lastProfileId,
+    autoApplyPresetId: null,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
       ...legacy.exportOptions,
@@ -252,8 +260,9 @@ function migrateVersion3Preferences(legacy: ReturnType<typeof JSON.parse>): User
     return null;
   }
 
-  return withV6Defaults({
+  return withCurrentDefaults({
     lastProfileId: legacy.lastProfileId,
+    autoApplyPresetId: null,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
       ...legacy.exportOptions,
@@ -279,8 +288,9 @@ function migrateVersion4Preferences(legacy: ReturnType<typeof JSON.parse>): User
     return null;
   }
 
-  return withV6Defaults({
+  return withCurrentDefaults({
     lastProfileId: legacy.lastProfileId,
+    autoApplyPresetId: null,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
       ...legacy.exportOptions,
@@ -309,8 +319,9 @@ function migrateVersion5Preferences(legacy: ReturnType<typeof JSON.parse>): User
     return null;
   }
 
-  return withV6Defaults({
+  return withCurrentDefaults({
     lastProfileId: legacy.lastProfileId,
+    autoApplyPresetId: null,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
       ...legacy.exportOptions,
@@ -344,6 +355,16 @@ function isVersion6Preferences(value: unknown): value is PreferencesV6 {
     && typeof prefs.isRightPaneOpen === 'boolean';
 }
 
+function isVersion7Preferences(value: unknown): value is PreferencesV7 {
+  if (!value || typeof value !== 'object') return false;
+  const prefs = value as Partial<PreferencesV7>;
+  return prefs.version === 7
+    && typeof prefs.lastProfileId === 'string'
+    && typeof prefs.sidebarTab === 'string'
+    && typeof prefs.isLeftPaneOpen === 'boolean'
+    && typeof prefs.isRightPaneOpen === 'boolean';
+}
+
 export function loadPreferences(): UserPreferences | null {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
@@ -356,13 +377,16 @@ export function loadPreferences(): UserPreferences | null {
     if (isVersion4Preferences(parsed)) return migrateVersion4Preferences(parsed);
     if (isVersion5Preferences(parsed)) return migrateVersion5Preferences(parsed);
     if (isVersion6Preferences(parsed)) {
-      return withV6Defaults(parsed);
+      return withCurrentDefaults(parsed);
+    }
+    if (isVersion7Preferences(parsed)) {
+      return withCurrentDefaults(parsed);
     }
     if (!isValidPreferences(parsed)) return null;
 
     return {
       ...parsed,
-      version: 7,
+      version: 8,
       exportOptions: {
         ...DEFAULT_EXPORT_OPTIONS,
         ...parsed.exportOptions,
@@ -384,6 +408,7 @@ export function loadPreferences(): UserPreferences | null {
       scanningAutoExport: parsed.scanningAutoExport ?? false,
       scanningAutoExportPath: parsed.scanningAutoExportPath ?? null,
       updateChannel: parsed.updateChannel ?? 'stable',
+      autoApplyPresetId: parsed.autoApplyPresetId ?? null,
     };
   } catch {
     return null;
@@ -393,7 +418,7 @@ export function loadPreferences(): UserPreferences | null {
 export function savePreferences(prefs: UserPreferences): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     ...prefs,
-    version: 7,
+    version: 8,
     exportOptions: {
       ...DEFAULT_EXPORT_OPTIONS,
       ...prefs.exportOptions,

@@ -96,6 +96,33 @@ describe('SettingsModal', () => {
     onDefaultLightSourceChange: vi.fn(),
     defaultLabStyleId: '',
     onDefaultLabStyleChange: vi.fn(),
+    builtinProfiles: [
+      {
+        id: 'generic-color',
+        version: 1,
+        name: 'Generic Color',
+        type: 'color' as const,
+        filmType: 'negative' as const,
+        category: 'Generic' as const,
+        description: 'Built-in preset',
+        defaultSettings: DEFAULT_COLOR_MANAGEMENT as never,
+      },
+    ],
+    customPresets: [
+      {
+        id: 'custom-portra',
+        version: 1,
+        name: 'Custom Portra',
+        type: 'color' as const,
+        filmType: 'negative' as const,
+        category: 'Generic' as const,
+        description: 'Custom preset',
+        defaultSettings: DEFAULT_COLOR_MANAGEMENT as never,
+        isCustom: true,
+      },
+    ],
+    defaultImportPresetId: null,
+    onDefaultImportPresetChange: vi.fn(),
     labStyleProfiles: [],
     onSaveCustomLightSource: vi.fn(async () => ({
       id: 'custom-light',
@@ -178,6 +205,39 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Calibration' }));
     fireEvent.change(screen.getByDisplayValue('Auto (no correction)'), { target: { value: 'daylight' } });
     expect(onDefaultLightSourceChange).toHaveBeenCalledWith('daylight');
+  });
+
+  it('lets the user choose an auto-apply import preset', () => {
+    const props = createProps();
+    const onDefaultImportPresetChange = vi.fn();
+    props.onDefaultImportPresetChange = onDefaultImportPresetChange;
+
+    render(
+      <SettingsModal {...props} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Calibration' }));
+    fireEvent.change(screen.getByDisplayValue('Last used preset'), { target: { value: 'custom-portra' } });
+    expect(onDefaultImportPresetChange).toHaveBeenCalledWith('custom-portra');
+  });
+
+  it('lets the user search presets and choose no preset', () => {
+    const props = createProps();
+    const onDefaultImportPresetChange = vi.fn();
+    props.onDefaultImportPresetChange = onDefaultImportPresetChange;
+
+    render(
+      <SettingsModal {...props} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Calibration' }));
+    fireEvent.change(screen.getByPlaceholderText('Search presets...'), { target: { value: 'portra' } });
+
+    expect(screen.queryByRole('option', { name: 'Generic Color' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Custom Portra' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByDisplayValue('Last used preset'), { target: { value: '__none__' } });
+    expect(onDefaultImportPresetChange).toHaveBeenCalledWith('__none__');
   });
 
   it('renders the backup tab and triggers preset backup actions', () => {

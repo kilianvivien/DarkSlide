@@ -1,12 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, Trash2, Upload } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ExportOptions, LabStyleProfile, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
+import { ColorManagementSettings, ColorProfileId, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { isDesktopShell } from '../utils/fileBridge';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { MAX_RESIDENT_DOC_OPTIONS, MaxResidentDocs } from '../utils/residentDocsStore';
+import { AUTO_APPLY_NONE_PRESET_ID } from '../utils/preferenceStore';
 
 const COLOR_PROFILE_IDS: ColorProfileId[] = ['srgb', 'display-p3', 'adobe-rgb'];
 
@@ -31,6 +32,10 @@ interface SettingsModalProps {
   onDefaultLightSourceChange: (lightSourceId: string) => void;
   defaultLabStyleId: string;
   onDefaultLabStyleChange: (labStyleId: string) => void;
+  builtinProfiles: FilmProfile[];
+  customPresets: FilmProfile[];
+  defaultImportPresetId: string | null;
+  onDefaultImportPresetChange: (presetId: string | null) => void;
   labStyleProfiles: LabStyleProfile[];
   onSaveCustomLightSource: (profile: {
     id?: string | null;
@@ -241,6 +246,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onDefaultLightSourceChange,
   defaultLabStyleId,
   onDefaultLabStyleChange,
+  builtinProfiles,
+  customPresets,
+  defaultImportPresetId,
+  onDefaultImportPresetChange,
   labStyleProfiles,
   onSaveCustomLightSource,
   onDeleteCustomLightSource,
@@ -284,6 +293,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [lsDraftBias, setLsDraftBias] = useState<[number, number, number]>([1, 1, 1]);
   const [lsDraftFlare, setLsDraftFlare] = useState<LightSourceProfile['flareCharacteristic']>('medium');
   const [backupFeedback, setBackupFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+  const [presetSearchQuery, setPresetSearchQuery] = useState('');
   const modalRef = useRef<HTMLDivElement>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
 
@@ -305,6 +315,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
     return `No source profile detected. Auto is using ${autoInputLabel}.`;
   })();
+
+  const normalizedPresetSearchQuery = presetSearchQuery.trim().toLowerCase();
+  const filteredBuiltinProfiles = useMemo(() => {
+    if (!normalizedPresetSearchQuery) {
+      return builtinProfiles;
+    }
+
+    return builtinProfiles.filter((profile) => profile.name.toLowerCase().includes(normalizedPresetSearchQuery));
+  }, [builtinProfiles, normalizedPresetSearchQuery]);
+
+  const filteredCustomPresets = useMemo(() => {
+    if (!normalizedPresetSearchQuery) {
+      return customPresets;
+    }
+
+    return customPresets.filter((profile) => profile.name.toLowerCase().includes(normalizedPresetSearchQuery));
+  }, [customPresets, normalizedPresetSearchQuery]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -915,6 +942,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               <option key={profile.id} value={profile.id}>{profile.name}</option>
                             ))}
                           </select>
+                        </div>
+
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Auto-Apply Preset On Import</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              Start new imports with a specific built-in or custom preset. If a sidecar is restored, those saved settings still win.
+                            </p>
+                          </div>
+
+                          <input
+                            type="text"
+                            value={presetSearchQuery}
+                            onChange={(event) => setPresetSearchQuery(event.target.value)}
+                            placeholder="Search presets..."
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 outline-none placeholder:text-zinc-500 focus:border-zinc-600"
+                          />
+
+                          <select
+                            value={defaultImportPresetId ?? ''}
+                            onChange={(event) => onDefaultImportPresetChange(event.target.value || null)}
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 outline-none focus:border-zinc-600"
+                          >
+                            <option value={AUTO_APPLY_NONE_PRESET_ID}>No preset</option>
+                            <option value="">Last used preset</option>
+                            <optgroup label="Built-in Presets">
+                              {filteredBuiltinProfiles.map((profile) => (
+                                <option key={profile.id} value={profile.id}>{profile.name}</option>
+                              ))}
+                            </optgroup>
+                            {filteredCustomPresets.length > 0 && (
+                              <optgroup label="Custom Presets">
+                                {filteredCustomPresets.map((profile) => (
+                                  <option key={profile.id} value={profile.id}>{profile.name}</option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </select>
+                          {normalizedPresetSearchQuery && filteredBuiltinProfiles.length === 0 && filteredCustomPresets.length === 0 && (
+                            <p className="text-[11px] text-zinc-500">No presets match that search.</p>
+                          )}
                         </div>
 
                         {/* Custom Light Sources */}

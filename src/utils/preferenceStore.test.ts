@@ -3,7 +3,7 @@ import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../consta
 import { loadPreferences, savePreferences, UserPreferences } from './preferenceStore';
 
 const VALID_PREFS: UserPreferences = {
-  version: 7,
+  version: 8,
   notificationSettings: {
     enabled: false,
     exportComplete: true,
@@ -11,6 +11,7 @@ const VALID_PREFS: UserPreferences = {
     contactSheetComplete: true,
   },
   lastProfileId: 'portra-400',
+  autoApplyPresetId: 'custom-import-preset',
   exportOptions: {
     format: 'image/png',
     quality: 0.85,
@@ -141,10 +142,12 @@ describe('loadPreferences', () => {
     localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
       ...VALID_PREFS,
       version: 6,
+      autoApplyPresetId: undefined,
     }));
 
     expect(loadPreferences()).toMatchObject({
-      version: 7,
+      version: 8,
+      autoApplyPresetId: null,
     });
   });
 });
@@ -155,8 +158,9 @@ describe('savePreferences + loadPreferences round-trip', () => {
     const loaded = loadPreferences();
 
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(7);
+    expect(loaded!.version).toBe(8);
     expect(loaded!.lastProfileId).toBe('portra-400');
+    expect(loaded!.autoApplyPresetId).toBe('custom-import-preset');
     expect(loaded!.sidebarTab).toBe('export');
     expect(loaded!.cropTab).toBe('Social');
     expect(loaded!.isLeftPaneOpen).toBe(false);
@@ -193,14 +197,15 @@ describe('savePreferences + loadPreferences round-trip', () => {
     }));
 
     expect(loadPreferences()).toMatchObject({
-      version: 7,
+      version: 8,
       openInEditorOutputPath: null,
       notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
       updateChannel: 'stable',
+      autoApplyPresetId: null,
     });
   });
 
-  it('migrates version 3 preferences to version 7 with default notification settings', () => {
+  it('migrates version 3 preferences to version 8 with default notification settings', () => {
     localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
       ...VALID_PREFS,
       version: 3,
@@ -208,8 +213,21 @@ describe('savePreferences + loadPreferences round-trip', () => {
     }));
 
     expect(loadPreferences()).toMatchObject({
-      version: 7,
+      version: 8,
       notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+    });
+  });
+
+  it('migrates version 7 preferences to version 8 and defaults the import preset off', () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      ...VALID_PREFS,
+      version: 7,
+      autoApplyPresetId: undefined,
+    }));
+
+    expect(loadPreferences()).toMatchObject({
+      version: 8,
+      autoApplyPresetId: null,
     });
   });
 });

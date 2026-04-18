@@ -20,7 +20,7 @@ import {
 import { appendDiagnostic } from '../utils/diagnostics';
 import { addRecentFile } from '../utils/recentFilesStore';
 import { getFileExtension, sanitizeFilenameBase } from '../utils/imagePipeline';
-import { loadPreferences } from '../utils/preferenceStore';
+import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences } from '../utils/preferenceStore';
 import { confirmRestoreSidecar, isDesktopShell, readTextFileByPath } from '../utils/fileBridge';
 import {
   buildRawInitialSettings,
@@ -233,13 +233,21 @@ export function useFileImport({
     const roll = getRollById?.(rollId) ?? null;
     const rawDefaultProfile = resolveRawStartupProfile(roll, persistedProfilesRef.current, fallbackProfile);
     const parsedPrefs = loadPreferences();
-    const initialProfile = rawImport
-      ? rawDefaultProfile
-      : (
-        parsedPrefs?.lastProfileId
-          ? (persistedProfilesRef.current.find((profile) => profile.id === parsedPrefs.lastProfileId) ?? fallbackProfile)
-          : fallbackProfile
-      );
+    const autoApplyPresetId = parsedPrefs?.autoApplyPresetId ?? null;
+    const disableAutoApplyPreset = autoApplyPresetId === AUTO_APPLY_NONE_PRESET_ID;
+    const lastUsedProfile = parsedPrefs?.lastProfileId
+      ? (persistedProfilesRef.current.find((profile) => profile.id === parsedPrefs.lastProfileId) ?? fallbackProfile)
+      : null;
+    const autoApplyProfile = autoApplyPresetId && !disableAutoApplyPreset
+      ? (persistedProfilesRef.current.find((profile) => profile.id === autoApplyPresetId) ?? null)
+      : null;
+    const preferredImportProfile = disableAutoApplyPreset
+      ? null
+      : (autoApplyProfile ?? lastUsedProfile);
+    const rawStartupProfile = rawDefaultProfile;
+    const activeImportProfile = rawImport
+      ? (preferredImportProfile ?? rawStartupProfile)
+      : (preferredImportProfile ?? fallbackProfile);
     activeDocumentIdRef.current = documentId;
 
     appendDiagnostic({
@@ -268,10 +276,10 @@ export function useFileImport({
       },
       previewLevels: [],
       settings: {
-        ...createDefaultSettings(structuredClone(initialProfile.defaultSettings)),
+        ...createDefaultSettings(structuredClone(activeImportProfile.defaultSettings)),
         filmBaseSample: rawImport
           ? null
-          : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample),
+          : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : activeImportProfile.defaultSettings.filmBaseSample),
       },
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
       estimatedFlare: null,
@@ -279,7 +287,7 @@ export function useFileImport({
       estimatedDensityBalance: null,
       lightSourceId: null,
       cropSource: null,
-      profileId: initialProfile.id,
+      profileId: activeImportProfile.id,
       labStyleId: null,
       rollId,
       exportOptions: {
@@ -306,10 +314,10 @@ export function useFileImport({
     try {
       let decoded: DecodedImage;
       let initialSettings: ConversionSettings = {
-        ...createDefaultSettings(structuredClone(initialProfile.defaultSettings)),
+        ...createDefaultSettings(structuredClone(activeImportProfile.defaultSettings)),
         filmBaseSample: rawImport
           ? null
-          : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : initialProfile.defaultSettings.filmBaseSample),
+          : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : activeImportProfile.defaultSettings.filmBaseSample),
       };
       let rawImportProfile: FilmProfile | null = null;
 
@@ -322,15 +330,23 @@ export function useFileImport({
             size: sourceFileSize,
           });
           const estimatedFilmBase = decodeRequest.precomputedFilmBaseSample ?? null;
-          initialSettings = createDefaultSettings(buildRawInitialSettings(
-            initialProfile.defaultSettings,
+          const rawStartupSettings = createDefaultSettings(buildRawInitialSettings(
+            rawStartupProfile.defaultSettings,
             rawResult.data,
             rawResult.width,
             rawResult.height,
             rawResult.orientation,
             estimatedFilmBase,
           ));
-          rawImportProfile = createRawImportProfile(initialProfile, initialSettings);
+          initialSettings = preferredImportProfile
+            ? {
+              ...createDefaultSettings(structuredClone(activeImportProfile.defaultSettings)),
+              filmBaseSample: activeImportProfile.defaultSettings.filmBaseSample
+                ? structuredClone(activeImportProfile.defaultSettings.filmBaseSample)
+                : (estimatedFilmBase ? structuredClone(estimatedFilmBase) : null),
+            }
+            : rawStartupSettings;
+          rawImportProfile = createRawImportProfile(rawStartupProfile, rawStartupSettings);
 
           if (estimatedFilmBase) {
             appendDiagnostic({
@@ -449,7 +465,9 @@ export function useFileImport({
       const savedLabStyleId = typeof window !== 'undefined'
         ? window.localStorage.getItem('darkslide_default_lab_style')
         : null;
-      const resolvedProfile = rawImportProfile ?? initialProfile;
+      const resolvedProfile = rawImport && preferredImportProfile
+        ? activeImportProfile
+        : (rawImportProfile ?? activeImportProfile);
       let restoredSidecar = null;
 
       if (nativePath && isDesktopShell() && !ignoredSidecarsRef.current.has(nativePath)) {

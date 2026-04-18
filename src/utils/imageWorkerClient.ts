@@ -35,12 +35,13 @@ import {
 } from '../types';
 import UTIF from 'utif';
 import { appendDiagnostic } from './diagnostics';
-import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, computeResidualBaseOffset, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
+import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, computeResidualBaseOffset, getExtensionFromFormat, normalizeCrop, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
 import { convertImageDataColorProfile, getPreferredPreviewDisplayProfile } from './colorProfiles';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
 import { finalizeExportBlob } from './imageMetadata';
 import { WorkerMessage, WorkerRequest, WorkerResponse } from './workerProtocol';
+import { FULL_FRAME_CROP, isFullFrameCrop } from './batchSettings';
 
 type ImageWorkerClientOptions = {
   gpuEnabled?: boolean;
@@ -777,6 +778,12 @@ export class ImageWorkerClient {
     flareFloor?: [number, number, number] | null,
     lightSourceBias?: [number, number, number],
   ) {
+    const samplingSettings = isFullFrameCrop(normalizeCrop(settings))
+      ? settings
+      : {
+        ...settings,
+        crop: { ...FULL_FRAME_CROP },
+      };
     const jobId = this.createJobId(documentId, `residual-${crypto.randomUUID()}`, 'preview');
 
     try {
@@ -784,7 +791,7 @@ export class ImageWorkerClient {
         documentId,
         jobId,
         sourceKind: 'preview',
-        settings,
+        settings: samplingSettings,
         comparisonMode: 'processed',
         targetMaxDimension: 512,
       });
@@ -799,7 +806,7 @@ export class ImageWorkerClient {
 
       return computeResidualBaseOffset(
         trimTileImageData(rawPreview),
-        settings,
+        samplingSettings,
         isColor,
         filmType ?? 'negative',
         inputProfileId,
@@ -915,6 +922,7 @@ export class ImageWorkerClient {
     filmType?: RenderRequest['filmType'],
     estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
     estimatedDensityBalance?: RenderRequest['estimatedDensityBalance'],
+    residualBaseOffset?: [number, number, number] | null,
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
   ) {
@@ -930,7 +938,7 @@ export class ImageWorkerClient {
 
     let histogramSourceImageData: ImageData;
     let imageData: ImageData;
-    const residualBaseOffset = comparisonMode === 'processed'
+    const previewResidualBaseOffset = residualBaseOffset ?? (comparisonMode === 'processed' && isFullFrameCrop(normalizeCrop(settings))
       ? computeResidualBaseOffset(
         trimTileImageData(rawPreview),
         settings,
@@ -941,7 +949,7 @@ export class ImageWorkerClient {
         lightSourceBias ?? [1, 1, 1],
         flareFloor ?? null,
       )
-      : null;
+      : null);
 
     if (comparisonMode === 'processed' && this.gpuPipeline) {
       const gpuStartedAt = performance.now();
@@ -965,7 +973,7 @@ export class ImageWorkerClient {
         filmType,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
-        residualBaseOffset,
+        previewResidualBaseOffset,
         flareFloor,
         lightSourceBias,
       );
@@ -1367,6 +1375,18 @@ export class ImageWorkerClient {
     }
 
     try {
+      const residualBaseOffset = payload.comparisonMode === 'processed' && !isFullFrameCrop(normalizeCrop(payload.settings))
+        ? await this.computeResidualBaseOffsetFromPreview(
+          payload.documentId,
+          payload.settings,
+          payload.isColor,
+          payload.inputProfileId ?? 'srgb',
+          payload.outputProfileId ?? 'srgb',
+          payload.filmType,
+          payload.flareFloor,
+          payload.lightSourceBias,
+        )
+        : null;
       const prepareStartedAt = performance.now();
       const prepared = await this.prepareTileJob({
         documentId: payload.documentId,
@@ -1400,6 +1420,7 @@ export class ImageWorkerClient {
         payload.filmType,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
+        residualBaseOffset,
         payload.flareFloor,
         payload.lightSourceBias,
       );

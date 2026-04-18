@@ -16,6 +16,7 @@ import {
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  FilmProfileType,
   PreparePreviewBitmapRequest,
   PreparedPreviewBitmapResult,
   PreparedTileJobResult,
@@ -65,6 +66,7 @@ import {
 } from './workerGeometryCache';
 import { clamp } from './math';
 import { estimateFilmBaseSampleFromRgba } from './rawImport';
+import { FULL_FRAME_CROP, isFullFrameCrop } from './batchSettings';
 import {
   WorkerError,
   WorkerMessage,
@@ -356,6 +358,47 @@ function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
     width: cropBounds.width,
     height: cropBounds.height,
   };
+}
+
+function getResidualBaseSamplingSettings(settings: ConversionSettings) {
+  const normalizedCrop = normalizeCrop(settings);
+  if (isFullFrameCrop(normalizedCrop)) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    crop: { ...FULL_FRAME_CROP },
+  };
+}
+
+function computeResidualBaseOffsetForSourceCanvas(
+  sourceCanvas: OffscreenCanvas,
+  settings: ConversionSettings,
+  isColor: boolean,
+  filmType: FilmProfileType = 'negative',
+  inputProfileId: ColorProfileId = 'srgb',
+  outputProfileId: ColorProfileId = 'srgb',
+  lightSourceBias: [number, number, number] = [1, 1, 1],
+  flareFloor: [number, number, number] | null = null,
+) {
+  const samplingSettings = getResidualBaseSamplingSettings(settings);
+  const transformed = renderTransformedCanvas(sourceCanvas, samplingSettings);
+  const context = transformed.canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Could not read residual base analysis canvas.');
+  }
+
+  return computeResidualBaseOffset(
+    context.getImageData(0, 0, transformed.width, transformed.height),
+    samplingSettings,
+    isColor,
+    filmType,
+    inputProfileId,
+    outputProfileId,
+    lightSourceBias,
+    flareFloor,
+  );
 }
 
 function renderRotatedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
@@ -793,8 +836,8 @@ function handleDustDetect(payload: DustDetectRequest) {
   }
 
   const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
-  const residualBaseOffset = computeResidualBaseOffset(
-    imageData,
+  const residualBaseOffset = computeResidualBaseOffsetForSourceCanvas(
+    preview.canvas,
     payload.settings,
     payload.isColor,
     payload.filmType ?? 'negative',
@@ -1187,8 +1230,8 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   if (!ctx) throw new Error('Could not analyze auto adjustments.');
 
   const toneImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  const residualBaseOffset = computeResidualBaseOffset(
-    toneImageData,
+  const residualBaseOffset = computeResidualBaseOffsetForSourceCanvas(
+    preview.canvas,
     payload.settings,
     payload.isColor,
     payload.filmType ?? 'negative',
@@ -1260,8 +1303,8 @@ function handleRender(payload: RenderRequest) {
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   const residualBaseOffset = payload.skipProcessing || payload.comparisonMode !== 'processed'
     ? null
-    : computeResidualBaseOffset(
-      imageData,
+    : computeResidualBaseOffsetForSourceCanvas(
+      previewSource,
       payload.settings,
       payload.isColor,
       payload.filmType ?? 'negative',
@@ -1332,8 +1375,8 @@ async function handleExport(payload: ExportRequest) {
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
-  const residualBaseOffset = computeResidualBaseOffset(
-    imageData,
+  const residualBaseOffset = computeResidualBaseOffsetForSourceCanvas(
+    exportSource,
     payload.settings,
     payload.isColor,
     payload.filmType ?? 'negative',

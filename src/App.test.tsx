@@ -1393,6 +1393,218 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
+  it('auto-applies the configured preset to RAW imports while preserving Raw Import Result as a reset target', async () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      version: 8,
+      lastProfileId: 'generic-color',
+      autoApplyPresetId: 'generic-bw',
+      exportOptions: {
+        format: 'image/jpeg',
+        quality: 0.92,
+        filenameBase: 'scan',
+        embedMetadata: true,
+        outputProfileId: 'srgb',
+        embedOutputProfile: true,
+        saveSidecar: false,
+        targetMaxDimension: null,
+      },
+      notificationSettings: {
+        enabled: true,
+        exportComplete: true,
+        batchComplete: true,
+        contactSheetComplete: true,
+      },
+      sidebarTab: 'adjust',
+      cropTab: 'Film',
+      isLeftPaneOpen: true,
+      isRightPaneOpen: true,
+      gpuRendering: true,
+      ultraSmoothDrag: false,
+      externalEditorPath: null,
+      externalEditorName: null,
+      openInEditorOutputPath: null,
+      defaultExportPath: null,
+      batchOutputPath: null,
+      contactSheetOutputPath: null,
+      scanningWatchPath: null,
+      scanningAutoExport: false,
+      scanningAutoExportPath: null,
+      updateChannel: 'stable',
+    }));
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('auto-raw.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/auto-raw.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [76, 73, 68][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const importRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      profileId: string | null;
+      isColor: boolean;
+      settings: {
+        saturation: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+        rotation: number;
+      };
+    };
+
+    expect(importRenderCall.profileId).toBe('generic-bw');
+    expect(importRenderCall.isColor).toBe(false);
+    expect(importRenderCall.settings.saturation).toBe(0);
+    expect(importRenderCall.settings.filmBaseSample).toEqual({ r: 76, g: 73, b: 68 });
+    expect(importRenderCall.settings.rotation).toBe(0);
+    expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const resetRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      profileId: string | null;
+      isColor: boolean;
+      settings: {
+        saturation: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+        rotation: number;
+      };
+    };
+
+    expect(resetRenderCall.profileId).toBe('raw-import-result');
+    expect(resetRenderCall.isColor).toBe(true);
+    expect(resetRenderCall.settings.saturation).toBe(100);
+    expect(resetRenderCall.settings.filmBaseSample).toBeNull();
+    expect(resetRenderCall.settings.rotation).toBe(90);
+  });
+
+  it('matches the manual preset-apply settings when auto-applying a color preset to a RAW import', async () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      version: 8,
+      lastProfileId: 'generic-color',
+      autoApplyPresetId: 'cinestill-400d',
+      exportOptions: {
+        format: 'image/jpeg',
+        quality: 0.92,
+        filenameBase: 'scan',
+        embedMetadata: true,
+        outputProfileId: 'srgb',
+        embedOutputProfile: true,
+        saveSidecar: false,
+        targetMaxDimension: null,
+      },
+      notificationSettings: {
+        enabled: true,
+        exportComplete: true,
+        batchComplete: true,
+        contactSheetComplete: true,
+      },
+      sidebarTab: 'adjust',
+      cropTab: 'Film',
+      isLeftPaneOpen: true,
+      isRightPaneOpen: true,
+      gpuRendering: true,
+      ultraSmoothDrag: false,
+      externalEditorPath: null,
+      externalEditorName: null,
+      openInEditorOutputPath: null,
+      defaultExportPath: null,
+      batchOutputPath: null,
+      contactSheetOutputPath: null,
+      scanningWatchPath: null,
+      scanningAutoExport: false,
+      scanningAutoExportPath: null,
+      updateChannel: 'stable',
+    }));
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('auto-color-raw.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/auto-color-raw.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [135, 163, 107][index % 3]),
+      color_space: 'sRGB',
+      orientation: 1,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 135, g: 163, b: 107 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const importRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      profileId: string | null;
+      settings: {
+        exposure: number;
+        contrast: number;
+        saturation: number;
+        temperature: number;
+        tint: number;
+        redBalance: number;
+        blueBalance: number;
+        blackPoint: number;
+        highlightProtection: number;
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+    };
+
+    expect(importRenderCall.profileId).toBe('cinestill-400d');
+    expect(importRenderCall.settings).toMatchObject({
+      exposure: 5,
+      contrast: 11,
+      saturation: 108,
+      temperature: 1,
+      tint: -1,
+      redBalance: 1.1,
+      blueBalance: 0.96,
+      blackPoint: 7,
+      highlightProtection: 38,
+      filmBaseSample: { r: 135, g: 163, b: 107 },
+    });
+  });
+
   it('auto-maps CS-LITE to cool, white, and warm modes as film profiles change', async () => {
     localStorage.setItem('darkslide_default_light_source', 'cs-lite');
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
@@ -1673,6 +1885,170 @@ describe('App import and preview pipeline', () => {
       }),
     });
     expect(screen.queryByRole('button', { name: 'Convert to B&W' })).not.toBeInTheDocument();
+  });
+
+  it('dismisses the monochrome suggestion when the user chooses a preset', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+    }) => {
+      const result = createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension);
+      result.imageData = createRenderImageData(payload.targetMaxDimension, payload.targetMaxDimension, (x, y) => {
+        const base = 52 + ((x + y) % 96);
+        return [base, base + 2, base + 4];
+      });
+      return result;
+    });
+
+    render(<App />);
+
+    await uploadFile(createFile('mono-scan.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(screen.getByText('This scan looks monochrome. Convert it to black and white?')).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    await flushMicrotasks();
+
+    expect(screen.queryByText('This scan looks monochrome. Convert it to black and white?')).not.toBeInTheDocument();
+  });
+
+  it('auto-applies the configured import preset when importing a new image', async () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      version: 8,
+      lastProfileId: 'generic-color',
+      autoApplyPresetId: 'generic-bw',
+      exportOptions: {
+        format: 'image/jpeg',
+        quality: 0.92,
+        filenameBase: 'scan',
+        embedMetadata: true,
+        outputProfileId: 'srgb',
+        embedOutputProfile: true,
+        saveSidecar: false,
+        targetMaxDimension: null,
+      },
+      notificationSettings: {
+        enabled: true,
+        exportComplete: true,
+        batchComplete: true,
+        contactSheetComplete: true,
+      },
+      sidebarTab: 'adjust',
+      cropTab: 'Film',
+      isLeftPaneOpen: true,
+      isRightPaneOpen: true,
+      gpuRendering: true,
+      ultraSmoothDrag: false,
+      externalEditorPath: null,
+      externalEditorName: null,
+      openInEditorOutputPath: null,
+      defaultExportPath: null,
+      batchOutputPath: null,
+      contactSheetOutputPath: null,
+      scanningWatchPath: null,
+      scanningAutoExport: false,
+      scanningAutoExportPath: null,
+      updateChannel: 'stable',
+    }));
+
+    workerState.decode.mockResolvedValue(createDecodedImage(4032, 6048));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan-a.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        saturation: number;
+      };
+      isColor: boolean;
+      profileId: string;
+    };
+
+    expect(latestRenderCall.profileId).toBe('generic-bw');
+    expect(latestRenderCall.isColor).toBe(false);
+    expect(latestRenderCall.settings.saturation).toBe(0);
+  });
+
+  it('supports disabling import preset auto-apply', async () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      version: 8,
+      lastProfileId: 'generic-bw',
+      autoApplyPresetId: '__none__',
+      exportOptions: {
+        format: 'image/jpeg',
+        quality: 0.92,
+        filenameBase: 'scan',
+        embedMetadata: true,
+        outputProfileId: 'srgb',
+        embedOutputProfile: true,
+        saveSidecar: false,
+        targetMaxDimension: null,
+      },
+      notificationSettings: {
+        enabled: true,
+        exportComplete: true,
+        batchComplete: true,
+        contactSheetComplete: true,
+      },
+      sidebarTab: 'adjust',
+      cropTab: 'Film',
+      isLeftPaneOpen: true,
+      isRightPaneOpen: true,
+      gpuRendering: true,
+      ultraSmoothDrag: false,
+      externalEditorPath: null,
+      externalEditorName: null,
+      openInEditorOutputPath: null,
+      defaultExportPath: null,
+      batchOutputPath: null,
+      contactSheetOutputPath: null,
+      scanningWatchPath: null,
+      scanningAutoExport: false,
+      scanningAutoExportPath: null,
+      updateChannel: 'stable',
+    }));
+
+    workerState.decode.mockResolvedValue(createDecodedImage(4032, 6048));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan-a.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: {
+        saturation: number;
+      };
+      isColor: boolean;
+      profileId: string;
+    };
+
+    expect(latestRenderCall.profileId).toBe('generic-color');
+    expect(latestRenderCall.isColor).toBe(true);
+    expect(latestRenderCall.settings.saturation).toBe(100);
   });
 
   it('shows the RAW decoding overlay while the native decode is still running', async () => {

@@ -18,7 +18,7 @@ import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic } from './utils/diagnostics';
 import { confirmDeleteRoll, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
-import { loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
+import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
 import { analyzeMonochromeSuggestion } from './utils/autoAnalysis';
@@ -178,6 +178,7 @@ export default function App() {
       ? window.localStorage.getItem('darkslide_default_lab_style') ?? ''
       : ''
   ));
+  const [defaultImportPresetId, setDefaultImportPresetId] = useState<string | null>(() => initialPreferences?.autoApplyPresetId ?? null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -409,8 +410,9 @@ export default function App() {
 
   // Snapshot of the latest preference-relevant state, updated on every render so handlers can always read fresh values
   const prefsSnapshotRef = useRef<UserPreferences>({
-    version: 7,
+    version: 8,
     lastProfileId: fallbackProfile.id,
+    autoApplyPresetId: initialPreferences?.autoApplyPresetId ?? null,
     exportOptions: DEFAULT_EXPORT_OPTIONS,
     notificationSettings: initialPreferences?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: 'adjust',
@@ -431,8 +433,9 @@ export default function App() {
     updateChannel: initialPreferences?.updateChannel ?? 'stable',
   });
   prefsSnapshotRef.current = {
-    version: 7,
+    version: 8,
     lastProfileId: documentState?.profileId ?? prefsSnapshotRef.current.lastProfileId,
+    autoApplyPresetId: defaultImportPresetId,
     exportOptions: documentState?.exportOptions ?? prefsSnapshotRef.current.exportOptions,
     notificationSettings,
     sidebarTab,
@@ -452,6 +455,26 @@ export default function App() {
     scanningAutoExportPath,
     updateChannel,
   };
+
+  useEffect(() => {
+    if (!defaultImportPresetId) {
+      return;
+    }
+
+    if (defaultImportPresetId === AUTO_APPLY_NONE_PRESET_ID) {
+      return;
+    }
+
+    if (persistedProfiles.some((profile) => profile.id === defaultImportPresetId)) {
+      return;
+    }
+
+    setDefaultImportPresetId(null);
+    savePreferences({
+      ...prefsSnapshotRef.current,
+      autoApplyPresetId: null,
+    });
+  }, [defaultImportPresetId, persistedProfiles]);
 
   const getRollById = useCallback((rollId: string | null) => (
     rollId ? rolls.get(rollId) ?? null : null
@@ -1931,6 +1954,14 @@ export default function App() {
     }
   }, []);
 
+  const handleDefaultImportPresetChange = useCallback((presetId: string | null) => {
+    setDefaultImportPresetId(presetId);
+    savePreferences({
+      ...prefsSnapshotRef.current,
+      autoApplyPresetId: presetId,
+    });
+  }, [prefsSnapshotRef]);
+
   const handleToggleComparison = useCallback(() => {
     setComparisonMode((current) => current === 'processed' ? 'original' : 'processed');
   }, []);
@@ -1958,6 +1989,13 @@ export default function App() {
       },
     });
   }, [documentState?.settings.dustRemoval, handleSettingsChange, selectedDustMarkId]);
+
+  const handlePresetSelection = useCallback((profile: FilmProfile) => {
+    if (documentState) {
+      setSuggestionNotice((current) => current?.documentId === documentState.id ? null : current);
+    }
+    handleProfileChange(profile);
+  }, [documentState, handleProfileChange]);
 
   const handleDustBrushActiveChange = useCallback((active: boolean) => {
     setDustBrushActive(active);
@@ -2665,7 +2703,9 @@ onToggleScanningSession: toggleScanningWindow,
       renderBackendDiagnostics={renderBackendDiagnostics}
       defaultLightSourceId={defaultLightSourceId}
       defaultLabStyleId={defaultLabStyleId}
+      defaultImportPresetId={defaultImportPresetId}
       onDefaultLabStyleChange={handleDefaultLabStyleChange}
+      onDefaultImportPresetChange={handleDefaultImportPresetChange}
       maxResidentDocs={maxResidentDocs}
       externalEditorPath={externalEditorPath}
       externalEditorName={externalEditorName}
@@ -2762,7 +2802,7 @@ onToggleScanningSession: toggleScanningWindow,
       onLightSourceChange={handleLightSourceChange}
       onLabStyleChange={handleLabStyleChange}
       onAutoAdjust={() => { void handleAutoAdjust(); }}
-      onProfileChange={handleProfileChange}
+      onProfileChange={handlePresetSelection}
       onSavePreset={handleSavePreset}
       onImportPreset={handleImportPreset}
       onDeletePreset={handleDeletePreset}

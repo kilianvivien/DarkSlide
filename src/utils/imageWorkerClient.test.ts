@@ -788,6 +788,185 @@ describe('ImageWorkerClient', () => {
     expect(convertSpy).not.toHaveBeenCalled();
   });
 
+  it('samples residual base correction from the full frame before rendering a cropped GPU preview', async () => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+    gpuState.instance.processPreviewImage.mockResolvedValueOnce(
+      new ImageData(new Uint8ClampedArray([10, 20, 30, 255]), 1, 1),
+    );
+
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const pending = client.render({
+      ...createRenderPayload(),
+      settings: {
+        ...createRenderPayload().settings,
+        crop: {
+          x: 0.2,
+          y: 0.2,
+          width: 0.5,
+          height: 0.5,
+          aspectRatio: 1,
+        },
+      },
+    });
+
+    await flushAsyncWork();
+
+    const residualPrepareRequest = worker.postedMessages[0];
+    expect(residualPrepareRequest?.type).toBe('prepare-tile-job');
+    expect(residualPrepareRequest?.payload).toMatchObject({
+      targetMaxDimension: 512,
+      settings: {
+        crop: {
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          aspectRatio: null,
+        },
+      },
+    });
+
+    worker.onmessage?.({
+      data: {
+        id: residualPrepareRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'residual-job',
+          sourceKind: 'preview',
+          width: 1,
+          height: 1,
+          previewLevelId: 'preview-512',
+          tileSize: 1024,
+          halo: 0,
+          geometryCacheHit: true,
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const residualTileRequest = worker.postedMessages[1];
+    expect(residualTileRequest?.type).toBe('read-tile');
+    worker.onmessage?.({
+      data: {
+        id: residualTileRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'residual-job',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          haloLeft: 0,
+          haloTop: 0,
+          haloRight: 0,
+          haloBottom: 0,
+          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const residualCancelRequest = worker.postedMessages[2];
+    expect(residualCancelRequest?.type).toBe('cancel-job');
+    worker.onmessage?.({
+      data: {
+        id: residualCancelRequest?.id,
+        ok: true,
+        payload: {
+          cancelled: true,
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const croppedPrepareRequest = worker.postedMessages[3];
+    expect(croppedPrepareRequest?.type).toBe('prepare-tile-job');
+    expect(croppedPrepareRequest?.payload).toMatchObject({
+      settings: {
+        crop: {
+          x: 0.2,
+          y: 0.2,
+          width: 0.5,
+          height: 0.5,
+          aspectRatio: 1,
+        },
+      },
+    });
+
+    worker.onmessage?.({
+      data: {
+        id: croppedPrepareRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:1:preview',
+          sourceKind: 'preview',
+          width: 1,
+          height: 1,
+          previewLevelId: 'preview-1024',
+          tileSize: 1024,
+          halo: 0,
+          geometryCacheHit: false,
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const croppedTileRequest = worker.postedMessages[4];
+    expect(croppedTileRequest?.type).toBe('read-tile');
+    worker.onmessage?.({
+      data: {
+        id: croppedTileRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:1:preview',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          haloLeft: 0,
+          haloTop: 0,
+          haloRight: 0,
+          haloBottom: 0,
+          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+        },
+      },
+    } as MessageEvent);
+
+    await flushAsyncWork();
+
+    const croppedCancelRequest = worker.postedMessages[5];
+    expect(croppedCancelRequest?.type).toBe('cancel-job');
+    worker.onmessage?.({
+      data: {
+        id: croppedCancelRequest?.id,
+        ok: true,
+        payload: {
+          cancelled: true,
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toMatchObject({
+      documentId: 'doc-1',
+      revision: 1,
+    });
+  });
+
   it('throttles ultra smooth draft histograms and suppresses per-frame draft diagnostics', async () => {
     vi.useFakeTimers();
     Object.defineProperty(navigator, 'gpu', {
