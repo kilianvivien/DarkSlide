@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ASPECT_RATIOS,
   LIGHT_SOURCE_PROFILES,
   createDefaultSettings,
   getSuggestedCsLiteLightSourceId,
@@ -17,6 +18,26 @@ describe('createDefaultSettings', () => {
       aspectRatio: null,
     });
     expect(createDefaultSettings().levelAngle).toBe(0);
+  });
+});
+
+describe('ASPECT_RATIOS', () => {
+  it('matches named film formats to their nominal width-to-height ratios', () => {
+    const filmRatios = ASPECT_RATIOS.filter((ratio) => ratio.category === 'Film');
+
+    expect(filmRatios).toEqual(expect.arrayContaining([
+      expect.objectContaining({ format: '35mm', value: 2 / 3 }),
+      expect.objectContaining({ format: '35mm', value: 3 / 2 }),
+      expect.objectContaining({ format: 'Half-frame', value: 3 / 4 }),
+      expect.objectContaining({ format: 'Half-frame', value: 4 / 3 }),
+      expect.objectContaining({ format: '6×4.5', value: 4.5 / 6 }),
+      expect.objectContaining({ format: '6×4.5', value: 6 / 4.5 }),
+      expect.objectContaining({ format: '6×6', value: 1 }),
+      expect.objectContaining({ format: '6×7', value: 6 / 7 }),
+      expect.objectContaining({ format: '6×7', value: 7 / 6 }),
+      expect.objectContaining({ format: '6×9', value: 6 / 9 }),
+      expect.objectContaining({ format: '6×9', value: 9 / 6 }),
+    ]));
   });
 });
 

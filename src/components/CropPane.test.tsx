@@ -56,6 +56,41 @@ describe('CropPane', () => {
     }));
   });
 
+  it('applies the nominal 6×4.5 medium-format ratio in landscape orientation', () => {
+    const onCropChange = vi.fn();
+
+    renderCropPane({
+      onCropChange,
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^6×4\.5/i })[0]);
+
+    expect(onCropChange).toHaveBeenCalledWith(expect.objectContaining({
+      aspectRatio: 6 / 4.5,
+    }));
+  });
+
+  it('toggles 6×4.5 to the matching portrait ratio', () => {
+    const onCropChange = vi.fn();
+
+    renderCropPane({
+      crop: {
+        x: 0.1,
+        y: 0.1,
+        width: 0.8,
+        height: 0.8,
+        aspectRatio: 6 / 4.5,
+      },
+      onCropChange,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /6×4\.5 switch to portrait/i }));
+
+    expect(onCropChange).toHaveBeenCalledWith(expect.objectContaining({
+      aspectRatio: 4.5 / 6,
+    }));
+  });
+
   it('rotates crop settings through the dedicated callback', () => {
     const onRotate = vi.fn();
 
