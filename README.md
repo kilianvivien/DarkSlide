@@ -10,7 +10,11 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v0.8.2
+## What's New in v0.8.3
+
+- **Corrected 6×4.5 crop preset** — the medium-format 6×4.5 preset now uses the nominal 6 cm × 4.5 cm frame ratio in both landscape and portrait orientations
+
+### Earlier in v0.8.2
 
 - **RAW import fixes** — fixed a startup crash when opening RAW files before any image was loaded, and duplicate tab creation on import
 - **Fixed preset auto-apply on RAW imports** — presets now apply correctly on RAW files, with import settings propagating as expected
