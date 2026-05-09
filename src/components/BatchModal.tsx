@@ -142,11 +142,6 @@ export function BatchModal({
     () => customProfiles.find((profile) => profile.id === selectedCustomProfileId) ?? customProfiles[0] ?? null,
     [customProfiles, selectedCustomProfileId],
   );
-  const openTabsSignature = useMemo(
-    () => openTabs.map((tab) => tab.id).join('|'),
-    [openTabs],
-  );
-
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -194,7 +189,7 @@ export function BatchModal({
 
       return [...nextOpenEntries, ...fileEntries];
     });
-  }, [isOpen, openTabsSignature]);
+  }, [isOpen, openTabs]);
 
   useEffect(() => {
     if (exportOptions.format !== 'image/webp' || exportOptions.outputProfileId === 'srgb') {

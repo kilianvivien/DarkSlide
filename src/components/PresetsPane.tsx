@@ -268,7 +268,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
 
   const searchNormalized = searchQuery.trim().toLowerCase();
 
-  const matchesSearch = (profile: FilmProfile) => {
+  const matchesSearch = useCallback((profile: FilmProfile) => {
     if (!searchNormalized) return true;
     const haystack = [
       profile.name,
@@ -283,15 +283,15 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       .join(' ')
       .toLowerCase();
     return haystack.includes(searchNormalized);
-  };
+  }, [searchNormalized]);
 
   const filteredGenericProfiles = useMemo(
     () => (isSearching ? genericProfiles.filter(matchesSearch) : genericProfiles),
-    [genericProfiles, searchNormalized, isSearching],
+    [genericProfiles, isSearching, matchesSearch],
   );
   const filteredStockProfiles = useMemo(
     () => (isSearching ? stockProfiles.filter(matchesSearch) : stockProfiles),
-    [stockProfiles, searchNormalized, isSearching],
+    [stockProfiles, isSearching, matchesSearch],
   );
   const groupedStockProfiles = useMemo(() => {
     const groups = new Map<FilmProfileCategory, FilmProfile[]>();
@@ -314,7 +314,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       const base = isSearching ? customPresets.filter(matchesSearch) : customPresets;
       return sortCustomPresets(base, customSort);
     },
-    [customPresets, searchNormalized, isSearching, customSort],
+    [customPresets, isSearching, customSort, matchesSearch],
   );
 
   // Film stock suggestions: built-in profile names + custom preset filmStocks + user-entered stocks

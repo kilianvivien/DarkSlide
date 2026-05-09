@@ -210,6 +210,7 @@ export default function App() {
     followUpCompletedForKey: string | null;
   }>());
   const enqueuePreviewRenderRef = useRef<((request: QueuedPreviewRender, priority: 'draft' | 'settled') => void) | null>(null);
+  const cancelPendingPreviewRenderRef = useRef<(() => void) | null>(null);
   const workerMemoryPressureActiveRef = useRef(false);
   const fullRenderTargetSelectionRef = useRef<{ previewLevelId: string; targetDimension: number } | null>(null);
   const tabSwitchDraftRef = useRef<string | null>(null);
@@ -519,7 +520,7 @@ export default function App() {
       documentState.source.height,
       documentState.settings.rotation + documentState.settings.levelAngle,
     );
-  }, [documentState?.settings.levelAngle, documentState?.settings.rotation, documentState?.source.height, documentState?.source.width]);
+  }, [documentState]);
   const displaySettings = useMemo(() => {
     if (!documentState) return null;
     if (!isCropOverlayVisible) return documentState.settings;
@@ -534,7 +535,7 @@ export default function App() {
         height: 1,
       },
     };
-  }, [documentState?.settings, isCropOverlayVisible]);
+  }, [documentState, isCropOverlayVisible]);
   const displayAngle = displaySettings ? displaySettings.rotation + displaySettings.levelAngle : 0;
   const {
     zoom, pan,
@@ -641,8 +642,6 @@ export default function App() {
     displayScaleFactor,
     displaySettings,
     documentState,
-    documentState?.source.height,
-    documentState?.source.width,
     isCropOverlayVisible,
   ]);
 
@@ -666,8 +665,6 @@ export default function App() {
     displayScaleFactor,
     displaySettings,
     documentState,
-    documentState?.source.height,
-    documentState?.source.width,
   ]);
 
   const fullRenderTargetDimension = useMemo(() => {
@@ -750,7 +747,7 @@ export default function App() {
       interactivePreviewFrameRef.current = null;
     }
     pendingInteractivePreviewRef.current = null;
-    cancelPendingPreviewRender();
+    cancelPendingPreviewRenderRef.current?.();
   }, []);
 
   const handleInteractionStart = useCallback(() => {
@@ -826,6 +823,33 @@ export default function App() {
     setDustBrushActive(false);
   }, [activeTabId]);
 
+  const cleanupAppTimers = useCallback(() => {
+    if (transientNoticeTimeoutRef.current !== null) {
+      window.clearTimeout(transientNoticeTimeoutRef.current);
+      transientNoticeTimeoutRef.current = null;
+    }
+    if (tabSwitchOverlayTimeoutRef.current !== null) {
+      window.clearTimeout(tabSwitchOverlayTimeoutRef.current);
+      tabSwitchOverlayTimeoutRef.current = null;
+    }
+    if (previewRetryFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewRetryFrameRef.current);
+      previewRetryFrameRef.current = null;
+    }
+    if (interactivePreviewFrameRef.current !== null) {
+      window.cancelAnimationFrame(interactivePreviewFrameRef.current);
+      interactivePreviewFrameRef.current = null;
+    }
+    if (zoomIdleTimeoutRef.current !== null) {
+      window.clearTimeout(zoomIdleTimeoutRef.current);
+      zoomIdleTimeoutRef.current = null;
+    }
+    if (renderIndicatorTimeoutRef.current !== null) {
+      window.clearTimeout(renderIndicatorTimeoutRef.current);
+      renderIndicatorTimeoutRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     workerClientRef.current = new ImageWorkerClient({
       gpuEnabled: initialPreferences?.gpuRendering ?? true,
@@ -838,30 +862,13 @@ export default function App() {
       // Ignore diagnostics refresh failures during startup.
     });
     return () => {
-      if (transientNoticeTimeoutRef.current !== null) {
-        window.clearTimeout(transientNoticeTimeoutRef.current);
-      }
-      if (tabSwitchOverlayTimeoutRef.current !== null) {
-        window.clearTimeout(tabSwitchOverlayTimeoutRef.current);
-      }
-      if (previewRetryFrameRef.current !== null) {
-        window.cancelAnimationFrame(previewRetryFrameRef.current);
-      }
-      if (interactivePreviewFrameRef.current !== null) {
-        window.cancelAnimationFrame(interactivePreviewFrameRef.current);
-      }
-      if (zoomIdleTimeoutRef.current !== null) {
-        window.clearTimeout(zoomIdleTimeoutRef.current);
-      }
-      if (renderIndicatorTimeoutRef.current !== null) {
-        window.clearTimeout(renderIndicatorTimeoutRef.current);
-      }
+      cleanupAppTimers();
       pendingPreviewRef.current?.imageBitmap?.close();
       pendingPreviewRef.current = null;
       workerClientRef.current?.terminate();
       workerClientRef.current = null;
     };
-  }, [initialPreferences, showTransientNotice]);
+  }, [cleanupAppTimers, initialPreferences, showTransientNotice]);
 
   // Restore UI layout from stored preferences on first mount
   useEffect(() => {
@@ -875,7 +882,6 @@ export default function App() {
     setIsRightPaneOpen(prefs.isRightPaneOpen);
     setGPURenderingEnabled(prefs.gpuRendering);
     setUltraSmoothDragEnabled(prefs.ultraSmoothDrag);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPreferences]);
 
   const refreshRenderBackendDiagnostics = useCallback(async () => {
@@ -1433,7 +1439,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, documentState?.estimatedDensityBalance, drawPreview, flushPendingPreview, getSettledAdaptiveState, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, setPreviewVisibility, tabsRef]);
+  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, flushPendingPreview, getSettledAdaptiveState, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, tabsRef]);
 
   const {
     enqueueRender: enqueuePreviewRender,
@@ -1452,12 +1458,16 @@ export default function App() {
 
   useEffect(() => {
     enqueuePreviewRenderRef.current = enqueuePreviewRender;
+    cancelPendingPreviewRenderRef.current = cancelPendingPreviewRender;
     return () => {
       if (enqueuePreviewRenderRef.current === enqueuePreviewRender) {
         enqueuePreviewRenderRef.current = null;
       }
+      if (cancelPendingPreviewRenderRef.current === cancelPendingPreviewRender) {
+        cancelPendingPreviewRenderRef.current = null;
+      }
     };
-  }, [enqueuePreviewRender]);
+  }, [cancelPendingPreviewRender, enqueuePreviewRender]);
 
   const handlePanStart = useCallback((clientX: number, clientY: number) => {
     clearRenderIndicator();
@@ -1667,13 +1677,7 @@ export default function App() {
     cancelScheduledInteractivePreview,
     comparisonMode,
     displaySettings,
-    documentState?.id,
-    documentState?.colorManagement,
-    documentState?.estimatedDensityBalance,
-    documentState?.estimatedFlare,
-    documentState?.lightSourceId,
-    documentState?.previewLevels.length,
-    documentState?.source,
+    documentState,
     enqueuePreviewRender,
     executePreviewRender,
     fullRenderTargetDimension,
@@ -1687,6 +1691,11 @@ export default function App() {
     isZooming,
     lightSourceProfilesById,
     renderTargetDimension,
+    SETTLED_RENDER_DEBOUNCE_MS.control,
+    SETTLED_RENDER_DEBOUNCE_MS.crop,
+    SETTLED_RENDER_DEBOUNCE_MS.other,
+    SETTLED_RENDER_DEBOUNCE_MS.pan,
+    SETTLED_RENDER_DEBOUNCE_MS.zoom,
     ultraSmoothDragEnabled,
   ]);
 
@@ -2054,7 +2063,7 @@ export default function App() {
         manualBrushRadius: Math.min(50, Math.max(2, dustRemoval.manualBrushRadius + delta)),
       },
     });
-  }, [documentState, documentState?.settings.dustRemoval, handleSettingsChange, selectedDustMarkId]);
+  }, [documentState, handleSettingsChange, selectedDustMarkId]);
 
   const handleRemoveLastDustMark = useCallback(() => {
     if (!documentState) {
@@ -2077,7 +2086,7 @@ export default function App() {
         marks: dustRemoval.marks.filter((mark) => mark.id !== lastManual.id),
       },
     });
-  }, [documentState, handleSettingsChange, pushHistoryEntry]);
+  }, [documentState, handleSettingsChange, pushHistoryEntry, selectedDustMarkId]);
 
   const handleDetectDust = useCallback(async () => {
     const worker = workerClientRef.current;
@@ -2121,7 +2130,7 @@ export default function App() {
     } finally {
       setIsDetectingDust(false);
     }
-  }, [activeProfile.filmType, activeProfile.id, activeProfile.type, documentState, formatError, handleSettingsChange, isDetectingDust, lightSourceProfilesById, pushHistoryEntry, showTransientNotice, tabsRef]);
+  }, [activeProfile.filmType, activeProfile.id, activeProfile.type, documentState, handleSettingsChange, isDetectingDust, lightSourceProfilesById, pushHistoryEntry, showTransientNotice, tabsRef]);
 
   const lastAutoDustDetectionKeyRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2150,7 +2159,7 @@ export default function App() {
 
     lastAutoDustDetectionKeyRef.current = key;
     void handleDetectDust();
-  }, [documentState?.id, documentState?.settings.dustRemoval, handleDetectDust]);
+  }, [documentState, handleDetectDust]);
 
   useEffect(() => {
     const marks = documentState?.settings.dustRemoval?.marks ?? [];

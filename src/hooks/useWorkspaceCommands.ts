@@ -753,6 +753,7 @@ export function useWorkspaceCommands({
     clearCanvas,
     disposeDocument,
     fileInputRef,
+    importSessionRef,
     interactionJustEndedRef,
     pendingPreviewRef,
     removeDocument,
@@ -927,7 +928,7 @@ export function useWorkspaceCommands({
       profileId: newPreset.id,
       dirty: false,
     }));
-  }, [activeProfile.type, documentState, savePreset, savePresetTags, updateDocument]);
+  }, [activeProfile.category, activeProfile.filmType, activeProfile.type, documentState, savePreset, savePresetTags, updateDocument]);
 
   const handleImportPreset = useCallback((profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => {
     importPreset({
@@ -1471,7 +1472,7 @@ export function useWorkspaceCommands({
     } catch {
       setError('Could not copy debug info to the clipboard.');
     }
-  }, [activeDocumentIdRef, activeRenderRequestRef, canvasSize, documentState, fitScale, fullRenderTargetDimension, hasVisiblePreview, importSessionRef, renderBackendDiagnostics, setError, showTransientNotice, targetMaxDimension]);
+  }, [activeDocumentIdRef, activeProfile.filmType, activeProfile.type, activeRenderRequestRef, canvasSize, documentState, fitScale, fullRenderTargetDimension, hasVisiblePreview, importSessionRef, renderBackendDiagnostics, setError, showTransientNotice, targetMaxDimension]);
 
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
