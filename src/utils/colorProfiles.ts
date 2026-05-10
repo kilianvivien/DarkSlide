@@ -464,6 +464,18 @@ export function convertRgbBetweenProfiles(
   ];
 }
 
+export class ColorProfileConversionError extends Error {
+  constructor(
+    message: string,
+    readonly fromProfileId: string,
+    readonly toProfileId: string,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'ColorProfileConversionError';
+  }
+}
+
 export function convertImageDataColorProfile(
   imageData: ImageData,
   fromProfileId: ColorProfileId,
@@ -471,6 +483,22 @@ export function convertImageDataColorProfile(
 ) {
   if (fromProfileId === toProfileId) {
     return imageData;
+  }
+
+  // Validate the transform matrix once before touching pixels. If the profile
+  // pair is invalid this throws cleanly with both profile ids attached, so
+  // upstream callers can fail the export and surface a meaningful toast
+  // instead of writing pixels through a broken transform and emitting a blob
+  // tagged with the wrong profile.
+  try {
+    getLinearTransformMatrix(fromProfileId, toProfileId);
+  } catch (error) {
+    throw new ColorProfileConversionError(
+      `Cannot build color transform from "${fromProfileId}" to "${toProfileId}".`,
+      fromProfileId,
+      toProfileId,
+      error,
+    );
   }
 
   const { data } = imageData;

@@ -11,6 +11,7 @@ import { getFileExtension } from '../utils/imagePipeline';
 import { decodeDesktopRawForWorker, isRawExtension } from '../utils/rawImport';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 interface ContactSheetModalProps {
   isOpen: boolean;
@@ -95,6 +96,7 @@ export function ContactSheetModal({
   const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map());
 
   useFocusTrap(modalRef, isOpen);
+  const { titleId } = useModalA11y(isOpen, onClose);
 
   const selectedEntries = useMemo(
     () => entries.filter((entry) => selectedIds.includes(entry.id)),
@@ -380,15 +382,21 @@ export function ContactSheetModal({
             transition={{ type: 'spring', bounce: 0.08, duration: 0.22 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-6 pointer-events-none"
           >
+            {/* stopPropagation prevents backdrop-click-to-close from firing
+               when the user clicks inside the modal. */}
+            {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
             <div
               ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
               className="pointer-events-auto flex h-full max-h-[900px] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-2xl shadow-black/60"
               onClick={(event) => event.stopPropagation()}
             >
               {/* Header */}
               <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-4">
                 <div>
-                  <h2 className="text-base font-semibold text-zinc-100">Contact Sheet</h2>
+                  <h2 id={titleId} className="text-base font-semibold text-zinc-100">Contact Sheet</h2>
                   <p className="mt-0.5 text-xs text-zinc-500">Build a proof sheet from the items currently queued in batch export.</p>
                 </div>
                 <button type="button" onClick={onClose} aria-label="Close contact sheet" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">

@@ -17,6 +17,10 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
   - **Grain-preserving repair** — path repairs now copy texture from a parallel donor strip (structure + texture decomposition), so film grain stays intact instead of getting replaced by a blurred patch
   - **Fewer false positives on grainy scans** — new texture vetoes (per-component noise-floor check + stricter peak isolation on the fallback detector) keep grain-only "peaks" from being flagged as dust
   - **Better faint and curved scratch detection** — a Hessian-based line-likeness map complements the orientation filter for low-contrast and non-straight defects
+- **Polish & reliability**
+  - **Visible error toasts** — image worker failures, import errors, and export failures now surface as bottom-right toasts with a copy-able diagnostic ID, instead of disappearing silently into the diagnostics log
+  - **Color-profile safety** — exports now abort loudly with a clear error if an ICC profile is malformed or a transform can't be built, rather than silently producing a color-corrupt file with the wrong embedded profile
+  - **Modal accessibility** — every modal (Settings, Batch, Contact Sheet, Roll Info) now closes with Escape, identifies itself to screen readers as a `dialog`, and only the topmost modal consumes Escape so nested dialogs stack correctly
 
 ### Earlier in v0.8.3
 

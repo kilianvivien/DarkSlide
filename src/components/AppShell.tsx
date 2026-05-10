@@ -32,6 +32,7 @@ import { ZoomBar } from './ZoomBar';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
 import { ErrorBoundary } from './ErrorBoundary';
+import { ToastHost } from './ToastHost';
 import { DEFAULT_COLOR_MANAGEMENT } from '../constants';
 import {
   BatchJobEntry,
@@ -1211,6 +1212,7 @@ export function AppShell({
           defaultOutputPath={contactSheetOutputPath}
         />
       </ErrorBoundary>
+      <ToastHost />
     </div>
   );
 }

@@ -35,6 +35,7 @@ import {
 } from '../types';
 import UTIF from 'utif';
 import { appendDiagnostic } from './diagnostics';
+import { pushToast } from './toastStore';
 import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, computeResidualBaseOffset, getExtensionFromFormat, normalizeCrop, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
 import { convertImageDataColorProfile, getPreferredPreviewDisplayProfile } from './colorProfiles';
@@ -363,6 +364,24 @@ export class ImageWorkerClient {
     failedWorker.terminate();
     this.rejectPending(error);
 
+    // The worker is restarted below, but the in-flight render/export this
+    // failure aborted is gone — surface it to the user so they don't sit
+    // looking at a frozen preview wondering why nothing updated.
+    const diagnostic = appendDiagnostic({
+      level: 'error',
+      code: error.name === 'WorkerRequestTimeoutError'
+        ? 'WORKER_REQUEST_TIMEOUT'
+        : 'WORKER_FATAL',
+      message: error.message,
+      context: {},
+    });
+    pushToast({
+      level: 'error',
+      title: 'Image worker error',
+      message: error.message,
+      diagnosticId: diagnostic?.id,
+    });
+
     if (!this.isTerminated) {
       this.worker = this.createWorker();
     }
@@ -385,17 +404,10 @@ export class ImageWorkerClient {
           return;
         }
 
-        appendDiagnostic({
-          level: 'error',
-          code: 'WORKER_REQUEST_TIMEOUT',
-          message: type,
-          context: {
-            requestId: id,
-            requestType: type,
-            timeoutMs,
-          },
-        });
-
+        // Diagnostic is appended by handleWorkerFailure; this path only
+        // produces the worker-level failure record + toast. We pass the
+        // request type via the error message so the centralized handler
+        // surfaces it.
         this.handleWorkerFailure(new WorkerRequestTimeoutError(type, timeoutMs));
       }, timeoutMs);
 

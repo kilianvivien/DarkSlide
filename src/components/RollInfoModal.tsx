@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Trash2, X } from 'lucide-react';
 import { FILM_PROFILES } from '../constants';
 import { Roll } from '../types';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 type RollInfoModalProps = {
   isOpen: boolean;
@@ -24,6 +26,9 @@ export function RollInfoModal({
   onDeleteRoll,
 }: RollInfoModalProps) {
   const [draft, setDraft] = useState<Partial<Roll>>({});
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, isOpen && roll !== null);
+  const { titleId } = useModalA11y(isOpen && roll !== null, onClose);
 
   const filmStockSuggestions = useMemo(
     () => [...new Set(FILM_PROFILES.map((p) => p.name))].sort((a, b) => a.localeCompare(b)),
@@ -62,13 +67,20 @@ export function RollInfoModal({
             exit={{ opacity: 0, y: 14, scale: 0.98 }}
             className="fixed inset-0 z-50 flex items-center justify-center px-4"
           >
+            {/* stopPropagation prevents backdrop-click-to-close from firing
+               when the user clicks inside the modal. */}
+            {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
             <div
+              ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
               className="w-full max-w-xl rounded-3xl border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/60"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
                 <div>
-                  <h2 className="text-sm font-semibold text-zinc-100">Roll Info</h2>
+                  <h2 id={titleId} className="text-sm font-semibold text-zinc-100">Roll Info</h2>
                   <p className="mt-1 text-xs text-zinc-500">{frameCount} frame{frameCount === 1 ? '' : 's'} in this roll</p>
                 </div>
                 <button

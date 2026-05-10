@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { getColorProfileIdFromName, identifyIccProfile } from './colorProfiles';
+import {
+  ColorProfileConversionError,
+  convertImageDataColorProfile,
+  getColorProfileIdFromName,
+  identifyIccProfile,
+} from './colorProfiles';
 
 function writeAscii(bytes: Uint8Array, offset: number, value: string) {
   for (let index = 0; index < value.length; index += 1) {
@@ -56,5 +61,15 @@ describe('color profile detection', () => {
       profileId: 'display-p3',
       profileName: 'Display P3',
     });
+  });
+
+  it('throws a typed error for unknown profile pairs instead of silently passing pixels through', () => {
+    const data = new Uint8ClampedArray([255, 128, 64, 255]);
+    const imageData = new ImageData(data, 1, 1);
+    expect(() => convertImageDataColorProfile(
+      imageData,
+      'srgb',
+      'totally-bogus-profile' as never,
+    )).toThrow(ColorProfileConversionError);
   });
 });

@@ -360,16 +360,17 @@ export async function finalizeExportBlob(
   }
 
   if (options.embedOutputProfile) {
-    try {
-      blob = await embedIccInBlob(
-        blob,
-        getColorProfileIcc(options.outputProfileId),
-        options.format,
-        getColorProfileDescription(options.outputProfileId),
-      );
-    } catch {
-      blob = options.embedMetadata ? blob : result.blob;
-    }
+    // No silent fallback. If the ICC blob is malformed or the embed fails for
+    // any other reason, we surface it to the export-path catch site (which
+    // emits a diagnostic and a user toast) instead of writing a file without
+    // a profile — that would leave the user with a color-corrupt archive
+    // they never get warned about.
+    blob = await embedIccInBlob(
+      blob,
+      getColorProfileIcc(options.outputProfileId),
+      options.format,
+      getColorProfileDescription(options.outputProfileId),
+    );
   }
 
   return {

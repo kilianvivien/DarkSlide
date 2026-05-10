@@ -64,7 +64,13 @@ export function useFocusTrap(containerRef: RefObject<HTMLElement | null>, enable
 
     return () => {
       container.removeEventListener('keydown', handleKeyDown);
-      previousActiveElement?.focus();
+      // Restore focus unconditionally. The container may already be detached
+      // (parent removed before this cleanup runs) — the prior implementation
+      // implicitly relied on `container` still being live, which left focus
+      // stranded on document.body when modals were torn down by route changes.
+      if (previousActiveElement && document.contains(previousActiveElement)) {
+        previousActiveElement.focus();
+      }
     };
   }, [containerRef, enabled]);
 }

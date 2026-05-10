@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, Trash2, Upload } from 'lucide-react';
 import { ColorManagementSettings, ColorProfileId, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
@@ -6,6 +6,7 @@ import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { isDesktopShell } from '../utils/fileBridge';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useModalA11y } from '../hooks/useModalA11y';
 import { MAX_RESIDENT_DOC_OPTIONS, MaxResidentDocs } from '../utils/residentDocsStore';
 import { AUTO_APPLY_NONE_PRESET_ID } from '../utils/preferenceStore';
 
@@ -333,14 +334,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     return customPresets.filter((profile) => profile.name.toLowerCase().includes(normalizedPresetSearchQuery));
   }, [customPresets, normalizedPresetSearchQuery]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const handle = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handle);
-    return () => window.removeEventListener('keydown', handle);
-  }, [isOpen, onClose]);
+  const { titleId } = useModalA11y(isOpen, onClose);
 
   const handleCopy = async () => {
     await onCopyDebugInfo();
@@ -422,8 +416,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             transition={{ type: 'spring', bounce: 0.1, duration: 0.25 }}
             className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"
           >
+            {/* stopPropagation prevents backdrop-click-to-close from firing
+               when the user clicks inside the modal. jsx-a11y treats
+               role=dialog as non-interactive but a click handler is
+               semantically correct for a modal container. */}
+            {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
             <div
               ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
               className="pointer-events-auto w-[min(720px,calc(100vw-2rem))] h-[min(580px,82vh)] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/60 flex flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
@@ -443,7 +445,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 shrink-0">
-                <h2 className="text-[13px] font-semibold text-zinc-400 tracking-tight">Settings</h2>
+                <h2 id={titleId} className="text-[13px] font-semibold text-zinc-400 tracking-tight">Settings</h2>
                 <button
                   onClick={onClose}
                   aria-label="Close settings"

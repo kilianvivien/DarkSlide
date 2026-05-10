@@ -10,6 +10,7 @@ import { getColorProfileDescription } from '../utils/colorProfiles';
 import { customProfileHasEmbeddedCropOrRotation, getBatchEffectiveSettings } from '../utils/batchSettings';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 type SettingsSourceMode = 'current' | 'builtin' | 'custom';
 
@@ -133,6 +134,7 @@ export function BatchModal({
   const desktopShell = isDesktopShell();
 
   useFocusTrap(modalRef, isOpen);
+  const { titleId } = useModalA11y(isOpen, onClose);
 
   const selectedBuiltinProfile = useMemo(
     () => FILM_PROFILES.find((profile) => profile.id === selectedProfileId) ?? FILM_PROFILES[0],
@@ -440,8 +442,14 @@ export function BatchModal({
             transition={{ type: 'spring', bounce: 0.08, duration: 0.22 }}
             className="fixed inset-0 z-50 flex items-stretch justify-center p-6 pointer-events-none"
           >
+            {/* stopPropagation prevents backdrop-click-to-close from firing
+               when the user clicks inside the modal. */}
+            {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
             <div
               ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
               className="pointer-events-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-2xl shadow-black/60"
               onClick={(event) => event.stopPropagation()}
               onDragOver={(event) => event.preventDefault()}
@@ -456,7 +464,7 @@ export function BatchModal({
               {/* Header */}
               <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-4">
                 <div>
-                  <h2 className="text-base font-semibold text-zinc-100">Batch Export</h2>
+                  <h2 id={titleId} className="text-base font-semibold text-zinc-100">Batch Export</h2>
                   <p className="mt-0.5 text-xs text-zinc-500">Process multiple scans sequentially with one shared export recipe. RAW files supported on desktop.</p>
                 </div>
                 <button type="button" onClick={onClose} aria-label="Close batch export" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">

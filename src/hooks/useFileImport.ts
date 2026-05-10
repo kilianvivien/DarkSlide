@@ -18,6 +18,7 @@ import {
   resolveLightSourceIdForProfile,
 } from '../constants';
 import { appendDiagnostic } from '../utils/diagnostics';
+import { pushToast } from '../utils/toastStore';
 import { addRecentFile } from '../utils/recentFilesStore';
 import { getFileExtension, sanitizeFilenameBase } from '../utils/imagePipeline';
 import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences } from '../utils/preferenceStore';
@@ -580,7 +581,7 @@ export function useFileImport({
       const message = formatError(importErr);
       const errorCode = getErrorCode(importErr);
       activeDocumentIdRef.current = null;
-      appendDiagnostic({
+      const diagnostic = appendDiagnostic({
         level: 'error',
         code: 'IMPORT_FAILED',
         message,
@@ -593,6 +594,12 @@ export function useFileImport({
       const nextError = errorCode === 'OUT_OF_MEMORY' ? message : `Import failed. ${message}`;
       setError(nextError);
       setImportError(nextError);
+      pushToast({
+        level: 'error',
+        title: 'Couldn’t import file',
+        message: `${file.name}: ${message}`,
+        diagnosticId: diagnostic?.id,
+      });
       tabsApi.removeDocument(documentId);
       setBlockingOverlay(null);
       return null;

@@ -255,7 +255,51 @@ export async function embedIccInPng(pngBlob: Blob, iccProfile: Uint8Array, profi
   return new Blob([result], { type: 'image/png' });
 }
 
+// Minimum-length sanity checks on an ICC v2/v4 profile blob. Returns null if
+// the blob is acceptable, or a human-readable reason otherwise. We don't try
+// to fully parse the tag table — we just confirm it isn't trivially malformed
+// before stamping it into the output container, where a bad profile would
+// produce a file that looks valid but has wrong colors.
+//
+// Layout reference: ICC.1:2010, section 7.2 (profile header).
+function validateIccProfile(iccProfile: Uint8Array): string | null {
+  if (iccProfile.length < 132) {
+    return 'ICC profile is too short (must be at least 132 bytes for the header).';
+  }
+  const declaredSize = (
+    (iccProfile[0] << 24)
+    | (iccProfile[1] << 16)
+    | (iccProfile[2] << 8)
+    | iccProfile[3]
+  ) >>> 0;
+  if (declaredSize !== iccProfile.length) {
+    return `ICC profile size header (${declaredSize}) does not match buffer length (${iccProfile.length}).`;
+  }
+  // Bytes 36..39 must be the ASCII tag "acsp".
+  if (
+    iccProfile[36] !== 0x61
+    || iccProfile[37] !== 0x63
+    || iccProfile[38] !== 0x73
+    || iccProfile[39] !== 0x70
+  ) {
+    return 'ICC profile is missing the "acsp" signature at offset 36.';
+  }
+  return null;
+}
+
+export class IccEmbedValidationError extends Error {
+  constructor(message: string, readonly format: ExportFormat) {
+    super(message);
+    this.name = 'IccEmbedValidationError';
+  }
+}
+
 export async function embedIccInBlob(blob: Blob, iccProfile: Uint8Array, format: ExportFormat, profileName?: string) {
+  const reason = validateIccProfile(iccProfile);
+  if (reason) {
+    throw new IccEmbedValidationError(reason, format);
+  }
+
   if (format === 'image/jpeg') {
     return embedIccInJpeg(blob, iccProfile);
   }

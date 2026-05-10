@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { createDefaultSettings, MAX_OPEN_TABS, resolveLightSourceIdForProfile } from '../constants';
 import { useFileImport } from './useFileImport';
 import { appendDiagnostic, getDiagnosticsReport } from '../utils/diagnostics';
+import { pushToast } from '../utils/toastStore';
 import {
   chooseApplicationPath,
   confirmDiscard,
@@ -1066,8 +1067,14 @@ export function useWorkspaceCommands({
       return saved;
     } catch (exportError) {
       const message = formatError(exportError);
-      appendDiagnostic({ level: 'error', code: 'EXPORT_FAILED', message });
+      const diagnostic = appendDiagnostic({ level: 'error', code: 'EXPORT_FAILED', message });
       setError(`Export failed. ${message}`);
+      pushToast({
+        level: 'error',
+        title: 'Export failed',
+        message,
+        diagnosticId: diagnostic?.id,
+      });
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'EXPORT_FAILED' } : current);
       window.setTimeout(() => {
         setDocumentState((current) => current?.status === 'error'
