@@ -164,6 +164,52 @@ function computeGradientMagnitude(luminance: Float32Array, width: number, height
   return result;
 }
 
+// Hessian-based line response on a band-passed signal. For thin elongated
+// structures (bright or dark) the Hessian's most-negative eigenvalue has large
+// magnitude perpendicular to the line, while the orthogonal eigenvalue stays
+// near zero. Scoring with `|λ_max| - |λ_min|` (clamped ≥ 0) gives a clean
+// "line-likeness" map that responds equally well to straight, curved, and
+// faint scratches — and stays low on isotropic noise (grain) where both
+// eigenvalues are similar in magnitude.
+//
+// Cheaper than running morphological opening at 8 orientations and gives a
+// continuous score rather than a binary per-orientation match.
+function computeHessianLineResponse(signal: Float32Array, width: number, height: number) {
+  const result = new Float32Array(signal.length);
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const index = y * width + x;
+      const center = signal[index];
+      const left = signal[index - 1];
+      const right = signal[index + 1];
+      const top = signal[index - width];
+      const bottom = signal[index + width];
+      const topLeft = signal[index - width - 1];
+      const topRight = signal[index - width + 1];
+      const bottomLeft = signal[index + width - 1];
+      const bottomRight = signal[index + width + 1];
+
+      const ixx = right - 2 * center + left;
+      const iyy = bottom - 2 * center + top;
+      const ixy = (bottomRight - bottomLeft - topRight + topLeft) * 0.25;
+
+      // Eigenvalues of the 2x2 Hessian via the closed form.
+      const trace = ixx + iyy;
+      const determinant = ixx * iyy - ixy * ixy;
+      const radicand = Math.max(0, (trace * trace) / 4 - determinant);
+      const sqrtTerm = Math.sqrt(radicand);
+      const lambda1 = trace / 2 + sqrtTerm;
+      const lambda2 = trace / 2 - sqrtTerm;
+      const absMax = Math.max(Math.abs(lambda1), Math.abs(lambda2));
+      const absMin = Math.min(Math.abs(lambda1), Math.abs(lambda2));
+
+      // line-likeness: dominant eigenvalue much larger than the other.
+      result[index] = Math.max(0, absMax - absMin);
+    }
+  }
+  return result;
+}
+
 function computeLineStrength(signal: Float32Array, width: number, height: number) {
   const result = new Float32Array(signal.length);
 
@@ -496,6 +542,34 @@ function dedupeMarks(marks: ScoredMark[]) {
   return deduped.map(({ score: _score, ...mark }) => mark);
 }
 
+// Mean of `localMad` in an annular ring around the component bounding box.
+// Used as a texture veto: a real defect stands clearly above its surrounding
+// local-noise floor; a grain "blob" has signal of the same order as its
+// neighbourhood's local MAD.
+function sampleRingNoise(
+  localMad: Float32Array,
+  width: number,
+  height: number,
+  stats: ComponentStats,
+) {
+  const ringRadius = Math.max(2, Math.round(Math.max(stats.maxX - stats.minX, stats.maxY - stats.minY) * 0.8) + 2);
+  const cx = (stats.minX + stats.maxX) / 2;
+  const cy = (stats.minY + stats.maxY) / 2;
+  let total = 0;
+  let count = 0;
+  for (let angleIndex = 0; angleIndex < 12; angleIndex += 1) {
+    const angle = (angleIndex / 12) * Math.PI * 2;
+    const sx = Math.round(cx + Math.cos(angle) * ringRadius);
+    const sy = Math.round(cy + Math.sin(angle) * ringRadius);
+    if (sx < 0 || sy < 0 || sx >= width || sy >= height) {
+      continue;
+    }
+    total += localMad[sy * width + sx];
+    count += 1;
+  }
+  return count > 0 ? total / count : 0;
+}
+
 function classifySpotComponent(
   stats: ComponentStats,
   width: number,
@@ -503,6 +577,7 @@ function classifySpotComponent(
   maxRadius: number,
   scale: number,
   normalizedSensitivity: number,
+  localMad: Float32Array,
 ): ScoredMark | null {
   const blobWidth = stats.maxX - stats.minX + 1;
   const blobHeight = stats.maxY - stats.minY + 1;
@@ -515,6 +590,15 @@ function classifySpotComponent(
   const borderRatio = stats.nearBorderCount / Math.max(stats.area, 1);
   const edgePenalty = meanEdge * lerp(2.4, 1.2, normalizedSensitivity);
   const score = meanSignal - edgePenalty - borderRatio * 0.08;
+
+  // Surrounding-noise veto. The required margin tightens at low sensitivity
+  // and loosens at high sensitivity but never falls below 2.0 — a real spot
+  // always stands clearly above its local noise floor.
+  const ringNoise = sampleRingNoise(localMad, width, height, stats);
+  const requiredRatio = lerp(3.4, 2.0, normalizedSensitivity);
+  if (ringNoise > 0 && meanSignal < ringNoise * requiredRatio) {
+    return null;
+  }
 
   if (
     stats.area < 2
@@ -543,6 +627,75 @@ function classifySpotComponent(
   } satisfies SpotDustMark & { score: number };
 }
 
+function measurePathWidths(
+  componentPoints: Array<{ x: number; y: number }>,
+  pathPoints: DustPathPoint[],
+  imgWidth: number,
+  imgHeight: number,
+  scale: number,
+  diagonal: number,
+  maxScan: number,
+): number[] {
+  const occupied = new Set<number>();
+  for (const point of componentPoints) {
+    occupied.add(point.y * imgWidth + point.x);
+  }
+  const isOccupied = (x: number, y: number) => (
+    x >= 0 && y >= 0 && x < imgWidth && y < imgHeight
+    && occupied.has(y * imgWidth + x)
+  );
+
+  const widths: number[] = [];
+  for (let index = 0; index < pathPoints.length; index += 1) {
+    const prev = pathPoints[Math.max(0, index - 1)];
+    const next = pathPoints[Math.min(pathPoints.length - 1, index + 1)];
+    const tangentDx = next.x - prev.x;
+    const tangentDy = next.y - prev.y;
+    const tangentLen = Math.hypot(tangentDx, tangentDy);
+    let normalX: number;
+    let normalY: number;
+    if (tangentLen === 0) {
+      normalX = 0;
+      normalY = 1;
+    } else {
+      // perpendicular to tangent
+      normalX = -tangentDy / tangentLen;
+      normalY = tangentDx / tangentLen;
+    }
+
+    // path points are stored in normalized full-resolution coordinates;
+    // convert back to detection-image pixel space to walk the component mask.
+    const cx = pathPoints[index].x * imgWidth;
+    const cy = pathPoints[index].y * imgHeight;
+
+    let positiveSteps = 0;
+    for (let step = 1; step <= maxScan; step += 1) {
+      const sx = Math.round(cx + normalX * step);
+      const sy = Math.round(cy + normalY * step);
+      if (!isOccupied(sx, sy)) {
+        break;
+      }
+      positiveSteps = step;
+    }
+    let negativeSteps = 0;
+    for (let step = 1; step <= maxScan; step += 1) {
+      const sx = Math.round(cx - normalX * step);
+      const sy = Math.round(cy - normalY * step);
+      if (!isOccupied(sx, sy)) {
+        break;
+      }
+      negativeSteps = step;
+    }
+
+    // Width is total chord length through the defect at this point, in
+    // detection-image pixels; convert to source pixels and normalize like radius.
+    const widthInDetectionPx = positiveSteps + negativeSteps + 1;
+    widths.push((widthInDetectionPx * scale) / diagonal);
+  }
+
+  return widths;
+}
+
 function classifyPathComponent(
   stats: ComponentStats,
   width: number,
@@ -550,6 +703,7 @@ function classifyPathComponent(
   maxRadius: number,
   scale: number,
   normalizedSensitivity: number,
+  localMad: Float32Array,
 ): ScoredMark | null {
   const blobWidth = stats.maxX - stats.minX + 1;
   const blobHeight = stats.maxY - stats.minY + 1;
@@ -572,6 +726,15 @@ function classifyPathComponent(
     return null;
   }
 
+  // Same surrounding-noise veto as for spots: a real scratch / hair stands
+  // clearly above the surrounding local-MAD level, where elongated grain
+  // clusters sit at the same scale as their neighbourhood.
+  const ringNoise = sampleRingNoise(localMad, width, height, stats);
+  const requiredRatio = lerp(3.0, 1.8, normalizedSensitivity);
+  if (ringNoise > 0 && meanSignal < ringNoise * requiredRatio) {
+    return null;
+  }
+
   const ordered = orderPointsAlongCurve(stats.points);
   const pathPoints = subsamplePathPoints(
     ordered,
@@ -587,11 +750,25 @@ function classifyPathComponent(
   const diagonal = Math.hypot(width * scale, height * scale);
   const radiusPx = clamp(Math.max(averageWidth * 1.25, maxRadius * 0.42), 1.5, maxRadius * 0.95) * scale;
 
+  // Cap normal scans at a few times maxRadius to keep cost bounded on noisy
+  // components that bleed into surrounding pixels through the mask.
+  const widthScanLimit = Math.max(6, Math.round(maxRadius * 3));
+  const widthAlongPath = measurePathWidths(
+    stats.points,
+    pathPoints,
+    width,
+    height,
+    scale,
+    diagonal,
+    widthScanLimit,
+  );
+
   return {
     id: `dust-auto-${crypto.randomUUID()}`,
     kind: 'path',
     points: pathPoints,
     radius: clamp(radiusPx / diagonal, 0, 1),
+    widthAlongPath,
     source: 'auto',
     score: score * ordered.length,
   } satisfies PathDustMark & { score: number };
@@ -648,6 +825,38 @@ function collectFallbackSpotCandidates(
         continue;
       }
 
+      // Peak isolation veto: a real dust speck stands out clearly from a ring
+      // of neighbours; a pure-grain "peak" is one of many similar values in
+      // the neighbourhood. Sample two rings (close + further out) so we both
+      // detect immediate isolation AND verify the broader area isn't simply
+      // an evenly-noisy field. This was the dominant false-positive source.
+      let isolated = true;
+      for (const ringRadius of [3, 5]) {
+        const ringSamples: number[] = [];
+        for (let angleIndex = 0; angleIndex < 12; angleIndex += 1) {
+          const angle = (angleIndex / 12) * Math.PI * 2;
+          const sx = clamp(Math.round(x + Math.cos(angle) * ringRadius), 0, width - 1);
+          const sy = clamp(Math.round(y + Math.sin(angle) * ringRadius), 0, height - 1);
+          ringSamples.push(signal[sy * width + sx]);
+        }
+        ringSamples.sort((left, right) => left - right);
+        // Use the 75th-percentile rather than the median: in a noisy field,
+        // half the ring samples are near zero by chance, so the median
+        // understates the noise floor and the peak passes too easily.
+        const ringQ75 = ringSamples[Math.floor(ringSamples.length * 0.75)];
+        const isolationMargin = Math.max(
+          lerp(0.018, 0.008, normalizedSensitivity),
+          localMad[index] * lerp(2.6, 1.7, normalizedSensitivity),
+        );
+        if (anomaly < ringQ75 + isolationMargin) {
+          isolated = false;
+          break;
+        }
+      }
+      if (!isolated) {
+        continue;
+      }
+
       const radiusPx = clamp(maxRadius * 0.52, 1.2, maxRadius * 0.9) * scale;
       marks.push({
         id: `dust-auto-${crypto.randomUUID()}`,
@@ -686,6 +895,10 @@ function detectDustMarksAtScale(
 
   const localMad = boxBlur(signal, width, height, madRadius);
   const lineStrength = computeLineStrength(signal, width, height);
+  // Complementary line-likeness map. Combined with the existing line strength
+  // it raises sensitivity for faint/curved scratches without lowering the
+  // global threshold (which would also let in more grain).
+  const hessianLine = computeHessianLineResponse(signal, width, height);
   const spotMask = new Uint8Array(signal.length);
   const lineMask = new Uint8Array(signal.length);
 
@@ -715,11 +928,17 @@ function detectDustMarksAtScale(
       spotMask[index] = 1;
     }
 
+    // Combined line score: pixels qualify if either the orientation filter or
+    // the Hessian line-likeness map says "line." Hessian helps faint and
+    // curved defects pass the gate that the orientation filter misses;
+    // orientation helps thin straight defects with weak Hessian response.
+    const hessianResponse = hessianLine[index];
+    const combinedLine = Math.max(localLine, hessianResponse * 0.85);
     if (
       canEmitPaths
       && anomaly > lineThreshold
-      && localLine > anomaly * lerp(0.95, 0.65, normalizedSensitivity)
-      && gradient < localLine * lerp(1.4, 1.9, normalizedSensitivity) + 0.03
+      && combinedLine > anomaly * lerp(0.95, 0.65, normalizedSensitivity)
+      && gradient < combinedLine * lerp(1.4, 1.9, normalizedSensitivity) + 0.03
     ) {
       lineMask[index] = 1;
     }
@@ -730,7 +949,7 @@ function detectDustMarksAtScale(
   if (canEmitSpots) {
     const components = buildComponentStats(spotMask, signal, edge, width, height);
     for (const component of components) {
-      const mark = classifySpotComponent(component, width, height, maxRadius, scale, normalizedSensitivity);
+      const mark = classifySpotComponent(component, width, height, maxRadius, scale, normalizedSensitivity, localMad);
       if (mark) {
         marks.push(mark);
       }
@@ -752,7 +971,7 @@ function detectDustMarksAtScale(
   if (canEmitPaths) {
     const components = buildComponentStats(lineMask, lineStrength, edge, width, height);
     for (const component of components) {
-      const mark = classifyPathComponent(component, width, height, maxRadius, scale, normalizedSensitivity);
+      const mark = classifyPathComponent(component, width, height, maxRadius, scale, normalizedSensitivity, localMad);
       if (mark) {
         marks.push(mark);
       }

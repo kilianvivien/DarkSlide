@@ -49,12 +49,20 @@ function normalizeDustMark(mark: DustMark | (Partial<DustMark> & Record<string, 
       return null;
     }
 
+    const rawWidths = 'widthAlongPath' in mark && Array.isArray(mark.widthAlongPath)
+      ? mark.widthAlongPath
+      : null;
+    const widthAlongPath = rawWidths && rawWidths.length === points.length
+      ? rawWidths.map((value: unknown) => clamp(Number(value ?? 0), 0, 1))
+      : undefined;
+
     return {
       id: String(mark.id ?? `dust-path-${crypto.randomUUID()}`),
       kind: 'path',
       points,
       radius: clamp(Number(mark.radius ?? 0), 0, 1),
       source,
+      ...(widthAlongPath ? { widthAlongPath } : {}),
     };
   }
 

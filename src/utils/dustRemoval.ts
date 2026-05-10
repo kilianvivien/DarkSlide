@@ -424,6 +424,8 @@ function getNearestSegmentInfo(path: Array<{ x: number; y: number }>, x: number,
       projY: number;
       tangentX: number;
       tangentY: number;
+      segmentIndex: number;
+      t: number;
     }
     | null = null;
 
@@ -457,10 +459,142 @@ function getNearestSegmentInfo(path: Array<{ x: number; y: number }>, x: number,
       projY,
       tangentX: segmentX / length,
       tangentY: segmentY / length,
+      segmentIndex: index,
+      t,
     };
   }
 
   return best;
+}
+
+// Safety multiplier on top of the measured defect half-width when picking the
+// inpaint coverage radius. >1 because measured widths slightly underestimate
+// the visible extent (anti-aliasing on the edges of the defect, sub-pixel feathering).
+const PATH_WIDTH_SAFETY = 1.6;
+
+type PathDonor = {
+  // Constant offset (in source pixels) from a defect pixel to its donor pixel.
+  // The donor is a strip running parallel to the defect, used to copy
+  // high-frequency texture (grain) into the inpainted region.
+  dx: number;
+  dy: number;
+  // Mean color of the donor patch — subtracted from the donor pixel to keep
+  // only its high-frequency component, which is then added on top of the
+  // smooth side-sample average. Mirrors the structure+texture trick used in
+  // repairSpotMark / interpolateBoundary.
+  meanR: number;
+  meanG: number;
+  meanB: number;
+  // Whether a usable donor was actually found. When false the inpainter falls
+  // back to a pure low-pass blend (the previous behavior).
+  found: boolean;
+};
+
+function findPathDonor(
+  originalData: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  normalX: number,
+  normalY: number,
+  tangentX: number,
+  tangentY: number,
+  halfWidthPx: number,
+): PathDonor {
+  // Target = average color/gradient of pixels that are clearly outside the
+  // defect, sampled symmetrically on both flanks. This is what we expect the
+  // donor strip to resemble in low-frequency terms.
+  const targetOffsets = [halfWidthPx * 1.6, halfWidthPx * 2.2];
+  let targetR = 0;
+  let targetG = 0;
+  let targetB = 0;
+  let targetGradient = 0;
+  let targetCount = 0;
+  for (const offset of targetOffsets) {
+    for (const sign of [-1, 1]) {
+      const sx = cx + normalX * offset * sign;
+      const sy = cy + normalY * offset * sign;
+      const sample = sampleColor(originalData, width, height, sx, sy);
+      if (!sample) {
+        continue;
+      }
+      targetR += sample.r;
+      targetG += sample.g;
+      targetB += sample.b;
+      targetGradient += computeGradientAt(originalData, width, height, Math.round(sx), Math.round(sy));
+      targetCount += 1;
+    }
+  }
+  if (targetCount === 0) {
+    return { dx: 0, dy: 0, meanR: 0, meanG: 0, meanB: 0, found: false };
+  }
+  targetR /= targetCount;
+  targetG /= targetCount;
+  targetB /= targetCount;
+  targetGradient /= targetCount;
+
+  // Donor candidates: parallel strips offset perpendicular to the path. Two
+  // along-path nudges (0, ±halfWidth*2) let the search slide the strip a bit
+  // to find a similar piece of texture without crossing the defect again.
+  // Donors must sit clearly outside the defect band — start at 2.4× halfWidth.
+  const perpendicularDistances = [
+    halfWidthPx * 2.4,
+    halfWidthPx * 3.4,
+    halfWidthPx * 4.6,
+  ];
+  const tangentialShifts = [0, halfWidthPx * 2, -halfWidthPx * 2];
+  const patchRadius = Math.max(halfWidthPx, 1.5);
+
+  let bestScore = Number.POSITIVE_INFINITY;
+  let bestDx = 0;
+  let bestDy = 0;
+  let bestStats: PatchStats | null = null;
+
+  for (const perpDist of perpendicularDistances) {
+    for (const tangentShift of tangentialShifts) {
+      for (const sign of [-1, 1]) {
+        const dx = normalX * perpDist * sign + tangentX * tangentShift;
+        const dy = normalY * perpDist * sign + tangentY * tangentShift;
+        const candidateX = cx + dx;
+        const candidateY = cy + dy;
+        if (candidateX < 0 || candidateY < 0 || candidateX >= width || candidateY >= height) {
+          continue;
+        }
+
+        const stats = computePatchStats(originalData, width, height, candidateX, candidateY, patchRadius);
+        if (!stats) {
+          continue;
+        }
+
+        const score = (
+          Math.abs(stats.r - targetR)
+          + Math.abs(stats.g - targetG)
+          + Math.abs(stats.b - targetB)
+          + Math.abs(stats.gradient - targetGradient) * 120
+        );
+        if (score < bestScore) {
+          bestScore = score;
+          bestDx = dx;
+          bestDy = dy;
+          bestStats = stats;
+        }
+      }
+    }
+  }
+
+  if (!bestStats) {
+    return { dx: 0, dy: 0, meanR: 0, meanG: 0, meanB: 0, found: false };
+  }
+
+  return {
+    dx: bestDx,
+    dy: bestDy,
+    meanR: bestStats.r,
+    meanG: bestStats.g,
+    meanB: bestStats.b,
+    found: true,
+  };
 }
 
 function repairPathMark(
@@ -471,7 +605,7 @@ function repairPathMark(
   mark: PathDustMark,
   diagonal: number,
 ) {
-  const radiusPx = Math.max(1, mark.radius * diagonal);
+  const fallbackRadiusPx = Math.max(1, mark.radius * diagonal);
   const pixelPath = mark.points.map((point) => ({
     x: clamp(point.x * width, 0, Math.max(width - 1, 0)),
     y: clamp(point.y * height, 0, Math.max(height - 1, 0)),
@@ -480,26 +614,99 @@ function repairPathMark(
     return;
   }
 
+  // Per-point effective half-width in source pixels. Each entry is the radius
+  // (half-width × safety) the inpainter should cover at the corresponding
+  // path point. Falls back to mark.radius for manual marks or detections that
+  // predate widthAlongPath.
+  const halfWidthsPx: number[] = pixelPath.map((_, index) => {
+    const widthNormalized = mark.widthAlongPath?.[index];
+    if (widthNormalized === undefined) {
+      return fallbackRadiusPx;
+    }
+    const halfWidthPx = (widthNormalized * diagonal) / 2;
+    // Never collapse below the mark's radius — the detector's per-component
+    // estimate is a useful lower bound when local width measurement is noisy.
+    return Math.max(fallbackRadiusPx, halfWidthPx * PATH_WIDTH_SAFETY);
+  });
+
+  const maxHalfWidth = halfWidthsPx.reduce((acc, value) => Math.max(acc, value), fallbackRadiusPx);
+  // Feather extends beyond the solid-replacement core. Outer cutoff is the
+  // half-width plus a multiple of the feather sigma so we compute padding from
+  // the same value used at the per-pixel coverage check below.
+  const featherCutoffMultiple = 2.5;
+
+  // Per path point: a donor offset into a parallel strip of clean texture,
+  // searched once and reused for every defect pixel that projects onto its
+  // surrounding segments. This is what makes the path inpaint preserve film
+  // grain instead of producing a low-pass blur — analogous to findBestPatch
+  // in repairSpotMark.
+  const donors: PathDonor[] = pixelPath.map((point, index) => {
+    const prev = pixelPath[Math.max(0, index - 1)];
+    const next = pixelPath[Math.min(pixelPath.length - 1, index + 1)];
+    const tdx = next.x - prev.x;
+    const tdy = next.y - prev.y;
+    const tlen = Math.hypot(tdx, tdy);
+    let tangentX = 1;
+    let tangentY = 0;
+    if (tlen > 0) {
+      tangentX = tdx / tlen;
+      tangentY = tdy / tlen;
+    }
+    const normalX = -tangentY;
+    const normalY = tangentX;
+    return findPathDonor(
+      originalData,
+      width,
+      height,
+      point.x,
+      point.y,
+      normalX,
+      normalY,
+      tangentX,
+      tangentY,
+      halfWidthsPx[index],
+    );
+  });
   const xs = pixelPath.map((point) => point.x);
   const ys = pixelPath.map((point) => point.y);
-  const padding = Math.ceil(radiusPx * 3);
+  const padding = Math.ceil(maxHalfWidth * (1 + featherCutoffMultiple * 0.6) + 2);
   const left = clamp(Math.floor(Math.min(...xs) - padding), 0, Math.max(width - 1, 0));
   const top = clamp(Math.floor(Math.min(...ys) - padding), 0, Math.max(height - 1, 0));
   const right = clamp(Math.ceil(Math.max(...xs) + padding), left, Math.max(width - 1, 0));
   const bottom = clamp(Math.ceil(Math.max(...ys) + padding), top, Math.max(height - 1, 0));
-  const sigma = Math.max(radiusPx * 0.7, 0.75);
-  const sigmaSquared = sigma * sigma;
-  const sideOffsets = [radiusPx * 1.4, radiusPx * 1.9, radiusPx * 2.35];
 
   for (let y = top; y <= bottom; y += 1) {
     for (let x = left; x <= right; x += 1) {
       const segment = getNearestSegmentInfo(pixelPath, x, y);
-      if (!segment || segment.distance > radiusPx * 1.25) {
+      if (!segment) {
+        continue;
+      }
+
+      // Interpolate the half-width across the current segment using the
+      // projection parameter so width transitions are smooth along tapered defects.
+      const startHalfWidth = halfWidthsPx[segment.segmentIndex - 1] ?? fallbackRadiusPx;
+      const endHalfWidth = halfWidthsPx[segment.segmentIndex] ?? fallbackRadiusPx;
+      const localHalfWidth = Math.max(
+        startHalfWidth * (1 - segment.t) + endHalfWidth * segment.t,
+        fallbackRadiusPx,
+      );
+      // Feather sigma controls the soft transition outside the core. Scaling
+      // with halfWidth keeps thin and thick defects looking equally smooth.
+      const featherSigma = Math.max(localHalfWidth * 0.6, 0.75);
+      const cutoffDistance = localHalfWidth + featherSigma * featherCutoffMultiple;
+      if (segment.distance > cutoffDistance) {
         continue;
       }
 
       const normalX = -segment.tangentY;
       const normalY = segment.tangentX;
+      // Sampling offsets must be outside the (widened) defect band so we
+      // never pull defect pixels into the inpaint reference.
+      const sideOffsets = [
+        localHalfWidth * 1.4,
+        localHalfWidth * 1.9,
+        localHalfWidth * 2.35,
+      ];
       const leftSamples: MeanColor[] = [];
       const rightSamples: MeanColor[] = [];
 
@@ -528,14 +735,45 @@ function repairPathMark(
 
       const leftMean = averageColors(leftSamples);
       const rightMean = averageColors(rightSamples);
-      const reconstructed = averageColors(
+      const smooth = averageColors(
         [leftMean, rightMean].filter((color): color is MeanColor => color !== null),
       );
-      if (!reconstructed) {
+      if (!smooth) {
         continue;
       }
 
-      const mask = Math.exp(-(segment.distance * segment.distance) / (2 * sigmaSquared));
+      // Structure + texture decomposition: `smooth` is the low-frequency
+      // local color, `donor` provides the high-frequency detail (grain,
+      // texture) by copying the offset of a parallel donor pixel from its
+      // own patch mean. Same trick as repairSpotMark uses for spots.
+      const startDonor = donors[segment.segmentIndex - 1];
+      const endDonor = donors[segment.segmentIndex];
+      const donor = (segment.t < 0.5 ? startDonor : endDonor) ?? startDonor;
+      let reconstructed: MeanColor = smooth;
+      if (donor && donor.found) {
+        const srcX = Math.round(x + donor.dx);
+        const srcY = Math.round(y + donor.dy);
+        if (srcX >= 0 && srcY >= 0 && srcX < width && srcY < height) {
+          const srcIndex = (srcY * width + srcX) * 4;
+          reconstructed = {
+            r: smooth.r + (originalData[srcIndex] - donor.meanR),
+            g: smooth.g + (originalData[srcIndex + 1] - donor.meanG),
+            b: smooth.b + (originalData[srcIndex + 2] - donor.meanB),
+          };
+        }
+      }
+
+      // Solid replacement inside the measured defect width, Gaussian feather
+      // beyond it. This guarantees the defect interior is fully covered (no
+      // visible residue along the defect length) while keeping the boundary
+      // soft enough to disappear into the surrounding texture.
+      let mask: number;
+      if (segment.distance <= localHalfWidth) {
+        mask = 1;
+      } else {
+        const beyond = segment.distance - localHalfWidth;
+        mask = Math.exp(-(beyond * beyond) / (2 * featherSigma * featherSigma));
+      }
       const pixelIndex = (y * width + x) * 4;
       data[pixelIndex] = clamp(Math.round(data[pixelIndex] * (1 - mask) + reconstructed.r * mask), 0, 255);
       data[pixelIndex + 1] = clamp(Math.round(data[pixelIndex + 1] * (1 - mask) + reconstructed.g * mask), 0, 255);

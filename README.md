@@ -10,7 +10,15 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v0.8.3
+## What's New in v0.9.0
+
+- **Auto dust/hair/scratch removal — major overhaul**
+  - **Full-length hair coverage** — the inpainter now measures each defect's width along its path and covers the full visible width, instead of leaving thin residual streaks along long hairs and scratches
+  - **Grain-preserving repair** — path repairs now copy texture from a parallel donor strip (structure + texture decomposition), so film grain stays intact instead of getting replaced by a blurred patch
+  - **Fewer false positives on grainy scans** — new texture vetoes (per-component noise-floor check + stricter peak isolation on the fallback detector) keep grain-only "peaks" from being flagged as dust
+  - **Better faint and curved scratch detection** — a Hessian-based line-likeness map complements the orientation filter for low-contrast and non-straight defects
+
+### Earlier in v0.8.3
 
 - **Corrected 6×4.5 crop preset** — the medium-format 6×4.5 preset now uses the nominal 6 cm × 4.5 cm frame ratio in both landscape and portrait orientations
 

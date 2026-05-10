@@ -107,6 +107,34 @@ describe('detectDustMarks', () => {
     ))).toBe(true);
   });
 
+  it('rejects pure grain as dust, even at high sensitivity', () => {
+    // A flat field with pseudo-random per-pixel grain should produce no
+    // detections — every grain "peak" looks like every other one. The
+    // fallback peak detector used to fire on these and is the dominant
+    // false-positive source on real scans.
+    const width = 96;
+    const height = 96;
+    const data = new Uint8ClampedArray(width * height * 4);
+    const base = 110;
+    const amplitude = 22;
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const noise = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+        const offset = (noise - Math.floor(noise) - 0.5) * amplitude;
+        const value = Math.max(0, Math.min(255, Math.round(base + offset)));
+        const pixelIndex = (y * width + x) * 4;
+        data[pixelIndex] = value;
+        data[pixelIndex + 1] = value;
+        data[pixelIndex + 2] = value;
+        data[pixelIndex + 3] = 255;
+      }
+    }
+
+    const marks = detectDustMarks(new ImageData(data, width, height), 80, 6, 'both');
+    expect(marks).toHaveLength(0);
+  });
+
   it('preserves subtle speck detection on high-resolution scans after downsampling', () => {
     const width = 4096;
     const height = 3072;

@@ -51,6 +51,10 @@ export interface PathDustMark {
   points: DustPathPoint[];
   radius: number;
   source: DustMarkSource;
+  // Optional per-point full width of the defect, normalized by the image diagonal
+  // (same convention as `radius`). When present, the inpainter uses it to size
+  // its coverage at each path point instead of the constant `radius`.
+  widthAlongPath?: number[];
 }
 
 export type DustMark = SpotDustMark | PathDustMark;
