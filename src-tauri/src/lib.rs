@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
 use tauri::Manager;
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 use tauri_plugin_updater::UpdaterExt;
 
 const GITHUB_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
@@ -33,6 +35,15 @@ struct SavedFileResult {
 
 #[derive(Default)]
 struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[derive(Default)]
+struct PendingOpenedFiles(Mutex<PendingOpenedFilesState>);
+
+#[derive(Default)]
+struct PendingOpenedFilesState {
+    paths: Vec<String>,
+    listener_ready: bool,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -331,6 +342,13 @@ fn write_text_file_by_path(path: String, content: String) -> Result<(), String> 
     fs::write(&path, content).map_err(|error| format!("Failed to write {path}: {error}"))
 }
 
+#[tauri::command]
+fn drain_opened_files(state: tauri::State<'_, PendingOpenedFiles>) -> Vec<String> {
+    let mut pending = state.0.lock().expect("pending opened files mutex poisoned");
+    pending.listener_ready = true;
+    pending.paths.drain(..).collect()
+}
+
 #[derive(Deserialize)]
 struct RecentMenuEntry {
     name: String,
@@ -409,6 +427,33 @@ async fn stop_watching(state: tauri::State<'_, WatcherState>) -> Result<(), Stri
 #[tauri::command]
 fn is_watching(state: tauri::State<'_, WatcherState>) -> bool {
     state.0.lock().map(|guard| guard.is_some()).unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn file_paths_from_opened_urls(urls: Vec<tauri::Url>) -> Vec<String> {
+    urls
+        .into_iter()
+        .filter_map(|url| url.to_file_path().ok())
+        .filter_map(|path| path.into_os_string().into_string().ok())
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn emit_opened_file_paths(app: &tauri::AppHandle, state: &PendingOpenedFiles, paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+
+    {
+        let mut pending = state.0.lock().expect("pending opened files mutex poisoned");
+        if !pending.listener_ready {
+            pending.paths.extend(paths.iter().cloned());
+        }
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.emit("app-open-files", paths);
+    }
 }
 
 #[tauri::command]
@@ -510,6 +555,7 @@ pub fn run() {
             read_text_file_by_path,
             file_size_by_path,
             write_text_file_by_path,
+            drain_opened_files,
             update_recent_files_menu,
             start_watching,
             stop_watching,
@@ -520,6 +566,7 @@ pub fn run() {
         ])
         .setup(|app| {
             app.manage(PendingUpdate::default());
+            app.manage(PendingOpenedFiles::default());
             app.manage(WatcherState(Mutex::new(None)));
             let import_item = MenuItemBuilder::with_id("open", "Import...")
                 .accelerator("CmdOrCtrl+O")
@@ -705,8 +752,16 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Opened { urls } = event {
+                let paths = file_paths_from_opened_urls(urls);
+                let state = app.state::<PendingOpenedFiles>();
+                emit_opened_file_paths(app, &state, paths);
+            }
+        });
 }
 
 #[cfg(test)]

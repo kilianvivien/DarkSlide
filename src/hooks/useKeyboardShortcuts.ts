@@ -15,6 +15,7 @@ type UseKeyboardShortcutsOptions = {
   shortcuts: ShortcutMap;
   onMenuAction?: (action: string) => void;
   onMenuOpenRecent?: (path: string) => void;
+  onOpenFiles?: (paths: string[]) => void;
   enableMenuEvents?: boolean;
 };
 
@@ -33,6 +34,7 @@ export function useKeyboardShortcuts({
   shortcuts,
   onMenuAction,
   onMenuOpenRecent,
+  onOpenFiles,
   enableMenuEvents = false,
 }: UseKeyboardShortcutsOptions) {
   const getShortcuts = useEvent(() => shortcuts);
@@ -41,6 +43,9 @@ export function useKeyboardShortcuts({
   });
   const handleMenuOpenRecent = useEvent((path: string) => {
     onMenuOpenRecent?.(path);
+  });
+  const handleOpenFiles = useEvent((paths: string[]) => {
+    onOpenFiles?.(paths);
   });
 
   useEffect(() => {
@@ -106,7 +111,32 @@ export function useKeyboardShortcuts({
         });
         if (cancelled) { unlistenAction(); unlistenRecent(); return; }
 
-        unlisten = () => { unlistenAction(); unlistenRecent(); };
+        const seenOpenedPaths = new Set<string>();
+        const handleOpenedPaths = (paths: string[]) => {
+          const nextPaths = paths.filter((path) => {
+            if (seenOpenedPaths.has(path)) {
+              return false;
+            }
+            seenOpenedPaths.add(path);
+            return true;
+          });
+          if (nextPaths.length > 0) {
+            handleOpenFiles(nextPaths);
+          }
+        };
+
+        const unlistenOpenFiles = await listen<string[]>('app-open-files', (event) => {
+          handleOpenedPaths(event.payload);
+        });
+        if (cancelled) { unlistenAction(); unlistenRecent(); unlistenOpenFiles(); return; }
+
+        const { invoke } = await import('@tauri-apps/api/core');
+        const pendingPaths = await invoke<string[]>('drain_opened_files').catch(() => []);
+        if (!cancelled && Array.isArray(pendingPaths)) {
+          handleOpenedPaths(pendingPaths);
+        }
+
+        unlisten = () => { unlistenAction(); unlistenRecent(); unlistenOpenFiles(); };
       } catch {
         // Ignore non-Tauri environments.
       }
@@ -116,5 +146,5 @@ export function useKeyboardShortcuts({
       cancelled = true;
       unlisten?.();
     };
-  }, [enableMenuEvents, handleMenuAction, handleMenuOpenRecent]);
+  }, [enableMenuEvents, handleMenuAction, handleMenuOpenRecent, handleOpenFiles]);
 }

@@ -38,6 +38,14 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      {
+        "name": "DarkSlide Supported Images",
+        "ext": ["tif", "tiff", "png", "jpg", "jpeg", "webp", "dng", "cr3", "nef", "arw", "raf", "rw2"],
+        "role": "Viewer",
+        "rank": "None"
+      }
+    ],
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": false,

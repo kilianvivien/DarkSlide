@@ -3170,6 +3170,45 @@ describe('App import and preview pipeline', () => {
     expect(screen.getByText(/640 × 480 px/)).toBeInTheDocument();
   });
 
+  it('imports files opened from the macOS app icon', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    coreState.invoke.mockImplementation(async (command: string) => (
+      command === 'drain_opened_files' ? [] : null
+    ));
+    let openFilesHandler: ((event: { payload: string[] }) => void) | null = null;
+    tauriEventState.listen.mockImplementation(async (eventName: string, handler: (event: { payload: string[] }) => void) => {
+      if (eventName === 'app-open-files') {
+        openFilesHandler = handler;
+      }
+      return vi.fn();
+    });
+    fileBridgeState.openImageFileByPath
+      .mockResolvedValueOnce({ file: createFile('dock-one.tiff', 'image/tiff'), path: '/Users/tester/dock-one.tiff', size: 2048 })
+      .mockResolvedValueOnce({ file: createFile('dock-two.jpg', 'image/jpeg'), path: '/Users/tester/dock-two.jpg', size: 1024 });
+    workerState.decode.mockResolvedValue(createDecodedImage(640, 480));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    render(<App />);
+    await flushMicrotasks();
+
+    await act(async () => {
+      openFilesHandler?.({ payload: ['/Users/tester/dock-one.tiff', '/Users/tester/dock-two.jpg'] });
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(fileBridgeState.openImageFileByPath).toHaveBeenCalledTimes(2);
+    expect(fileBridgeState.openImageFileByPath).toHaveBeenNthCalledWith(1, '/Users/tester/dock-one.tiff');
+    expect(fileBridgeState.openImageFileByPath).toHaveBeenNthCalledWith(2, '/Users/tester/dock-two.jpg');
+    expect(workerState.decode).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText('Filename')).toHaveValue('dock-two');
+  });
+
   it('returns to ready when a native export is cancelled', async () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
     fileBridgeState.openImageFile.mockResolvedValue({ file: createFile('export-cancel.tiff', 'image/tiff'), path: '/Users/tester/export-cancel.tiff' });

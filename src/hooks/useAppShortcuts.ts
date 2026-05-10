@@ -19,6 +19,7 @@ type UseAppShortcutsOptions = {
   onRedo: () => void;
   onOpenImage: () => Promise<void>;
   onOpenRecentFile: (file: File, path: string, size?: number) => Promise<string | null>;
+  onOpenFilesByPath: (paths: string[]) => Promise<void>;
   onOpenInEditor: () => Promise<void>;
   onCloseImage: () => Promise<void>;
   onDownload: () => Promise<void>;
@@ -59,6 +60,7 @@ export function useAppShortcuts({
   onRedo,
   onOpenImage,
   onOpenRecentFile,
+  onOpenFilesByPath,
   onOpenInEditor,
   onCloseImage,
   onDownload,
@@ -205,6 +207,9 @@ case 'check-for-updates':
           void onOpenImage();
         }
       })();
+    },
+    onOpenFiles: (paths) => {
+      void onOpenFilesByPath(paths);
     },
     enableMenuEvents: usesNativeFileDialogs,
   });

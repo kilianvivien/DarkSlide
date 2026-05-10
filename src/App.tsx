@@ -2608,6 +2608,26 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     savePreferences({ ...prefsSnapshotRef.current, updateChannel: channel });
   }, []);
 
+  const handleOpenFilesByPath = useCallback(async (paths: string[]) => {
+    for (const path of paths) {
+      try {
+        const result = await openImageFileByPath(path);
+        if (result) {
+          await importFile(result.file, result.path, result.size);
+        }
+      } catch (openError) {
+        const message = formatError(openError);
+        appendDiagnostic({
+          level: 'error',
+          code: 'APP_OPEN_FILE_FAILED',
+          message,
+          context: { path },
+        });
+        setError(`Could not open file. ${message}`);
+      }
+    }
+  }, [importFile]);
+
   useAppShortcuts({
     tabs,
     activeTabId,
@@ -2623,6 +2643,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onRedo: handleRedo,
     onOpenImage: handleOpenImage,
     onOpenRecentFile: importFile,
+    onOpenFilesByPath: handleOpenFilesByPath,
     onOpenInEditor: async () => { await handleOpenInEditor(); },
     onCloseImage: async () => { await handleCloseImage(); },
     onDownload: async () => { await handleDownload(); },
