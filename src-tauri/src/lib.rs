@@ -547,6 +547,12 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Register state on the builder so it is available before `setup` runs.
+        // On macOS, AppKit can dispatch `application:openURLs:` (e.g. document
+        // restoration on launch) before our setup closure executes; if the
+        // RunEvent::Opened handler queries unmanaged state it panics across the
+        // FFI boundary and aborts the process.
+        .manage(PendingOpenedFiles::default())
         .invoke_handler(tauri::generate_handler![
             decode_raw,
             save_blob_to_directory,
@@ -566,7 +572,6 @@ pub fn run() {
         ])
         .setup(|app| {
             app.manage(PendingUpdate::default());
-            app.manage(PendingOpenedFiles::default());
             app.manage(WatcherState(Mutex::new(None)));
             let import_item = MenuItemBuilder::with_id("open", "Import...")
                 .accelerator("CmdOrCtrl+O")
@@ -757,9 +762,17 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
             if let RunEvent::Opened { urls } = event {
-                let paths = file_paths_from_opened_urls(urls);
-                let state = app.state::<PendingOpenedFiles>();
-                emit_opened_file_paths(app, &state, paths);
+                // This callback is invoked from an Objective-C selector
+                // (`application:openURLs:`). A Rust panic here cannot unwind
+                // across the FFI boundary and would abort the process, so we
+                // catch any panic and drop the paths rather than crash.
+                let app = app.clone();
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let paths = file_paths_from_opened_urls(urls);
+                    if let Some(state) = app.try_state::<PendingOpenedFiles>() {
+                        emit_opened_file_paths(&app, &state, paths);
+                    }
+                }));
             }
         });
 }
