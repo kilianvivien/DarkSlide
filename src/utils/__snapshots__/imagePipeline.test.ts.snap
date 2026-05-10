@@ -252,6 +252,27 @@ exports[`profile round-trips > Fujifilm 200 — processImageData with default se
 ]
 `;
 
+exports[`profile round-trips > Fujifilm 400 — processImageData with default settings produces stable output 1`] = `
+[
+  26,
+  78,
+  95,
+  255,
+  145,
+  152,
+  150,
+  255,
+  231,
+  230,
+  225,
+  255,
+  48,
+  64,
+  67,
+  255,
+]
+`;
+
 exports[`profile round-trips > Fujifilm C200 — processImageData with default settings produces stable output 1`] = `
 [
   21,
@@ -269,6 +290,27 @@ exports[`profile round-trips > Fujifilm C200 — processImageData with default s
   40,
   65,
   71,
+  255,
+]
+`;
+
+exports[`profile round-trips > Fujifilm Neopan Acros 100 II — processImageData with default settings produces stable output 1`] = `
+[
+  55,
+  55,
+  55,
+  255,
+  135,
+  135,
+  135,
+  255,
+  214,
+  214,
+  214,
+  255,
+  49,
+  49,
+  49,
   255,
 ]
 `;
@@ -353,6 +395,27 @@ exports[`profile round-trips > Generic Color — processImageData with default s
   50,
   55,
   52,
+  255,
+]
+`;
+
+exports[`profile round-trips > Harman Phoenix II 200 — processImageData with default settings produces stable output 1`] = `
+[
+  12,
+  74,
+  91,
+  255,
+  147,
+  148,
+  145,
+  255,
+  236,
+  226,
+  221,
+  255,
+  42,
+  57,
+  58,
   255,
 ]
 `;
@@ -525,6 +588,48 @@ exports[`profile round-trips > Ilford XP2 Super — processImageData with defaul
 ]
 `;
 
+exports[`profile round-trips > Kentmere Pan 200 — processImageData with default settings produces stable output 1`] = `
+[
+  51,
+  51,
+  51,
+  255,
+  134,
+  134,
+  134,
+  255,
+  217,
+  217,
+  217,
+  255,
+  44,
+  44,
+  44,
+  255,
+]
+`;
+
+exports[`profile round-trips > Kentmere Pan 400 — processImageData with default settings produces stable output 1`] = `
+[
+  54,
+  54,
+  54,
+  255,
+  137,
+  137,
+  137,
+  255,
+  218,
+  218,
+  218,
+  255,
+  48,
+  48,
+  48,
+  255,
+]
+`;
+
 exports[`profile round-trips > Kodak ColorPlus 200 — processImageData with default settings produces stable output 1`] = `
 [
   42,
@@ -647,6 +752,48 @@ exports[`profile round-trips > Kodak Gold 200 — processImageData with default 
   71,
   61,
   44,
+  255,
+]
+`;
+
+exports[`profile round-trips > Kodak Kodacolor 100 — processImageData with default settings produces stable output 1`] = `
+[
+  37,
+  74,
+  82,
+  255,
+  157,
+  144,
+  131,
+  255,
+  239,
+  219,
+  203,
+  255,
+  59,
+  60,
+  56,
+  255,
+]
+`;
+
+exports[`profile round-trips > Kodak Kodacolor 200 — processImageData with default settings produces stable output 1`] = `
+[
+  40,
+  76,
+  80,
+  255,
+  168,
+  148,
+  129,
+  255,
+  244,
+  225,
+  204,
+  255,
+  64,
+  61,
+  52,
   255,
 ]
 `;
@@ -878,6 +1025,48 @@ exports[`profile round-trips > Kodak Vision3 500T — processImageData with defa
   61,
   73,
   87,
+  255,
+]
+`;
+
+exports[`profile round-trips > LomoChrome Color '92 Sun-kissed — processImageData with default settings produces stable output 1`] = `
+[
+  36,
+  79,
+  73,
+  255,
+  176,
+  153,
+  120,
+  255,
+  246,
+  233,
+  196,
+  255,
+  65,
+  63,
+  43,
+  255,
+]
+`;
+
+exports[`profile round-trips > LomoChrome Color '92 — processImageData with default settings produces stable output 1`] = `
+[
+  19,
+  77,
+  97,
+  255,
+  146,
+  150,
+  153,
+  255,
+  234,
+  228,
+  228,
+  255,
+  44,
+  62,
+  66,
   255,
 ]
 `;
