@@ -104,6 +104,37 @@ describe('processImageData', () => {
 
     expect(Array.from(balanced.data)).not.toEqual(Array.from(unbalanced.data));
   });
+
+  it('does not crush RAW B&W preset output when the direct film base is cleared', () => {
+    const darkBase = { r: 32, g: 51, b: 39 };
+    const crushed = createGrid(2, [
+      [80, 100, 90],
+      [120, 140, 130],
+      [160, 180, 170],
+      [200, 210, 205],
+    ]);
+    const recovered = createGrid(2, [
+      [80, 100, 90],
+      [120, 140, 130],
+      [160, 180, 170],
+      [200, 210, 205],
+    ]);
+
+    processImageData(crushed, {
+      ...neutralSettings,
+      filmBaseSample: darkBase,
+    }, false, 'processed');
+    processImageData(recovered, {
+      ...neutralSettings,
+      filmBaseSample: null,
+    }, false, 'processed');
+
+    const crushedLuminance = Array.from({ length: 4 }, (_, index) => luminance(crushed, index));
+    const recoveredLuminance = Array.from({ length: 4 }, (_, index) => luminance(recovered, index));
+
+    expect(crushedLuminance.every((value) => value === 0)).toBe(true);
+    expect(recoveredLuminance.some((value) => value > 0)).toBe(true);
+  });
 });
 
 describe('buildProcessingUniforms', () => {

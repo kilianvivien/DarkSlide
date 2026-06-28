@@ -29,6 +29,7 @@ import { syncRecentFilesToMenu } from './utils/recentFilesStore';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, SuggestionNoticeState, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore';
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
+import { usesColorChannelPipeline } from './utils/pipelineIntent';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
   return {
@@ -1491,7 +1492,7 @@ export default function App() {
 
     const documentId = documentState.id;
     const settings = displaySettings;
-    const isColor = activeProfile.type === 'color';
+    const isColor = usesColorChannelPipeline({ type: activeProfile.type });
     const profileMaskTuning = activeProfile.maskTuning;
     const profileColorMatrix = activeProfile.colorMatrix;
     const profileTonalCharacter = activeProfile.tonalCharacter;
@@ -2101,7 +2102,7 @@ export default function App() {
         {
           documentId: documentState.id,
           settings: documentState.settings,
-          isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+          isColor: usesColorChannelPipeline({ type: activeProfile.type }),
           profileId: activeProfile.id,
           filmType: activeProfile.filmType,
           flareFloor: documentState.estimatedFlare ?? null,
@@ -2209,7 +2210,7 @@ export default function App() {
     const result = await worker.autoAnalyze({
       documentId: requestDocumentId,
       settings: displaySettings,
-      isColor: activeProfile.type === 'color',
+      isColor: usesColorChannelPipeline({ type: activeProfile.type }),
       profileId: activeProfile.id,
       filmType: activeProfile.filmType,
       inputProfileId,
@@ -2394,7 +2395,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     const result = await worker.autoAnalyze({
       documentId,
       settings: tab.document.settings,
-      isColor: profile.type === 'color',
+      isColor: usesColorChannelPipeline(profile),
       profileId: profile.id,
       filmType: profile.filmType,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
@@ -2498,7 +2499,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     const result = await worker.export({
       documentId,
       settings: tab.document.settings,
-      isColor: profile.type === 'color' && !tab.document.settings.blackAndWhite.enabled,
+      isColor: usesColorChannelPipeline(profile),
       profileId: profile.id,
       filmType: profile.filmType,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),

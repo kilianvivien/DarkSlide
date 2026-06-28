@@ -1476,7 +1476,7 @@ describe('App import and preview pipeline', () => {
     expect(importRenderCall.profileId).toBe('generic-bw');
     expect(importRenderCall.isColor).toBe(false);
     expect(importRenderCall.settings.saturation).toBe(0);
-    expect(importRenderCall.settings.filmBaseSample).toEqual({ r: 76, g: 73, b: 68 });
+    expect(importRenderCall.settings.filmBaseSample).toBeNull();
     expect(importRenderCall.settings.rotation).toBe(0);
     expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
 
@@ -1603,6 +1603,57 @@ describe('App import and preview pipeline', () => {
       highlightProtection: 38,
       filmBaseSample: { r: 135, g: 163, b: 107 },
     });
+  });
+
+  it('clears the estimated RAW film base when manually applying a B&W preset', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('acros-frame.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/acros-frame.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [32, 51, 39][index % 3]),
+      color_space: 'sRGB',
+      orientation: 1,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 32, g: 51, b: 39 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      isColor: boolean;
+      settings: {
+        filmBaseSample: { r: number; g: number; b: number } | null;
+      };
+    };
+
+    expect(latestRenderCall.isColor).toBe(false);
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
   });
 
   it('auto-maps CS-LITE to cool, white, and warm modes as film profiles change', async () => {
@@ -1837,6 +1888,59 @@ describe('App import and preview pipeline', () => {
       lightSourceBias: [number, number, number];
     };
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.94, 0.88]);
+  });
+
+  it('keeps color-channel processing active when a color profile is converted to black and white', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.export.mockImplementation(async (payload: { isColor: boolean }) => ({
+      blob: new Blob(['export']),
+      filename: 'scan.jpg',
+      width: 300,
+      height: 200,
+      format: 'image/jpeg',
+      quality: 0.92,
+      isColor: payload.isColor,
+    }));
+
+    render(<App />);
+
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Black And White' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      isColor: boolean;
+      settings: {
+        blackAndWhite: { enabled: boolean };
+      };
+    };
+    expect(latestRenderCall.settings.blackAndWhite.enabled).toBe(true);
+    expect(latestRenderCall.isColor).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar Export' }));
+    await flushMicrotasks();
+
+    const latestExportCall = workerState.export.mock.calls.at(-1)?.[0] as {
+      isColor: boolean;
+      settings: {
+        blackAndWhite: { enabled: boolean };
+      };
+    };
+    expect(latestExportCall.settings.blackAndWhite.enabled).toBe(true);
+    expect(latestExportCall.isColor).toBe(true);
   });
 
   it('suggests black and white conversion for likely monochrome color scans and applies it from the notice button', async () => {

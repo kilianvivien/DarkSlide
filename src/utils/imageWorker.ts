@@ -67,6 +67,7 @@ import {
 import { clamp } from './math';
 import { estimateFilmBaseSampleFromRgba } from './rawImport';
 import { FULL_FRAME_CROP, isFullFrameCrop } from './batchSettings';
+import { usesColorChannelPipeline } from './pipelineIntent';
 import {
   WorkerError,
   WorkerMessage,
@@ -1491,7 +1492,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
     const residualBaseOffset = computeResidualBaseOffset(
       imageData,
       settings,
-      profile.type === 'color' && !settings.blackAndWhite.enabled,
+      usesColorChannelPipeline(profile),
       profile.filmType ?? 'negative',
       resolveStoredInputProfileId(document, colorManagement?.inputMode ?? 'auto', colorManagement?.inputProfileId ?? 'srgb'),
       payload.exportOptions.outputProfileId,
@@ -1501,7 +1502,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
     processImageData(
       imageData,
       settings,
-      profile.type === 'color' && !settings.blackAndWhite.enabled,
+      usesColorChannelPipeline(profile),
       'processed',
       profile.maskTuning,
       profile.colorMatrix,

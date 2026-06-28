@@ -29,6 +29,7 @@ import {
   decodeDesktopRawForWorker,
   rotationFromExifOrientation,
 } from '../utils/rawImport';
+import { shouldUseDirectRawFilmBase } from '../utils/pipelineIntent';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getSidecarCandidatePaths, parseSidecar } from '../utils/sidecarSettings';
 
@@ -339,14 +340,20 @@ export function useFileImport({
             rawResult.orientation,
             estimatedFilmBase,
           ));
-          initialSettings = preferredImportProfile
-            ? {
-              ...createDefaultSettings(structuredClone(activeImportProfile.defaultSettings)),
-              filmBaseSample: activeImportProfile.defaultSettings.filmBaseSample
-                ? structuredClone(activeImportProfile.defaultSettings.filmBaseSample)
-                : (estimatedFilmBase ? structuredClone(estimatedFilmBase) : null),
-            }
-            : rawStartupSettings;
+          if (preferredImportProfile) {
+            const preferredSettings = createDefaultSettings(structuredClone(activeImportProfile.defaultSettings));
+            const shouldUseDirectBase = shouldUseDirectRawFilmBase(true, activeImportProfile, preferredSettings);
+            initialSettings = {
+              ...preferredSettings,
+              filmBaseSample: shouldUseDirectBase
+                ? (preferredSettings.filmBaseSample
+                  ? structuredClone(preferredSettings.filmBaseSample)
+                  : (estimatedFilmBase ? structuredClone(estimatedFilmBase) : null))
+                : null,
+            };
+          } else {
+            initialSettings = rawStartupSettings;
+          }
           rawImportProfile = createRawImportProfile(rawStartupProfile, rawStartupSettings);
 
           if (estimatedFilmBase) {

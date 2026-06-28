@@ -4,6 +4,7 @@ import { FilmProfile, LightSourceProfile, WorkspaceDocument } from '../types';
 import { getResolvedInputProfileId } from '../utils/appHelpers';
 import { computeHighlightDensity } from '../utils/imagePipeline';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
+import { usesColorChannelPipeline } from '../utils/pipelineIntent';
 
 type DocumentThumbnailProps = {
   workerClient: ImageWorkerClient | null;
@@ -40,7 +41,7 @@ export function DocumentThumbnail({
         const result = await workerClient.render({
           documentId: document.id,
           settings: document.settings,
-          isColor: profile.type === 'color' && !document.settings.blackAndWhite.enabled,
+          isColor: usesColorChannelPipeline(profile),
           filmType: profile.filmType,
           inputProfileId: getResolvedInputProfileId(document.source, document.colorManagement),
           outputProfileId: document.colorManagement.outputProfileId,

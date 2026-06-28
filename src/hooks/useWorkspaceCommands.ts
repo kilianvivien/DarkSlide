@@ -23,6 +23,7 @@ import { notifyExportFinished, primeExportNotificationsPermission } from '../uti
 import { clamp } from '../utils/math';
 import { computeHighlightDensity } from '../utils/imagePipeline';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
+import { isRawWorkspaceDocument, rendersMonochrome, shouldUseDirectRawFilmBase, usesColorChannelPipeline } from '../utils/pipelineIntent';
 import {
   BatchJobEntry,
 } from '../utils/batchProcessor';
@@ -105,26 +106,17 @@ function buildProfileSettingsForDocument(
   const scanFilmBaseSample = currentDocument?.settings.filmBaseSample
     ?? currentDocument?.estimatedFilmBaseSample
     ?? null;
+  const shouldUseDirectBase = currentDocument
+    ? shouldUseDirectRawFilmBase(isRawWorkspaceDocument(currentDocument), profile, nextSettings)
+    : false;
 
-  if (!usesRawImportProfileDefaults && !nextSettings.filmBaseSample && scanFilmBaseSample) {
+  if (!usesRawImportProfileDefaults && shouldUseDirectBase && !nextSettings.filmBaseSample && scanFilmBaseSample) {
     nextSettings.filmBaseSample = structuredClone(scanFilmBaseSample);
+  } else if (currentDocument && isRawWorkspaceDocument(currentDocument) && !shouldUseDirectBase) {
+    nextSettings.filmBaseSample = null;
   }
 
   return nextSettings;
-}
-
-function shouldSampleDirectFilmBase(
-  document: WorkspaceDocument,
-  profile: FilmProfile,
-) {
-  const isRawDocument = document.source.mime === 'image/x-raw-rgba'
-    || Boolean(document.rawImportProfile)
-    || ['.dng', '.cr3', '.nef', '.arw', '.raf', '.rw2'].includes(document.source.extension.toLowerCase());
-
-  return isRawDocument
-    && profile.type === 'color'
-    && (profile.filmType ?? 'negative') === 'negative'
-    && !document.settings.blackAndWhite.enabled;
 }
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
@@ -991,7 +983,7 @@ export function useWorkspaceCommands({
       const result = await worker.export({
         documentId: documentState.id,
         settings: exportSettings,
-        isColor: activeProfile.type === 'color' && !exportSettings.blackAndWhite.enabled,
+        isColor: usesColorChannelPipeline({ type: activeProfile.type }),
         profileId: activeProfile.id,
         filmType: activeProfile.filmType,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
@@ -1033,7 +1025,7 @@ export function useWorkspaceCommands({
             settings: structuredClone(exportSettings),
             profileId: activeProfile.id,
             profileName: activeProfile.name,
-            isColor: activeProfile.type === 'color' && !exportSettings.blackAndWhite.enabled,
+            isColor: !rendersMonochrome({ type: activeProfile.type }, exportSettings),
             colorManagement: structuredClone(documentState.colorManagement),
             exportOptions: {
               ...exportOptions,
@@ -1138,7 +1130,7 @@ export function useWorkspaceCommands({
       const result = await worker.export({
         documentId: documentState.id,
         settings: documentState.settings,
-        isColor: activeProfile.type === 'color' && !documentState.settings.blackAndWhite.enabled,
+        isColor: usesColorChannelPipeline({ type: activeProfile.type }),
         profileId: activeProfile.id,
         filmType: activeProfile.filmType,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
@@ -1358,7 +1350,7 @@ export function useWorkspaceCommands({
           y,
         });
 
-        if (shouldSampleDirectFilmBase(documentState, activeProfile)) {
+        if (shouldUseDirectRawFilmBase(isRawWorkspaceDocument(documentState), activeProfile, documentState.settings)) {
           handleSettingsChange({
             filmBaseSample: sample,
           });
