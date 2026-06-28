@@ -10,7 +10,20 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v0.9.0
+## What's New in v0.9.3
+
+- **Fixed RAW black & white conversions** — mono RAW renders and exports no longer inherit a color negative's film-base correction, fixing washed-out and color-cast results when converting RAW negatives with a B&W profile (or with the B&W toggle enabled)
+- **Consistent color-vs-mono pipeline** — the decision of whether a frame is processed in color or monochrome is now made the same way across preview, auto-analyze, single export, batch export, and contact sheets, so a frame can no longer slip down the wrong pipeline
+
+### Earlier in v0.9.2
+
+- **New manufacturer-backed film stocks** — added presets for Kodak Ektacolor/Ektapan, Kodak Vision3, Kodak Verita, Ilford Ortho Plus, Kentmere Pan 100, Harman Phoenix/Red/Switch Azure, Lomography LomoChrome/Redscale/Kino stocks, and CineStill BwXX
+
+### Earlier in v0.9.1
+
+- **Fixed a crash when opening files via the macOS dock** before the app had finished loading
+
+### Earlier in v0.9.0
 
 - **Auto dust/hair/scratch removal — major overhaul**
   - **Full-length hair coverage** — the inpainter now measures each defect's width along its path and covers the full visible width, instead of leaving thin residual streaks along long hairs and scratches
