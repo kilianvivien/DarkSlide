@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
 import { processImageData } from './imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, RAW_IMPORT_PROFILE_ID, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 
 function createRawRgb(width: number, height: number, border: [number, number, number], center: [number, number, number]) {
   const data = new Uint8Array(width * height * 3);
@@ -146,6 +146,21 @@ describe('rawImport', () => {
     expect(rotationFromExifOrientation(8)).toBe(270);
     expect(rotationFromExifOrientation(3)).toBe(180);
     expect(rotationFromExifOrientation(1)).toBe(0);
+  });
+
+  it('maps mirrored EXIF orientations to a baked horizontal flip plus rotation', () => {
+    expect(mirrorFromExifOrientation(2)).toBe(true);
+    expect(mirrorFromExifOrientation(4)).toBe(true);
+    expect(mirrorFromExifOrientation(5)).toBe(true);
+    expect(mirrorFromExifOrientation(7)).toBe(true);
+    expect(mirrorFromExifOrientation(1)).toBe(false);
+    expect(mirrorFromExifOrientation(6)).toBe(false);
+    expect(mirrorFromExifOrientation(null)).toBe(false);
+
+    expect(rotationFromExifOrientation(2)).toBe(0);
+    expect(rotationFromExifOrientation(4)).toBe(180);
+    expect(rotationFromExifOrientation(5)).toBe(270);
+    expect(rotationFromExifOrientation(7)).toBe(90);
   });
 
   it('builds RAW startup settings with derived balance and rotation defaults', () => {

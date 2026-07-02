@@ -16,20 +16,29 @@ export function isRawExtension(extension: string) {
   return RAW_EXTENSIONS.includes(extension as typeof RAW_EXTENSIONS[number]);
 }
 
+// Rotation that uprights the image once any horizontal mirror has been baked
+// into the stored pixels (see mirrorFromExifOrientation). EXIF 5/7 are
+// transpose/transverse: mirror first, then rotate 270/90 clockwise.
 export function rotationFromExifOrientation(orientation: number | null | undefined) {
   switch (orientation) {
     case 3:
     case 4:
       return 180;
-    case 5:
     case 6:
-      return 90;
     case 7:
+      return 90;
+    case 5:
     case 8:
       return 270;
     default:
       return 0;
   }
+}
+
+// EXIF orientations 2, 4, 5 and 7 are mirrored variants; film holders flip
+// strips constantly, so they show up regularly in scans.
+export function mirrorFromExifOrientation(orientation: number | null | undefined) {
+  return orientation === 2 || orientation === 4 || orientation === 5 || orientation === 7;
 }
 
 export function rgbToRgba(rgb: ArrayLike<number>, width: number, height: number) {
@@ -69,6 +78,7 @@ export function createWorkerDecodeRequestFromRaw(
     precomputedFilmBaseSample,
     declaredColorProfileName: rawResult.color_space,
     declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
+    mirrorHorizontal: mirrorFromExifOrientation(rawResult.orientation),
   };
 }
 

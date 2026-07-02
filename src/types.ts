@@ -355,7 +355,6 @@ export interface RawDecodeResult {
   height: number;
   data: ArrayLike<number>;
   color_space: string;
-  white_balance?: [number, number, number] | null;
   orientation?: number | null;
 }
 
@@ -409,6 +408,7 @@ export interface DecodeRequest {
   precomputedFilmBaseSample?: FilmBaseSample | null;
   declaredColorProfileName?: string | null;
   declaredColorProfileId?: ColorProfileId | null;
+  mirrorHorizontal?: boolean;
 }
 
 export interface RenderRequest {

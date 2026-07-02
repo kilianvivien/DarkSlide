@@ -830,7 +830,6 @@ describe('App import and preview pipeline', () => {
       height: 1,
       data: [10, 20, 30, 40, 50, 60],
       color_space: 'sRGB',
-      white_balance: [2, 1, 1.5],
     });
     workerState.decode.mockResolvedValue(createDecodedImage(2, 1));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (

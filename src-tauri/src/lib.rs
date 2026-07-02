@@ -23,7 +23,6 @@ struct RawDecodeResult {
     height: u32,
     data: Vec<u8>,
     color_space: String,
-    white_balance: Option<[f64; 3]>,
     orientation: Option<u16>,
 }
 
@@ -117,20 +116,6 @@ fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
         .map_err(|error| error.to_string())?;
     let rgb = developed.to_rgb8();
 
-    let white_balance = match raw_image.wb_coeffs {
-        [r, g, b, _]
-            if r.is_finite()
-                && g.is_finite()
-                && b.is_finite()
-                && r > 0.0
-                && g > 0.0
-                && b > 0.0 =>
-        {
-            Some([r as f64, g as f64, b as f64])
-        }
-        _ => None,
-    };
-
     let orientation = analyze_metadata(&path)
         .ok()
         .and_then(|analysis| match analysis.data {
@@ -143,7 +128,6 @@ fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
         height: rgb.height(),
         data: rgb.into_raw(),
         color_space: "sRGB".to_string(),
-        white_balance,
         orientation,
     })
 }

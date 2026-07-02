@@ -65,7 +65,7 @@ import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
 import { clamp } from './math';
-import { estimateFilmBaseSampleFromRgba } from './rawImport';
+import { estimateFilmBaseSampleFromRgba, mirrorFromExifOrientation } from './rawImport';
 import { FULL_FRAME_CROP, isFullFrameCrop } from './batchSettings';
 import { usesColorChannelPipeline } from './pipelineIntent';
 import {
@@ -176,6 +176,17 @@ function pruneCancelledJobs(now = performance.now()) {
 function isRecentlyCancelledJob(jobId: string) {
   pruneCancelledJobs();
   return cancelledJobs.has(jobId);
+}
+
+function mirrorCanvasHorizontal(source: OffscreenCanvas) {
+  const canvas = new OffscreenCanvas(source.width, source.height);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Could not create mirror canvas.');
+  ctx.translate(source.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(source, 0, 0);
+  releaseCanvas(source);
+  return canvas;
 }
 
 async function decodeRasterBlob(buffer: ArrayBuffer, mime: string) {
@@ -873,7 +884,7 @@ async function handleDecode(payload: DecodeRequest) {
     }
 
     const { width, height } = payload.rawDimensions;
-    const canvas = new OffscreenCanvas(width, height);
+    let canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) {
       throw new Error('Could not create RAW decode canvas.');
@@ -881,6 +892,10 @@ async function handleDecode(payload: DecodeRequest) {
 
     const imageData = new ImageData(new Uint8ClampedArray(payload.buffer), width, height);
     ctx.putImageData(imageData, 0, 0);
+
+    if (payload.mirrorHorizontal) {
+      canvas = mirrorCanvasHorizontal(canvas);
+    }
 
     assertSupportedDimensions(canvas.width, canvas.height);
 
@@ -961,6 +976,10 @@ async function handleDecode(payload: DecodeRequest) {
       throw createError(error.code, error.message);
     }
     throw error;
+  }
+
+  if (mirrorFromExifOrientation(exif?.orientation)) {
+    decodedCanvas = mirrorCanvasHorizontal(decodedCanvas);
   }
 
   assertSupportedDimensions(decodedCanvas.width, decodedCanvas.height);

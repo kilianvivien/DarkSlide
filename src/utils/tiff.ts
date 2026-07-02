@@ -96,7 +96,17 @@ export function decodeTiffRaster<TFrame extends TiffFrame>(
 
   let decodeFailure: unknown = null;
 
-  for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
+  // Scanner TIFFs sometimes store a thumbnail as IFD0; prefer the
+  // largest-area frame instead of the first usable one.
+  const orderedFrameIndices = frames
+    .map((frame, frameIndex) => ({
+      frameIndex,
+      area: (getFrameDimension(frame, 'width') ?? 0) * (getFrameDimension(frame, 'height') ?? 0),
+    }))
+    .sort((left, right) => right.area - left.area)
+    .map((entry) => entry.frameIndex);
+
+  for (const frameIndex of orderedFrameIndices) {
     const frame = frames[frameIndex];
     if (!isUsableFrame(frame)) continue;
 
