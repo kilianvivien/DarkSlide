@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES } from '../constants';
 
@@ -133,6 +133,48 @@ describe('Sidebar', () => {
     expect(screen.getByText('Green')).toBeInTheDocument();
     expect(screen.getByText('Blue')).toBeInTheDocument();
     expect(screen.getByText('Tone')).toBeInTheDocument();
+  });
+
+  it('shows and forwards bit-depth controls for TIFF exports', () => {
+    const onExportOptionsChange = vi.fn();
+
+    render(
+      <Sidebar
+        settings={createDefaultSettings()}
+        exportOptions={{ ...DEFAULT_EXPORT_OPTIONS, format: 'image/tiff', bitDepth: 16, filenameBase: 'test' }}
+        quickExportPresets={[]}
+        colorManagement={DEFAULT_COLOR_MANAGEMENT}
+        sourceMetadata={null}
+        cropImageWidth={4032}
+        cropImageHeight={6048}
+        onLevelInteractionChange={vi.fn()}
+        onSettingsChange={vi.fn()}
+        onExportOptionsChange={onExportOptionsChange}
+        onColorManagementChange={vi.fn()}
+        activeProfile={FILM_PROFILES[0] ?? null}
+        histogramData={null}
+        isPickingFilmBase={false}
+        onTogglePicker={vi.fn()}
+        onExport={vi.fn()}
+        onQuickExport={vi.fn()}
+        onSaveQuickExportPreset={vi.fn()}
+        onDeleteQuickExportPreset={vi.fn()}
+        onOpenBatchExport={vi.fn()}
+        isExporting={false}
+        activeTab="export"
+        onTabChange={vi.fn()}
+        cropTab="Film"
+        onCropTabChange={vi.fn()}
+        onCropDone={vi.fn()}
+        onResetCrop={vi.fn()}
+        activePointPicker={null}
+        onSetPointPicker={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '8-bit' }));
+    expect(onExportOptionsChange).toHaveBeenCalledWith({ bitDepth: 8 });
   });
 
 });

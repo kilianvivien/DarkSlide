@@ -110,6 +110,7 @@ export interface ExifMetadata {
 }
 
 export type ExportFormat = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/tiff';
+export type ExportBitDepth = 8 | 16;
 export type TileSourceKind = 'preview' | 'source';
 export type PreviewMode = 'draft' | 'settled';
 export type RenderBackendMode = 'gpu-preview' | 'gpu-tiled-render' | 'cpu-worker';
@@ -233,6 +234,7 @@ export interface NotificationSettings {
 
 export interface ExportOptions {
   format: ExportFormat;
+  bitDepth: ExportBitDepth;
   quality: number;
   filenameBase: string;
   embedMetadata: boolean;
@@ -246,6 +248,7 @@ export interface QuickExportPreset {
   id: string;
   name: string;
   format: ExportFormat;
+  bitDepth: ExportBitDepth;
   quality: number;
   outputProfileId: ColorProfileId;
   embedMetadata: boolean;

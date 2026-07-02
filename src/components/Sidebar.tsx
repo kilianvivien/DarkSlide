@@ -44,7 +44,7 @@ const POINT_PICKERS = [
   { mode: 'white' as const, label: 'White', swatchClass: 'bg-white border-zinc-300' },
 ];
 
-const COLOR_PROFILE_IDS: ColorProfileId[] = ['srgb', 'display-p3', 'adobe-rgb'];
+const COLOR_PROFILE_IDS: ColorProfileId[] = ['srgb', 'display-p3', 'adobe-rgb', 'linear'];
 
 type ScalarSliderKey =
   | 'exposure'
@@ -394,6 +394,7 @@ export const Sidebar = memo(function Sidebar({
 
   const isWebpExport = exportOptions.format === 'image/webp';
   const showQualityControl = exportOptions.format !== 'image/png' && exportOptions.format !== 'image/tiff';
+  const showBitDepthControl = exportOptions.format === 'image/png' || exportOptions.format === 'image/tiff';
 
   return (
     <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden">
@@ -852,6 +853,28 @@ export const Sidebar = memo(function Sidebar({
                         onChange={handleExportQualityChange}
                         unit="%"
                       />
+                    )}
+
+                    {showBitDepthControl && (
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Bit Depth</label>
+                        <div className="grid grid-cols-2 gap-1 rounded-lg bg-zinc-950 p-1">
+                          {([8, 16] as const).map((bitDepth) => (
+                            <button
+                              key={bitDepth}
+                              type="button"
+                              onClick={() => onExportOptionsChange({ bitDepth })}
+                              className={`rounded-md px-2 py-1.5 text-[10px] font-bold uppercase transition-all ${
+                                exportOptions.bitDepth === bitDepth
+                                  ? 'bg-zinc-100 text-zinc-950'
+                                  : 'text-zinc-500 hover:text-zinc-300'
+                              }`}
+                            >
+                              {bitDepth}-bit
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
 
                     <div className="space-y-2">

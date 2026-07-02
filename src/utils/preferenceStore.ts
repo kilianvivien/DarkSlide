@@ -1,5 +1,6 @@
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
 import { CropTab, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
+import { normalizeExportOptions } from './exportOptions';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
 export const AUTO_APPLY_NONE_PRESET_ID = '__none__';
@@ -49,7 +50,8 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     typeof exportOptions.quality === 'number' &&
     typeof exportOptions.filenameBase === 'string' &&
     (exportOptions.embedMetadata === undefined || typeof exportOptions.embedMetadata === 'boolean') &&
-    (exportOptions.outputProfileId === undefined || ['srgb', 'display-p3', 'adobe-rgb'].includes(exportOptions.outputProfileId)) &&
+    (exportOptions.bitDepth === undefined || exportOptions.bitDepth === 8 || exportOptions.bitDepth === 16) &&
+    (exportOptions.outputProfileId === undefined || ['srgb', 'display-p3', 'adobe-rgb', 'linear'].includes(exportOptions.outputProfileId)) &&
     (exportOptions.embedOutputProfile === undefined || typeof exportOptions.embedOutputProfile === 'boolean') &&
     (exportOptions.saveSidecar === undefined || typeof exportOptions.saveSidecar === 'boolean') &&
     (exportOptions.targetMaxDimension === undefined || exportOptions.targetMaxDimension === null || typeof exportOptions.targetMaxDimension === 'number') &&
@@ -170,12 +172,22 @@ function withCurrentDefaults(base: PreferencesV6Base): UserPreferences {
   return {
     ...rest,
     version: 8,
+    exportOptions: normalizeStoredExportOptions(rest.exportOptions),
     autoApplyPresetId: autoApplyPresetId ?? null,
     scanningWatchPath: scanningWatchPath ?? null,
     scanningAutoExport: scanningAutoExport ?? false,
     scanningAutoExportPath: scanningAutoExportPath ?? null,
     updateChannel: updateChannel ?? 'stable',
   };
+}
+
+function normalizeStoredExportOptions(options: Partial<ExportOptions> | undefined): ExportOptions {
+  const hasBitDepth = !!options && Object.prototype.hasOwnProperty.call(options, 'bitDepth');
+  return normalizeExportOptions({
+    ...DEFAULT_EXPORT_OPTIONS,
+    ...options,
+    ...(!hasBitDepth ? { bitDepth: undefined } : {}),
+  });
 }
 
 function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPreferences | null {
@@ -203,13 +215,14 @@ function migrateLegacyPreferences(legacy: ReturnType<typeof JSON.parse>): UserPr
     lastProfileId: legacy.lastProfileId,
     autoApplyPresetId: null,
     exportOptions: {
-      ...DEFAULT_EXPORT_OPTIONS,
-      format: legacy.exportOptions.format,
-      quality: legacy.exportOptions.quality,
-      filenameBase: legacy.exportOptions.filenameBase,
-      embedMetadata: legacy.exportOptions.embedMetadata ?? DEFAULT_EXPORT_OPTIONS.embedMetadata,
-      outputProfileId: 'srgb',
-      embedOutputProfile: legacy.exportOptions.iccEmbedMode !== 'none',
+      ...normalizeStoredExportOptions({
+        format: legacy.exportOptions.format,
+        quality: legacy.exportOptions.quality,
+        filenameBase: legacy.exportOptions.filenameBase,
+        embedMetadata: legacy.exportOptions.embedMetadata ?? DEFAULT_EXPORT_OPTIONS.embedMetadata,
+        outputProfileId: 'srgb',
+        embedOutputProfile: legacy.exportOptions.iccEmbedMode !== 'none',
+      }),
     },
     notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: legacy.sidebarTab,
@@ -236,8 +249,7 @@ function migrateVersion2Preferences(legacy: ReturnType<typeof JSON.parse>): User
     lastProfileId: legacy.lastProfileId,
     autoApplyPresetId: null,
     exportOptions: {
-      ...DEFAULT_EXPORT_OPTIONS,
-      ...legacy.exportOptions,
+      ...normalizeStoredExportOptions(legacy.exportOptions),
     },
     notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: legacy.sidebarTab,
@@ -264,8 +276,7 @@ function migrateVersion3Preferences(legacy: ReturnType<typeof JSON.parse>): User
     lastProfileId: legacy.lastProfileId,
     autoApplyPresetId: null,
     exportOptions: {
-      ...DEFAULT_EXPORT_OPTIONS,
-      ...legacy.exportOptions,
+      ...normalizeStoredExportOptions(legacy.exportOptions),
     },
     notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     sidebarTab: legacy.sidebarTab,
@@ -292,8 +303,7 @@ function migrateVersion4Preferences(legacy: ReturnType<typeof JSON.parse>): User
     lastProfileId: legacy.lastProfileId,
     autoApplyPresetId: null,
     exportOptions: {
-      ...DEFAULT_EXPORT_OPTIONS,
-      ...legacy.exportOptions,
+      ...normalizeStoredExportOptions(legacy.exportOptions),
     },
     notificationSettings: {
       ...DEFAULT_NOTIFICATION_SETTINGS,
@@ -323,8 +333,7 @@ function migrateVersion5Preferences(legacy: ReturnType<typeof JSON.parse>): User
     lastProfileId: legacy.lastProfileId,
     autoApplyPresetId: null,
     exportOptions: {
-      ...DEFAULT_EXPORT_OPTIONS,
-      ...legacy.exportOptions,
+      ...normalizeStoredExportOptions(legacy.exportOptions),
     },
     notificationSettings: {
       ...DEFAULT_NOTIFICATION_SETTINGS,
@@ -388,8 +397,7 @@ export function loadPreferences(): UserPreferences | null {
       ...parsed,
       version: 8,
       exportOptions: {
-        ...DEFAULT_EXPORT_OPTIONS,
-        ...parsed.exportOptions,
+        ...normalizeStoredExportOptions(parsed.exportOptions),
       },
       notificationSettings: {
         ...DEFAULT_NOTIFICATION_SETTINGS,
@@ -420,8 +428,7 @@ export function savePreferences(prefs: UserPreferences): void {
     ...prefs,
     version: 8,
     exportOptions: {
-      ...DEFAULT_EXPORT_OPTIONS,
-      ...prefs.exportOptions,
+      ...normalizeStoredExportOptions(prefs.exportOptions),
     },
   }));
 }

@@ -1,5 +1,6 @@
 import { BUILTIN_QUICK_EXPORT_PRESETS } from '../constants';
 import { ExportOptions, QuickExportPreset } from '../types';
+import { normalizeQuickExportPreset } from './exportOptions';
 
 const STORAGE_KEY = 'darkslide_quick_export_presets_v1';
 const MAX_CUSTOM_PRESETS = 12;
@@ -18,6 +19,7 @@ function isValidPreset(value: unknown): value is QuickExportPreset {
   return typeof preset.id === 'string'
     && typeof preset.name === 'string'
     && typeof preset.format === 'string'
+    && (preset.bitDepth === undefined || preset.bitDepth === 8 || preset.bitDepth === 16)
     && typeof preset.quality === 'number'
     && typeof preset.outputProfileId === 'string'
     && typeof preset.embedMetadata === 'boolean'
@@ -44,11 +46,11 @@ export function mergeQuickExportPresets(customPresets: QuickExportPreset[] = [])
   const merged = new Map<string, QuickExportPreset>();
 
   BUILTIN_QUICK_EXPORT_PRESETS.forEach((preset) => {
-    merged.set(preset.id, { ...preset });
+    merged.set(preset.id, normalizeQuickExportPreset({ ...preset }));
   });
 
   customPresets.forEach((preset) => {
-    merged.set(preset.id, { ...preset, isBuiltIn: false });
+    merged.set(preset.id, normalizeQuickExportPreset({ ...preset, isBuiltIn: false }));
   });
 
   return Array.from(merged.values());
@@ -102,6 +104,7 @@ export function createFromCurrentSettings(
     id: `quick-${typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`,
     name: normalizedName,
     format: currentExportOptions.format,
+    bitDepth: currentExportOptions.bitDepth,
     quality: currentExportOptions.quality,
     outputProfileId: currentExportOptions.outputProfileId,
     embedMetadata: currentExportOptions.embedMetadata,

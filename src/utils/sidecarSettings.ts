@@ -1,5 +1,6 @@
 import { APP_VERSION_LABEL } from '../appVersion';
 import { SidecarFile } from '../types';
+import { normalizeExportOptions } from './exportOptions';
 
 export const SIDECAR_SUFFIX = '.darkslide-settings';
 
@@ -67,7 +68,12 @@ function isValidSidecar(value: unknown): value is SidecarFile {
 export function parseSidecar(json: string): SidecarFile | null {
   try {
     const parsed = JSON.parse(json);
-    return isValidSidecar(parsed) ? parsed : null;
+    return isValidSidecar(parsed)
+      ? {
+        ...parsed,
+        exportOptions: normalizeExportOptions(parsed.exportOptions),
+      }
+      : null;
   } catch {
     return null;
   }

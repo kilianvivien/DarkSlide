@@ -30,6 +30,7 @@ import { BlockingOverlayState, createDocumentColorManagement, formatError, getCa
 import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore';
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
 import { usesColorChannelPipeline } from './utils/pipelineIntent';
+import { normalizeExportOptions } from './utils/exportOptions';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
   return {
@@ -1941,7 +1942,11 @@ export default function App() {
   const wrappedHandleExportOptionsChange = useCallback((options: Partial<ExportOptions>) => {
     handleExportOptionsChange(options);
     if (!documentState) {
-      setDefaultExportOptions((current) => ({ ...current, ...options }));
+      setDefaultExportOptions((current) => normalizeExportOptions({
+        ...current,
+        ...options,
+        ...(options.format === 'image/webp' ? { outputProfileId: 'srgb' as const } : {}),
+      }));
     }
   }, [handleExportOptionsChange, documentState]);
 

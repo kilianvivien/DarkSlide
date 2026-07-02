@@ -14,6 +14,7 @@ const VALID_PREFS: UserPreferences = {
   autoApplyPresetId: 'custom-import-preset',
   exportOptions: {
     format: 'image/png',
+    bitDepth: 16,
     quality: 0.85,
     filenameBase: 'test',
     embedMetadata: false,
@@ -138,6 +139,38 @@ describe('loadPreferences', () => {
     });
   });
 
+  it('defaults missing bitDepth by export format', () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      ...VALID_PREFS,
+      exportOptions: {
+        ...VALID_PREFS.exportOptions,
+        bitDepth: undefined,
+        format: 'image/tiff',
+      },
+    }));
+
+    expect(loadPreferences()?.exportOptions).toMatchObject({
+      format: 'image/tiff',
+      bitDepth: 16,
+    });
+  });
+
+  it('forces JPEG and WebP preferences back to 8-bit', () => {
+    localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
+      ...VALID_PREFS,
+      exportOptions: {
+        ...VALID_PREFS.exportOptions,
+        format: 'image/webp',
+        bitDepth: 16,
+      },
+    }));
+
+    expect(loadPreferences()?.exportOptions).toMatchObject({
+      format: 'image/webp',
+      bitDepth: 8,
+    });
+  });
+
   it('defaults the advanced inversion preference off for version 6 payloads', () => {
     localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
       ...VALID_PREFS,
@@ -174,6 +207,7 @@ describe('savePreferences + loadPreferences round-trip', () => {
       contactSheetComplete: true,
     });
     expect(loaded!.exportOptions.format).toBe('image/png');
+    expect(loaded!.exportOptions.bitDepth).toBe(16);
     expect(loaded!.exportOptions.quality).toBe(0.85);
     expect(loaded!.exportOptions.embedMetadata).toBe(false);
     expect(loaded!.exportOptions.outputProfileId).toBe('display-p3');

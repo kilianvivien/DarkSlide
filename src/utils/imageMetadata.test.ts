@@ -52,6 +52,7 @@ describe('image metadata helpers', () => {
       },
       {
         format: 'image/jpeg',
+        bitDepth: 8,
         quality: 0.92,
         filenameBase: 'scan',
         embedMetadata: true,
@@ -80,6 +81,7 @@ describe('image metadata helpers', () => {
       },
       {
         format: 'image/jpeg',
+        bitDepth: 8,
         quality: 0.92,
         filenameBase: 'scan',
         embedMetadata: false,

@@ -11,6 +11,7 @@ import { customProfileHasEmbeddedCropOrRotation, getBatchEffectiveSettings } fro
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useModalA11y } from '../hooks/useModalA11y';
+import { normalizeExportOptions } from '../utils/exportOptions';
 
 type SettingsSourceMode = 'current' | 'builtin' | 'custom';
 
@@ -198,7 +199,7 @@ export function BatchModal({
       return;
     }
 
-    setExportOptions((current) => ({ ...current, outputProfileId: 'srgb' }));
+    setExportOptions((current) => normalizeExportOptions({ ...current, outputProfileId: 'srgb' }));
   }, [exportOptions.format, exportOptions.outputProfileId]);
 
   if (!isOpen) {
@@ -667,7 +668,7 @@ export function BatchModal({
                           <button
                             key={format}
                             type="button"
-                            onClick={() => setExportOptions((current) => ({
+                            onClick={() => setExportOptions((current) => normalizeExportOptions({
                               ...current,
                               format,
                               ...(format === 'image/webp' ? { outputProfileId: 'srgb' as const } : {}),
@@ -696,6 +697,27 @@ export function BatchModal({
                             onChange={(event) => setExportOptions((current) => ({ ...current, quality: Number(event.target.value) / 100 }))}
                             className="w-full"
                           />
+                        </div>
+                      )}
+                      {(exportOptions.format === 'image/png' || exportOptions.format === 'image/tiff') && (
+                        <div>
+                          <p className="mb-1.5 text-xs text-zinc-400">Bit depth</p>
+                          <div className="grid grid-cols-2 gap-1 rounded-lg bg-zinc-950 p-1">
+                            {([8, 16] as const).map((bitDepth) => (
+                              <button
+                                key={bitDepth}
+                                type="button"
+                                onClick={() => setExportOptions((current) => normalizeExportOptions({ ...current, bitDepth }))}
+                                className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+                                  exportOptions.bitDepth === bitDepth
+                                    ? 'bg-zinc-100 text-zinc-950'
+                                    : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                              >
+                                {bitDepth}-bit
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       )}
                       <div>
@@ -765,7 +787,7 @@ export function BatchModal({
                             <div className="space-y-2">
                               <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Output Profile</p>
                               <div className="space-y-2">
-                                {(['srgb', 'display-p3', 'adobe-rgb'] as ColorProfileId[]).map((profileId) => (
+                                {(['srgb', 'display-p3', 'adobe-rgb', 'linear'] as ColorProfileId[]).map((profileId) => (
                                   <React.Fragment key={profileId}>
                                     <RadioOption
                                       disabled={exportOptions.format === 'image/webp' && profileId !== 'srgb'}

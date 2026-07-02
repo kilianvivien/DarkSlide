@@ -304,6 +304,7 @@ export function ContactSheetModal({
         captionFontSize,
         exportOptions: {
           format,
+          bitDepth: 8,
           quality,
           filenameBase,
           embedMetadata,
@@ -664,7 +665,7 @@ export function ContactSheetModal({
                       <div className="space-y-2">
                         <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Output Profile</p>
                         <div className="flex gap-4">
-                          {(['srgb', 'display-p3', 'adobe-rgb'] as const).map((profileId) => (
+                          {(['srgb', 'display-p3', 'adobe-rgb', 'linear'] as const).map((profileId) => (
                             <label key={profileId} className="flex cursor-pointer items-center gap-2.5 text-sm">
                               <input
                                 type="radio"

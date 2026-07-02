@@ -48,6 +48,7 @@ import {
 } from '../types';
 import { buildSidecarFile, getSidecarPathForExport, serializeSidecar } from '../utils/sidecarSettings';
 import { sanitizeFilenameBase } from '../utils/imagePipeline';
+import { normalizeExportOptions } from '../utils/exportOptions';
 
 function createHistoryEntry(
   settings: ConversionSettings,
@@ -520,9 +521,11 @@ export function useWorkspaceCommands({
   }, [handleSettingsChange]);
 
   const handleExportOptionsChange = useCallback((options: Partial<WorkspaceDocument['exportOptions']>) => {
-    const normalizedOptions = options.format === 'image/webp'
-      ? { ...options, outputProfileId: 'srgb' as const }
-      : options;
+    const normalizedOptions = normalizeExportOptions({
+      format: options.format ?? documentState?.exportOptions.format ?? prefsSnapshotRef.current.exportOptions.format,
+      ...options,
+      ...(options.format === 'image/webp' ? { outputProfileId: 'srgb' as const } : {}),
+    });
 
     if (documentState) {
       updateDocument((current) => ({
@@ -541,7 +544,8 @@ export function useWorkspaceCommands({
     }
 
     if (
-      normalizedOptions.format !== undefined
+      options.format !== undefined
+      || options.bitDepth !== undefined
       || normalizedOptions.quality !== undefined
       || normalizedOptions.embedMetadata !== undefined
       || normalizedOptions.outputProfileId !== undefined
@@ -552,6 +556,7 @@ export function useWorkspaceCommands({
         exportOptions: {
           ...prefsSnapshotRef.current.exportOptions,
           ...(normalizedOptions.format !== undefined ? { format: normalizedOptions.format } : {}),
+          ...(normalizedOptions.bitDepth !== undefined ? { bitDepth: normalizedOptions.bitDepth } : {}),
           ...(normalizedOptions.quality !== undefined ? { quality: normalizedOptions.quality } : {}),
           ...(normalizedOptions.embedMetadata !== undefined ? { embedMetadata: normalizedOptions.embedMetadata } : {}),
           ...(normalizedOptions.outputProfileId !== undefined ? { outputProfileId: normalizedOptions.outputProfileId } : {}),
@@ -1101,6 +1106,7 @@ export function useWorkspaceCommands({
     const nextExportOptions = {
       ...documentState.exportOptions,
       format: preset.format,
+      bitDepth: preset.bitDepth,
       quality: preset.quality,
       outputProfileId: preset.outputProfileId,
       embedMetadata: preset.embedMetadata,
