@@ -4,6 +4,9 @@ import {
   ColorProfileId,
   ContactSheetRequest,
   ContactSheetResult,
+  ConversionAnalysisRequest,
+  ConversionAnalysisResult,
+  ConversionParametersDebug,
   ConversionSettings,
   DecodeRequest,
   DensityBalance,
@@ -36,13 +39,12 @@ import {
 import UTIF from 'utif';
 import { appendDiagnostic } from './diagnostics';
 import { pushToast } from './toastStore';
-import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, computeResidualBaseOffset, getExtensionFromFormat, normalizeCrop, sanitizeFilenameBase } from './imagePipeline';
+import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
 import { convertImageDataColorProfile, getPreferredPreviewDisplayProfile } from './colorProfiles';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
 import { finalizeExportBlob } from './imageMetadata';
 import { WorkerMessage, WorkerRequest, WorkerResponse } from './workerProtocol';
-import { FULL_FRAME_CROP, isFullFrameCrop } from './batchSettings';
 
 type ImageWorkerClientOptions = {
   gpuEnabled?: boolean;
@@ -76,6 +78,7 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   'read-tile': 10_000,
   'cancel-job': 5_000,
   'sample-film-base': 10_000,
+  'conversion-analysis': 10_000,
   'detect-frame': 10_000,
   'compute-flare': 10_000,
   'dust-detect': 10_000,
@@ -288,6 +291,10 @@ export class ImageWorkerClient {
   private lastExportJob: RenderJobDiagnosticsSnapshot | null = null;
 
   private activePreviewJobIds = new Map<string, string>();
+
+  private lastConversionAnalysis = new Map<string, ConversionAnalysisResult>();
+
+  private lastConversionDebugJson = new Map<string, string>();
 
   private lastDraftHistogram: HistogramData | null = null;
 
@@ -780,55 +787,68 @@ export class ImageWorkerClient {
     return this.request<ReadTileResult>('read-tile', payload);
   }
 
-  private async computeResidualBaseOffsetFromPreview(
-    documentId: string,
-    settings: ConversionSettings,
-    isColor: boolean,
-    inputProfileId: ColorProfileId,
-    outputProfileId: ColorProfileId,
-    filmType?: FilmProfileType,
-    flareFloor?: [number, number, number] | null,
-    lightSourceBias?: [number, number, number],
-  ) {
-    const samplingSettings = isFullFrameCrop(normalizeCrop(settings))
-      ? settings
-      : {
-        ...settings,
-        crop: { ...FULL_FRAME_CROP },
-      };
-    const jobId = this.createJobId(documentId, `residual-${crypto.randomUUID()}`, 'preview');
+  // Pinned conversion analysis (audit Phase C): the worker computes
+  // residual-base and highlight-density once per (document, settings) at a
+  // fixed resolution, so the GPU preview, GPU tiled export, and CPU worker
+  // paths all consume identical numbers.
+  private async fetchConversionAnalysis(payload: ConversionAnalysisRequest): Promise<ConversionAnalysisResult> {
+    const result = await this.requestWithDocumentRecovery<ConversionAnalysisResult>(
+      payload.documentId,
+      () => this.request<ConversionAnalysisResult>('conversion-analysis', payload),
+      true,
+    );
+    this.lastConversionAnalysis.set(payload.documentId, result);
+    this.logConversionParametersIfChanged(payload.documentId, result.debug);
+    return result;
+  }
 
-    try {
-      const prepared = await this.prepareTileJob({
-        documentId,
-        jobId,
-        sourceKind: 'preview',
-        settings: samplingSettings,
-        comparisonMode: 'processed',
-        targetMaxDimension: 512,
-      });
-      const rawPreview = await this.readTile({
-        documentId,
-        jobId,
-        x: 0,
-        y: 0,
-        width: prepared.width,
-        height: prepared.height,
-      });
-
-      return computeResidualBaseOffset(
-        trimTileImageData(rawPreview),
-        samplingSettings,
-        isColor,
-        filmType ?? 'negative',
-        inputProfileId,
-        outputProfileId,
-        lightSourceBias ?? [1, 1, 1],
-        flareFloor ?? null,
-      );
-    } finally {
-      await this.cancelTileJob(documentId, jobId).catch(() => undefined);
+  private logConversionParametersIfChanged(documentId: string, debug: ConversionParametersDebug) {
+    const serialized = JSON.stringify(debug);
+    if (this.lastConversionDebugJson.get(documentId) === serialized) {
+      return;
     }
+    this.lastConversionDebugJson.set(documentId, serialized);
+    appendDiagnostic({
+      level: 'info',
+      code: 'CONVERSION_PARAMETERS',
+      message: documentId,
+      context: {
+        documentId,
+        baseSampleSource: debug.baseSampleSource,
+        baseDensity: debug.baseDensity.map((value) => value.toFixed(3)).join('/'),
+        densityScale: debug.densityScale.map((value) => value.toFixed(3)).join('/'),
+        densityScaleSource: debug.densityScaleSource,
+        inputProfileId: debug.inputProfileId,
+        outputProfileId: debug.outputProfileId,
+        flareFloor: debug.flareFloor ? debug.flareFloor.map((value) => value.toFixed(1)).join('/') : null,
+        residualBaseOffset: debug.residualBaseOffset
+          ? debug.residualBaseOffset.map((value) => value.toFixed(4)).join('/')
+          : null,
+        highlightDensity: Number(debug.highlightDensity.toFixed(4)),
+      },
+    });
+  }
+
+  private buildConversionAnalysisRequest(payload: RenderRequest | ExportRequest): ConversionAnalysisRequest {
+    return {
+      documentId: payload.documentId,
+      settings: payload.settings,
+      isColor: payload.isColor,
+      profileId: payload.profileId ?? null,
+      filmType: payload.filmType,
+      inputProfileId: payload.inputProfileId ?? 'srgb',
+      outputProfileId: payload.outputProfileId ?? 'srgb',
+      lightSourceBias: payload.lightSourceBias,
+      flareFloor: payload.flareFloor,
+      maskTuning: payload.maskTuning,
+      colorMatrix: payload.colorMatrix,
+      tonalCharacter: payload.tonalCharacter,
+      labStyleToneCurve: payload.labStyleToneCurve,
+      labStyleChannelCurves: payload.labStyleChannelCurves,
+      labTonalCharacterOverride: payload.labTonalCharacterOverride,
+      labSaturationBias: payload.labSaturationBias,
+      labTemperatureBias: payload.labTemperatureBias,
+    };
   }
 
   private async assembleTileJob(
@@ -950,18 +970,9 @@ export class ImageWorkerClient {
 
     let histogramSourceImageData: ImageData;
     let imageData: ImageData;
-    const previewResidualBaseOffset = residualBaseOffset ?? (comparisonMode === 'processed' && isFullFrameCrop(normalizeCrop(settings))
-      ? computeResidualBaseOffset(
-        trimTileImageData(rawPreview),
-        settings,
-        isColor,
-        filmType ?? 'negative',
-        inputProfileId,
-        outputProfileId,
-        lightSourceBias ?? [1, 1, 1],
-        flareFloor ?? null,
-      )
-      : null);
+    // The pinned residual offset is fetched from the worker by the caller
+    // (audit Phase C) — never recomputed here at preview resolution.
+    const previewResidualBaseOffset = residualBaseOffset ?? null;
 
     if (comparisonMode === 'processed' && this.gpuPipeline) {
       const gpuStartedAt = performance.now();
@@ -1039,7 +1050,11 @@ export class ImageWorkerClient {
     return {
       imageData,
       histogram,
-      highlightDensity: computeHighlightDensity(histogram),
+      // Report the pinned estimate the frame was rendered with, so the
+      // App-side adaptive state converges instead of chasing a stale value.
+      highlightDensity: comparisonMode === 'processed'
+        ? (highlightDensityEstimate ?? 0)
+        : computeHighlightDensity(histogram),
       tileCount: 1,
       phaseTimings,
     };
@@ -1387,18 +1402,16 @@ export class ImageWorkerClient {
     }
 
     try {
-      const residualBaseOffset = payload.comparisonMode === 'processed' && !isFullFrameCrop(normalizeCrop(payload.settings))
-        ? await this.computeResidualBaseOffsetFromPreview(
-          payload.documentId,
-          payload.settings,
-          payload.isColor,
-          payload.inputProfileId ?? 'srgb',
-          payload.outputProfileId ?? 'srgb',
-          payload.filmType,
-          payload.flareFloor,
-          payload.lightSourceBias,
-        )
+      // Draft (interactive) frames reuse the last pinned analysis to keep
+      // slider drags responsive; settled frames always fetch fresh values.
+      const canReuseAnalysis = payload.previewMode === 'draft'
+        && this.lastConversionAnalysis.has(payload.documentId);
+      const analysis = payload.comparisonMode === 'processed'
+        ? (canReuseAnalysis
+          ? this.lastConversionAnalysis.get(payload.documentId)!
+          : await this.fetchConversionAnalysis(this.buildConversionAnalysisRequest(payload)))
         : null;
+      const residualBaseOffset = analysis?.residualBaseOffset ?? null;
       const prepareStartedAt = performance.now();
       const prepared = await this.prepareTileJob({
         documentId: payload.documentId,
@@ -1428,7 +1441,7 @@ export class ImageWorkerClient {
         payload.labTonalCharacterOverride,
         payload.labSaturationBias,
         payload.labTemperatureBias,
-        payload.highlightDensityEstimate,
+        analysis?.highlightDensity ?? 0,
         payload.filmType,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
@@ -1687,16 +1700,8 @@ export class ImageWorkerClient {
     });
 
     try {
-      const residualBaseOffset = await this.computeResidualBaseOffsetFromPreview(
-        payload.documentId,
-        payload.settings,
-        payload.isColor,
-        payload.inputProfileId ?? 'srgb',
-        payload.outputProfileId ?? 'srgb',
-        payload.filmType,
-        payload.flareFloor,
-        payload.lightSourceBias,
-      );
+      const analysis = await this.fetchConversionAnalysis(this.buildConversionAnalysisRequest(payload));
+      const residualBaseOffset = analysis.residualBaseOffset;
       const prepared = await this.prepareTileJob({
         documentId: payload.documentId,
         jobId,
@@ -1720,7 +1725,7 @@ export class ImageWorkerClient {
         payload.labTonalCharacterOverride,
         payload.labSaturationBias,
         payload.labTemperatureBias,
-        payload.highlightDensityEstimate,
+        analysis.highlightDensity,
         payload.filmType,
         estimatedFilmBaseSample,
         estimatedDensityBalance,

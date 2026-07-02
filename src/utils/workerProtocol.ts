@@ -4,6 +4,8 @@ import type {
   CancelTileJobRequest,
   ContactSheetRequest,
   ContactSheetResult,
+  ConversionAnalysisRequest,
+  ConversionAnalysisResult,
   DecodeRequest,
   DecodedImage,
   DetectedFrame,
@@ -57,6 +59,7 @@ export type WorkerRequest =
   | { type: 'read-tile'; payload: ReadTileRequest }
   | { type: 'cancel-job'; payload: CancelTileJobRequest }
   | { type: 'sample-film-base'; payload: SampleRequest }
+  | { type: 'conversion-analysis'; payload: ConversionAnalysisRequest }
   | { type: 'detect-frame'; payload: DetectFramePayload }
   | { type: 'compute-flare'; payload: ComputeFlarePayload }
   | { type: 'dust-detect'; payload: DustDetectRequest }
@@ -70,6 +73,7 @@ export type WorkerSuccessPayload =
   | DecodedImage
   | RenderResult
   | AutoAnalyzeResult
+  | ConversionAnalysisResult
   | DustDetectResult
   | PreparedTileJobResult
   | PreparedPreviewBitmapResult

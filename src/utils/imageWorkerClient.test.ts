@@ -35,6 +35,11 @@ class MockWorker {
 
   postedMessages: WorkerMessage[] = [];
 
+  // Pinned conversion-analysis requests are auto-answered and kept out of
+  // postedMessages so the message-order assertions below stay focused on
+  // the geometry/tile protocol they exercise.
+  analysisMessages: WorkerMessage[] = [];
+
   terminate = vi.fn();
 
   constructor() {
@@ -42,11 +47,39 @@ class MockWorker {
   }
 
   postMessage(message: WorkerMessage) {
+    if (message.type === 'conversion-analysis') {
+      this.analysisMessages.push(message);
+      queueMicrotask(() => {
+        this.onmessage?.({
+          data: {
+            id: message.id,
+            ok: true,
+            payload: {
+              type: 'conversion-analysis',
+              residualBaseOffset: null,
+              highlightDensity: 0,
+              debug: {
+                baseSampleSource: 'none',
+                baseDensity: [0, 0, 0],
+                densityScale: [1, 1, 1],
+                densityScaleSource: 'neutral',
+                inputProfileId: 'srgb',
+                outputProfileId: 'srgb',
+                flareFloor: null,
+                residualBaseOffset: null,
+                highlightDensity: 0,
+              },
+            },
+          },
+        } as MessageEvent);
+      });
+      return;
+    }
     this.postedMessages.push(message);
   }
 }
 
-async function flushAsyncWork(iterations = 4) {
+async function flushAsyncWork(iterations = 16) {
   for (let index = 0; index < iterations; index += 1) {
     await Promise.resolve();
   }
@@ -788,7 +821,7 @@ describe('ImageWorkerClient', () => {
     expect(convertSpy).not.toHaveBeenCalled();
   });
 
-  it('samples residual base correction from the full frame before rendering a cropped GPU preview', async () => {
+  it('requests the pinned conversion analysis before rendering a cropped GPU preview', async () => {
     Object.defineProperty(navigator, 'gpu', {
       configurable: true,
       value: {},
@@ -818,80 +851,26 @@ describe('ImageWorkerClient', () => {
 
     await flushAsyncWork();
 
-    const residualPrepareRequest = worker.postedMessages[0];
-    expect(residualPrepareRequest?.type).toBe('prepare-tile-job');
-    expect(residualPrepareRequest?.payload).toMatchObject({
-      targetMaxDimension: 512,
+    // The residual base offset is no longer sampled client-side from a
+    // dedicated 512px tile job: the client asks the worker for the pinned
+    // conversion analysis (audit Phase C) and goes straight to geometry.
+    const analysisRequest = worker.analysisMessages[0];
+    expect(analysisRequest?.type).toBe('conversion-analysis');
+    expect(analysisRequest?.payload).toMatchObject({
+      documentId: 'doc-1',
+      isColor: true,
       settings: {
         crop: {
-          x: 0,
-          y: 0,
-          width: 1,
-          height: 1,
-          aspectRatio: null,
+          x: 0.2,
+          y: 0.2,
+          width: 0.5,
+          height: 0.5,
+          aspectRatio: 1,
         },
       },
     });
 
-    worker.onmessage?.({
-      data: {
-        id: residualPrepareRequest?.id,
-        ok: true,
-        payload: {
-          documentId: 'doc-1',
-          jobId: 'residual-job',
-          sourceKind: 'preview',
-          width: 1,
-          height: 1,
-          previewLevelId: 'preview-512',
-          tileSize: 1024,
-          halo: 0,
-          geometryCacheHit: true,
-        },
-      },
-    } as MessageEvent);
-
-    await flushAsyncWork();
-
-    const residualTileRequest = worker.postedMessages[1];
-    expect(residualTileRequest?.type).toBe('read-tile');
-    worker.onmessage?.({
-      data: {
-        id: residualTileRequest?.id,
-        ok: true,
-        payload: {
-          documentId: 'doc-1',
-          jobId: 'residual-job',
-          x: 0,
-          y: 0,
-          width: 1,
-          height: 1,
-          haloLeft: 0,
-          haloTop: 0,
-          haloRight: 0,
-          haloBottom: 0,
-          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
-        },
-      },
-    } as MessageEvent);
-
-    await flushAsyncWork();
-
-    const residualCancelRequest = worker.postedMessages[2];
-    expect(residualCancelRequest?.type).toBe('cancel-job');
-    worker.onmessage?.({
-      data: {
-        id: residualCancelRequest?.id,
-        ok: true,
-        payload: {
-          cancelled: true,
-        },
-      },
-    } as MessageEvent);
-
-    await flushAsyncWork();
-
-    const croppedPrepareRequest = worker.postedMessages[3];
+    const croppedPrepareRequest = worker.postedMessages[0];
     expect(croppedPrepareRequest?.type).toBe('prepare-tile-job');
     expect(croppedPrepareRequest?.payload).toMatchObject({
       settings: {
@@ -925,7 +904,7 @@ describe('ImageWorkerClient', () => {
 
     await flushAsyncWork();
 
-    const croppedTileRequest = worker.postedMessages[4];
+    const croppedTileRequest = worker.postedMessages[1];
     expect(croppedTileRequest?.type).toBe('read-tile');
     worker.onmessage?.({
       data: {
@@ -949,7 +928,7 @@ describe('ImageWorkerClient', () => {
 
     await flushAsyncWork();
 
-    const croppedCancelRequest = worker.postedMessages[5];
+    const croppedCancelRequest = worker.postedMessages[2];
     expect(croppedCancelRequest?.type).toBe('cancel-job');
     worker.onmessage?.({
       data: {

@@ -678,6 +678,49 @@ export interface AutoAnalyzeRequest {
   lightSourceBias?: [number, number, number];
 }
 
+// Pinned conversion analysis (audit Phase C): data-dependent conversion
+// parameters computed once per (document, relevant settings) at a fixed
+// resolution in the worker, then passed identically to preview, tiles,
+// and export so they cannot drift apart.
+export interface ConversionAnalysisRequest {
+  documentId: string;
+  settings: ConversionSettings;
+  isColor: boolean;
+  profileId?: string | null;
+  filmType?: FilmProfileType;
+  inputProfileId?: ColorProfileId;
+  outputProfileId?: ColorProfileId;
+  lightSourceBias?: [number, number, number];
+  flareFloor?: [number, number, number] | null;
+  maskTuning?: MaskTuning;
+  colorMatrix?: ColorMatrix;
+  tonalCharacter?: TonalCharacter;
+  labStyleToneCurve?: CurvePoint[];
+  labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] };
+  labTonalCharacterOverride?: Partial<TonalCharacter>;
+  labSaturationBias?: number;
+  labTemperatureBias?: number;
+}
+
+export interface ConversionParametersDebug {
+  baseSampleSource: 'manual-picker' | 'auto-estimated-border' | 'none';
+  baseDensity: [number, number, number];
+  densityScale: [number, number, number];
+  densityScaleSource: DensityBalance['source'] | 'neutral';
+  inputProfileId: ColorProfileId;
+  outputProfileId: ColorProfileId;
+  flareFloor: [number, number, number] | null;
+  residualBaseOffset: [number, number, number] | null;
+  highlightDensity: number;
+}
+
+export interface ConversionAnalysisResult {
+  type: 'conversion-analysis';
+  residualBaseOffset: [number, number, number] | null;
+  highlightDensity: number;
+  debug: ConversionParametersDebug;
+}
+
 export interface DustDetectRequest {
   documentId: string;
   settings: ConversionSettings;

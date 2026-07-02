@@ -299,6 +299,9 @@ export interface DensityInversionParams {
   // Per-channel density scaling that normalizes the dye layers' contrast
   // mismatch to the green channel (C-41 layers have different gammas).
   densityScale: [number, number, number];
+  // Provenance, for the conversion-parameters debug readout (audit Phase C).
+  baseSampleSource: 'manual-picker' | 'auto-estimated-border' | 'none';
+  densityScaleSource: DensityBalance['source'] | 'neutral';
 }
 
 const DISABLED_DENSITY_INVERSION: DensityInversionParams = {
@@ -306,6 +309,8 @@ const DISABLED_DENSITY_INVERSION: DensityInversionParams = {
   gamma: [1, 1, 1],
   baseDensity: [0, 0, 0],
   densityScale: [1, 1, 1],
+  baseSampleSource: 'none',
+  densityScaleSource: 'neutral',
 };
 
 function resolveDensityBalance(
@@ -399,6 +404,10 @@ export function resolveDensityInversionParams(
     gamma: [DENSITY_TO_POSITIVE_GAMMA, DENSITY_TO_POSITIVE_GAMMA, DENSITY_TO_POSITIVE_GAMMA],
     baseDensity,
     densityScale: [densityBalance.scaleR, densityBalance.scaleG, densityBalance.scaleB],
+    baseSampleSource: settings.filmBaseSample
+      ? 'manual-picker'
+      : (convertedEstimate ? 'auto-estimated-border' : 'none'),
+    densityScaleSource: isColor ? densityBalance.source : 'neutral',
   };
 }
 
