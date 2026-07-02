@@ -33,8 +33,7 @@ import {
   WorkerMemoryDiagnostics,
 } from '../types';
 import {
-  applyFilmBaseCompensation,
-  applyLightSourceCorrection,
+  applyInversionStage,
   assertSupportedDimensions,
   buildEmptyHistogram,
   computeResidualBaseOffset,
@@ -48,6 +47,7 @@ import {
   normalizeCrop,
   processImageData,
   releaseScratchBuffers,
+  resolveDensityInversionParams,
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
@@ -393,6 +393,9 @@ function computeResidualBaseOffsetForSourceCanvas(
   outputProfileId: ColorProfileId = 'srgb',
   lightSourceBias: [number, number, number] = [1, 1, 1],
   flareFloor: [number, number, number] | null = null,
+  profileId: string | null = null,
+  estimatedFilmBaseSample: FilmBaseSample | null = null,
+  estimatedDensityBalance: DensityBalance | null = null,
 ) {
   const samplingSettings = getResidualBaseSamplingSettings(settings);
   const transformed = renderTransformedCanvas(sourceCanvas, samplingSettings);
@@ -410,6 +413,9 @@ function computeResidualBaseOffsetForSourceCanvas(
     outputProfileId,
     lightSourceBias,
     flareFloor,
+    profileId,
+    estimatedFilmBaseSample,
+    estimatedDensityBalance,
   );
 }
 
@@ -793,42 +799,71 @@ function createDustRemovedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
   return canvas;
 }
 
-function applyDustAnalysisStage(
+interface AnalysisInversionOptions {
+  settings: ConversionSettings;
+  isColor: boolean;
+  profileId?: string | null;
+  filmType?: FilmProfileType;
+  flareFloor?: [number, number, number] | null;
+  lightSourceBias?: [number, number, number];
+}
+
+// Shared front-half of the conversion pipeline for analysis passes (auto
+// white balance, dust detection). Mirrors processImageData up to the
+// channel-balance stage so analysis sees the same positives as rendering.
+function applyAnalysisInversionStage(
   imageData: ImageData,
-  payload: DustDetectRequest,
+  options: AnalysisInversionOptions,
+  inputProfileId: ColorProfileId,
+  outputProfileId: ColorProfileId,
+  document: StoredDocument,
   residualBaseOffset: [number, number, number] | null,
 ) {
-  convertImageDataColorProfile(imageData, 'srgb', 'srgb');
+  convertImageDataColorProfile(imageData, inputProfileId, outputProfileId);
 
   const { data } = imageData;
-  const filmBaseBalance = getFilmBaseBalance(payload.settings.filmBaseSample);
-  const lightSourceBias = payload.lightSourceBias ?? [1, 1, 1];
-  const filmType = payload.filmType ?? 'negative';
+  const filmType = options.filmType ?? 'negative';
+  const filmBaseBalance = getFilmBaseBalance(options.settings.filmBaseSample);
+  const lightSourceBias = options.lightSourceBias ?? [1, 1, 1];
+  const flareStrength = (options.settings.flareCorrection ?? 50) / 100;
+  const flareFloorNormalized: [number, number, number] = options.flareFloor
+    ? [options.flareFloor[0] / 255, options.flareFloor[1] / 255, options.flareFloor[2] / 255]
+    : [0, 0, 0];
+  const densityInversion = resolveDensityInversionParams(
+    options.settings,
+    options.isColor,
+    filmType,
+    options.profileId ?? null,
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
+    inputProfileId,
+    outputProfileId,
+    options.flareFloor ?? null,
+    flareStrength,
+  );
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
     let g = data[index + 1] / 255;
     let b = data[index + 2] / 255;
 
-    r = applyLightSourceCorrection(r, lightSourceBias[0]);
-    g = applyLightSourceCorrection(g, lightSourceBias[1]);
-    b = applyLightSourceCorrection(b, lightSourceBias[2]);
+    [r, g, b] = applyInversionStage(
+      r,
+      g,
+      b,
+      filmType,
+      outputProfileId,
+      filmBaseBalance,
+      densityInversion,
+      flareFloorNormalized,
+      flareStrength,
+      lightSourceBias,
+      residualBaseOffset,
+    );
 
-    if (filmType !== 'slide') {
-      r = 1 - r;
-      g = 1 - g;
-      b = 1 - b;
-    }
-
-    r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
-    g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
-    b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
-
-    if (residualBaseOffset) {
-      r = Math.max(0, r - residualBaseOffset[0]);
-      g = Math.max(0, g - residualBaseOffset[1]);
-      b = Math.max(0, b - residualBaseOffset[2]);
-    }
+    r *= options.settings.redBalance;
+    g *= options.settings.greenBalance;
+    b *= options.settings.blueBalance;
 
     data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
     data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
@@ -857,10 +892,16 @@ function handleDustDetect(payload: DustDetectRequest) {
     'srgb',
     payload.lightSourceBias ?? [1, 1, 1],
     payload.flareFloor ?? null,
+    payload.profileId ?? null,
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
   );
-  applyDustAnalysisStage(
+  applyAnalysisInversionStage(
     imageData,
     payload,
+    'srgb',
+    'srgb',
+    document,
     residualBaseOffset,
   );
   const detectedMarks = detectDustMarks(imageData, payload.sensitivity, payload.maxRadius, payload.mode)
@@ -1197,49 +1238,6 @@ function sampleRegionFromTransformedCanvas(
   } satisfies FilmBaseSample;
 }
 
-function applyAutoWhiteBalanceAnalysisStage(
-  imageData: ImageData,
-  payload: AutoAnalyzeRequest,
-  residualBaseOffset: [number, number, number] | null,
-) {
-  convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
-
-  const { data } = imageData;
-  const filmBaseBalance = getFilmBaseBalance(payload.settings.filmBaseSample);
-  const lightSourceBias = payload.lightSourceBias ?? [1, 1, 1];
-  const filmType = payload.filmType ?? 'negative';
-
-  for (let index = 0; index < data.length; index += 4) {
-    let r = data[index] / 255;
-    let g = data[index + 1] / 255;
-    let b = data[index + 2] / 255;
-
-    r = applyLightSourceCorrection(r, lightSourceBias[0]);
-    g = applyLightSourceCorrection(g, lightSourceBias[1]);
-    b = applyLightSourceCorrection(b, lightSourceBias[2]);
-
-    if (filmType !== 'slide') {
-      r = 1 - r;
-      g = 1 - g;
-      b = 1 - b;
-    }
-
-    r = applyFilmBaseCompensation(r, filmBaseBalance.red) * payload.settings.redBalance;
-    g = applyFilmBaseCompensation(g, filmBaseBalance.green) * payload.settings.greenBalance;
-    b = applyFilmBaseCompensation(b, filmBaseBalance.blue) * payload.settings.blueBalance;
-
-    if (residualBaseOffset) {
-      r = Math.max(0, r - residualBaseOffset[0]);
-      g = Math.max(0, g - residualBaseOffset[1]);
-      b = Math.max(0, b - residualBaseOffset[2]);
-    }
-
-    data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
-    data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
-    data[index + 2] = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
-  }
-}
-
 function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   const document = getStoredDocument(payload.documentId);
   const analysisTargetDimension = Math.min(payload.targetMaxDimension, 1024);
@@ -1259,6 +1257,9 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.outputProfileId ?? 'srgb',
     payload.lightSourceBias ?? [1, 1, 1],
     payload.flareFloor ?? null,
+    payload.profileId ?? null,
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
   );
   const toneHistogram = processImageData(
     toneImageData,
@@ -1281,12 +1282,17 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
   );
 
   const whiteBalanceImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  applyAutoWhiteBalanceAnalysisStage(
+  applyAnalysisInversionStage(
     whiteBalanceImageData,
     payload,
+    payload.inputProfileId ?? 'srgb',
+    payload.outputProfileId ?? 'srgb',
+    document,
     residualBaseOffset,
   );
 
@@ -1332,6 +1338,9 @@ function handleRender(payload: RenderRequest) {
       payload.outputProfileId ?? 'srgb',
       payload.lightSourceBias ?? [1, 1, 1],
       payload.flareFloor ?? null,
+      payload.profileId ?? null,
+      document.estimatedFilmBaseSample,
+      document.estimatedDensityBalance,
     );
   const histogram = payload.skipProcessing
     ? buildEmptyHistogram()
@@ -1356,6 +1365,8 @@ function handleRender(payload: RenderRequest) {
       residualBaseOffset,
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
+      document.estimatedFilmBaseSample,
+      document.estimatedDensityBalance,
     );
   const highlightDensity = computeHighlightDensity(histogram);
 
@@ -1404,6 +1415,9 @@ async function handleExport(payload: ExportRequest) {
     payload.outputProfileId ?? 'srgb',
     payload.lightSourceBias ?? [1, 1, 1],
     payload.flareFloor ?? null,
+    payload.profileId ?? null,
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
   );
 
   if (payload.skipProcessing) {
@@ -1438,6 +1452,8 @@ async function handleExport(payload: ExportRequest) {
     residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
+    document.estimatedFilmBaseSample,
+    document.estimatedDensityBalance,
   );
   ctx.putImageData(imageData, 0, 0);
 
@@ -1517,6 +1533,9 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       payload.exportOptions.outputProfileId,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
       payload.flareFloorPerCell?.[index] ?? null,
+      profile.id,
+      document.estimatedFilmBaseSample,
+      document.estimatedDensityBalance,
     );
     processImageData(
       imageData,
@@ -1539,6 +1558,8 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       residualBaseOffset,
       payload.flareFloorPerCell?.[index] ?? null,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
+      document.estimatedFilmBaseSample,
+      document.estimatedDensityBalance,
     );
 
     const col = index % columns;

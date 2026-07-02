@@ -16,7 +16,7 @@ import {
 } from '../imagePipeline';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
-const PROCESSING_UNIFORM_BYTES = 72 * 4;
+const PROCESSING_UNIFORM_BYTES = 84 * 4;
 const CURVE_LUT_BYTES = 1024 * 4;
 const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
@@ -480,8 +480,8 @@ export class WebGPUPipeline {
     outputProfileId: ColorProfileId = 'srgb',
     profileId: string | null = null,
     filmType: FilmProfileType = 'negative',
-    _estimatedFilmBaseSample?: FilmBaseSample | null,
-    _estimatedDensityBalance?: DensityBalance | null,
+    estimatedFilmBaseSample: FilmBaseSample | null = null,
+    estimatedDensityBalance: DensityBalance | null = null,
     residualBaseOffset: [number, number, number] | null = null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
@@ -543,6 +543,8 @@ export class WebGPUPipeline {
       residualBaseOffset,
       flareFloor,
       lightSourceBias,
+      estimatedFilmBaseSample,
+      estimatedDensityBalance,
     );
     const processingUniformsHash = hashFloat32Array(processingUniforms);
     if (processingUniformsHash !== this.lastProcessingUniformsHash) {

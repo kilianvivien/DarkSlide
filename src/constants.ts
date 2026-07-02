@@ -411,6 +411,14 @@ export const FILM_STOCK_DENSITY_PRESETS: Record<string, Omit<DensityBalance, 'so
   'fujifilm-200': { scaleR: 1, scaleG: 1, scaleB: 0.57 },
 };
 
+// Effective display gamma of the density → positive mapping. Calibrated so a
+// typical C-41 midtone lands where the previous complement inversion put it,
+// which keeps existing film profile defaults and user presets working.
+// Per-channel dye contrast differences are handled by the density balance
+// scales above (FILM_STOCK_DENSITY_PRESETS / computeDensityBalance), so this
+// stays a single scalar — applying both would double-correct.
+export const DENSITY_TO_POSITIVE_GAMMA = 2.2;
+
 export const LIGHT_SOURCE_PROFILES: LightSourceProfile[] = [
   { id: 'auto', name: 'Auto (no correction)', colorTemperature: 0, spectralBias: [1, 1, 1], flareCharacteristic: 'medium' },
   { id: 'daylight', name: 'Generic daylight LED panel', colorTemperature: 5500, spectralBias: [1.0, 0.98, 0.95], flareCharacteristic: 'low' },

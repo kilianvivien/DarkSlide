@@ -16,7 +16,7 @@ struct Uniforms {
   filmBaseR: f32,
   filmBaseG: f32,
   filmBaseB: f32,
-  shadowFloorR: f32,
+  densityInversionEnabled: f32,
 
   chanBalR: f32,
   chanBalG: f32,
@@ -41,7 +41,7 @@ struct Uniforms {
   shadowRecovery: f32,
   midtoneContrast: f32,
   highlightDensity: f32,
-  shadowFloorG: f32,
+  _pad8: f32,
 
   flareFloorR: f32,
   flareFloorG: f32,
@@ -91,7 +91,22 @@ struct Uniforms {
   residualBaseOffsetR: f32,
   residualBaseOffsetG: f32,
   residualBaseOffsetB: f32,
-  shadowFloorB: f32,
+  _pad17: f32,
+
+  hdGammaR: f32,
+  hdGammaG: f32,
+  hdGammaB: f32,
+  _pad18: f32,
+
+  baseDensityR: f32,
+  baseDensityG: f32,
+  baseDensityB: f32,
+  _pad19: f32,
+
+  densityScaleR: f32,
+  densityScaleG: f32,
+  densityScaleB: f32,
+  _pad20: f32,
 };
 
 struct BlurParams {
@@ -179,11 +194,14 @@ fn applyFilmBaseCompensation(value: f32, sampleValue: f32) -> f32 {
   return clampF((value - invertedFilmBase) / max(1.0 / 255.0, 1.0 - invertedFilmBase), 0.0, 1.0);
 }
 
-fn applyShadowFloorCorrection(value: f32, floor: f32) -> f32 {
-  if (floor <= 0.0) {
-    return value;
-  }
-  return clampF((value - floor) / (1.0 - floor), 0.0, 1.0);
+fn log10(value: f32) -> f32 {
+  return log(value) / log(10.0);
+}
+
+fn applyDensityInversion(encodedValue: f32, transferMode: f32, baseDensity: f32, densityScale: f32, gamma: f32) -> f32 {
+  let transmittance = clampF(decodeTransfer(encodedValue, transferMode), 1e-6, 1.0);
+  let density = max(0.0, -log10(transmittance) - baseDensity) * densityScale;
+  return clampF(1.0 - pow(10.0, -density / max(gamma, 0.01)), 0.0, 1.0);
 }
 
 fn applyTonalCharacter(value: f32, uniforms: Uniforms) -> f32 {
@@ -289,19 +307,21 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
     g = clampF(g / max(uniforms.lightSourceBiasG, 0.05), 0.0, 1.0);
     b = clampF(b / max(uniforms.lightSourceBiasB, 0.05), 0.0, 1.0);
 
-    if (uniforms.isSlide <= 0.5) {
-      r = 1.0 - r;
-      g = 1.0 - g;
-      b = 1.0 - b;
+    if (uniforms.densityInversionEnabled > 0.5) {
+      r = applyDensityInversion(r, uniforms.outputTransferMode, uniforms.baseDensityR, uniforms.densityScaleR, uniforms.hdGammaR);
+      g = applyDensityInversion(g, uniforms.outputTransferMode, uniforms.baseDensityG, uniforms.densityScaleG, uniforms.hdGammaG);
+      b = applyDensityInversion(b, uniforms.outputTransferMode, uniforms.baseDensityB, uniforms.densityScaleB, uniforms.hdGammaB);
+    } else {
+      if (uniforms.isSlide <= 0.5) {
+        r = 1.0 - r;
+        g = 1.0 - g;
+        b = 1.0 - b;
+      }
+
+      r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
+      g = applyFilmBaseCompensation(g, uniforms.filmBaseG);
+      b = applyFilmBaseCompensation(b, uniforms.filmBaseB);
     }
-
-    r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
-    g = applyFilmBaseCompensation(g, uniforms.filmBaseG);
-    b = applyFilmBaseCompensation(b, uniforms.filmBaseB);
-
-    r = applyShadowFloorCorrection(r, uniforms.shadowFloorR);
-    g = applyShadowFloorCorrection(g, uniforms.shadowFloorG);
-    b = applyShadowFloorCorrection(b, uniforms.shadowFloorB);
 
     r = max(0.0, r - uniforms.residualBaseOffsetR);
     g = max(0.0, g - uniforms.residualBaseOffsetG);

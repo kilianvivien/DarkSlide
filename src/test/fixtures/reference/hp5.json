@@ -1,9 +1,9 @@
 {
   "profile": "hp5",
   "patches": [
-    { "name": "highlight", "x": 0, "y": 0, "source": [210, 180, 165], "expected": [50, 50, 50] },
-    { "name": "midtone", "x": 1, "y": 0, "source": [128, 120, 115], "expected": [134, 134, 134] },
-    { "name": "shadow", "x": 0, "y": 1, "source": [60, 55, 50], "expected": [217, 217, 217] },
-    { "name": "near-highlight", "x": 1, "y": 1, "source": [200, 190, 185], "expected": [43, 43, 43] }
+    { "name": "highlight", "x": 0, "y": 0, "source": [210, 180, 165], "expected": [51, 51, 51] },
+    { "name": "midtone", "x": 1, "y": 0, "source": [128, 120, 115], "expected": [135, 135, 135] },
+    { "name": "shadow", "x": 0, "y": 1, "source": [60, 55, 50], "expected": [214, 214, 214] },
+    { "name": "near-highlight", "x": 1, "y": 1, "source": [200, 190, 185], "expected": [45, 45, 45] }
   ]
 }

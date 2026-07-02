@@ -138,8 +138,8 @@ describe('processImageData', () => {
 });
 
 describe('buildProcessingUniforms', () => {
-  it('keeps the GPU uniform payload aligned at 72 floats', () => {
-    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(72);
+  it('keeps the GPU uniform payload aligned at 84 floats', () => {
+    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(84);
   });
 
 });
@@ -282,7 +282,7 @@ describe('blackPoint and whitePoint sliders', () => {
   it('blackPoint=0 leaves a dark pixel at its natural level', () => {
     const pixel = createPixel(235, 235, 235);
     processImageData(pixel, { ...neutralSettings, blackPoint: 0, whitePoint: 255 }, true, 'processed');
-    expect(luminance(pixel)).toBeCloseTo(20, 0);
+    expect(luminance(pixel)).toBeCloseTo(21, 0);
   });
 
   it('whitePoint=200 clips a bright pixel to full', () => {
