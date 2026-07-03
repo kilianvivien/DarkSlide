@@ -21,8 +21,11 @@ const GITHUB_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 struct RawDecodeResult {
     width: u32,
     height: u32,
-    data: Vec<u8>,
+    data: Vec<u16>,
     color_space: String,
+    #[serde(rename = "bitDepth")]
+    bit_depth: u8,
+    transfer: String,
     orientation: Option<u16>,
 }
 
@@ -114,7 +117,7 @@ fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
                 .ok_or_else(|| rawler::RawlerError::DecoderFailed("Failed to convert developed RAW image to a dynamic image".to_string()))
         })
         .map_err(|error| error.to_string())?;
-    let rgb = developed.to_rgb8();
+    let rgb = developed.to_rgb16();
 
     let orientation = analyze_metadata(&path)
         .ok()
@@ -128,6 +131,8 @@ fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
         height: rgb.height(),
         data: rgb.into_raw(),
         color_space: "sRGB".to_string(),
+        bit_depth: 16,
+        transfer: "srgb".to_string(),
         orientation,
     })
 }

@@ -413,6 +413,142 @@ describe('ImageWorkerClient', () => {
     });
   });
 
+  it('routes RAW 16-bit exports directly to the worker without retaining the high-depth buffer in the recovery cache', async () => {
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const decoded = client.decode({
+      documentId: 'raw-doc',
+      buffer: new Uint8Array([10, 20, 30, 255]).buffer,
+      highDepthRawBuffer: new Uint16Array([2570, 5140, 7710]).buffer,
+      highDepthRawBitDepth: 16,
+      highDepthRawTransfer: 'srgb',
+      fileName: 'scan.nef',
+      mime: 'image/x-raw-rgba',
+      size: 1234,
+      rawDimensions: { width: 1, height: 1 },
+    });
+
+    const decodeRequest = worker.postedMessages[0];
+    worker.onmessage?.({
+      data: {
+        id: decodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'raw-doc',
+            name: 'scan.nef',
+            mime: 'image/x-raw-rgba',
+            extension: '.nef',
+            size: 1234,
+            width: 1,
+            height: 1,
+          },
+          previewLevels: [],
+        },
+      },
+    } as MessageEvent);
+    await expect(decoded).resolves.toMatchObject({ metadata: { id: 'raw-doc' } });
+
+    const exported = client.export({
+      ...createRenderPayload(),
+      documentId: 'raw-doc',
+      options: {
+        format: 'image/tiff',
+        bitDepth: 16,
+        quality: 1,
+        filenameBase: 'scan',
+        embedMetadata: false,
+        outputProfileId: 'srgb',
+        embedOutputProfile: false,
+        saveSidecar: false,
+        targetMaxDimension: null,
+      },
+    });
+
+    await flushAsyncWork();
+    const exportRequest = worker.postedMessages[1];
+    expect(exportRequest?.type).toBe('export');
+    expect(worker.postedMessages.map((message) => message.type)).not.toContain('prepare-tile-job');
+
+    worker.onmessage?.({
+      data: {
+        id: exportRequest?.id,
+        ok: true,
+        payload: {
+          blob: new Blob(['tiff'], { type: 'image/tiff' }),
+          filename: 'scan.tiff',
+          bitDepthDowngraded: false,
+        },
+      },
+    } as MessageEvent);
+
+    await expect(exported).resolves.toMatchObject({
+      filename: 'scan.tiff',
+      bitDepthDowngraded: false,
+    });
+
+    worker.onerror?.({
+      message: 'worker restarted',
+      preventDefault: vi.fn(),
+    } as unknown as ErrorEvent);
+    const secondWorker = MockWorker.instances[1];
+    const renderAfterRestart = client.render({ ...createRenderPayload(), documentId: 'raw-doc' });
+    await flushAsyncWork(8);
+    const recoveredDecodeRequest = secondWorker.postedMessages[0];
+    expect(recoveredDecodeRequest?.type).toBe('decode');
+    expect(recoveredDecodeRequest?.payload).toMatchObject({
+      documentId: 'raw-doc',
+      mime: 'image/x-raw-rgba',
+      highDepthRawBuffer: undefined,
+    });
+    secondWorker.onmessage?.({
+      data: {
+        id: recoveredDecodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'raw-doc',
+            name: 'scan.nef',
+            mime: 'image/x-raw-rgba',
+            extension: '.nef',
+            size: 1234,
+            width: 1,
+            height: 1,
+          },
+          previewLevels: [],
+        },
+      },
+    } as MessageEvent);
+    await flushAsyncWork(8);
+    const renderRequest = secondWorker.postedMessages[1];
+    secondWorker.onmessage?.({
+      data: {
+        id: renderRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'raw-doc',
+          revision: 1,
+          width: 1,
+          height: 1,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+          histogram: {
+            r: new Array(256).fill(0),
+            g: new Array(256).fill(0),
+            b: new Array(256).fill(0),
+            l: new Array(256).fill(0),
+          },
+          highlightDensity: 0,
+          tileCount: 1,
+          phaseTimings: {},
+        },
+      },
+    } as MessageEvent);
+    await expect(renderAfterRestart).resolves.toMatchObject({ documentId: 'raw-doc' });
+  });
+
   it('retries a render after re-decoding when the worker reports a missing document', async () => {
     const { ImageWorkerClient } = await import('./imageWorkerClient');
     const client = new ImageWorkerClient();

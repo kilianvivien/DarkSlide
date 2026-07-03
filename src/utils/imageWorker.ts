@@ -51,6 +51,7 @@ import {
   getTransformedDimensions,
   normalizeCrop,
   processImageData,
+  processFloatRaster,
   releaseScratchBuffers,
   resolveDensityInversionParams,
   sanitizeFilenameBase,
@@ -85,9 +86,18 @@ interface StoredPreview {
   canvas: OffscreenCanvas;
 }
 
+interface HighDepthRawSource {
+  width: number;
+  height: number;
+  data: Uint16Array;
+  bitDepth: 16;
+  transfer: 'srgb';
+}
+
 interface StoredDocument {
   metadata: SourceMetadata;
   sourceCanvas: OffscreenCanvas;
+  highDepthRawSource?: HighDepthRawSource;
   previews: StoredPreview[];
   rotationCache: Map<string, OffscreenCanvas>;
   cropCache: Map<string, StoredTileJob>;
@@ -565,6 +575,71 @@ function handleConversionAnalysis(payload: ConversionAnalysisRequest): Conversio
   };
 }
 
+function mirrorHighDepthRawSource(source: HighDepthRawSource): HighDepthRawSource {
+  const data = new Uint16Array(source.data.length);
+  for (let y = 0; y < source.height; y += 1) {
+    for (let x = 0; x < source.width; x += 1) {
+      const sourceIndex = (y * source.width + x) * 3;
+      const targetIndex = (y * source.width + (source.width - 1 - x)) * 3;
+      data[targetIndex] = source.data[sourceIndex];
+      data[targetIndex + 1] = source.data[sourceIndex + 1];
+      data[targetIndex + 2] = source.data[sourceIndex + 2];
+    }
+  }
+  return { ...source, data };
+}
+
+function sampleHighDepthRaw(source: HighDepthRawSource, x: number, y: number, channel: number) {
+  if (x < 0 || y < 0 || x > source.width - 1 || y > source.height - 1) {
+    return 0;
+  }
+
+  const x0 = clamp(Math.floor(x), 0, source.width - 1);
+  const y0 = clamp(Math.floor(y), 0, source.height - 1);
+  const x1 = clamp(x0 + 1, 0, source.width - 1);
+  const y1 = clamp(y0 + 1, 0, source.height - 1);
+  const fx = x - x0;
+  const fy = y - y0;
+  const sample = (sampleX: number, sampleY: number) => source.data[(sampleY * source.width + sampleX) * 3 + channel] / 65_535;
+  const top = sample(x0, y0) * (1 - fx) + sample(x1, y0) * fx;
+  const bottom = sample(x0, y1) * (1 - fx) + sample(x1, y1) * fx;
+  return top * (1 - fy) + bottom * fy;
+}
+
+function transformHighDepthRawSource(source: HighDepthRawSource, settings: ConversionSettings) {
+  const rotation = settings.rotation + settings.levelAngle;
+  const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
+    source.width,
+    source.height,
+    rotation,
+  );
+  const cropBounds = getCropPixelBounds(normalizeCrop(settings), rotatedWidth, rotatedHeight);
+  const data = new Float32Array(cropBounds.width * cropBounds.height * 3);
+  const radians = (rotation * Math.PI) / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+
+  for (let y = 0; y < cropBounds.height; y += 1) {
+    for (let x = 0; x < cropBounds.width; x += 1) {
+      const rotatedX = cropBounds.x + x + 0.5 - rotatedWidth / 2;
+      const rotatedY = cropBounds.y + y + 0.5 - rotatedHeight / 2;
+      const sourceX = cosine * rotatedX + sine * rotatedY + source.width / 2 - 0.5;
+      const sourceY = -sine * rotatedX + cosine * rotatedY + source.height / 2 - 0.5;
+      const targetIndex = (y * cropBounds.width + x) * 3;
+      data[targetIndex] = sampleHighDepthRaw(source, sourceX, sourceY, 0);
+      data[targetIndex + 1] = sampleHighDepthRaw(source, sourceX, sourceY, 1);
+      data[targetIndex + 2] = sampleHighDepthRaw(source, sourceX, sourceY, 2);
+    }
+  }
+
+  return {
+    width: cropBounds.width,
+    height: cropBounds.height,
+    data,
+    channels: 3 as const,
+  };
+}
+
 function renderRotatedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
   const rotation = settings.rotation + settings.levelAngle;
   const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
@@ -680,6 +755,7 @@ function estimateMemoryBytes() {
 
   for (const document of documents.values()) {
     total += document.sourceCanvas.width * document.sourceCanvas.height * 4;
+    total += document.highDepthRawSource?.data.byteLength ?? 0;
 
     for (const preview of document.previews) {
       if (preview.canvas !== document.sourceCanvas) {
@@ -1075,11 +1151,23 @@ async function handleDecode(payload: DecodeRequest) {
       throw new Error('Could not create RAW decode canvas.');
     }
 
+    let highDepthRawSource: HighDepthRawSource | undefined = payload.highDepthRawBuffer
+      ? {
+        width,
+        height,
+        data: new Uint16Array(payload.highDepthRawBuffer),
+        bitDepth: 16,
+        transfer: payload.highDepthRawTransfer ?? 'srgb',
+      }
+      : undefined;
     const imageData = new ImageData(new Uint8ClampedArray(payload.buffer), width, height);
     ctx.putImageData(imageData, 0, 0);
 
     if (payload.mirrorHorizontal) {
       canvas = mirrorCanvasHorizontal(canvas);
+      if (highDepthRawSource) {
+        highDepthRawSource = mirrorHighDepthRawSource(highDepthRawSource);
+      }
     }
 
     assertSupportedDimensions(canvas.width, canvas.height);
@@ -1100,6 +1188,7 @@ async function handleDecode(payload: DecodeRequest) {
     documents.set(payload.documentId, {
       metadata,
       sourceCanvas: canvas,
+      highDepthRawSource,
       previews: previewStore,
       rotationCache: new Map(),
       cropCache: new Map(),
@@ -1546,8 +1635,70 @@ function handleSampleFilmBase(payload: SampleRequest) {
   return sampleRegionFromTransformedCanvas(transformed, payload);
 }
 
+function canUseHighDepthRawExport(document: StoredDocument, payload: ExportRequest) {
+  return Boolean(
+    document.highDepthRawSource
+    && payload.options.bitDepth === 16
+    && (payload.options.format === 'image/tiff' || payload.options.format === 'image/png')
+    && resolveDustRemovalSettings(payload.settings.dustRemoval).marks.length === 0,
+  );
+}
+
 async function handleExport(payload: ExportRequest) {
   const document = getStoredDocument(payload.documentId);
+  const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
+
+  if (canUseHighDepthRawExport(document, payload) && document.highDepthRawSource) {
+    const transformed = transformHighDepthRawSource(document.highDepthRawSource, payload.settings);
+    const residualBaseOffset = getPinnedResidualBaseOffset(
+      document,
+      payload.settings,
+      payload.isColor,
+      payload.filmType ?? 'negative',
+      payload.inputProfileId ?? 'srgb',
+      payload.outputProfileId ?? 'srgb',
+      payload.lightSourceBias ?? [1, 1, 1],
+      payload.flareFloor ?? null,
+      payload.profileId ?? null,
+    );
+    const pinnedHighlightDensity = getPinnedHighlightDensity(document, payload, residualBaseOffset);
+
+    if (!payload.skipProcessing) {
+      processFloatRaster(
+        transformed,
+        payload.settings,
+        payload.isColor,
+        'processed',
+        payload.maskTuning,
+        payload.colorMatrix,
+        payload.tonalCharacter,
+        payload.labStyleToneCurve,
+        payload.labStyleChannelCurves,
+        payload.labTonalCharacterOverride,
+        payload.labSaturationBias ?? 0,
+        payload.labTemperatureBias ?? 0,
+        pinnedHighlightDensity,
+        payload.inputProfileId ?? 'srgb',
+        payload.outputProfileId ?? 'srgb',
+        payload.profileId ?? null,
+        payload.filmType ?? 'negative',
+        residualBaseOffset,
+        payload.flareFloor ?? null,
+        payload.lightSourceBias ?? [1, 1, 1],
+        document.estimatedFilmBaseSample,
+        document.estimatedDensityBalance,
+      );
+    }
+
+    const encoded = await encodeExportRaster(transformed, payload.options);
+
+    return {
+      blob: encoded.blob,
+      filename,
+      bitDepthDowngraded: encoded.bitDepthDowngraded,
+    } satisfies ExportResult;
+  }
+
   const exportSource = createDustRemovedCanvas(document.sourceCanvas, payload.settings);
   const transformed = renderTransformedCanvas(exportSource, payload.settings);
   if (exportSource !== document.sourceCanvas) {
@@ -1557,7 +1708,6 @@ async function handleExport(payload: ExportRequest) {
   if (!ctx) throw new Error('Could not create export canvas.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
   const residualBaseOffset = getPinnedResidualBaseOffset(
     document,
     payload.settings,
@@ -1614,6 +1764,9 @@ async function handleExport(payload: ExportRequest) {
     blob: encoded.blob,
     filename,
     bitDepthDowngraded: encoded.bitDepthDowngraded,
+    bitDepthDowngradeReason: encoded.bitDepthDowngraded && document.highDepthRawSource && resolveDustRemovalSettings(payload.settings.dustRemoval).marks.length > 0
+      ? 'dust-removal'
+      : (encoded.bitDepthDowngraded ? 'missing-high-depth-source' : undefined),
   } satisfies ExportResult;
 }
 

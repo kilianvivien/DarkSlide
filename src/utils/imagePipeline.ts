@@ -1210,3 +1210,188 @@ export function processImageData(
 
   return histogram;
 }
+
+export interface FloatRgbRaster {
+  width: number;
+  height: number;
+  data: Float32Array;
+  channels?: 3 | 4;
+}
+
+export function processFloatRaster(
+  raster: FloatRgbRaster,
+  settings: ConversionSettings,
+  isColor: boolean,
+  comparisonMode: 'processed' | 'original',
+  maskTuning?: MaskTuning,
+  colorMatrix?: ColorMatrix,
+  tonalCharacter?: TonalCharacter,
+  labStyleToneCurve?: CurvePoint[],
+  labStyleChannelCurves?: CurveChannelOverrides,
+  labTonalCharacterOverride?: Partial<TonalCharacter>,
+  labSaturationBias = 0,
+  labTemperatureBias = 0,
+  highlightDensityEstimate = 0,
+  inputProfileId: InputProfileSpec = 'srgb',
+  outputProfileId: ColorProfileId = 'srgb',
+  profileId: string | null = null,
+  filmType: FilmProfileType = 'negative',
+  residualBaseOffset: ResidualBaseOffset | null = null,
+  flareFloor: [number, number, number] | null = null,
+  lightSourceBias: [number, number, number] = [1, 1, 1],
+  estimatedFilmBaseSample: FilmBaseSample | null = null,
+  estimatedDensityBalance: DensityBalance | null = null,
+): FloatRgbRaster {
+  const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
+  const effectiveTonalCharacter = tonalCharacter
+    ? { ...tonalCharacter, ...labTonalCharacterOverride }
+    : (labTonalCharacterOverride ? {
+      shadowLift: labTonalCharacterOverride.shadowLift ?? 0,
+      midtoneAnchor: labTonalCharacterOverride.midtoneAnchor ?? 0,
+      highlightRolloff: labTonalCharacterOverride.highlightRolloff ?? 0.5,
+    } : undefined);
+
+  const data = raster.data;
+  const channels = raster.channels ?? 3;
+  const lut = buildComposedCurveLuts(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
+  const fusedR = new Float32Array(256);
+  const fusedG = new Float32Array(256);
+  const fusedB = new Float32Array(256);
+  const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
+  const safeContrast = clamp(effectiveSettings.contrast, -255, 258);
+  const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
+  const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
+  const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
+  const blackPoint = effectiveSettings.blackPoint / 255;
+  const whitePoint = effectiveSettings.whitePoint / 255;
+  const temperatureShift = clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1);
+  const tintShift = clamp(effectiveSettings.tint / 255, -1, 1);
+  const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
+  const flareStrength = (effectiveSettings.flareCorrection ?? 50) / 100;
+  const flareFloorNormalized: [number, number, number] = flareFloor
+    ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
+    : [0, 0, 0];
+  const densityInversion = resolveDensityInversionParams(
+    effectiveSettings,
+    isColor,
+    filmType,
+    profileId,
+    estimatedFilmBaseSample,
+    estimatedDensityBalance,
+    inputProfileId,
+    outputProfileId,
+    flareFloor,
+    flareStrength,
+  );
+
+  for (let index = 0; index < 256; index += 1) {
+    fusedR[index] = lut.r[lut.master[index]] / 255;
+    fusedG[index] = lut.g[lut.master[index]] / 255;
+    fusedB[index] = lut.b[lut.master[index]] / 255;
+  }
+
+  for (let pixel = 0; pixel < raster.width * raster.height; pixel += 1) {
+    const index = pixel * channels;
+    let r = data[index] ?? 0;
+    let g = data[index + 1] ?? 0;
+    let b = data[index + 2] ?? 0;
+
+    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
+
+    if (comparisonMode === 'processed') {
+      [r, g, b] = applyInversionStage(
+        r,
+        g,
+        b,
+        filmType,
+        outputProfileId,
+        filmBaseBalance,
+        densityInversion,
+        flareFloorNormalized,
+        flareStrength,
+        lightSourceBias,
+        residualBaseOffset,
+      );
+
+      if (colorMatrix) {
+        [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);
+      }
+
+      if (isColor) {
+        r *= effectiveSettings.redBalance;
+        g *= effectiveSettings.greenBalance;
+        b *= effectiveSettings.blueBalance;
+        if (!effectiveSettings.blackAndWhite.enabled) {
+          r += temperatureShift;
+          b -= temperatureShift;
+          g += tintShift;
+        }
+      }
+
+      if (shouldUseBlackAndWhite) {
+        const gray = isColor
+          ? mixBlackAndWhiteChannels(
+            r,
+            g,
+            b,
+            effectiveSettings.blackAndWhite.redMix,
+            effectiveSettings.blackAndWhite.greenMix,
+            effectiveSettings.blackAndWhite.blueMix,
+          )
+          : LUMA_R * r + LUMA_G * g + LUMA_B * b;
+        r = gray;
+        g = gray;
+        b = gray;
+      }
+
+      r *= exposureFactor;
+      g *= exposureFactor;
+      b *= exposureFactor;
+
+      r = applyWhiteBlackPoint(r, blackPoint, whitePoint);
+      g = applyWhiteBlackPoint(g, blackPoint, whitePoint);
+      b = applyWhiteBlackPoint(b, blackPoint, whitePoint);
+
+      r = contrastFactor * (r - 0.5) + 0.5;
+      g = contrastFactor * (g - 0.5) + 0.5;
+      b = contrastFactor * (b - 0.5) + 0.5;
+
+      r = applyShadowRecovery(r, effectiveSettings.shadowRecovery ?? 0);
+      g = applyShadowRecovery(g, effectiveSettings.shadowRecovery ?? 0);
+      b = applyShadowRecovery(b, effectiveSettings.shadowRecovery ?? 0);
+
+      r = applyMidtoneContrast(r, effectiveSettings.midtoneContrast ?? 0);
+      g = applyMidtoneContrast(g, effectiveSettings.midtoneContrast ?? 0);
+      b = applyMidtoneContrast(b, effectiveSettings.midtoneContrast ?? 0);
+
+      r = applyAdaptiveHighlightRecovery(r, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
+      g = applyAdaptiveHighlightRecovery(g, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
+      b = applyAdaptiveHighlightRecovery(b, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
+
+      const gray = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+      if (isColor && !effectiveSettings.blackAndWhite.enabled) {
+        r = gray + (r - gray) * saturationFactor;
+        g = gray + (g - gray) * saturationFactor;
+        b = gray + (b - gray) * saturationFactor;
+      } else {
+        [r, g, b] = shouldUseBlackAndWhite
+          ? applyBlackAndWhiteTone(gray, effectiveSettings.blackAndWhite.tone)
+          : [gray, gray, gray];
+      }
+
+      const mappedR = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
+      const mappedG = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
+      const mappedB = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
+
+      r = fusedR[mappedR];
+      g = fusedG[mappedG];
+      b = fusedB[mappedB];
+    }
+
+    data[index] = clamp(r, 0, 1);
+    data[index + 1] = clamp(g, 0, 1);
+    data[index + 2] = clamp(b, 0, 1);
+  }
+
+  return { ...raster, channels };
+}

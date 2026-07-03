@@ -1013,7 +1013,9 @@ export function useWorkspaceCommands({
         pushToast({
           level: 'warning',
           title: 'Exported at 8-bit',
-          message: '16-bit output is not available for this render yet, so the file was saved at 8-bit.',
+          message: result.bitDepthDowngradeReason === 'dust-removal'
+            ? '16-bit RAW export is not available when dust removal is active yet, so the file was saved at 8-bit.'
+            : '16-bit output is not available for this render yet, so the file was saved at 8-bit.',
         });
       }
 

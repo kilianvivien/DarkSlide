@@ -828,8 +828,10 @@ describe('App import and preview pipeline', () => {
     coreState.invoke.mockResolvedValue({
       width: 2,
       height: 1,
-      data: [10, 20, 30, 40, 50, 60],
+      data: [10 * 257, 20 * 257, 30 * 257, 40 * 257, 50 * 257, 60 * 257],
       color_space: 'sRGB',
+      bitDepth: 16,
+      transfer: 'srgb',
     });
     workerState.decode.mockResolvedValue(createDecodedImage(2, 1));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
@@ -856,11 +858,14 @@ describe('App import and preview pipeline', () => {
       fileName: 'scan.dng',
       mime: 'image/x-raw-rgba',
       rawDimensions: { width: 2, height: 1 },
+      highDepthRawBitDepth: 16,
+      highDepthRawTransfer: 'srgb',
       size: 12_345_678,
     }));
 
-    const rawDecodeRequest = workerState.decode.mock.calls[0]?.[0] as { buffer: ArrayBuffer };
+    const rawDecodeRequest = workerState.decode.mock.calls[0]?.[0] as { buffer: ArrayBuffer; highDepthRawBuffer: ArrayBuffer };
     expect(Array.from(new Uint8Array(rawDecodeRequest.buffer))).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
+    expect(Array.from(new Uint16Array(rawDecodeRequest.highDepthRawBuffer))).toEqual([2570, 5140, 7710, 10280, 12850, 15420]);
     expect(screen.getByText(/2 × 1 px/)).toBeInTheDocument();
 
     const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;

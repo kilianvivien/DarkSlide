@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
 import { processImageData } from './imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 
 function createRawRgb(width: number, height: number, border: [number, number, number], center: [number, number, number]) {
   const data = new Uint8Array(width * height * 3);
@@ -276,8 +276,10 @@ describe('rawImport', () => {
     const rawResult = {
       width: 64,
       height: 48,
-      data: createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]),
+      data: Uint16Array.from(createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]), (value) => value * 257),
       color_space: 'Adobe RGB (1998)',
+      bitDepth: 16 as const,
+      transfer: 'srgb' as const,
     };
 
     const request = createWorkerDecodeRequestFromRaw('doc-1', 'scan.nef', 1234, rawResult);
@@ -291,6 +293,8 @@ describe('rawImport', () => {
         width: 64,
         height: 48,
       },
+      highDepthRawBitDepth: 16,
+      highDepthRawTransfer: 'srgb',
       declaredColorProfileName: 'Adobe RGB (1998)',
       declaredColorProfileId: 'adobe-rgb',
       precomputedFilmBaseSample: {
@@ -300,12 +304,19 @@ describe('rawImport', () => {
       },
     });
     expect(Array.from(new Uint8Array(request.buffer).slice(0, 8))).toEqual([160, 150, 140, 255, 160, 150, 140, 255]);
+    expect(Array.from(new Uint16Array(request.highDepthRawBuffer!).slice(0, 6))).toEqual([41120, 38550, 35980, 41120, 38550, 35980]);
   });
 
   it('expands RGB RAW pixels to RGBA for the worker', () => {
     expect(Array.from(rgbToRgba(new Uint8Array([1, 2, 3, 4, 5, 6]), 2, 1))).toEqual([
       1, 2, 3, 255,
       4, 5, 6, 255,
+    ]);
+  });
+
+  it('downconverts RGB16 RAW pixels to an 8-bit RGBA preview', () => {
+    expect(Array.from(rgb16ToRgba8(new Uint16Array([0, 32_768, 65_535]), 1, 1))).toEqual([
+      0, 128, 255, 255,
     ]);
   });
 });

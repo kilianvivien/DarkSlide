@@ -385,6 +385,8 @@ export interface RawDecodeResult {
   height: number;
   data: ArrayLike<number>;
   color_space: string;
+  bitDepth?: ExportBitDepth;
+  transfer?: 'srgb';
   orientation?: number | null;
 }
 
@@ -435,6 +437,9 @@ export interface DecodeRequest {
   size: number;
   displayScaleFactor?: number;
   rawDimensions?: { width: number; height: number };
+  highDepthRawBuffer?: ArrayBuffer;
+  highDepthRawBitDepth?: ExportBitDepth;
+  highDepthRawTransfer?: 'srgb';
   precomputedFilmBaseSample?: FilmBaseSample | null;
   declaredColorProfileName?: string | null;
   declaredColorProfileId?: ColorProfileId | null;
@@ -528,6 +533,7 @@ export interface ExportResult {
    * user instead of silently shipping a lower-depth file.
    */
   bitDepthDowngraded?: boolean;
+  bitDepthDowngradeReason?: 'missing-high-depth-source' | 'dust-removal';
 }
 
 export interface ContactSheetCell {

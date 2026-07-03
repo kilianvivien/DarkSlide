@@ -1,4 +1,4 @@
-import { RAW_EXTENSIONS } from '../constants';
+import { MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
 import { ConversionSettings, DecodeRequest, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
 import { getColorProfileIdFromName } from './colorProfiles';
 import { clamp } from './math';
@@ -57,17 +57,52 @@ export function rgbToRgba(rgb: ArrayLike<number>, width: number, height: number)
   return rgba;
 }
 
+export function rgb16ToRgba8(rgb: ArrayLike<number>, width: number, height: number) {
+  const expectedLength = width * height * 3;
+  if (rgb.length !== expectedLength) {
+    throw new Error(`RAW decode returned ${rgb.length} RGB samples for a ${width}x${height} image.`);
+  }
+
+  const rgba = new Uint8Array(width * height * 4);
+  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < rgb.length; sourceIndex += 3, targetIndex += 4) {
+    rgba[targetIndex] = Math.round((rgb[sourceIndex] ?? 0) / 257);
+    rgba[targetIndex + 1] = Math.round((rgb[sourceIndex + 1] ?? 0) / 257);
+    rgba[targetIndex + 2] = Math.round((rgb[sourceIndex + 2] ?? 0) / 257);
+    rgba[targetIndex + 3] = 255;
+  }
+  return rgba;
+}
+
+function normalizeRawHighDepthBuffer(rawResult: RawDecodeResult) {
+  if (rawResult.width * rawResult.height > MAX_HIGH_DEPTH_RAW_PIXELS) {
+    return undefined;
+  }
+
+  const bitDepth = rawResult.bitDepth ?? 8;
+  if (bitDepth !== 16) {
+    return undefined;
+  }
+  return Uint16Array.from(rawResult.data).buffer;
+}
+
 export function createWorkerDecodeRequestFromRaw(
   documentId: string,
   fileName: string,
   size: number,
   rawResult: RawDecodeResult,
 ): DecodeRequest {
-  const precomputedFilmBaseSample = estimateFilmBaseSample(rawResult.data, rawResult.width, rawResult.height);
+  const previewRgba = (rawResult.bitDepth ?? 8) === 16
+    ? rgb16ToRgba8(rawResult.data, rawResult.width, rawResult.height).buffer
+    : rgbToRgba(rawResult.data, rawResult.width, rawResult.height).buffer;
+  const previewBytes = new Uint8Array(previewRgba);
+  const highDepthRawBuffer = normalizeRawHighDepthBuffer(rawResult);
+  const precomputedFilmBaseSample = (rawResult.bitDepth ?? 8) === 16
+    ? estimateFilmBaseSampleFromRgba(previewBytes, rawResult.width, rawResult.height)
+    : estimateFilmBaseSample(rawResult.data, rawResult.width, rawResult.height);
 
   return {
     documentId,
-    buffer: rgbToRgba(rawResult.data, rawResult.width, rawResult.height).buffer,
+    buffer: previewRgba,
     fileName,
     mime: 'image/x-raw-rgba',
     size,
@@ -75,6 +110,9 @@ export function createWorkerDecodeRequestFromRaw(
       width: rawResult.width,
       height: rawResult.height,
     },
+    highDepthRawBuffer,
+    highDepthRawBitDepth: highDepthRawBuffer ? 16 : undefined,
+    highDepthRawTransfer: highDepthRawBuffer ? (rawResult.transfer ?? 'srgb') : undefined,
     precomputedFilmBaseSample,
     declaredColorProfileName: rawResult.color_space,
     declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),

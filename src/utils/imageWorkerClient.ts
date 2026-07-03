@@ -462,6 +462,11 @@ export class ImageWorkerClient {
     return {
       ...payload,
       buffer: payload.buffer.slice(0),
+      // The RAW high-depth buffer can be hundreds of MB. It is transferred to
+      // the worker and intentionally not retained in the main-thread recovery
+      // cache; after a worker restart the document can recover the preview path
+      // and 16-bit export will gracefully fall back until the file is reopened.
+      highDepthRawBuffer: undefined,
       rawDimensions: payload.rawDimensions ? { ...payload.rawDimensions } : undefined,
       precomputedFilmBaseSample: payload.precomputedFilmBaseSample ? { ...payload.precomputedFilmBaseSample } : payload.precomputedFilmBaseSample,
     };
@@ -1125,7 +1130,8 @@ export class ImageWorkerClient {
 
   async decode(payload: DecodeRequest) {
     const cachedPayload = this.cloneDecodeRequest(payload);
-    const decoded = await this.request<DecodedImage>('decode', payload, [payload.buffer]);
+    const transfer = payload.highDepthRawBuffer ? [payload.buffer, payload.highDepthRawBuffer] : [payload.buffer];
+    const decoded = await this.request<DecodedImage>('decode', payload, transfer);
     this.decodeCache.set(payload.documentId, {
       payload: cachedPayload,
       estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
@@ -1566,6 +1572,18 @@ export class ImageWorkerClient {
     const cachedDecode = this.decodeCache.get(payload.documentId);
     const estimatedFilmBaseSample = cachedDecode?.estimatedFilmBaseSample ?? null;
     const estimatedDensityBalance = payload.estimatedDensityBalance ?? cachedDecode?.estimatedDensityBalance ?? null;
+    const wantsHighDepthRawExport = cachedDecode?.payload.mime === 'image/x-raw-rgba'
+      && payload.options.bitDepth === 16
+      && (payload.options.format === 'image/tiff' || payload.options.format === 'image/png');
+    if (wantsHighDepthRawExport) {
+      this.markCpuWorkerBackend('source');
+      return this.requestWithDocumentRecovery(
+        payload.documentId,
+        () => this.request<ExportResult>('export', payload),
+        allowRecovery,
+      );
+    }
+
     if (!this.canAttemptGPU()) {
       this.markCpuWorkerBackend('source');
       return this.requestWithDocumentRecovery(
