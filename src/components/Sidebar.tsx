@@ -9,6 +9,7 @@ import {
   Focus,
   FolderOutput,
   Info,
+  Loader2,
   Pipette,
   Plus,
   Settings,
@@ -940,17 +941,18 @@ export const Sidebar = memo(function Sidebar({
                 <button
                   onClick={onExport}
                   disabled={isExporting}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-100 text-zinc-950 rounded-xl text-sm font-semibold hover:bg-white transition-all shadow-lg shadow-black/20 disabled:opacity-50"
+                  className="grid w-full grid-cols-[1rem_auto] items-center justify-center gap-2 rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50"
+                  aria-busy={isExporting}
                 >
                   {isExporting ? (
                     <>
-                      <Download size={15} className="animate-bounce" />
-                      Exporting…
+                      <Loader2 size={15} className="shrink-0 animate-spin" />
+                      <span className="whitespace-nowrap">Exporting...</span>
                     </>
                   ) : (
                     <>
-                      <Download size={15} />
-                      Export Image
+                      <Download size={15} className="shrink-0" />
+                      <span className="whitespace-nowrap">Export Image</span>
                     </>
                   )}
                 </button>

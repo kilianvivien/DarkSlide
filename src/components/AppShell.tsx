@@ -704,10 +704,13 @@ export function AppShell({
                   <button
                     onClick={onDownload}
                     disabled={Boolean(isExporting)}
-                    className="flex items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-1.5 text-sm font-medium text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50 min-w-[7.5rem]"
+                    className="grid min-w-[8.75rem] grid-cols-[1rem_auto] items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-1.5 text-sm font-medium text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50"
+                    aria-busy={isExporting}
                   >
-                    {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-                    {isExporting ? 'Exporting...' : 'Export'}
+                    {isExporting ? <Loader2 size={16} className="shrink-0 animate-spin" /> : <Download size={16} className="shrink-0" />}
+                    <span className="whitespace-nowrap tabular-nums">
+                      {isExporting ? 'Exporting...' : 'Export'}
+                    </span>
                   </button>
                 </>
               )}
