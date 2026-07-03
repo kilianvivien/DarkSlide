@@ -437,8 +437,18 @@ function getPinnedHighlightDensity(
   payload: Omit<ConversionAnalysisRequest, 'documentId'>,
   residualBaseOffset: [number, number, number] | null,
 ) {
+  // The analysis neutralizes highlightProtection, sharpen, and noiseReduction
+  // before measuring, so key the cache on the neutralized settings — otherwise
+  // nudging those sliders busts the (clear-all-eviction) cache and recomputes an
+  // identical result.
+  const analysisSettings: ConversionSettings = {
+    ...payload.settings,
+    highlightProtection: 0,
+    sharpen: { ...payload.settings.sharpen, enabled: false },
+    noiseReduction: { ...payload.settings.noiseReduction, enabled: false },
+  };
   const cacheKey = JSON.stringify([
-    payload.settings,
+    analysisSettings,
     payload.isColor,
     payload.profileId ?? null,
     payload.filmType ?? 'negative',
@@ -459,13 +469,6 @@ function getPinnedHighlightDensity(
   if (cached !== undefined) {
     return cached;
   }
-
-  const analysisSettings: ConversionSettings = {
-    ...payload.settings,
-    highlightProtection: 0,
-    sharpen: { ...payload.settings.sharpen, enabled: false },
-    noiseReduction: { ...payload.settings.noiseReduction, enabled: false },
-  };
   const preview = getOrCreatePreviewByMaxDimension(document, HIGHLIGHT_ANALYSIS_MAX_DIMENSION);
   // Use job-local canvases: the shared renderTransformedCanvas output may
   // still be in use by the render/export that requested this analysis.
@@ -1605,11 +1608,12 @@ async function handleExport(payload: ExportRequest) {
   );
   ctx.putImageData(imageData, 0, 0);
 
-  const blob = await encodeExportRaster(imageData, payload.options);
+  const encoded = await encodeExportRaster(imageData, payload.options);
 
   return {
-    blob,
+    blob: encoded.blob,
     filename,
+    bitDepthDowngraded: encoded.bitDepthDowngraded,
   } satisfies ExportResult;
 }
 

@@ -358,4 +358,68 @@ describe('runBatch auto-analysis', () => {
     }));
   });
 
+  it('keeps the color-channel pipeline for a B&W-toggled color profile', async () => {
+    const sharedSettings = createDefaultSettings({
+      blackAndWhite: { enabled: true, redMix: 0, greenMix: 0, blueMix: 0, tone: 0 },
+    });
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    expect(profile.type).toBe('color');
+
+    const workerClient = {
+      detectFrame: vi.fn(async () => null),
+      computeFlare: vi.fn(async () => null),
+      render: vi.fn(async () => ({
+        documentId: 'doc-1',
+        revision: 1,
+        width: 100,
+        height: 100,
+        previewLevelId: 'preview-1024',
+        imageData: new ImageData(1, 1),
+        histogram: createHistogramWithHighlightRatio(0.2),
+        highlightDensity: 0.2,
+      })),
+      autoAnalyze: vi.fn(async () => ({
+        exposure: 0,
+        blackPoint: 0,
+        whitePoint: 255,
+        temperature: 0,
+        tint: 0,
+      })),
+      export: vi.fn(async () => ({
+        blob: new Blob(['ok'], { type: 'image/jpeg' }),
+        filename: 'frame.jpg',
+      })),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+    } as const;
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'doc-1',
+        kind: 'open-tab',
+        documentId: 'doc-1',
+        sourceMetadata: createSourceMetadata('doc-1'),
+        filename: 'doc-1.tiff',
+        size: 1,
+        status: 'pending',
+      }],
+      sharedSettings,
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoMode: 'per-image' },
+    ));
+
+    // A B&W toggle on a color profile must still route through the color-channel
+    // pipeline (isColor: true) so channel balance, the B&W mixer, residual base
+    // correction, and density balance match the single-image preview/export.
+    expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({ isColor: true }));
+    expect(workerClient.render).toHaveBeenCalledWith(expect.objectContaining({ isColor: true }));
+    expect(workerClient.autoAnalyze).toHaveBeenCalledWith(expect.objectContaining({ isColor: true }));
+  });
+
 });

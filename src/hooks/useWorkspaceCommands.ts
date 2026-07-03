@@ -1009,6 +1009,14 @@ export function useWorkspaceCommands({
         highlightDensityEstimate,
       });
 
+      if (result.bitDepthDowngraded) {
+        pushToast({
+          level: 'warning',
+          title: 'Exported at 8-bit',
+          message: '16-bit output is not available for this render yet, so the file was saved at 8-bit.',
+        });
+      }
+
       const saved = params?.outputPath
         ? { status: 'saved' as const, path: await saveToDirectory(result.blob, result.filename, params.outputPath) }
         : exportOptions.saveSidecar

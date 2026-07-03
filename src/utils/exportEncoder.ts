@@ -400,23 +400,53 @@ export function encodeTiff(raster: ExportRaster, bitDepth: ExportBitDepth, iccPr
   return bytes;
 }
 
-export async function encodeExportRaster(raster: ExportRaster, options: ExportOptions) {
-  const bitDepth = normalizeExportBitDepth(options.format, options.bitDepth);
+export interface EncodedExport {
+  blob: Blob;
+  /** The bit depth the blob was actually encoded at. */
+  bitDepth: ExportBitDepth;
+  /**
+   * True when 16-bit output was requested but only an 8-bit ImageData source
+   * was available, so the export was degraded to 8-bit instead of failing.
+   */
+  bitDepthDowngraded: boolean;
+}
+
+export async function encodeExportRaster(raster: ExportRaster, options: ExportOptions): Promise<EncodedExport> {
+  const requestedBitDepth = normalizeExportBitDepth(options.format, options.bitDepth);
   const prepared = await prepareRaster(raster, options.targetMaxDimension);
+
+  // 16-bit PNG/TIFF output can only be produced from a high-depth float raster.
+  // Every current export path hands us 8-bit ImageData, so rather than throwing
+  // HighBitDepthExportUnavailableError (which surfaced as a generic "Export
+  // failed" toast) we degrade to 8-bit and report the downgrade to the caller.
+  const bitDepthDowngraded = requestedBitDepth === 16 && isImageDataRaster(prepared);
+  const bitDepth: ExportBitDepth = bitDepthDowngraded ? 8 : requestedBitDepth;
+
   const iccProfile = options.embedOutputProfile ? getColorProfileIcc(options.outputProfileId) : null;
   const profileName = options.embedOutputProfile ? getColorProfileDescription(options.outputProfileId) : null;
 
   if (options.format === 'image/png') {
-    return new Blob([encodePng(prepared, bitDepth, iccProfile, profileName)], { type: 'image/png' });
+    // 8-bit PNG goes through the canvas encoder for real deflate compression;
+    // finalizeExportBlob re-embeds the output ICC profile afterwards. The manual
+    // encoder (stored/uncompressed IDAT) is reserved for 16-bit float rasters.
+    if (bitDepth === 8) {
+      const canvas = createCanvasFromRaster(prepared);
+      const blob = await canvasToBlob(canvas, { type: 'image/png' });
+      return { blob, bitDepth, bitDepthDowngraded };
+    }
+    const blob = new Blob([encodePng(prepared, bitDepth, iccProfile, profileName)], { type: 'image/png' });
+    return { blob, bitDepth, bitDepthDowngraded };
   }
 
   if (options.format === 'image/tiff') {
-    return new Blob([encodeTiff(prepared, bitDepth, iccProfile)], { type: 'image/tiff' });
+    const blob = new Blob([encodeTiff(prepared, bitDepth, iccProfile)], { type: 'image/tiff' });
+    return { blob, bitDepth, bitDepthDowngraded };
   }
 
   const canvas = createCanvasFromRaster(prepared);
-  return canvasToBlob(canvas, {
+  const blob = await canvasToBlob(canvas, {
     type: options.format,
     quality: options.quality,
   });
+  return { blob, bitDepth, bitDepthDowngraded };
 }

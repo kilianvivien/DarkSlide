@@ -1,7 +1,12 @@
 import { ExportBitDepth, ExportFormat, ExportOptions, QuickExportPreset } from '../types';
 
-export function getDefaultBitDepthForFormat(format: ExportFormat): ExportBitDepth {
-  return format === 'image/png' || format === 'image/tiff' ? 16 : 8;
+export function getDefaultBitDepthForFormat(_format: ExportFormat): ExportBitDepth {
+  // 16-bit output requires a high-depth render buffer that no export path
+  // produces yet, so an unspecified bit depth normalizes to 8-bit — the depth
+  // that actually round-trips. Callers can still explicitly request 16-bit for
+  // PNG/TIFF; that path degrades gracefully with a warning until a float export
+  // pipeline exists.
+  return 8;
 }
 
 export function supportsExportBitDepth(format: ExportFormat, bitDepth: ExportBitDepth) {

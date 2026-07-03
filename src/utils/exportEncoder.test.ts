@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { BUILTIN_QUICK_EXPORT_PRESETS } from '../constants';
+import { ExportOptions } from '../types';
 import { getColorProfileIcc } from './colorProfiles';
 import { encodeExportRaster, encodePng, encodeTiff, HighBitDepthExportUnavailableError, FloatExportRaster } from './exportEncoder';
 
@@ -119,11 +121,17 @@ describe('exportEncoder', () => {
     expect(readUint16Le(bytes, stripOffset! + 4)).toBe(65_535);
   });
 
-  it('does not allow 16-bit export from 8-bit ImageData', async () => {
+  it('throws HighBitDepthExportUnavailableError from the low-level encoders for 8-bit ImageData', () => {
+    const imageData = new ImageData(new Uint8ClampedArray([0, 128, 255, 255]), 1, 1);
+    expect(() => encodePng(imageData, 16)).toThrow(HighBitDepthExportUnavailableError);
+    expect(() => encodeTiff(imageData, 16)).toThrow(HighBitDepthExportUnavailableError);
+  });
+
+  it('degrades a requested 16-bit ImageData export to 8-bit instead of failing', async () => {
     const imageData = new ImageData(new Uint8ClampedArray([0, 128, 255, 255]), 1, 1);
 
-    await expect(encodeExportRaster(imageData, {
-      format: 'image/png',
+    const encoded = await encodeExportRaster(imageData, {
+      format: 'image/tiff',
       bitDepth: 16,
       quality: 1,
       filenameBase: 'scan',
@@ -132,6 +140,37 @@ describe('exportEncoder', () => {
       embedOutputProfile: false,
       saveSidecar: false,
       targetMaxDimension: null,
-    })).rejects.toBeInstanceOf(HighBitDepthExportUnavailableError);
+    });
+
+    expect(encoded.bitDepthDowngraded).toBe(true);
+    expect(encoded.bitDepth).toBe(8);
+    expect(encoded.blob.size).toBeGreaterThan(0);
+    // A 1x1 RGB strip is 3 bytes at 8-bit (it would be 6 at 16-bit).
+    const bytes = new Uint8Array(await encoded.blob.arrayBuffer());
+    const entries = getTiffEntries(bytes);
+    expect(entries.get(279)?.value).toBe(3);
+  });
+
+  it('produces a blob when quick-exporting the built-in Archive preset', async () => {
+    const preset = BUILTIN_QUICK_EXPORT_PRESETS.find((candidate) => candidate.id === 'quick-archive');
+    expect(preset).toBeTruthy();
+
+    const options: ExportOptions = {
+      format: preset!.format,
+      bitDepth: preset!.bitDepth,
+      quality: preset!.quality,
+      filenameBase: 'archive',
+      embedMetadata: preset!.embedMetadata,
+      outputProfileId: preset!.outputProfileId,
+      embedOutputProfile: preset!.embedOutputProfile,
+      saveSidecar: preset!.saveSidecar,
+      targetMaxDimension: preset!.maxDimension,
+    };
+
+    const imageData = new ImageData(new Uint8ClampedArray([10, 20, 30, 255]), 1, 1);
+    const encoded = await encodeExportRaster(imageData, options);
+
+    expect(encoded.blob.size).toBeGreaterThan(0);
+    expect(encoded.bitDepthDowngraded).toBe(false);
   });
 });

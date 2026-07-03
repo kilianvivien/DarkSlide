@@ -10,7 +10,16 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v0.9.3
+## What's New in v1.0.0
+
+- **Density-domain inversion** — negatives are now inverted in the film-density domain, with the base sample driving an exact black point and flare subtracted symmetrically from the base and the image, for more faithful, better-behaved conversions
+- **Deterministic, inspectable conversions** — per-document residual-base and highlight analysis are pinned so the preview and the export match, and a diagnostic report captures the exact conversion parameters used
+- **Parsed ICC input profiles** — embedded matrix+TRC ICC profiles are read directly (with D50→D65 adaptation), instead of always falling back to sRGB
+- **Bit-depth export controls** — PNG and TIFF exports expose a bit-depth choice; 8-bit PNG keeps real deflate compression, and a requested 16-bit export degrades gracefully to 8-bit with a warning until the high-depth render path ships
+- **Consistent batch pipeline** — batch export now makes the color-vs-mono decision the same way as preview and single export, so a B&W-toggled color negative no longer slips down the wrong pipeline
+- **Correct embedded PNG color profiles** — fixed the zlib framing in embedded PNG ICC profiles so the profile round-trips in other applications
+
+### Earlier in v0.9.3
 
 - **Fixed RAW black & white conversions** — mono RAW renders and exports no longer inherit a color negative's film-base correction, fixing washed-out and color-cast results when converting RAW negatives with a B&W profile (or with the B&W toggle enabled)
 - **Consistent color-vs-mono pipeline** — the decision of whether a frame is processed in color or monochrome is now made the same way across preview, auto-analyze, single export, batch export, and contact sheets, so a frame can no longer slip down the wrong pipeline

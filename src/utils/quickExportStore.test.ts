@@ -33,7 +33,9 @@ describe('quickExportStore bit depth migration', () => {
 
     expect(loadQuickExportPresets().find((preset) => preset.id === 'custom-archive')).toMatchObject({
       format: 'image/tiff',
-      bitDepth: 16,
+      // A missing bitDepth normalizes to 8-bit — the depth every export path can
+      // actually produce until a high-depth render buffer exists.
+      bitDepth: 8,
     });
   });
 

@@ -139,7 +139,7 @@ describe('loadPreferences', () => {
     });
   });
 
-  it('defaults missing bitDepth by export format', () => {
+  it('normalizes a missing bitDepth to 8-bit', () => {
     localStorage.setItem('darkslide_preferences_v1', JSON.stringify({
       ...VALID_PREFS,
       exportOptions: {
@@ -151,7 +151,9 @@ describe('loadPreferences', () => {
 
     expect(loadPreferences()?.exportOptions).toMatchObject({
       format: 'image/tiff',
-      bitDepth: 16,
+      // 16-bit requires a high-depth render buffer no export path produces yet,
+      // so an unspecified bit depth resolves to 8-bit.
+      bitDepth: 8,
     });
   });
 

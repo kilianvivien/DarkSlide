@@ -1,6 +1,39 @@
+import { inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { embedIccInBlob, IccEmbedValidationError } from './iccEmbed';
 import { encodeTiff, FloatExportRaster } from './exportEncoder';
+
+function buildMinimalPng(): Uint8Array {
+  const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  // IHDR chunk (length 13) + IEND chunk. The embed path only reads the IHDR
+  // length/type, so exact pixel/CRC contents are irrelevant here.
+  const ihdr = new Uint8Array(12 + 13);
+  ihdr[3] = 13; // length (big-endian)
+  ihdr.set(new TextEncoder().encode('IHDR'), 4);
+  const iend = new Uint8Array(12);
+  iend.set(new TextEncoder().encode('IEND'), 4);
+  const png = new Uint8Array(signature.length + ihdr.length + iend.length);
+  png.set(signature, 0);
+  png.set(ihdr, signature.length);
+  png.set(iend, signature.length + ihdr.length);
+  return png;
+}
+
+function extractPngIccpDeflateStream(png: Uint8Array): Uint8Array {
+  let offset = 8;
+  while (offset + 12 <= png.length) {
+    const length = (png[offset] << 24) | (png[offset + 1] << 16) | (png[offset + 2] << 8) | png[offset + 3];
+    const type = String.fromCharCode(png[offset + 4], png[offset + 5], png[offset + 6], png[offset + 7]);
+    if (type === 'iCCP') {
+      const data = png.subarray(offset + 8, offset + 8 + length);
+      const nameEnd = data.indexOf(0); // profile name terminator
+      // Skip the name null and the 1-byte compression method to reach the stream.
+      return data.subarray(nameEnd + 2);
+    }
+    offset += 12 + length;
+  }
+  throw new Error('no iCCP chunk found');
+}
 
 function buildMinimalValidIccProfile(size = 132): Uint8Array {
   // Just enough bytes to satisfy the header sanity checks: declared size
@@ -105,6 +138,23 @@ describe('embedIccInBlob ICC validation', () => {
     expect(String.fromCharCode(...embedded.subarray(12, 16))).toBe('ICCP');
     expect(readUint32Le(embedded, 16)).toBe(newProfile.length);
     expect(String.fromCharCode(...embedded.subarray(20 + newProfile.length + (newProfile.length % 2), 24 + newProfile.length + (newProfile.length % 2)))).toBe('VP8 ');
+  });
+
+  it('writes a PNG iCCP chunk whose zlib stream inflates back to the profile', async () => {
+    // The deflate stored-block LEN/NLEN fields are little-endian; a profile
+    // larger than 255 bytes exercises the high byte, so a big-endian LEN would
+    // corrupt the stream and fail to inflate.
+    const profile = buildMinimalValidIccProfile(600);
+    const embedded = new Uint8Array(await (await embedIccInBlob(
+      new Blob([buildMinimalPng()], { type: 'image/png' }),
+      profile,
+      'image/png',
+      'Test Profile',
+    )).arrayBuffer());
+
+    const stream = extractPngIccpDeflateStream(embedded);
+    const inflated = new Uint8Array(inflateSync(Buffer.from(stream)));
+    expect(Array.from(inflated)).toEqual(Array.from(profile));
   });
 });
 

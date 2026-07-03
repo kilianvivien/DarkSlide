@@ -522,6 +522,12 @@ export interface ExportRequest {
 export interface ExportResult {
   blob: Blob;
   filename: string;
+  /**
+   * Set when a requested 16-bit export was degraded to 8-bit because only an
+   * 8-bit source raster was available. The export path uses this to warn the
+   * user instead of silently shipping a lower-depth file.
+   */
+  bitDepthDowngraded?: boolean;
 }
 
 export interface ContactSheetCell {

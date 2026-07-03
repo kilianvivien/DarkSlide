@@ -1,6 +1,7 @@
 import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, ExportOptions, FilmProfile, HistogramData, InputProfileSpec, LabStyleProfile, SourceMetadata } from '../types';
 import { ImageWorkerClient } from './imageWorkerClient';
 import { computeHighlightDensity, getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
+import { usesColorChannelPipeline } from './pipelineIntent';
 import { decodeDesktopRawForWorker, isRawExtension } from './rawImport';
 import { isDesktopShell, saveExportBlob, saveToDirectory } from './fileBridge';
 import type { AutoAnalyzeResult } from '../types';
@@ -253,7 +254,7 @@ export async function* runBatch(
         const autoDustMarks = await workerClient.detectDust({
           documentId,
           settings: entrySettings,
-          isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
+          isColor: usesColorChannelPipeline(sharedProfile),
           profileId: sharedProfile.id,
           filmType: sharedProfile.filmType,
           flareFloor: entry.estimatedFlare ?? null,
@@ -279,7 +280,7 @@ export async function* runBatch(
       const baseHighlightAnalysis = await analyzeBatchHighlightDensity(workerClient, {
         documentId,
         settings: entrySettings,
-        isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
+        isColor: usesColorChannelPipeline(sharedProfile),
         filmType: sharedProfile.filmType,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
@@ -304,7 +305,7 @@ export async function* runBatch(
           : await workerClient.autoAnalyze({
             documentId,
             settings: entrySettings,
-            isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
+            isColor: usesColorChannelPipeline(sharedProfile),
             filmType: sharedProfile.filmType,
             inputProfileId,
             outputProfileId: exportOptions.outputProfileId,
@@ -337,7 +338,7 @@ export async function* runBatch(
         const postAutoHighlightAnalysis = await analyzeBatchHighlightDensity(workerClient, {
           documentId,
           settings: entrySettings,
-          isColor: sharedProfile.type === 'color' && !entrySettings.blackAndWhite.enabled,
+          isColor: usesColorChannelPipeline(sharedProfile),
           filmType: sharedProfile.filmType,
           inputProfileId,
           outputProfileId: exportOptions.outputProfileId,
@@ -360,7 +361,7 @@ export async function* runBatch(
       const result = await workerClient.export({
         documentId,
         settings: entrySettings,
-        isColor: sharedProfile.type === 'color' && !sharedSettings.blackAndWhite.enabled,
+        isColor: usesColorChannelPipeline(sharedProfile),
         filmType: sharedProfile.filmType,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,

@@ -1644,7 +1644,7 @@ export class ImageWorkerClient {
       );
       await this.cancelTileJob(payload.documentId, jobId);
 
-      const blob = await this.createBlobFromImageData(
+      const encoded = await this.createBlobFromImageData(
         assembled.imageData,
         payload.options,
       );
@@ -1703,8 +1703,9 @@ export class ImageWorkerClient {
       });
 
       return {
-        blob,
+        blob: encoded.blob,
         filename: `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`,
+        bitDepthDowngraded: encoded.bitDepthDowngraded,
       } satisfies ExportResult;
     } catch (error) {
       await this.cancelTileJob(payload.documentId, jobId);
