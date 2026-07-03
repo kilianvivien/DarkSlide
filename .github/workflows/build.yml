@@ -16,7 +16,52 @@ permissions:
   contents: write
 
 jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.release_tag }}" ]]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        if: steps.release.outputs.tag != ''
+        shell: bash
+        run: |
+          tag="${{ steps.release.outputs.tag }}"
+          notes_file=".github/release-notes/${tag}.md"
+          if [[ ! -f "$notes_file" ]]; then
+            notes_file=""
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ -n "$notes_file" ]]; then
+              gh release edit "$tag" --title "DarkSlide ${tag}" --notes-file "$notes_file"
+            else
+              gh release edit "$tag" --title "DarkSlide ${tag}" --generate-notes
+            fi
+          elif [[ -n "$notes_file" ]]; then
+            gh release create "$tag" --title "DarkSlide ${tag}" --notes-file "$notes_file"
+          else
+            gh release create "$tag" --title "DarkSlide ${tag}" --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   build:
+    needs: prepare-release
     strategy:
       fail-fast: false
       matrix:
@@ -68,25 +113,12 @@ jobs:
       - name: Build Tauri app
         run: npm run tauri:build${{ matrix.os == 'macos' && ' -- --target universal-apple-darwin' || '' }}
 
-      # ── Resolve the release tag (tag push or manual input) ────────────────
-      - name: Resolve release tag
-        id: release
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ inputs.release_tag }}" ]]; then
-            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=" >> "$GITHUB_OUTPUT"
-          fi
-
       # ── macOS: upload .dmg to release ─────────────────────────────────────
       - name: Upload macOS artifacts to release
-        if: matrix.os == 'macos' && steps.release.outputs.tag != ''
+        if: matrix.os == 'macos' && needs.prepare-release.outputs.tag != ''
         shell: bash
         run: |
-          gh release upload "${{ steps.release.outputs.tag }}" \
+          gh release upload "${{ needs.prepare-release.outputs.tag }}" \
             src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg \
             --clobber
         env:
@@ -94,10 +126,10 @@ jobs:
 
       # ── Linux: upload .deb and .AppImage to release ───────────────────────
       - name: Upload Linux artifacts to release
-        if: matrix.os == 'linux' && steps.release.outputs.tag != ''
+        if: matrix.os == 'linux' && needs.prepare-release.outputs.tag != ''
         shell: bash
         run: |
-          gh release upload "${{ steps.release.outputs.tag }}" \
+          gh release upload "${{ needs.prepare-release.outputs.tag }}" \
             src-tauri/target/release/bundle/deb/*.deb \
             src-tauri/target/release/bundle/appimage/*.AppImage \
             --clobber
@@ -106,10 +138,10 @@ jobs:
 
       # ── Windows: upload .msi and NSIS .exe to release ────────────────────
       - name: Upload Windows artifacts to release
-        if: matrix.os == 'windows' && steps.release.outputs.tag != ''
+        if: matrix.os == 'windows' && needs.prepare-release.outputs.tag != ''
         shell: bash
         run: |
-          gh release upload "${{ steps.release.outputs.tag }}" \
+          gh release upload "${{ needs.prepare-release.outputs.tag }}" \
             src-tauri/target/release/bundle/msi/*.msi \
             src-tauri/target/release/bundle/nsis/*.exe \
             --clobber
