@@ -704,7 +704,7 @@ export function AppShell({
                   <button
                     onClick={onDownload}
                     disabled={Boolean(isExporting)}
-                    className="flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-1.5 text-sm font-medium text-zinc-950 shadow-lg shadow-black/20 transition-all hover:bg-white disabled:opacity-50"
+                    className="flex items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-1.5 text-sm font-medium text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50 min-w-[7.5rem]"
                   >
                     {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                     {isExporting ? 'Exporting...' : 'Export'}
