@@ -123,11 +123,40 @@ export interface FilmBaseSample {
   b: number;
 }
 
+// Provenance of the resolved clear-film-base reference. `FilmBaseSample` stays
+// a bare RGB triple (it is persisted in settings/presets/rolls); the estimator
+// wraps it in `FilmBaseEstimate` to carry confidence and provenance so the
+// pipeline can degrade gracefully instead of trusting a bad border sample.
+export type FilmBaseEstimateSource =
+  | 'manual'          // user-sampled (settings.filmBaseSample)
+  | 'roll'            // shared from another frame in the roll
+  | 'frame-rebate'    // detected clear-film region near the image gate
+  | 'outer-border'    // legacy border estimate that passed validation
+  | 'low-confidence'; // conservative fallback, estimator evidence rejected
+
+export interface FilmBaseEstimate {
+  sample: FilmBaseSample;
+  source: FilmBaseEstimateSource;
+  confidence: number;          // 0..1
+  rejectedCandidates: number;  // for diagnostics
+  clamped: boolean;            // true if a guard overrode the raw estimate
+}
+
+// The provenance the density resolver reports for the base reference it
+// actually used (superset of estimator provenance plus the manual/none paths).
+export type FilmBaseResolvedSource =
+  | 'manual-picker'
+  | 'roll'
+  | 'frame-rebate'
+  | 'auto-estimated-border'
+  | 'conservative-fallback'
+  | 'none';
+
 export interface DensityBalance {
   scaleR: number;
   scaleG: number;
   scaleB: number;
-  source: 'auto-histogram' | 'film-stock-preset' | 'manual';
+  source: 'auto-histogram' | 'film-stock-preset' | 'manual' | 'clamp-rejected';
 }
 
 export type PointPickerMode = 'black' | 'white' | 'grey';
@@ -211,6 +240,10 @@ export interface ConversionSettings {
   levelAngle: number;
   crop: CropSettings;
   filmBaseSample: FilmBaseSample | null;
+  // Provenance of `filmBaseSample`. Missing ⇒ 'manual' (backward compatible
+  // with persisted presets/sidecars). 'roll' marks a base shared from another
+  // frame in the roll rather than picked directly on this frame.
+  filmBaseSampleSource?: 'manual' | 'roll';
   residualBaseCorrection?: boolean;
   blackAndWhite: BlackAndWhiteSettings;
   sharpen: SharpenSettings;
@@ -377,6 +410,7 @@ export interface DecodedImage {
   previewLevels: PreviewLevel[];
   estimatedFlare?: [number, number, number] | null;
   estimatedFilmBaseSample?: FilmBaseSample | null;
+  estimatedFilmBase?: FilmBaseEstimate | null;
   estimatedDensityBalance?: DensityBalance | null;
 }
 
@@ -398,6 +432,7 @@ export interface WorkspaceDocument {
   colorManagement: ColorManagementSettings;
   estimatedFlare?: [number, number, number] | null;
   estimatedFilmBaseSample?: FilmBaseSample | null;
+  estimatedFilmBase?: FilmBaseEstimate | null;
   estimatedDensityBalance?: DensityBalance | null;
   lightSourceId?: string | null;
   cropSource?: CropSource | null;
@@ -441,6 +476,7 @@ export interface DecodeRequest {
   highDepthRawBitDepth?: ExportBitDepth;
   highDepthRawTransfer?: 'srgb';
   precomputedFilmBaseSample?: FilmBaseSample | null;
+  precomputedFilmBase?: FilmBaseEstimate | null;
   declaredColorProfileName?: string | null;
   declaredColorProfileId?: ColorProfileId | null;
   mirrorHorizontal?: boolean;
@@ -485,6 +521,11 @@ export interface RenderResult {
   imageData: ImageData;
   histogram: HistogramData;
   highlightDensity: number;
+  // Confidence provenance of the film-base reference resolved for this render.
+  // Surfaced so the main thread can raise a low-confidence notice (once per
+  // document) without recomputing the resolver.
+  baseSampleSource?: FilmBaseResolvedSource;
+  lowConfidence?: boolean;
 }
 
 export interface PreparePreviewBitmapRequest {
@@ -745,10 +786,16 @@ export interface ConversionAnalysisRequest {
 }
 
 export interface ConversionParametersDebug {
-  baseSampleSource: 'manual-picker' | 'auto-estimated-border' | 'none';
+  baseSampleSource: FilmBaseResolvedSource;
   baseDensity: [number, number, number];
   densityScale: [number, number, number];
   densityScaleSource: DensityBalance['source'] | 'neutral';
+  baseConfidence: number;
+  lowConfidence: boolean;
+  resolvedSample: FilmBaseSample | null;
+  estimatedSample: FilmBaseSample | null;
+  estimatorRejectedCandidates: number;
+  crushGuardTriggered: boolean;
   inputProfileId: InputProfileSpec;
   outputProfileId: ColorProfileId;
   flareFloor: [number, number, number] | null;

@@ -425,6 +425,26 @@ export const FILM_STOCK_DENSITY_PRESETS: Record<string, Omit<DensityBalance, 'so
 // stays a single scalar — applying both would double-correct.
 export const DENSITY_TO_POSITIVE_GAMMA = 2.2;
 
+// Confidence gates for the clear-film-base estimator and the density resolver.
+// Single source of truth — every threshold in the film-base pipeline reads
+// from here; never inline these numbers.
+export const FILM_BASE_CONFIDENCE = {
+  // Below this luminance (0-255) a candidate cannot be "clear film base"
+  // for a negative; it is holder/paper/dense image content.
+  minPlausibleLuminance: 96,
+  // Minimum contiguous candidate coverage (fraction of scanned region).
+  minRegionFraction: 0.005,
+  // Max per-channel std-dev inside a candidate region (texture gate).
+  maxRegionStdDev: 14,
+  // Estimate accepted outright at or above this confidence.
+  accept: 0.6,
+  // Between reject and accept: used, but flagged low-confidence.
+  reject: 0.3,
+  // If more than this fraction of the positive histogram lands in the
+  // bottom 8/255 after inversion, the base is catastrophic.
+  maxCrushedFraction: 0.85,
+} as const;
+
 export const LIGHT_SOURCE_PROFILES: LightSourceProfile[] = [
   { id: 'auto', name: 'Auto (no correction)', colorTemperature: 0, spectralBias: [1, 1, 1], flareCharacteristic: 'medium' },
   { id: 'daylight', name: 'Generic daylight LED panel', colorTemperature: 5500, spectralBias: [1.0, 0.98, 0.95], flareCharacteristic: 'low' },

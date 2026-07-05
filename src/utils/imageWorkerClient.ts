@@ -16,6 +16,7 @@ import {
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  FilmBaseEstimate,
   FilmProfileType,
   HistogramData,
   HistogramMode,
@@ -62,6 +63,7 @@ type PendingResolver = {
 type CachedDecodeRequest = {
   payload: DecodeRequest;
   estimatedFilmBaseSample: FilmBaseSample | null;
+  estimatedFilmBase: FilmBaseEstimate | null;
   estimatedDensityBalance: DensityBalance | null;
   workerEpoch: number;
   evictionTimeout: number | null;
@@ -469,6 +471,9 @@ export class ImageWorkerClient {
       highDepthRawBuffer: undefined,
       rawDimensions: payload.rawDimensions ? { ...payload.rawDimensions } : undefined,
       precomputedFilmBaseSample: payload.precomputedFilmBaseSample ? { ...payload.precomputedFilmBaseSample } : payload.precomputedFilmBaseSample,
+      precomputedFilmBase: payload.precomputedFilmBase
+        ? { ...payload.precomputedFilmBase, sample: { ...payload.precomputedFilmBase.sample } }
+        : payload.precomputedFilmBase,
     };
   }
 
@@ -494,6 +499,7 @@ export class ImageWorkerClient {
         this.decodeCache.set(documentId, {
           payload: cached.payload,
           estimatedFilmBaseSample: cached.estimatedFilmBaseSample,
+          estimatedFilmBase: cached.estimatedFilmBase,
           estimatedDensityBalance: cached.estimatedDensityBalance,
           workerEpoch: this.workerEpoch,
           evictionTimeout: null,
@@ -875,7 +881,7 @@ export class ImageWorkerClient {
     labTemperatureBias?: RenderRequest['labTemperatureBias'],
     highlightDensityEstimate?: RenderRequest['highlightDensityEstimate'],
     filmType?: RenderRequest['filmType'],
-    estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
+    estimatedFilmBaseSample?: FilmBaseSample | FilmBaseEstimate | null,
     estimatedDensityBalance?: RenderRequest['estimatedDensityBalance'],
     residualBaseOffset?: [number, number, number] | null,
     flareFloor?: RenderRequest['flareFloor'],
@@ -958,7 +964,7 @@ export class ImageWorkerClient {
     labTemperatureBias?: RenderRequest['labTemperatureBias'],
     highlightDensityEstimate?: RenderRequest['highlightDensityEstimate'],
     filmType?: RenderRequest['filmType'],
-    estimatedFilmBaseSample?: RenderRequest['estimatedFilmBaseSample'],
+    estimatedFilmBaseSample?: FilmBaseSample | FilmBaseEstimate | null,
     estimatedDensityBalance?: RenderRequest['estimatedDensityBalance'],
     residualBaseOffset?: [number, number, number] | null,
     flareFloor?: RenderRequest['flareFloor'],
@@ -1135,6 +1141,7 @@ export class ImageWorkerClient {
     this.decodeCache.set(payload.documentId, {
       payload: cachedPayload,
       estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
+      estimatedFilmBase: decoded.estimatedFilmBase ?? null,
       estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
       workerEpoch: this.workerEpoch,
       evictionTimeout: null,
@@ -1223,7 +1230,14 @@ export class ImageWorkerClient {
   private async renderInternal(payload: RenderRequest, allowRecovery: boolean): Promise<RenderResult> {
     const activePreviewJobId = this.activePreviewJobIds.get(payload.documentId) ?? null;
     const cachedDecode = this.decodeCache.get(payload.documentId);
-    const estimatedFilmBaseSample = payload.estimatedFilmBaseSample ?? cachedDecode?.estimatedFilmBaseSample ?? null;
+    // Prefer the confidence-carrying estimate (source of truth from decode) so
+    // the GPU uniforms resolve the same base density/provenance as the worker's
+    // conversion analysis — the bare sample loses the confidence signal that
+    // drives B&W luminance-first and conservative-fallback handling.
+    const estimatedFilmBaseSample = cachedDecode?.estimatedFilmBase
+      ?? payload.estimatedFilmBaseSample
+      ?? cachedDecode?.estimatedFilmBaseSample
+      ?? null;
     const estimatedDensityBalance = payload.estimatedDensityBalance ?? cachedDecode?.estimatedDensityBalance ?? null;
     await this.cancelTileJob(payload.documentId, activePreviewJobId, true);
 
@@ -1440,6 +1454,10 @@ export class ImageWorkerClient {
         imageData: assembled.imageData,
         histogram: assembled.histogram,
         highlightDensity: assembled.highlightDensity,
+        // Surfaced from the pinned conversion analysis so the low-confidence
+        // notice fires for GPU-rendered previews too (the common path).
+        baseSampleSource: analysis?.debug.baseSampleSource,
+        lowConfidence: analysis?.debug.lowConfidence,
       } satisfies RenderResult;
     } catch (error) {
       await this.cancelTileJob(payload.documentId, jobId);
@@ -1570,7 +1588,9 @@ export class ImageWorkerClient {
 
   private async exportInternal(payload: ExportRequest, allowRecovery: boolean): Promise<ExportResult> {
     const cachedDecode = this.decodeCache.get(payload.documentId);
-    const estimatedFilmBaseSample = cachedDecode?.estimatedFilmBaseSample ?? null;
+    // Prefer the confidence-carrying estimate so GPU-tiled export resolves the
+    // same base as the worker analysis (matches the preview render path).
+    const estimatedFilmBaseSample = cachedDecode?.estimatedFilmBase ?? cachedDecode?.estimatedFilmBaseSample ?? null;
     const estimatedDensityBalance = payload.estimatedDensityBalance ?? cachedDecode?.estimatedDensityBalance ?? null;
     const wantsHighDepthRawExport = cachedDecode?.payload.mime === 'image/x-raw-rgba'
       && payload.options.bitDepth === 16

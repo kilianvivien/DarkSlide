@@ -19,6 +19,7 @@ import {
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  FilmBaseEstimate,
   FilmProfileType,
   InputProfileSpec,
   PreparePreviewBitmapRequest,
@@ -38,6 +39,7 @@ import {
   WorkerMemoryDiagnostics,
 } from '../types';
 import {
+  applyCrushGuard,
   applyInversionStage,
   assertSupportedDimensions,
   buildEmptyHistogram,
@@ -50,6 +52,7 @@ import {
   getCropPixelBounds,
   getTransformedDimensions,
   normalizeCrop,
+  normalizeFilmBaseEstimate,
   processImageData,
   processFloatRaster,
   releaseScratchBuffers,
@@ -71,7 +74,7 @@ import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
 import { clamp } from './math';
-import { estimateFilmBaseSampleFromRgba, mirrorFromExifOrientation } from './rawImport';
+import { computeBrightPercentileSample, estimateFilmBase, mirrorFromExifOrientation } from './rawImport';
 import { usesColorChannelPipeline } from './pipelineIntent';
 import { encodeExportRaster } from './exportEncoder';
 import {
@@ -102,6 +105,7 @@ interface StoredDocument {
   rotationCache: Map<string, OffscreenCanvas>;
   cropCache: Map<string, StoredTileJob>;
   estimatedFilmBaseSample: FilmBaseSample | null;
+  estimatedFilmBase: FilmBaseEstimate | null;
   estimatedDensityBalance: DensityBalance | null;
   // Pinned conversion analysis (audit Phase C): memoized so preview, tiles,
   // dust detection, and export all consume identical numbers.
@@ -223,14 +227,14 @@ async function decodeRasterBlob(buffer: ArrayBuffer, mime: string) {
   return canvas;
 }
 
-function estimateCanvasFilmBase(canvas: OffscreenCanvas) {
+function estimateCanvasFilmBase(canvas: OffscreenCanvas): FilmBaseEstimate | null {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) {
     return null;
   }
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  return estimateFilmBaseSampleFromRgba(imageData.data, canvas.width, canvas.height);
+  return estimateFilmBase(imageData.data, canvas.width, canvas.height, 4);
 }
 
 function estimateCanvasDensityBalance(canvas: OffscreenCanvas, filmBaseSample: FilmBaseSample | null) {
@@ -245,6 +249,34 @@ function estimateCanvasDensityBalance(canvas: OffscreenCanvas, filmBaseSample: F
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   return computeDensityBalance(imageData, filmBaseSample);
+}
+
+// Catastrophic-base guard (diagnosis §"Clamp catastrophic base choices"). Run
+// the resolved base through the density inversion against the smallest preview
+// level; if it would crush most of the frame to black, demote the estimate to a
+// conservative bright-percentile reference and recompute the density balance so
+// a distrusted sample can never become the hard density zero point.
+function guardFilmBaseAgainstCrush(
+  estimate: FilmBaseEstimate | null,
+  previews: StoredPreview[],
+  priorDensityBalance: DensityBalance | null,
+): { estimate: FilmBaseEstimate | null; densityBalance: DensityBalance | null } {
+  if (!estimate || previews.length === 0) {
+    return { estimate, densityBalance: priorDensityBalance };
+  }
+
+  const smallest = previews.reduce(
+    (min, preview) => (preview.level.maxDimension < min.level.maxDimension ? preview : min),
+    previews[0],
+  );
+  const ctx = smallest.canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    return { estimate, densityBalance: priorDensityBalance };
+  }
+
+  const imageData = ctx.getImageData(0, 0, smallest.canvas.width, smallest.canvas.height);
+  const conservative = computeBrightPercentileSample(imageData.data, smallest.canvas.width, smallest.canvas.height, 4);
+  return applyCrushGuard(estimate, imageData, conservative, priorDensityBalance);
 }
 
 function decodeTiff(buffer: ArrayBuffer) {
@@ -431,7 +463,7 @@ function getPinnedResidualBaseOffset(
     lightSourceBias,
     flareFloor,
     profileId,
-    document.estimatedFilmBaseSample,
+    document.estimatedFilmBase,
     document.estimatedDensityBalance,
   );
 
@@ -513,7 +545,7 @@ function getPinnedHighlightDensity(
     residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
-    document.estimatedFilmBaseSample,
+    document.estimatedFilmBase,
     document.estimatedDensityBalance,
   );
 
@@ -531,7 +563,7 @@ function buildConversionParametersDebug(
     payload.isColor,
     payload.filmType ?? 'negative',
     payload.profileId ?? null,
-    document.estimatedFilmBaseSample,
+    document.estimatedFilmBase,
     document.estimatedDensityBalance,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
@@ -544,6 +576,12 @@ function buildConversionParametersDebug(
     baseDensity: densityInversion.baseDensity,
     densityScale: densityInversion.densityScale,
     densityScaleSource: densityInversion.densityScaleSource,
+    baseConfidence: densityInversion.baseConfidence,
+    lowConfidence: densityInversion.lowConfidence,
+    resolvedSample: payload.settings.filmBaseSample ?? document.estimatedFilmBase?.sample ?? null,
+    estimatedSample: document.estimatedFilmBase?.sample ?? null,
+    estimatorRejectedCandidates: document.estimatedFilmBase?.rejectedCandidates ?? 0,
+    crushGuardTriggered: document.estimatedFilmBase?.clamped ?? false,
     inputProfileId: payload.inputProfileId ?? 'srgb',
     outputProfileId: payload.outputProfileId ?? 'srgb',
     flareFloor: payload.flareFloor ?? null,
@@ -1056,7 +1094,7 @@ function applyAnalysisInversionStage(
     options.isColor,
     filmType,
     options.profileId ?? null,
-    document.estimatedFilmBaseSample,
+    document.estimatedFilmBase,
     document.estimatedDensityBalance,
     inputProfileId,
     outputProfileId,
@@ -1173,8 +1211,13 @@ async function handleDecode(payload: DecodeRequest) {
     assertSupportedDimensions(canvas.width, canvas.height);
 
     const previewStore = buildPreviewLevels(canvas, payload.displayScaleFactor);
-    const estimatedFilmBaseSample = payload.precomputedFilmBaseSample ?? estimateCanvasFilmBase(canvas);
-    const estimatedDensityBalance = estimateCanvasDensityBalance(canvas, estimatedFilmBaseSample);
+    const rawEstimate = payload.precomputedFilmBase
+      ?? normalizeFilmBaseEstimate(payload.precomputedFilmBaseSample ?? estimateCanvasFilmBase(canvas));
+    const priorDensityBalance = estimateCanvasDensityBalance(canvas, rawEstimate?.sample ?? null);
+    const guarded = guardFilmBaseAgainstCrush(rawEstimate, previewStore, priorDensityBalance);
+    const estimatedFilmBase = guarded.estimate;
+    const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
+    const estimatedDensityBalance = guarded.densityBalance;
     const metadata: SourceMetadata = {
       id: payload.documentId,
       name: payload.fileName,
@@ -1195,6 +1238,7 @@ async function handleDecode(payload: DecodeRequest) {
       residualBaseCache: new Map(),
       highlightDensityCache: new Map(),
       estimatedFilmBaseSample,
+      estimatedFilmBase,
       estimatedDensityBalance,
       lastAccessedAt: Date.now(),
     });
@@ -1206,6 +1250,7 @@ async function handleDecode(payload: DecodeRequest) {
       previewLevels: previewStore.map((preview) => preview.level),
       estimatedFlare,
       estimatedFilmBaseSample,
+      estimatedFilmBase,
       estimatedDensityBalance,
     } satisfies DecodedImage;
   }
@@ -1264,8 +1309,12 @@ async function handleDecode(payload: DecodeRequest) {
   assertSupportedDimensions(decodedCanvas.width, decodedCanvas.height);
 
   const previewStore = buildPreviewLevels(decodedCanvas, payload.displayScaleFactor);
-  const estimatedFilmBaseSample = estimateCanvasFilmBase(decodedCanvas);
-  const estimatedDensityBalance = estimateCanvasDensityBalance(decodedCanvas, estimatedFilmBaseSample);
+  const rasterEstimate = normalizeFilmBaseEstimate(estimateCanvasFilmBase(decodedCanvas));
+  const rasterPriorDensityBalance = estimateCanvasDensityBalance(decodedCanvas, rasterEstimate?.sample ?? null);
+  const rasterGuarded = guardFilmBaseAgainstCrush(rasterEstimate, previewStore, rasterPriorDensityBalance);
+  const estimatedFilmBase = rasterGuarded.estimate;
+  const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
+  const estimatedDensityBalance = rasterGuarded.densityBalance;
   const decoderColorProfileId = payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName);
   const declaredUnsupportedColorProfileName = payload.declaredColorProfileName && !decoderColorProfileId
     ? payload.declaredColorProfileName
@@ -1296,6 +1345,7 @@ async function handleDecode(payload: DecodeRequest) {
     residualBaseCache: new Map(),
     highlightDensityCache: new Map(),
     estimatedFilmBaseSample,
+    estimatedFilmBase,
     estimatedDensityBalance,
     lastAccessedAt: Date.now(),
   });
@@ -1307,6 +1357,7 @@ async function handleDecode(payload: DecodeRequest) {
     previewLevels: previewStore.map((preview) => preview.level),
     estimatedFlare,
     estimatedFilmBaseSample,
+    estimatedFilmBase,
     estimatedDensityBalance,
   } satisfies DecodedImage;
 }
@@ -1521,7 +1572,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
-    document.estimatedFilmBaseSample,
+    document.estimatedFilmBase,
     document.estimatedDensityBalance,
   );
 
@@ -1606,7 +1657,7 @@ function handleRender(payload: RenderRequest) {
       residualBaseOffset,
       payload.flareFloor ?? null,
       payload.lightSourceBias ?? [1, 1, 1],
-      document.estimatedFilmBaseSample,
+      document.estimatedFilmBase,
       document.estimatedDensityBalance,
     );
   const highlightDensity = usesProcessedPipeline ? pinnedHighlightDensity : computeHighlightDensity(histogram);
@@ -1614,6 +1665,21 @@ function handleRender(payload: RenderRequest) {
   if (!payload.skipProcessing) {
     ctx.putImageData(imageData, 0, 0);
   }
+
+  // Resolve the base provenance/confidence the render actually used so the main
+  // thread can raise a one-time low-confidence notice without recomputing.
+  const densityInversion = resolveDensityInversionParams(
+    payload.settings,
+    payload.isColor,
+    payload.filmType ?? 'negative',
+    payload.profileId ?? null,
+    document.estimatedFilmBase,
+    document.estimatedDensityBalance,
+    payload.inputProfileId ?? 'srgb',
+    payload.outputProfileId ?? 'srgb',
+    payload.flareFloor ?? null,
+    (payload.settings.flareCorrection ?? 50) / 100,
+  );
 
   return {
     documentId: payload.documentId,
@@ -1624,6 +1690,8 @@ function handleRender(payload: RenderRequest) {
     imageData,
     histogram,
     highlightDensity,
+    baseSampleSource: densityInversion.baseSampleSource,
+    lowConfidence: densityInversion.lowConfidence,
   } satisfies RenderResult;
 }
 
@@ -1685,7 +1753,7 @@ async function handleExport(payload: ExportRequest) {
         residualBaseOffset,
         payload.flareFloor ?? null,
         payload.lightSourceBias ?? [1, 1, 1],
-        document.estimatedFilmBaseSample,
+        document.estimatedFilmBase,
         document.estimatedDensityBalance,
       );
     }
@@ -1753,7 +1821,7 @@ async function handleExport(payload: ExportRequest) {
     residualBaseOffset,
     payload.flareFloor ?? null,
     payload.lightSourceBias ?? [1, 1, 1],
-    document.estimatedFilmBaseSample,
+    document.estimatedFilmBase,
     document.estimatedDensityBalance,
   );
   ctx.putImageData(imageData, 0, 0);
@@ -1863,7 +1931,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       residualBaseOffset,
       payload.flareFloorPerCell?.[index] ?? null,
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
-      document.estimatedFilmBaseSample,
+      document.estimatedFilmBase,
       document.estimatedDensityBalance,
     );
 

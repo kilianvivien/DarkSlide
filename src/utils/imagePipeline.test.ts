@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, rotateCropClockwise } from './imagePipeline';
+import { applyCrushGuard, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, resolveDensityInversionParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { FilmBaseEstimate } from '../types';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -146,7 +147,9 @@ describe('buildProcessingUniforms', () => {
 
 describe('computeDensityBalance', () => {
   it('computes per-channel scales from midtone densities', () => {
-    const imageData = createGrid(12, [
+    // 40×40 so there are well over 1000 usable midtone samples — a normal
+    // color-negative fixture that measures a trustworthy (non-clamped) balance.
+    const imageData = createGrid(40, [
       [210, 180, 120],
       [195, 170, 115],
       [180, 160, 110],
@@ -165,6 +168,165 @@ describe('computeDensityBalance', () => {
     expect(balance.scaleB).toBeLessThan(2);
     expect(balance.scaleR).not.toBeCloseTo(1, 3);
     expect(balance.scaleB).not.toBeCloseTo(1, 3);
+  });
+
+  it('rejects a clamp-boundary blue scale as untrustworthy (Img2188 shape)', () => {
+    // A dim/expired-negative shape where the blue channel density dwarfs green,
+    // so the raw blue scale falls below the 0.4 clamp boundary.
+    const imageData = createGrid(40, [
+      [185, 178, 52],
+      [180, 172, 50],
+      [175, 168, 55],
+      [182, 175, 48],
+    ]);
+
+    const balance = computeDensityBalance(imageData, { r: 205, g: 200, b: 128 });
+
+    expect(balance.source).toBe('clamp-rejected');
+    expect(balance.scaleR).toBe(1);
+    expect(balance.scaleG).toBe(1);
+    expect(balance.scaleB).toBe(1);
+  });
+});
+
+function uniformImage(r: number, g: number, b: number, size = 8) {
+  return createGrid(size, [[r, g, b]]);
+}
+
+describe('wouldBaseCrushImage', () => {
+  const denseFrame = uniformImage(80, 80, 80);
+
+  it('flags a base that collapses most of the frame to black', () => {
+    const crushParams = resolveDensityInversionParams(
+      { filmBaseSample: { r: 32, g: 51, b: 39 }, flareCorrection: 50 },
+      true, 'negative', null, null, null, 'srgb', 'srgb', null, 0.5,
+    );
+    expect(wouldBaseCrushImage(denseFrame, crushParams, 'srgb')).toBe(true);
+  });
+
+  it('passes a healthy bright base through', () => {
+    const healthyParams = resolveDensityInversionParams(
+      { filmBaseSample: { r: 200, g: 200, b: 200 }, flareCorrection: 50 },
+      true, 'negative', null, null, null, 'srgb', 'srgb', null, 0.5,
+    );
+    expect(wouldBaseCrushImage(denseFrame, healthyParams, 'srgb')).toBe(false);
+  });
+});
+
+describe('applyCrushGuard (decode-time demotion, Img2322 shape)', () => {
+  const denseFrame = uniformImage(80, 80, 80);
+
+  it('demotes a crushing estimate to a conservative fallback that resolves to conservative-fallback', () => {
+    const crushingEstimate: FilmBaseEstimate = {
+      sample: { r: 32, g: 51, b: 39 }, source: 'outer-border', confidence: 0.7, rejectedCandidates: 1, clamped: false,
+    };
+    const conservative = { r: 200, g: 200, b: 200 };
+
+    const guarded = applyCrushGuard(crushingEstimate, denseFrame, conservative, null, 'srgb');
+
+    expect(guarded.estimate.clamped).toBe(true);
+    expect(guarded.estimate.source).toBe('low-confidence');
+    expect(guarded.estimate.confidence).toBe(0);
+    expect(guarded.estimate.sample).toEqual(conservative);
+
+    const resolved = resolveDensityInversionParams(
+      { filmBaseSample: null, flareCorrection: 50 },
+      true, 'negative', null, guarded.estimate, guarded.densityBalance, 'srgb', 'srgb', null, 0.5,
+    );
+    expect(resolved.baseSampleSource).toBe('conservative-fallback');
+    expect(resolved.lowConfidence).toBe(true);
+    // The demoted base no longer crushes the frame.
+    expect(wouldBaseCrushImage(denseFrame, resolved, 'srgb')).toBe(false);
+  });
+
+  it('leaves a healthy estimate untouched', () => {
+    const healthyEstimate: FilmBaseEstimate = {
+      sample: { r: 200, g: 190, b: 175 }, source: 'outer-border', confidence: 0.8, rejectedCandidates: 0, clamped: false,
+    };
+    const guarded = applyCrushGuard(healthyEstimate, denseFrame, { r: 210, g: 210, b: 210 }, null, 'srgb');
+    expect(guarded.estimate).toBe(healthyEstimate);
+    expect(guarded.estimate.clamped).toBe(false);
+  });
+});
+
+describe('resolveDensityInversionParams confidence handling', () => {
+  const settingsNoManual = { filmBaseSample: null, flareCorrection: 50 } as const;
+
+  it('treats a manual sample as high-confidence and byte-identical regardless of a bad estimate', () => {
+    const manualSample = { r: 149, g: 217, b: 177 };
+    const badEstimate: FilmBaseEstimate = {
+      sample: { r: 32, g: 51, b: 39 }, source: 'low-confidence', confidence: 0, rejectedCandidates: 2, clamped: true,
+    };
+
+    const withBadEstimate = resolveDensityInversionParams(
+      { filmBaseSample: manualSample, flareCorrection: 50 },
+      true, 'negative', null, badEstimate, null, 'srgb', 'srgb', null, 0.5,
+    );
+    const withoutEstimate = resolveDensityInversionParams(
+      { filmBaseSample: manualSample, flareCorrection: 50 },
+      true, 'negative', null, null, null, 'srgb', 'srgb', null, 0.5,
+    );
+
+    expect(withBadEstimate.baseSampleSource).toBe('manual-picker');
+    expect(withBadEstimate.baseConfidence).toBe(1);
+    expect(withBadEstimate.lowConfidence).toBe(false);
+    // The manual path must not be perturbed by the estimate at all.
+    expect(withBadEstimate.baseDensity).toEqual(withoutEstimate.baseDensity);
+  });
+
+  it('routes a low-confidence estimate to the conservative fallback', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 150, g: 150, b: 150 }, source: 'low-confidence', confidence: 0, rejectedCandidates: 4, clamped: true,
+    };
+    const params = resolveDensityInversionParams(
+      settingsNoManual, true, 'negative', null, estimate, null, 'srgb', 'srgb', null, 0.5,
+    );
+    expect(params.baseSampleSource).toBe('conservative-fallback');
+    expect(params.lowConfidence).toBe(true);
+    expect(params.baseConfidence).toBe(0);
+  });
+
+  it('uses a high-confidence frame-rebate estimate as-is', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 150, g: 210, b: 180 }, source: 'frame-rebate', confidence: 0.8, rejectedCandidates: 1, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      settingsNoManual, true, 'negative', null, estimate, null, 'srgb', 'srgb', null, 0.5,
+    );
+    expect(params.baseSampleSource).toBe('frame-rebate');
+    expect(params.lowConfidence).toBe(false);
+    expect(params.baseConfidence).toBeCloseTo(0.8);
+  });
+
+  it('reports a roll-shared manual sample as roll provenance', () => {
+    const params = resolveDensityInversionParams(
+      { filmBaseSample: { r: 149, g: 217, b: 177 }, filmBaseSampleSource: 'roll', flareCorrection: 50 },
+      true, 'negative', null, null, null, 'srgb', 'srgb', null, 0.5,
+    );
+    expect(params.baseSampleSource).toBe('roll');
+    expect(params.baseConfidence).toBe(1);
+    expect(params.lowConfidence).toBe(false);
+  });
+
+  it('collapses an estimated B&W base to a single luminance Dmin', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 120, g: 180, b: 150 }, source: 'frame-rebate', confidence: 0.4, rejectedCandidates: 0, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      settingsNoManual, false, 'negative', null, estimate, null, 'srgb', 'srgb', null, 0.5,
+    );
+    // Below the accept gate on B&W → equal per-channel base density.
+    expect(params.baseDensity[0]).toBeCloseTo(params.baseDensity[1]);
+    expect(params.baseDensity[1]).toBeCloseTo(params.baseDensity[2]);
+  });
+
+  it('keeps a manual B&W base per-channel (luminance-first does not leak into manual)', () => {
+    const params = resolveDensityInversionParams(
+      { filmBaseSample: { r: 120, g: 180, b: 150 }, flareCorrection: 50 },
+      false, 'negative', null, null, null, 'srgb', 'srgb', null, 0.5,
+    );
+    // Distinct channel samples must keep distinct base densities for a manual pick.
+    expect(params.baseDensity[0]).not.toBeCloseTo(params.baseDensity[1]);
   });
 });
 

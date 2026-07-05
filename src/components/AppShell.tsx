@@ -632,8 +632,7 @@ export function AppShell({
                 {isLeftPaneOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
               </button>
               <h1 className="ml-2 text-sm font-bold tracking-tight text-zinc-100">
-                Dark<span className="font-medium text-zinc-500">Slide</span>{' '}
-                <span className="ml-1 text-[10px] font-normal uppercase tracking-widest text-zinc-700">beta</span>
+                Dark<span className="font-medium text-zinc-500">Slide</span>
               </h1>
             </div>
 

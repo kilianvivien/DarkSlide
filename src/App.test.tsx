@@ -574,7 +574,13 @@ function createDecodedImage(width: number, height: number, options: { exifOrient
   };
 }
 
-function createRenderResult(documentId: string, revision: number, width: number, height: number) {
+function createRenderResult(
+  documentId: string,
+  revision: number,
+  width: number,
+  height: number,
+  overrides: { lowConfidence?: boolean; baseSampleSource?: string } = {},
+) {
   return {
     documentId,
     revision,
@@ -589,6 +595,7 @@ function createRenderResult(documentId: string, revision: number, width: number,
       l: new Array(256).fill(0),
     },
     highlightDensity: 0,
+    ...overrides,
   };
 }
 
@@ -1131,10 +1138,91 @@ describe('App import and preview pipeline', () => {
 
     expect(latestRenderCall.settings.filmBaseSample).toBeNull();
     expect(latestRenderCall.settings.exposure).toBe(0);
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * ((255 - 73) / (255 - 76)));
+    // The flat {76,73,68} frame is a dim negative whose luminance is below the
+    // clear-base plausibility floor, so the estimator refuses it and startup
+    // keeps neutral stock white balance instead of a distrusted border tilt.
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * ((255 - 73) / (255 - 68)));
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9);
     expect(latestRenderCall.settings.rotation).toBe(90);
+  });
+
+  it('raises a one-time low-confidence notice when the settled RAW render falls back to a conservative base', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('dim.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/dim.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [76, 73, 68][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; targetMaxDimension: number }) => (
+      createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension, {
+        lowConfidence: true,
+        baseSampleSource: 'conservative-fallback',
+      })
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(screen.getByText(/Automatic conversion confidence is low for this frame/)).toBeInTheDocument();
+  });
+
+  it('does not raise the low-confidence notice for a confident RAW render', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('clean.nef', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/clean.nef',
+      size: 12_345_678,
+    });
+    coreState.invoke.mockResolvedValue({
+      width: 8,
+      height: 8,
+      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [160, 151, 134][index % 3]),
+      color_space: 'sRGB',
+      orientation: 6,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8),
+      estimatedFilmBaseSample: { r: 160, g: 151, b: 134 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; targetMaxDimension: number }) => (
+      createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension, {
+        lowConfidence: false,
+        baseSampleSource: 'auto-estimated-border',
+      })
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(screen.queryByText(/Automatic conversion confidence is low for this frame/)).not.toBeInTheDocument();
   });
 
   it('uses the roll film stock to seed RAW startup from the matching profile before layering the border correction', async () => {
@@ -1218,8 +1306,11 @@ describe('App import and preview pipeline', () => {
       filmBaseSample: null,
       rotation: 90,
     });
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.16 * ((255 - 105) / (255 - 89)));
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.86 * ((255 - 105) / (255 - 55)));
+    // {89,105,55} is a dim flat frame below the clear-base plausibility floor,
+    // so the low-confidence estimate does not seed white balance; the roll's
+    // stock profile balances are preserved neutral.
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.16);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.86);
   });
 
   it('keeps the first RAW preset switch self-consistent while the import preview render is still in flight', async () => {
@@ -1387,9 +1478,12 @@ describe('App import and preview pipeline', () => {
 
     expect(latestRenderCall.settings.filmBaseSample).toBeNull();
     expect(latestRenderCall.settings.exposure).toBe(0);
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * ((255 - 73) / (255 - 76)));
+    // The flat {76,73,68} frame is a dim negative whose luminance is below the
+    // clear-base plausibility floor, so the estimator refuses it and startup
+    // keeps neutral stock white balance instead of a distrusted border tilt.
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * ((255 - 73) / (255 - 68)));
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9);
     expect(latestRenderCall.settings.blackPoint).toBe(8);
     expect(latestRenderCall.settings.whitePoint).toBe(245);
     expect(latestRenderCall.settings.temperature).toBe(0);

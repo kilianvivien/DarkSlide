@@ -500,7 +500,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                       <div>
                         <p className="text-[12px] font-semibold text-zinc-300 leading-tight">DarkSlide</p>
-                        <p className="text-[10px] text-zinc-600 leading-tight mt-0.5">{APP_VERSION_LABEL} beta</p>
+                        <p className="text-[10px] text-zinc-600 leading-tight mt-0.5">{APP_VERSION_LABEL}</p>
                         <p className="text-[10px] text-zinc-700 leading-tight mt-0.5">MIT Licence</p>
                       </div>
                     </div>
@@ -1258,7 +1258,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <div className="flex items-start justify-between gap-4">
                             <div>
                               <p className="text-[13px] font-semibold text-zinc-100">Current Version</p>
-                              <p className="mt-0.5 text-[12px] text-zinc-500">{APP_VERSION_LABEL} beta</p>
+                              <p className="mt-0.5 text-[12px] text-zinc-500">{APP_VERSION_LABEL}</p>
                             </div>
                             <button
                               type="button"

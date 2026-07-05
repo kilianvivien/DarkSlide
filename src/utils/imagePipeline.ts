@@ -7,6 +7,8 @@ import {
   CropSettings,
   ExportFormat,
   FilmBaseSample,
+  FilmBaseEstimate,
+  FilmBaseResolvedSource,
   FilmProfileType,
   HistogramData,
   InputProfileSpec,
@@ -14,7 +16,7 @@ import {
   PreviewLevel,
   TonalCharacter,
 } from '../types';
-import { DENSITY_TO_POSITIVE_GAMMA, FILM_STOCK_DENSITY_PRESETS, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
+import { DENSITY_TO_POSITIVE_GAMMA, FILM_BASE_CONFIDENCE, FILM_STOCK_DENSITY_PRESETS, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
 import { convertRgbBetweenProfiles, decodeProfileChannel, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
 import { clamp } from './math';
 
@@ -22,6 +24,10 @@ const LUMA_R = 0.299;
 const LUMA_G = 0.587;
 const LUMA_B = 0.114;
 const DENSITY_EPSILON = 1e-6;
+// Trusted range for auto-measured per-channel density scales. A raw scale
+// outside this band is treated as a failed measurement, not clamped into it.
+const DENSITY_BALANCE_CLAMP_LOW = 0.4;
+const DENSITY_BALANCE_CLAMP_HIGH = 2;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -301,8 +307,14 @@ export interface DensityInversionParams {
   // mismatch to the green channel (C-41 layers have different gammas).
   densityScale: [number, number, number];
   // Provenance, for the conversion-parameters debug readout (audit Phase C).
-  baseSampleSource: 'manual-picker' | 'auto-estimated-border' | 'none';
+  baseSampleSource: FilmBaseResolvedSource;
   densityScaleSource: DensityBalance['source'] | 'neutral';
+  // Confidence of the resolved base: 1 for manual, estimator confidence for an
+  // auto estimate, 0 when there is no usable reference.
+  baseConfidence: number;
+  // True whenever the resolver had to fall back to a conservative reference or
+  // a distrusted measurement was rejected. Drives the low-confidence notice.
+  lowConfidence: boolean;
 }
 
 const DISABLED_DENSITY_INVERSION: DensityInversionParams = {
@@ -312,7 +324,52 @@ const DISABLED_DENSITY_INVERSION: DensityInversionParams = {
   densityScale: [1, 1, 1],
   baseSampleSource: 'none',
   densityScaleSource: 'neutral',
+  baseConfidence: 0,
+  lowConfidence: false,
 };
+
+export function isFilmBaseEstimate(
+  value: FilmBaseSample | FilmBaseEstimate | null | undefined,
+): value is FilmBaseEstimate {
+  return value != null && typeof value === 'object' && 'sample' in value;
+}
+
+// Normalize either a bare sample (legacy callers) or a full estimate into the
+// sample + provenance metadata the resolver reasons about. A bare sample has no
+// confidence signal, so it is treated as a validated outer-border estimate.
+export function normalizeFilmBaseEstimate(
+  value: FilmBaseSample | FilmBaseEstimate | null | undefined,
+): FilmBaseEstimate | null {
+  if (value == null) {
+    return null;
+  }
+  if (isFilmBaseEstimate(value)) {
+    return value;
+  }
+  return {
+    sample: value,
+    source: 'outer-border',
+    confidence: 1,
+    rejectedCandidates: 0,
+    clamped: false,
+  };
+}
+
+function mapEstimateSourceToResolved(source: FilmBaseEstimate['source']): FilmBaseResolvedSource {
+  switch (source) {
+    case 'roll':
+      return 'roll';
+    case 'frame-rebate':
+      return 'frame-rebate';
+    case 'low-confidence':
+      return 'conservative-fallback';
+    case 'manual':
+      return 'manual-picker';
+    case 'outer-border':
+    default:
+      return 'auto-estimated-border';
+  }
+}
 
 function resolveDensityBalance(
   isColor: boolean,
@@ -366,11 +423,11 @@ function sampleChannelToDensity(
 }
 
 export function resolveDensityInversionParams(
-  settings: Pick<ConversionSettings, 'filmBaseSample' | 'flareCorrection'>,
+  settings: Pick<ConversionSettings, 'filmBaseSample' | 'filmBaseSampleSource' | 'flareCorrection'>,
   isColor: boolean,
   filmType: FilmProfileType,
   profileId: string | null = null,
-  estimatedFilmBaseSample: FilmBaseSample | null = null,
+  estimatedFilmBaseSample: FilmBaseSample | FilmBaseEstimate | null = null,
   estimatedDensityBalance: DensityBalance | null = null,
   inputProfileId: InputProfileSpec = 'srgb',
   outputProfileId: ColorProfileId = 'srgb',
@@ -381,12 +438,15 @@ export function resolveDensityInversionParams(
     return DISABLED_DENSITY_INVERSION;
   }
 
+  const estimate = normalizeFilmBaseEstimate(estimatedFilmBaseSample);
   // Border estimates are captured in the decoded image profile, so they need
   // the same profile transform as the pixels before any density math.
-  const convertedEstimate = estimatedFilmBaseSample
-    ? convertEstimatedFilmBaseSampleToWorkingProfile(estimatedFilmBaseSample, inputProfileId, outputProfileId)
+  const convertedEstimate = estimate
+    ? convertEstimatedFilmBaseSampleToWorkingProfile(estimate.sample, inputProfileId, outputProfileId)
     : null;
-  const resolvedSample = settings.filmBaseSample ?? convertedEstimate ?? null;
+  const manualSample = settings.filmBaseSample ?? null;
+  const usingEstimateSample = !manualSample && convertedEstimate != null;
+  const resolvedSample = manualSample ?? convertedEstimate ?? null;
   const flareFloorNormalized: [number, number, number] = flareFloor
     ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
     : [0, 0, 0];
@@ -398,17 +458,54 @@ export function resolveDensityInversionParams(
     ]
     : [0, 0, 0];
 
+  // B&W Dmin path (diagnosis §"B&W luminance-first"): a monochrome negative has
+  // no color mask, so per-channel base differences are scanner/light bias, not
+  // signal. For an *estimated* base, collapse to a single luminance Dmin at low
+  // confidence, and blend halfway toward luminance at high confidence. Manual
+  // B&W samples are left byte-identical (the user's explicit reference).
+  if (!isColor && usingEstimateSample && resolvedSample) {
+    const lumValue = 0.299 * resolvedSample.r + 0.587 * resolvedSample.g + 0.114 * resolvedSample.b;
+    const lumFlareFloor = 0.299 * flareFloorNormalized[0] + 0.587 * flareFloorNormalized[1] + 0.114 * flareFloorNormalized[2];
+    const baseDensityLum = sampleChannelToDensity(lumValue, outputProfileId, lumFlareFloor, flareStrength);
+    if (estimate!.confidence < FILM_BASE_CONFIDENCE.accept) {
+      baseDensity[0] = baseDensityLum;
+      baseDensity[1] = baseDensityLum;
+      baseDensity[2] = baseDensityLum;
+    } else {
+      baseDensity[0] = baseDensity[0] * 0.5 + baseDensityLum * 0.5;
+      baseDensity[1] = baseDensity[1] * 0.5 + baseDensityLum * 0.5;
+      baseDensity[2] = baseDensity[2] * 0.5 + baseDensityLum * 0.5;
+    }
+  }
+
   const densityBalance = resolveDensityBalance(isColor, profileId, estimatedDensityBalance);
+  const densityScaleLowConfidence = isColor && densityBalance.source === 'clamp-rejected';
+
+  // Below the reject gate (or an explicitly refused estimate) the evidence is
+  // too weak to trust as a hard density zero point. The estimate's own sample
+  // is still bright (surviving clusters clear the plausibility floor; refused
+  // estimates carry a bright-percentile sample), so it is safe to keep as a
+  // least-destructive reference — it is just relabelled a conservative fallback.
+  const useConservativeFallback = !manualSample && convertedEstimate != null
+    && (estimate!.confidence < FILM_BASE_CONFIDENCE.reject || estimate!.source === 'low-confidence');
+  const baseSampleSource: FilmBaseResolvedSource = manualSample
+    ? (settings.filmBaseSampleSource === 'roll' ? 'roll' : 'manual-picker')
+    : (convertedEstimate
+      ? (useConservativeFallback ? 'conservative-fallback' : mapEstimateSourceToResolved(estimate!.source))
+      : 'none');
+  const baseConfidence = manualSample ? 1 : (convertedEstimate ? estimate!.confidence : 0);
+  const estimateLowConfidence = !manualSample && convertedEstimate != null
+    && (estimate!.confidence < FILM_BASE_CONFIDENCE.accept || estimate!.source === 'low-confidence');
 
   return {
     enabled: true,
     gamma: [DENSITY_TO_POSITIVE_GAMMA, DENSITY_TO_POSITIVE_GAMMA, DENSITY_TO_POSITIVE_GAMMA],
     baseDensity,
     densityScale: [densityBalance.scaleR, densityBalance.scaleG, densityBalance.scaleB],
-    baseSampleSource: settings.filmBaseSample
-      ? 'manual-picker'
-      : (convertedEstimate ? 'auto-estimated-border' : 'none'),
+    baseSampleSource,
     densityScaleSource: isColor ? densityBalance.source : 'neutral',
+    baseConfidence,
+    lowConfidence: estimateLowConfidence || densityScaleLowConfidence,
   };
 }
 
@@ -422,6 +519,83 @@ export function applyDensityInversion(
   const transmittance = clamp(decodeProfileChannel(outputProfileId, encodedValue), DENSITY_EPSILON, 1);
   const density = Math.max(0, -Math.log10(transmittance) - baseDensity) * densityScale;
   return clamp(1 - Math.pow(10, -density / Math.max(gamma, 0.01)), 0, 1);
+}
+
+// "Near-empty positive histogram" detector from the diagnosis: run a sample of
+// pixels through the density inversion and report whether the resolved base
+// would collapse most of the frame to black. Pure and allocation-light so the
+// worker can run it once at decode time against the smallest preview level.
+const CRUSH_GUARD_SAMPLE_TARGET = 20_000;
+const CRUSH_GUARD_BLACK_THRESHOLD = 8 / 255;
+
+export function wouldBaseCrushImage(
+  imageData: ImageData,
+  params: DensityInversionParams,
+  outputProfileId: ColorProfileId,
+): boolean {
+  if (!params.enabled) {
+    return false;
+  }
+  const { data } = imageData;
+  const totalPixels = data.length / 4;
+  if (totalPixels === 0) {
+    return false;
+  }
+  const stride = Math.max(1, Math.floor(totalPixels / CRUSH_GUARD_SAMPLE_TARGET));
+  let sampled = 0;
+  let crushed = 0;
+  for (let index = 0; index < data.length; index += 4 * stride) {
+    const r = applyDensityInversion(data[index] / 255, outputProfileId, params.baseDensity[0], params.densityScale[0], params.gamma[0]);
+    const g = applyDensityInversion(data[index + 1] / 255, outputProfileId, params.baseDensity[1], params.densityScale[1], params.gamma[1]);
+    const b = applyDensityInversion(data[index + 2] / 255, outputProfileId, params.baseDensity[2], params.densityScale[2], params.gamma[2]);
+    if (Math.max(r, g, b) <= CRUSH_GUARD_BLACK_THRESHOLD) {
+      crushed += 1;
+    }
+    sampled += 1;
+  }
+  if (sampled === 0) {
+    return false;
+  }
+  return crushed / sampled > FILM_BASE_CONFIDENCE.maxCrushedFraction;
+}
+
+// Pure core of the decode-time crush guard: if `estimate` would crush the
+// analysis frame to black, demote it to the supplied conservative
+// bright-percentile sample and recompute the density balance from that safe
+// reference. Otherwise return the inputs unchanged. Kept here (not in the
+// worker) so it is unit-testable end to end.
+export function applyCrushGuard(
+  estimate: FilmBaseEstimate,
+  imageData: ImageData,
+  conservativeSample: FilmBaseSample,
+  priorDensityBalance: DensityBalance | null,
+  outputProfileId: ColorProfileId = 'srgb',
+): { estimate: FilmBaseEstimate; densityBalance: DensityBalance | null } {
+  const provisional = resolveDensityInversionParams(
+    { filmBaseSample: null, flareCorrection: 50 },
+    true,
+    'negative',
+    null,
+    estimate,
+    priorDensityBalance,
+    outputProfileId,
+    outputProfileId,
+    null,
+    0.5,
+  );
+
+  if (!wouldBaseCrushImage(imageData, provisional, outputProfileId)) {
+    return { estimate, densityBalance: priorDensityBalance };
+  }
+
+  const demoted: FilmBaseEstimate = {
+    sample: conservativeSample,
+    source: 'low-confidence',
+    confidence: 0,
+    rejectedCandidates: estimate.rejectedCandidates,
+    clamped: true,
+  };
+  return { estimate: demoted, densityBalance: computeDensityBalance(imageData, conservativeSample, outputProfileId) };
 }
 
 function mean(values: number[], start: number, end: number) {
@@ -489,10 +663,26 @@ export function computeDensityBalance(
   const meanG = mean(densitiesG, lo, hi);
   const meanB = mean(densitiesB, lo, hi);
 
+  const rawScaleR = meanG / Math.max(meanR, DENSITY_EPSILON);
+  const rawScaleB = meanG / Math.max(meanB, DENSITY_EPSILON);
+
+  // A scale that only survives by hitting a clamp boundary is not a measured
+  // correction — it is the estimator failing on dim/expired film (diagnosis
+  // §"Reject density-balance clamp hits"). Likewise a large tilt from very few
+  // usable midtones is untrustworthy. In both cases hold neutral and flag it.
+  const clampHit = rawScaleR < DENSITY_BALANCE_CLAMP_LOW || rawScaleR > DENSITY_BALANCE_CLAMP_HIGH
+    || rawScaleB < DENSITY_BALANCE_CLAMP_LOW || rawScaleB > DENSITY_BALANCE_CLAMP_HIGH;
+  const marginalSamples = densitiesR.length < 1000
+    && (Math.abs(rawScaleR - 1) > 0.25 || Math.abs(rawScaleB - 1) > 0.25);
+
+  if (clampHit || marginalSamples) {
+    return { scaleR: 1, scaleG: 1, scaleB: 1, source: 'clamp-rejected' };
+  }
+
   return {
-    scaleR: clamp(meanG / Math.max(meanR, DENSITY_EPSILON), 0.4, 2),
+    scaleR: clamp(rawScaleR, DENSITY_BALANCE_CLAMP_LOW, DENSITY_BALANCE_CLAMP_HIGH),
     scaleG: 1,
-    scaleB: clamp(meanG / Math.max(meanB, DENSITY_EPSILON), 0.4, 2),
+    scaleB: clamp(rawScaleB, DENSITY_BALANCE_CLAMP_LOW, DENSITY_BALANCE_CLAMP_HIGH),
     source: 'auto-histogram',
   };
 }
@@ -563,7 +753,7 @@ export function computeResidualBaseOffset(
   lightSourceBias: [number, number, number] = [1, 1, 1],
   flareFloor: [number, number, number] | null = null,
   profileId: string | null = null,
-  estimatedFilmBaseSample: FilmBaseSample | null = null,
+  estimatedFilmBaseSample: FilmBaseSample | FilmBaseEstimate | null = null,
   estimatedDensityBalance: DensityBalance | null = null,
 ): ResidualBaseOffset | null {
   if (!isColor || filmType !== 'negative' || settings.residualBaseCorrection === false) {
@@ -742,7 +932,7 @@ export function buildProcessingUniforms(
   residualBaseOffset: ResidualBaseOffset | null = null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
-  estimatedFilmBaseSample: FilmBaseSample | null = null,
+  estimatedFilmBaseSample: FilmBaseSample | FilmBaseEstimate | null = null,
   estimatedDensityBalance: DensityBalance | null = null,
 ) {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
@@ -1039,7 +1229,7 @@ export function processImageData(
   residualBaseOffset: ResidualBaseOffset | null = null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
-  estimatedFilmBaseSample: FilmBaseSample | null = null,
+  estimatedFilmBaseSample: FilmBaseSample | FilmBaseEstimate | null = null,
   estimatedDensityBalance: DensityBalance | null = null,
 ): HistogramData {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
@@ -1239,7 +1429,7 @@ export function processFloatRaster(
   residualBaseOffset: ResidualBaseOffset | null = null,
   flareFloor: [number, number, number] | null = null,
   lightSourceBias: [number, number, number] = [1, 1, 1],
-  estimatedFilmBaseSample: FilmBaseSample | null = null,
+  estimatedFilmBaseSample: FilmBaseSample | FilmBaseEstimate | null = null,
   estimatedDensityBalance: DensityBalance | null = null,
 ): FloatRgbRaster {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);

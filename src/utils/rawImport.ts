@@ -1,5 +1,5 @@
-import { MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
-import { ConversionSettings, DecodeRequest, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
+import { FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
+import { ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
 import { getColorProfileIdFromName } from './colorProfiles';
 import { clamp } from './math';
 
@@ -94,11 +94,14 @@ export function createWorkerDecodeRequestFromRaw(
   const previewRgba = (rawResult.bitDepth ?? 8) === 16
     ? rgb16ToRgba8(rawResult.data, rawResult.width, rawResult.height).buffer
     : rgbToRgba(rawResult.data, rawResult.width, rawResult.height).buffer;
-  const previewBytes = new Uint8Array(previewRgba);
   const highDepthRawBuffer = normalizeRawHighDepthBuffer(rawResult);
-  const precomputedFilmBaseSample = (rawResult.bitDepth ?? 8) === 16
-    ? estimateFilmBaseSampleFromRgba(previewBytes, rawResult.width, rawResult.height)
-    : estimateFilmBaseSample(rawResult.data, rawResult.width, rawResult.height);
+  // Estimate the clear base from the highest-fidelity data available: the
+  // full-resolution 16-bit RGB buffer when present (independent of whether it
+  // survived the high-depth size cap), otherwise the 8-bit RGB. The 8-bit
+  // preview is a display artifact and never the source of truth here.
+  const precomputedFilmBase = (rawResult.bitDepth ?? 8) === 16
+    ? estimateFilmBase16(rawResult.data, rawResult.width, rawResult.height)
+    : estimateFilmBase(rawResult.data, rawResult.width, rawResult.height, 3);
 
   return {
     documentId,
@@ -113,7 +116,8 @@ export function createWorkerDecodeRequestFromRaw(
     highDepthRawBuffer,
     highDepthRawBitDepth: highDepthRawBuffer ? 16 : undefined,
     highDepthRawTransfer: highDepthRawBuffer ? (rawResult.transfer ?? 'srgb') : undefined,
-    precomputedFilmBaseSample,
+    precomputedFilmBase,
+    precomputedFilmBaseSample: precomputedFilmBase?.sample ?? null,
     declaredColorProfileName: rawResult.color_space,
     declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
     mirrorHorizontal: mirrorFromExifOrientation(rawResult.orientation),
@@ -135,118 +139,321 @@ export async function decodeDesktopRawForWorker(options: DesktopRawDecodeForWork
   };
 }
 
-function estimateFilmBaseSampleWithStride(
+const ANALYSIS_GRID_TARGET = 200;      // max cells per axis
+const ANALYSIS_MAX_SAMPLES = 260_000;  // bound per-import pixel reads
+const LUMINANCE_R = 0.299;
+const LUMINANCE_G = 0.587;
+const LUMINANCE_B = 0.114;
+
+interface AnalysisCell {
+  r: number;      // mean channel value, 0..255 float
+  g: number;
+  b: number;
+  lum: number;
+  stdDev: number; // max per-channel std-dev inside the cell
+  count: number;
+  touchesInner: boolean; // cell lies (partly) in the 3–12% rebate band
+  scanned: boolean;      // cell had at least one sampled border/rebate pixel
+}
+
+// Per-channel mode-cluster mean over a set of cell means: reuse the historical
+// 64-bin mode + ±10 averaging so a clean uniform border reproduces the exact
+// legacy sample value.
+function modeClusterMean(values: number[]): number {
+  const BIN_COUNT = 64;
+  const BIN_WIDTH = 256 / BIN_COUNT;
+  const CLUSTER_RADIUS = 10;
+  const bins = new Uint32Array(BIN_COUNT);
+  for (const value of values) {
+    bins[Math.min(BIN_COUNT - 1, Math.max(0, Math.floor(value / BIN_WIDTH)))] += 1;
+  }
+  let modeBin = 0;
+  for (let index = 1; index < BIN_COUNT; index += 1) {
+    if (bins[index] > bins[modeBin]) modeBin = index;
+  }
+  const modeCenter = (modeBin + 0.5) * BIN_WIDTH;
+  let sum = 0;
+  let count = 0;
+  for (const value of values) {
+    if (Math.abs(value - modeCenter) <= CLUSTER_RADIUS) {
+      sum += value;
+      count += 1;
+    }
+  }
+  if (count === 0) {
+    return values.reduce((acc, value) => acc + value, 0) / Math.max(1, values.length);
+  }
+  return sum / count;
+}
+
+function percentileSample(cells: AnalysisCell[], percentile: number): FilmBaseSample {
+  const collect = (channel: 'r' | 'g' | 'b') => {
+    const values = cells.map((cell) => cell[channel]).sort((left, right) => left - right);
+    const index = clamp(Math.floor(values.length * percentile), 0, values.length - 1);
+    return clamp(Math.round(values[index] ?? 0), 1, 255);
+  };
+  return { r: collect('r'), g: collect('g'), b: collect('b') };
+}
+
+// Region-based, confidence-scored clear-film-base estimator. Parameterized by a
+// channel scale so the 8-bit (scale 1) and 16-bit (scale 255/65535) paths share
+// one implementation. Reads at most ANALYSIS_MAX_SAMPLES pixels regardless of
+// source resolution.
+function estimateFilmBaseCore(
   pixels: ArrayLike<number>,
   width: number,
   height: number,
-  stride: 3 | 4,
-): FilmBaseSample | null {
+  stride: number,
+  channelScale: number,
+): FilmBaseEstimate | null {
   if (width < 8 || height < 8 || pixels.length < width * height * stride) {
     return null;
   }
 
-  const BIN_COUNT = 64;
-  const BIN_WIDTH = 256 / BIN_COUNT;
-  const CLUSTER_RADIUS = 10;
-  const MIN_CLUSTER_SIZE = 12;
-  const borderThickness = Math.max(8, Math.min(160, Math.round(Math.min(width, height) * 0.03)));
-  const borderPixels = width * borderThickness * 2 + Math.max(0, height - borderThickness * 2) * borderThickness * 2;
-  const step = Math.max(1, Math.round(Math.sqrt(borderPixels / 4096)));
-  const samples: Array<{ lum: number; r: number; g: number; b: number }> = [];
+  const minDimension = Math.min(width, height);
+  const outerInsetPx = Math.max(2, minDimension * 0.03);
+  const innerInsetPx = Math.max(outerInsetPx + 1, minDimension * 0.12);
 
-  const pushSample = (x: number, y: number) => {
-    const index = (y * width + x) * stride;
-    const r = pixels[index] ?? 0;
-    const g = pixels[index + 1] ?? 0;
-    const b = pixels[index + 2] ?? 0;
-    samples.push({
-      lum: 0.299 * r + 0.587 * g + 0.114 * b,
+  const cellSize = Math.max(1, Math.ceil(Math.max(width, height) / ANALYSIS_GRID_TARGET));
+  const gridW = Math.ceil(width / cellSize);
+  const gridH = Math.ceil(height / cellSize);
+  const cellCount = gridW * gridH;
+
+  const sumR = new Float64Array(cellCount);
+  const sumG = new Float64Array(cellCount);
+  const sumB = new Float64Array(cellCount);
+  const sumSqR = new Float64Array(cellCount);
+  const sumSqG = new Float64Array(cellCount);
+  const sumSqB = new Float64Array(cellCount);
+  const counts = new Uint32Array(cellCount);
+  const touchesInner = new Uint8Array(cellCount);
+
+  const pixelStep = Math.max(1, Math.round(Math.sqrt((width * height) / ANALYSIS_MAX_SAMPLES)));
+
+  for (let y = 0; y < height; y += pixelStep) {
+    const edgeY = Math.min(y, height - 1 - y);
+    for (let x = 0; x < width; x += pixelStep) {
+      const edgeDist = Math.min(x, width - 1 - x, edgeY);
+      if (edgeDist > innerInsetPx) {
+        continue; // interior image content — not a base candidate region
+      }
+      const cellIndex = Math.floor(y / cellSize) * gridW + Math.floor(x / cellSize);
+      const sourceIndex = (y * width + x) * stride;
+      const r = (pixels[sourceIndex] ?? 0) * channelScale;
+      const g = (pixels[sourceIndex + 1] ?? 0) * channelScale;
+      const b = (pixels[sourceIndex + 2] ?? 0) * channelScale;
+      sumR[cellIndex] += r;
+      sumG[cellIndex] += g;
+      sumB[cellIndex] += b;
+      sumSqR[cellIndex] += r * r;
+      sumSqG[cellIndex] += g * g;
+      sumSqB[cellIndex] += b * b;
+      counts[cellIndex] += 1;
+      if (edgeDist > outerInsetPx) {
+        touchesInner[cellIndex] = 1;
+      }
+    }
+  }
+
+  const cells: AnalysisCell[] = new Array(cellCount);
+  const scannedCells: AnalysisCell[] = [];
+  const stdDevOf = (sum: number, sumSq: number, n: number) => {
+    const meanValue = sum / n;
+    return Math.sqrt(Math.max(0, sumSq / n - meanValue * meanValue));
+  };
+
+  for (let index = 0; index < cellCount; index += 1) {
+    const n = counts[index];
+    if (n === 0) {
+      cells[index] = { r: 0, g: 0, b: 0, lum: 0, stdDev: Infinity, count: 0, touchesInner: false, scanned: false };
+      continue;
+    }
+    const r = sumR[index] / n;
+    const g = sumG[index] / n;
+    const b = sumB[index] / n;
+    const stdDev = Math.max(
+      stdDevOf(sumR[index], sumSqR[index], n),
+      stdDevOf(sumG[index], sumSqG[index], n),
+      stdDevOf(sumB[index], sumSqB[index], n),
+    );
+    const cell: AnalysisCell = {
       r,
       g,
       b,
-    });
+      lum: LUMINANCE_R * r + LUMINANCE_G * g + LUMINANCE_B * b,
+      stdDev,
+      count: n,
+      touchesInner: touchesInner[index] === 1,
+      scanned: true,
+    };
+    cells[index] = cell;
+    scannedCells.push(cell);
+  }
+
+  if (scannedCells.length < 8) {
+    return null;
+  }
+
+  // Candidate filter: bright enough, low texture, not blown out.
+  const isCandidate = (cell: AnalysisCell) => (
+    cell.scanned
+    && cell.lum >= FILM_BASE_CONFIDENCE.minPlausibleLuminance
+    && cell.stdDev <= FILM_BASE_CONFIDENCE.maxRegionStdDev
+    && Math.min(cell.r, cell.g, cell.b) < 250
+  );
+
+  // 4-connected clustering over candidate cells.
+  const clusterId = new Int32Array(cellCount).fill(-1);
+  const clusters: number[][] = [];
+  const stack: number[] = [];
+  for (let start = 0; start < cellCount; start += 1) {
+    if (clusterId[start] !== -1 || !isCandidate(cells[start])) continue;
+    const id = clusters.length;
+    const members: number[] = [];
+    clusterId[start] = id;
+    stack.push(start);
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      members.push(current);
+      const cx = current % gridW;
+      const cy = Math.floor(current / gridW);
+      const neighbors = [
+        cx > 0 ? current - 1 : -1,
+        cx < gridW - 1 ? current + 1 : -1,
+        cy > 0 ? current - gridW : -1,
+        cy < gridH - 1 ? current + gridW : -1,
+      ];
+      for (const neighbor of neighbors) {
+        if (neighbor >= 0 && clusterId[neighbor] === -1 && isCandidate(cells[neighbor])) {
+          clusterId[neighbor] = id;
+          stack.push(neighbor);
+        }
+      }
+    }
+    clusters.push(members);
+  }
+
+  const minClusterCells = Math.max(1, Math.round(scannedCells.length * FILM_BASE_CONFIDENCE.minRegionFraction));
+  const survivors = clusters.filter((members) => members.length >= minClusterCells);
+  const rejectedCandidates = clusters.length - survivors.length;
+
+  if (survivors.length === 0) {
+    // No trustworthy clear base anywhere — conservative bright-percentile
+    // fallback so the render can never collapse to black.
+    return {
+      sample: percentileSample(scannedCells, 0.995),
+      source: 'low-confidence',
+      confidence: 0,
+      rejectedCandidates: clusters.length,
+      clamped: false,
+    };
+  }
+
+  let best: number[] = survivors[0];
+  let bestConfidence = -1;
+  let bestTouchesInner = false;
+  for (const members of survivors) {
+    let lumSum = 0;
+    let stdSum = 0;
+    let touchesInnerRing = false;
+    for (const index of members) {
+      lumSum += cells[index].lum;
+      stdSum += cells[index].stdDev;
+      if (cells[index].touchesInner) touchesInnerRing = true;
+    }
+    const meanLum = lumSum / members.length;
+    const meanStd = stdSum / members.length;
+    const clusterFraction = members.length / scannedCells.length;
+    const sizeScore = Math.min(1, clusterFraction / (4 * FILM_BASE_CONFIDENCE.minRegionFraction));
+    const uniformityScore = clamp(1 - meanStd / FILM_BASE_CONFIDENCE.maxRegionStdDev, 0, 1);
+    const brightnessScore = clamp(
+      (meanLum - FILM_BASE_CONFIDENCE.minPlausibleLuminance) / (255 - FILM_BASE_CONFIDENCE.minPlausibleLuminance),
+      0,
+      1,
+    );
+    const confidence = 0.3 * sizeScore + 0.4 * uniformityScore + 0.3 * brightnessScore;
+    if (confidence > bestConfidence) {
+      bestConfidence = confidence;
+      best = members;
+      bestTouchesInner = touchesInnerRing;
+    }
+  }
+
+  const winningR = best.map((index) => cells[index].r);
+  const winningG = best.map((index) => cells[index].g);
+  const winningB = best.map((index) => cells[index].b);
+  const sample: FilmBaseSample = {
+    r: clamp(Math.round(modeClusterMean(winningR)), 1, 255),
+    g: clamp(Math.round(modeClusterMean(winningG)), 1, 255),
+    b: clamp(Math.round(modeClusterMean(winningB)), 1, 255),
   };
 
-  for (let y = 0; y < borderThickness; y += step) {
-    for (let x = 0; x < width; x += step) {
-      pushSample(x, y);
-      pushSample(x, height - 1 - y);
+  return {
+    sample,
+    source: bestTouchesInner ? 'frame-rebate' : 'outer-border',
+    confidence: clamp(bestConfidence, 0, 1),
+    rejectedCandidates,
+    clamped: false,
+  };
+}
+
+export function estimateFilmBase(
+  pixels: ArrayLike<number>,
+  width: number,
+  height: number,
+  stride: 3 | 4,
+): FilmBaseEstimate | null {
+  return estimateFilmBaseCore(pixels, width, height, stride, 1);
+}
+
+// Conservative bright-percentile base over the whole frame (not just the
+// border): guarantees a high transmittance reference so the density inversion
+// cannot collapse the image to black. Used when the crush guard demotes an
+// estimate. Bounded to ANALYSIS_MAX_SAMPLES reads regardless of resolution.
+export function computeBrightPercentileSample(
+  pixels: ArrayLike<number>,
+  width: number,
+  height: number,
+  stride: 3 | 4,
+  percentile = 0.995,
+): FilmBaseSample {
+  const valuesR: number[] = [];
+  const valuesG: number[] = [];
+  const valuesB: number[] = [];
+  const pixelStep = Math.max(1, Math.round(Math.sqrt((width * height) / ANALYSIS_MAX_SAMPLES)));
+  for (let y = 0; y < height; y += pixelStep) {
+    for (let x = 0; x < width; x += pixelStep) {
+      const index = (y * width + x) * stride;
+      valuesR.push(pixels[index] ?? 0);
+      valuesG.push(pixels[index + 1] ?? 0);
+      valuesB.push(pixels[index + 2] ?? 0);
     }
   }
+  const pick = (values: number[]) => {
+    if (values.length === 0) return 1;
+    values.sort((left, right) => left - right);
+    const idx = clamp(Math.floor(values.length * percentile), 0, values.length - 1);
+    return clamp(Math.round(values[idx]), 1, 255);
+  };
+  return { r: pick(valuesR), g: pick(valuesG), b: pick(valuesB) };
+}
 
-  for (let y = borderThickness; y < height - borderThickness; y += step) {
-    for (let x = 0; x < borderThickness; x += step) {
-      pushSample(x, y);
-      pushSample(width - 1 - x, y);
-    }
-  }
-
-  if (samples.length < 24) {
-    return null;
-  }
-
-  const candidateSamples = [...samples]
-    .sort((left, right) => right.lum - left.lum)
-    .slice(0, Math.max(24, Math.min(512, Math.round(samples.length * 0.2))));
-  const result = { r: 0, g: 0, b: 0 } satisfies FilmBaseSample;
-
-  for (const channel of ['r', 'g', 'b'] as const) {
-    const bins = new Uint32Array(BIN_COUNT);
-    for (const sample of candidateSamples) {
-      const bin = Math.min(BIN_COUNT - 1, Math.floor(sample[channel] / BIN_WIDTH));
-      bins[bin] += 1;
-    }
-
-    let modeBin = 0;
-    for (let index = 1; index < BIN_COUNT; index += 1) {
-      if (bins[index] > bins[modeBin]) {
-        modeBin = index;
-      }
-    }
-
-    const modeCenter = (modeBin + 0.5) * BIN_WIDTH;
-    let sum = 0;
-    let count = 0;
-
-    for (const sample of candidateSamples) {
-      if (Math.abs(sample[channel] - modeCenter) <= CLUSTER_RADIUS) {
-        sum += sample[channel];
-        count += 1;
-      }
-    }
-
-    if (count < MIN_CLUSTER_SIZE) {
-      const takeCount = Math.max(24, Math.min(256, Math.round(samples.length * 0.12)));
-      const topSamples = [...samples].sort((left, right) => right.lum - left.lum).slice(0, takeCount);
-      const sums = topSamples.reduce((acc, sample) => ({
-        r: acc.r + sample.r,
-        g: acc.g + sample.g,
-        b: acc.b + sample.b,
-      }), { r: 0, g: 0, b: 0 });
-
-      return {
-        r: clamp(Math.round(sums.r / topSamples.length), 1, 255),
-        g: clamp(Math.round(sums.g / topSamples.length), 1, 255),
-        b: clamp(Math.round(sums.b / topSamples.length), 1, 255),
-      };
-    }
-
-    result[channel] = clamp(Math.round(sum / count), 1, 255);
-  }
-
-  if (Math.min(result.r, result.g, result.b) < 5) {
-    return null;
-  }
-
-  return result;
+// 16-bit RGB analysis path (stride 3). Channels are normalized to 0..255 float
+// without rounding before scoring; the returned sample is rounded to 8-bit.
+export function estimateFilmBase16(
+  rgb: Uint16Array | ArrayLike<number>,
+  width: number,
+  height: number,
+): FilmBaseEstimate | null {
+  return estimateFilmBaseCore(rgb, width, height, 3, 255 / 65535);
 }
 
 export function estimateFilmBaseSample(rgb: ArrayLike<number>, width: number, height: number): FilmBaseSample | null {
-  return estimateFilmBaseSampleWithStride(rgb, width, height, 3);
+  return estimateFilmBase(rgb, width, height, 3)?.sample ?? null;
 }
 
 export function estimateFilmBaseSampleFromRgba(rgba: ArrayLike<number>, width: number, height: number): FilmBaseSample | null {
-  return estimateFilmBaseSampleWithStride(rgba, width, height, 4);
+  return estimateFilmBase(rgba, width, height, 4)?.sample ?? null;
 }
 
 export function getFilmBaseChannelBalance(sample: FilmBaseSample | null) {
@@ -294,11 +501,22 @@ export function buildRawInitialSettings(
   width: number,
   height: number,
   orientation: number | null | undefined,
-  estimatedFilmBaseSample: FilmBaseSample | null = estimateFilmBaseSample(rgb, width, height),
+  estimatedFilmBase: FilmBaseSample | FilmBaseEstimate | null = estimateFilmBase(rgb, width, height, 3),
 ) {
   const nextSettings = structuredClone(baseSettings);
 
-  const channelBalance = getFilmBaseChannelBalance(estimatedFilmBaseSample);
+  // A distrusted estimate must not seed the white balance — a wrong base start
+  // compounds the wrong reference (diagnosis §"fallback behavior is too eager").
+  // Bare samples carry no confidence signal and are treated as trusted.
+  const estimate = estimatedFilmBase && typeof estimatedFilmBase === 'object' && 'sample' in estimatedFilmBase
+    ? estimatedFilmBase
+    : null;
+  const bareSample = estimate ? estimate.sample : (estimatedFilmBase as FilmBaseSample | null);
+  const lowConfidence = estimate != null
+    && (estimate.confidence < FILM_BASE_CONFIDENCE.reject || estimate.source === 'low-confidence');
+  const channelBalance = lowConfidence
+    ? { redBalance: 1, greenBalance: 1, blueBalance: 1 }
+    : getFilmBaseChannelBalance(bareSample);
 
   return {
     ...nextSettings,

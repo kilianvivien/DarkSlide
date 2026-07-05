@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultSettings } from '../constants';
+import { createDefaultSettings, FILM_BASE_CONFIDENCE } from '../constants';
 import { processImageData } from './imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+
+// Build an RGB Uint8Array by evaluating a per-pixel function. Pixel coordinates
+// are passed so fixtures can paint edge bands, rebate strips, etc.
+function buildRgb(width: number, height: number, pixel: (x: number, y: number) => [number, number, number]) {
+  const data = new Uint8Array(width * height * 3);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 3;
+      const [r, g, b] = pixel(x, y);
+      data[index] = r;
+      data[index + 1] = g;
+      data[index + 2] = b;
+    }
+  }
+  return data;
+}
+
+function edgeDistance(x: number, y: number, width: number, height: number) {
+  return Math.min(x, y, width - 1 - x, height - 1 - y);
+}
 
 function createRawRgb(width: number, height: number, border: [number, number, number], center: [number, number, number]) {
   const data = new Uint8Array(width * height * 3);
@@ -272,6 +292,24 @@ describe('rawImport', () => {
     expect(startupMeans.b / Math.max(startupMeans.g, 1)).toBeLessThan(1.35);
   });
 
+  it('starts from neutral channel balances when the film-base estimate is low confidence', () => {
+    const base = createDefaultSettings({ redBalance: 1.12, blueBalance: 0.9 });
+    const rgb = createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]);
+    const lowConfidence = {
+      sample: { r: 40, g: 44, b: 30 },
+      source: 'low-confidence' as const,
+      confidence: 0,
+      rejectedCandidates: 3,
+      clamped: true,
+    };
+
+    const settings = buildRawInitialSettings(base, rgb, 64, 48, 1, lowConfidence);
+    // No base-derived tilt: the distrusted estimate is not allowed to seed WB.
+    expect(settings.redBalance).toBeCloseTo(1.12);
+    expect(settings.greenBalance).toBeCloseTo(1);
+    expect(settings.blueBalance).toBeCloseTo(0.9);
+  });
+
   it('builds a worker decode request from RAW decoder output', () => {
     const rawResult = {
       width: 64,
@@ -318,5 +356,117 @@ describe('rawImport', () => {
     expect(Array.from(rgb16ToRgba8(new Uint16Array([0, 32_768, 65_535]), 1, 1))).toEqual([
       0, 128, 255, 255,
     ]);
+  });
+});
+
+describe('estimateFilmBase (confidence-scored)', () => {
+  it('reports high confidence and outer-border provenance for a clean bright border', () => {
+    const border: [number, number, number] = [168, 151, 134];
+    const rgb = buildRgb(160, 120, (x, y) => (
+      edgeDistance(x, y, 160, 120) < 2 ? border : [40, 60, 120]
+    ));
+
+    const estimate = estimateFilmBase(rgb, 160, 120, 3);
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('outer-border');
+    expect(estimate!.confidence).toBeGreaterThan(FILM_BASE_CONFIDENCE.accept);
+    expect(estimate!.sample.r).toBeCloseTo(border[0], -1);
+    expect(estimate!.sample.g).toBeCloseTo(border[1], -1);
+    expect(estimate!.sample.b).toBeCloseTo(border[2], -1);
+  });
+
+  it('finds the bright rebate strip when the outer edge is dark holder (Img2322 shape)', () => {
+    const rebate: [number, number, number] = [150, 210, 180];
+    const rgb = buildRgb(200, 150, (x, y) => {
+      const distance = edgeDistance(x, y, 200, 150);
+      if (distance < 3) return [28, 28, 28];   // dark holder at the literal edge
+      if (distance < 10) return rebate;         // clear rebate strip inset ~5%
+      return [46, 40, 30];                      // dense image content
+    });
+
+    const estimate = estimateFilmBase(rgb, 200, 150, 3);
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('frame-rebate');
+    expect(estimate!.sample.r).toBeCloseTo(rebate[0], -1);
+    expect(estimate!.sample.g).toBeCloseTo(rebate[1], -1);
+    expect(estimate!.sample.b).toBeCloseTo(rebate[2], -1);
+  });
+
+  it('falls back to a bright-percentile sample with zero confidence for a fully dark frame', () => {
+    const rgb = buildRgb(160, 120, () => [22, 20, 24]);
+
+    const estimate = estimateFilmBase(rgb, 160, 120, 3);
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('low-confidence');
+    expect(estimate!.confidence).toBe(0);
+    // The conservative sample never latches onto a dark population as a hard base.
+    expect(estimate!.sample.r).toBeGreaterThanOrEqual(1);
+  });
+
+  it('picks the film cluster instead of averaging a mixed holder/film border', () => {
+    const film: [number, number, number] = [150, 120, 90];
+    const rgb = buildRgb(200, 150, (x, y) => {
+      if (edgeDistance(x, y, 200, 150) >= 10) return [46, 40, 30];
+      return x < 100 ? film : [8, 8, 8]; // left half clear film, right half black holder
+    });
+
+    const estimate = estimateFilmBase(rgb, 200, 150, 3);
+    expect(estimate).not.toBeNull();
+    // Sample tracks the film cluster, not the midpoint between film and black.
+    expect(estimate!.sample.r).toBeCloseTo(film[0], -1);
+    expect(estimate!.sample.g).toBeCloseTo(film[1], -1);
+    expect(estimate!.sample.b).toBeCloseTo(film[2], -1);
+  });
+
+  it('produces the same sample for a horizontally mirrored frame (orientation-invariant)', () => {
+    const film: [number, number, number] = [150, 120, 90];
+    const pixel = (x: number, y: number): [number, number, number] => {
+      if (edgeDistance(x, y, 200, 150) >= 10) return [46, 40, 30];
+      return x < 100 ? film : [8, 8, 8];
+    };
+    const rgb = buildRgb(200, 150, pixel);
+    const mirrored = buildRgb(200, 150, (x, y) => pixel(200 - 1 - x, y));
+
+    const original = estimateFilmBase(rgb, 200, 150, 3);
+    const flipped = estimateFilmBase(mirrored, 200, 150, 3);
+    expect(original).not.toBeNull();
+    expect(flipped).not.toBeNull();
+    expect(flipped!.sample).toEqual(original!.sample);
+  });
+
+  it('estimates the base from a 16-bit RGB buffer (high-depth analysis path)', () => {
+    // 41120 = 160 * 257, which maps to exactly 160 in the 0..255 analysis space.
+    const border16: [number, number, number] = [160 * 257, 151 * 257, 134 * 257];
+    const rgb16 = new Uint16Array(160 * 120 * 3);
+    for (let y = 0; y < 120; y += 1) {
+      for (let x = 0; x < 160; x += 1) {
+        const index = (y * 160 + x) * 3;
+        const clear = edgeDistance(x, y, 160, 120) < 2;
+        rgb16[index] = clear ? border16[0] : 40 * 257;
+        rgb16[index + 1] = clear ? border16[1] : 60 * 257;
+        rgb16[index + 2] = clear ? border16[2] : 120 * 257;
+      }
+    }
+
+    const estimate = estimateFilmBase16(rgb16, 160, 120);
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('outer-border');
+    expect(estimate!.sample).toEqual({ r: 160, g: 151, b: 134 });
+  });
+
+  it('rejects a bright but heavily textured border via the texture gate', () => {
+    // Large enough that each analysis cell spans multiple pixels, so a
+    // high-frequency checkerboard produces a high per-cell std-dev.
+    const rgb = buildRgb(320, 240, (x, y) => {
+      if (edgeDistance(x, y, 320, 240) >= 24) return [46, 40, 30];
+      return (x + y) % 2 === 0 ? [225, 225, 225] : [55, 55, 55];
+    });
+
+    const estimate = estimateFilmBase(rgb, 320, 240, 3);
+    expect(estimate).not.toBeNull();
+    // No smooth clear-base region survives, so the estimator refuses rather
+    // than trusting the textured border.
+    expect(estimate!.source).toBe('low-confidence');
+    expect(estimate!.confidence).toBe(0);
   });
 });

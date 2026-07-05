@@ -221,6 +221,7 @@ export default function App() {
   const previousActiveTabIdRef = useRef<string | null>(null);
   const lastAutoFitCropKeyRef = useRef<string | null>(null);
   const monochromeSuggestionOfferedRef = useRef(new Set<string>());
+  const lowConfidenceNoticeOfferedRef = useRef(new Set<string>());
   const convertToBlackAndWhiteActionRef = useRef<(documentId: string) => void>(() => undefined);
   const tauriWindowRef = useRef<{
     startDragging: () => Promise<void>;
@@ -275,6 +276,39 @@ export default function App() {
       onAction: () => convertToBlackAndWhiteActionRef.current(documentId),
     });
   }, []);
+
+  // Once-per-document low-confidence notice: fires only when the settled render
+  // fell back to a conservative/clamp-rejected base (result.lowConfidence) and
+  // there is no manual or roll sample to trust. Mirrors the monochrome
+  // suggestion throttling so it stays rare and non-alarming.
+  const maybeNotifyLowConfidenceFilmBase = useCallback((
+    documentId: string,
+    options: {
+      comparisonMode: 'processed' | 'original';
+      previewMode: 'draft' | 'settled';
+      interactionQuality: InteractionQuality | null;
+      lowConfidence: boolean | undefined;
+      hasManualSample: boolean;
+    },
+  ) => {
+    if (
+      options.comparisonMode !== 'processed'
+      || options.previewMode !== 'settled'
+      || options.interactionQuality !== null
+      || !options.lowConfidence
+      || options.hasManualSample
+      || lowConfidenceNoticeOfferedRef.current.has(documentId)
+      || activeDocumentIdRef.current !== documentId
+    ) {
+      return;
+    }
+
+    lowConfidenceNoticeOfferedRef.current.add(documentId);
+    showTransientNotice(
+      'Automatic conversion confidence is low for this frame. Try sampling the film base or adjusting exposure/levels.',
+      'warning',
+    );
+  }, [showTransientNotice]);
 
   useEffect(() => {
     if (!documentState) {
@@ -1370,6 +1404,13 @@ export default function App() {
         isColor,
         blackAndWhiteEnabled: settings.blackAndWhite.enabled,
       });
+      maybeNotifyLowConfidenceFilmBase(result.documentId, {
+        comparisonMode: nextComparisonMode,
+        previewMode,
+        interactionQuality,
+        lowConfidence: result.lowConfidence,
+        hasManualSample: settings.filmBaseSample !== null,
+      });
       if (shouldTrackHeavyRenderIndicator) {
         lastCompletedSettledRenderKeyRef.current = renderKey;
         adaptiveState.committedHighlightDensity = result.highlightDensity;
@@ -1441,7 +1482,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, flushPendingPreview, getSettledAdaptiveState, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, tabsRef]);
+  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, flushPendingPreview, getSettledAdaptiveState, maybeNotifyLowConfidenceFilmBase, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, tabsRef]);
 
   const {
     enqueueRender: enqueuePreviewRender,

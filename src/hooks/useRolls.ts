@@ -217,6 +217,7 @@ export function useRolls({
           settings: {
             ...currentTab.document.settings,
             filmBaseSample: structuredClone(filmBase),
+            filmBaseSampleSource: 'roll',
           },
           dirty: true,
         },

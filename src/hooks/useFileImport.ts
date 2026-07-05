@@ -282,10 +282,12 @@ export function useFileImport({
         filmBaseSample: rawImport
           ? null
           : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : activeImportProfile.defaultSettings.filmBaseSample),
+        ...(!rawImport && roll?.filmBaseSample ? { filmBaseSampleSource: 'roll' as const } : {}),
       },
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
       estimatedFlare: null,
       estimatedFilmBaseSample: null,
+      estimatedFilmBase: null,
       estimatedDensityBalance: null,
       lightSourceId: null,
       cropSource: null,
@@ -331,14 +333,17 @@ export function useFileImport({
             path: nativePath!,
             size: sourceFileSize,
           });
-          const estimatedFilmBase = decodeRequest.precomputedFilmBaseSample ?? null;
+          const estimatedFilmBaseEstimate = decodeRequest.precomputedFilmBase ?? null;
+          const estimatedFilmBase = estimatedFilmBaseEstimate?.sample
+            ?? decodeRequest.precomputedFilmBaseSample
+            ?? null;
           const rawStartupSettings = createDefaultSettings(buildRawInitialSettings(
             rawStartupProfile.defaultSettings,
             rawResult.data,
             rawResult.width,
             rawResult.height,
             rawResult.orientation,
-            estimatedFilmBase,
+            estimatedFilmBaseEstimate ?? estimatedFilmBase,
           ));
           if (preferredImportProfile) {
             const preferredSettings = createDefaultSettings(structuredClone(activeImportProfile.defaultSettings));
@@ -519,6 +524,7 @@ export function useFileImport({
         }),
         estimatedFlare: decoded.estimatedFlare,
         estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
+        estimatedFilmBase: decoded.estimatedFilmBase ?? null,
         estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
         lightSourceId: resolveLightSourceIdForProfile(
           resolvedProfile,

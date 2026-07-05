@@ -21,7 +21,7 @@ import { savePreferences, UserPreferences } from '../utils/preferenceStore';
 import { saveMaxResidentDocs, MaxResidentDocs } from '../utils/residentDocsStore';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 import { clamp } from '../utils/math';
-import { computeHighlightDensity } from '../utils/imagePipeline';
+import { computeHighlightDensity, resolveDensityInversionParams } from '../utils/imagePipeline';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
 import { isRawWorkspaceDocument, rendersMonochrome, shouldUseDirectRawFilmBase, usesColorChannelPipeline } from '../utils/pipelineIntent';
 import {
@@ -1461,19 +1461,45 @@ export function useWorkspaceCommands({
         activeDocumentId: activeDocumentIdRef.current,
         activeImportSession: importSessionRef.current,
         activeRenderRequest: activeRenderRequestRef.current,
-        colorInversion: documentState ? {
-          activePipeline: 'standard',
-          profileType: activeProfile.type,
-          filmType: activeProfile.filmType ?? 'negative',
-          blackAndWhiteEnabled: documentState.settings.blackAndWhite.enabled,
-          usedEstimatedFilmBaseSample: !documentState.settings.filmBaseSample && Boolean(documentState.estimatedFilmBaseSample),
-          baseSampleSource: documentState.settings.filmBaseSample
-            ? 'manual-picker'
-            : documentState.estimatedFilmBaseSample
-              ? 'auto-estimated-border-sample'
-              : null,
-          reason: 'standard only',
-        } : null,
+        colorInversion: documentState ? (() => {
+          const isColor = usesColorChannelPipeline({ type: activeProfile.type });
+          const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
+          const outputProfileId = documentState.colorManagement.outputProfileId;
+          const filmBaseParams = resolveDensityInversionParams(
+            documentState.settings,
+            isColor,
+            activeProfile.filmType ?? 'negative',
+            activeProfile.id,
+            documentState.estimatedFilmBase ?? documentState.estimatedFilmBaseSample ?? null,
+            documentState.estimatedDensityBalance ?? null,
+            inputProfileId,
+            outputProfileId,
+            documentState.estimatedFlare ?? null,
+            (documentState.settings.flareCorrection ?? 50) / 100,
+          );
+          return {
+            activePipeline: 'standard',
+            profileType: activeProfile.type,
+            filmType: activeProfile.filmType ?? 'negative',
+            blackAndWhiteEnabled: documentState.settings.blackAndWhite.enabled,
+            // Full film-base decision record (audit: diagnosis §"Expose the
+            // decision in diagnostics"). Resolved from the same estimate/params
+            // the render used, so screenshots are immediately actionable.
+            filmBase: {
+              resolvedSample: documentState.settings.filmBaseSample ?? documentState.estimatedFilmBase?.sample ?? null,
+              baseSampleSource: filmBaseParams.baseSampleSource,
+              baseConfidence: filmBaseParams.baseConfidence,
+              estimatedSample: documentState.estimatedFilmBase?.sample ?? documentState.estimatedFilmBaseSample ?? null,
+              estimatorRejectedCandidates: documentState.estimatedFilmBase?.rejectedCandidates ?? 0,
+              crushGuardTriggered: documentState.estimatedFilmBase?.clamped ?? false,
+              baseDensity: filmBaseParams.baseDensity,
+              densityScale: filmBaseParams.densityScale,
+              densityScaleSource: filmBaseParams.densityScaleSource,
+              filmBaseSampleSource: documentState.settings.filmBaseSampleSource ?? 'manual',
+              lowConfidence: filmBaseParams.lowConfidence,
+            },
+          };
+        })() : null,
         fitScale,
         targetMaxDimension,
         effectiveRenderTarget: fullRenderTargetDimension,
@@ -1487,7 +1513,7 @@ export function useWorkspaceCommands({
     } catch {
       setError('Could not copy debug info to the clipboard.');
     }
-  }, [activeDocumentIdRef, activeProfile.filmType, activeProfile.type, activeRenderRequestRef, canvasSize, documentState, fitScale, fullRenderTargetDimension, hasVisiblePreview, importSessionRef, renderBackendDiagnostics, setError, showTransientNotice, targetMaxDimension]);
+  }, [activeDocumentIdRef, activeProfile.filmType, activeProfile.id, activeProfile.type, activeRenderRequestRef, canvasSize, documentState, fitScale, fullRenderTargetDimension, hasVisiblePreview, importSessionRef, renderBackendDiagnostics, setError, showTransientNotice, targetMaxDimension]);
 
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
