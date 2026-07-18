@@ -10,7 +10,14 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v1.0.0
+## What's New in v1.1.0
+
+- **True 16-bit export fidelity** — high-bit-depth exports now keep float precision through curves, sharpening, and noise reduction, avoiding the intermediate 8-bit rounding that could quantize smooth tones
+- **Auto White Balance** — a new one-click control neutralizes color casts by applying temperature and tint from DarkSlide's neutral-balance analysis
+- **Better results for borderless scans** — when no film rebate is visible, DarkSlide can estimate the film base from the brightest low-texture area inside the frame and records the estimate as low-confidence for transparency
+- **Security hardening** — all fixable npm and Cargo dependency alerts have been addressed, including the Tauri origin-confusion fix, while staying within the project's current major versions
+
+### Earlier in v1.0.0
 
 - **Density-domain inversion** — negatives are now inverted in the film-density domain, with the base sample driving an exact black point and flare subtracted symmetrically from the base and the image, for more faithful, better-behaved conversions
 - **Deterministic, inspectable conversions** — per-document residual-base and highlight analysis are pinned so the preview and the export match, and a diagnostic report captures the exact conversion parameters used
@@ -68,6 +75,7 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **Instant negative-to-positive conversion** with real-time preview
 - **Film stock profiles** — 40+ built-in color and black & white stocks to match the look of popular films
 - **Full editing controls** — exposure, contrast, saturation, temperature, tint, curves, black & white points, and highlight protection
+- **Auto White Balance** — neutralize color casts in one click while retaining full control over temperature and tint
 - **Black & white mode** with per-channel luminance mixing for fine-tuned tonal control
 - **Sharpening & noise reduction** to clean up your scans
 
@@ -77,6 +85,7 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **Work on multiple images at once** with tabbed documents
 - **Batch export** — convert a whole roll with one click, optionally applying a preset to every frame
 - **Contact sheet generation** — create a grid overview of your scans
+- **High-bit-depth output** — export 16-bit PNG or TIFF files with float precision preserved through curves, sharpening, and noise reduction
 - **Save and share presets** — create custom looks, organize them in folders, and export/import as `.darkslide` files
 - **Searchable preset browser** with sorting and tag display
 
