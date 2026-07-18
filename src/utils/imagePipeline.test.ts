@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyCrushGuard, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processImageData, resolveDensityInversionParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { FilmBaseEstimate } from '../types';
 
 function createPixel(r: number, g: number, b: number) {
@@ -296,6 +296,18 @@ describe('resolveDensityInversionParams confidence handling', () => {
     expect(params.baseSampleSource).toBe('frame-rebate');
     expect(params.lowConfidence).toBe(false);
     expect(params.baseConfidence).toBeCloseTo(0.8);
+  });
+
+  it('uses an in-frame estimate but flags it low-confidence', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 190, g: 170, b: 150 }, source: 'in-frame', confidence: 0.55, rejectedCandidates: 3, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      settingsNoManual, true, 'negative', null, estimate, null, 'srgb', 'srgb', null, 0.5,
+    );
+    expect(params.baseSampleSource).toBe('auto-estimated-in-frame');
+    expect(params.lowConfidence).toBe(true);
+    expect(params.baseConfidence).toBeCloseTo(0.55);
   });
 
   it('reports a roll-shared manual sample as roll provenance', () => {
@@ -647,6 +659,173 @@ describe('sharpen', () => {
     const minWith = Math.min(...Array.from(withSharpen.data).filter((_, i) => i % 4 !== 3));
 
     expect(maxWith - minWith).toBeGreaterThanOrEqual(maxWithout - minWithout);
+  });
+});
+
+function sampleTable(table: Float32Array, value: number) {
+  const t = Math.min(Math.max(value, 0), 1) * (FLOAT_CURVE_TABLE_SIZE - 1);
+  const i0 = Math.floor(t);
+  const i1 = Math.min(i0 + 1, FLOAT_CURVE_TABLE_SIZE - 1);
+  return table[i0] + (table[i1] - table[i0]) * (t - i0);
+}
+
+function createFloatRamp(count: number): FloatRgbRaster {
+  const data = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const v = i / (count - 1);
+    data[i * 3] = v;
+    data[i * 3 + 1] = v;
+    data[i * 3 + 2] = v;
+  }
+  return { width: count, height: 1, data, channels: 3 };
+}
+
+function createFloatGrid(size: number, pixels: Array<[number, number, number]>): FloatRgbRaster {
+  const data = new Float32Array(size * size * 3);
+  for (let i = 0; i < size * size; i++) {
+    const [r, g, b] = pixels[i % pixels.length];
+    data[i * 3] = r / 255;
+    data[i * 3 + 1] = g / 255;
+    data[i * 3 + 2] = b / 255;
+  }
+  return { width: size, height: size, data, channels: 3 };
+}
+
+const nonTrivialCurves = {
+  rgb: [{ x: 0, y: 0 }, { x: 96, y: 60 }, { x: 192, y: 215 }, { x: 255, y: 255 }],
+  red: [{ x: 0, y: 10 }, { x: 255, y: 245 }],
+  green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+  blue: [{ x: 0, y: 0 }, { x: 128, y: 140 }, { x: 255, y: 255 }],
+};
+
+describe('float curve tables', () => {
+  it('identity settings produce identity tables', () => {
+    const tables = buildFloatCurveTables(createDefaultSettings());
+    for (let i = 0; i < FLOAT_CURVE_TABLE_SIZE; i += 17) {
+      const x = i / (FLOAT_CURVE_TABLE_SIZE - 1);
+      expect(Math.abs(tables.r[i] - x)).toBeLessThan(1e-6);
+      expect(Math.abs(tables.g[i] - x)).toBeLessThan(1e-6);
+      expect(Math.abs(tables.b[i] - x)).toBeLessThan(1e-6);
+    }
+  });
+
+  it('matches the fused 8-bit LUT within 1.5/255 at integer sample points', () => {
+    const settings = createDefaultSettings({ curves: nonTrivialCurves });
+    const tables = buildFloatCurveTables(settings);
+    const masterLut = createCurveLut(settings.curves.rgb);
+    const channelLuts = {
+      r: createCurveLut(settings.curves.red),
+      g: createCurveLut(settings.curves.green),
+      b: createCurveLut(settings.curves.blue),
+    };
+    for (let i = 0; i < 256; i++) {
+      for (const channel of ['r', 'g', 'b'] as const) {
+        const fused = channelLuts[channel][masterLut[i]] / 255;
+        const float = sampleTable(tables[channel], i / 255);
+        expect(Math.abs(float - fused)).toBeLessThan(1.5 / 255);
+      }
+    }
+  });
+
+  it('monotone curves produce monotone tables', () => {
+    const tables = buildFloatCurveTables(createDefaultSettings({ curves: nonTrivialCurves }));
+    for (const table of [tables.r, tables.g, tables.b]) {
+      for (let i = 1; i < FLOAT_CURVE_TABLE_SIZE; i++) {
+        expect(table[i]).toBeGreaterThanOrEqual(table[i - 1]);
+      }
+    }
+  });
+});
+
+describe('processFloatRaster tonal resolution', () => {
+  it('keeps far more than 256 distinct levels through a non-trivial curve', () => {
+    const raster = createFloatRamp(65536);
+    processFloatRaster(raster, {
+      ...neutralSettings,
+      curves: nonTrivialCurves,
+    }, true, 'processed');
+
+    const distinct = new Set<number>();
+    for (let i = 0; i < 65536; i++) {
+      distinct.add(Math.round(raster.data[i * 3] * 1e6));
+    }
+    // The pre-fix path quantized to a 256-entry LUT, capping this at 256.
+    expect(distinct.size).toBeGreaterThan(2000);
+  });
+});
+
+describe('processFloatRaster spatial ops', () => {
+  it('noise reduction smooths a checkerboard pattern', () => {
+    const raster = createFloatGrid(4, [[220, 220, 220], [30, 30, 30]]);
+    const untouched = createFloatGrid(4, [[220, 220, 220], [30, 30, 30]]);
+
+    processFloatRaster(raster, {
+      ...neutralSettings,
+      noiseReduction: { enabled: true, luminanceStrength: 80 },
+    }, true, 'processed');
+    processFloatRaster(untouched, neutralSettings, true, 'processed');
+
+    const adjacentDiff = (r: FloatRgbRaster) => {
+      let total = 0;
+      for (let y = 0; y < 4; y++) {
+        for (let x = 0; x < 3; x++) {
+          const i = (y * r.width + x) * 3;
+          const j = (y * r.width + x + 1) * 3;
+          total += Math.abs(r.data[i] - r.data[j]);
+        }
+      }
+      return total;
+    };
+
+    expect(adjacentDiff(raster)).toBeLessThan(adjacentDiff(untouched) * 0.6);
+  });
+
+  it('sharpen amplifies edge contrast on a checkerboard pattern', () => {
+    const withSharpen = createFloatGrid(4, [[220, 220, 220], [30, 30, 30]]);
+    const withoutSharpen = createFloatGrid(4, [[220, 220, 220], [30, 30, 30]]);
+
+    processFloatRaster(withSharpen, {
+      ...neutralSettings,
+      sharpen: { enabled: true, radius: 0.5, amount: 150 },
+    }, true, 'processed');
+    processFloatRaster(withoutSharpen, {
+      ...neutralSettings,
+      sharpen: { enabled: false, radius: 1.0, amount: 0 },
+    }, true, 'processed');
+
+    const range = (r: FloatRgbRaster) => {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const v of r.data) {
+        min = Math.min(min, v);
+        max = Math.max(max, v);
+      }
+      return max - min;
+    };
+
+    expect(range(withSharpen)).toBeGreaterThanOrEqual(range(withoutSharpen));
+  });
+
+  it('stays close to the 8-bit path on identical inputs with spatial ops enabled', () => {
+    const pixels: Array<[number, number, number]> = [[220, 180, 150], [30, 60, 90], [128, 128, 128], [200, 90, 45]];
+    const settings = {
+      ...neutralSettings,
+      noiseReduction: { enabled: true, luminanceStrength: 40 },
+      sharpen: { enabled: true, radius: 1.0, amount: 60 },
+    };
+
+    const imageData = createGrid(4, pixels);
+    const raster = createFloatGrid(4, pixels);
+    processImageData(imageData, settings, true, 'processed');
+    processFloatRaster(raster, settings, true, 'processed');
+
+    for (let i = 0; i < 16; i++) {
+      for (let c = 0; c < 3; c++) {
+        const eightBit = imageData.data[i * 4 + c] / 255;
+        const float = raster.data[i * 3 + c];
+        expect(Math.abs(float - eightBit)).toBeLessThan(2.5 / 255);
+      }
+    }
   });
 });
 

@@ -31,6 +31,9 @@ const DENSITY_BALANCE_CLAMP_HIGH = 2;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
+let scratchFloatA: Float32Array | null = null;
+let scratchFloatB: Float32Array | null = null;
+let scratchFloatSize = 0;
 
 type CurveChannelOverrides = {
   r?: CurvePoint[];
@@ -361,6 +364,8 @@ function mapEstimateSourceToResolved(source: FilmBaseEstimate['source']): FilmBa
       return 'roll';
     case 'frame-rebate':
       return 'frame-rebate';
+    case 'in-frame':
+      return 'auto-estimated-in-frame';
     case 'low-confidence':
       return 'conservative-fallback';
     case 'manual':
@@ -900,6 +905,44 @@ function buildComposedCurveLuts(
   };
 }
 
+export const FLOAT_CURVE_TABLE_SIZE = 4096;
+
+function evalCurveNormalized(points: CurvePoint[] | undefined, value: number): number {
+  if (!points) return clamp(value, 0, 1);
+  return clamp(getCurveValue(points, clamp(value, 0, 1) * 255) / 255, 0, 1);
+}
+
+// High-resolution curve tables for the float (16-bit export) path. Composition
+// order matches the fused 8-bit LUTs used by processImageData/the GPU preview
+// (channel(master(x)) with master = userMaster∘labMaster), but sampled by exact
+// float evaluation with no integer rounding, so deep exports keep full tonal
+// resolution through the curve stage.
+export function buildFloatCurveTables(
+  settings: ConversionSettings,
+  labStyleToneCurve?: CurvePoint[],
+  labStyleChannelCurves?: CurveChannelOverrides,
+) {
+  const size = FLOAT_CURVE_TABLE_SIZE;
+  const r = new Float32Array(size);
+  const g = new Float32Array(size);
+  const b = new Float32Array(size);
+  for (let index = 0; index < size; index += 1) {
+    const x = index / (size - 1);
+    const master = evalCurveNormalized(settings.curves.rgb, evalCurveNormalized(labStyleToneCurve, x));
+    r[index] = evalCurveNormalized(settings.curves.red, evalCurveNormalized(labStyleChannelCurves?.r, master));
+    g[index] = evalCurveNormalized(settings.curves.green, evalCurveNormalized(labStyleChannelCurves?.g, master));
+    b[index] = evalCurveNormalized(settings.curves.blue, evalCurveNormalized(labStyleChannelCurves?.b, master));
+  }
+  return { r, g, b };
+}
+
+function sampleFloatCurveTable(table: Float32Array, value: number): number {
+  const t = clamp(value, 0, 1) * (FLOAT_CURVE_TABLE_SIZE - 1);
+  const i0 = Math.floor(t);
+  const i1 = Math.min(i0 + 1, FLOAT_CURVE_TABLE_SIZE - 1);
+  return table[i0] + (table[i1] - table[i0]) * (t - i0);
+}
+
 export function computeHighlightDensity(histogram: HistogramData) {
   const total = histogram.l.reduce((sum, count) => sum + count, 0);
   if (total <= 0) {
@@ -1109,14 +1152,7 @@ export function accumulateHistogram(
   }
 }
 
-function gaussianBlur1D(
-  src: Uint8ClampedArray,
-  dst: Float32Array,
-  width: number,
-  height: number,
-  horizontal: boolean,
-  kernelRadius: number,
-): void {
+function buildGaussianKernel(kernelRadius: number) {
   const size = Math.max(1, Math.round(kernelRadius));
   const kernelSize = size * 2 + 1;
   const kernel = new Float32Array(kernelSize);
@@ -1128,6 +1164,18 @@ function gaussianBlur1D(
     kernelSum += kernel[i];
   }
   for (let i = 0; i < kernelSize; i++) kernel[i] /= kernelSum;
+  return { kernel, size };
+}
+
+function gaussianBlur1D(
+  src: Uint8ClampedArray,
+  dst: Float32Array,
+  width: number,
+  height: number,
+  horizontal: boolean,
+  kernelRadius: number,
+): void {
+  const { kernel, size } = buildGaussianKernel(kernelRadius);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -1176,6 +1224,100 @@ export function releaseScratchBuffers() {
   scratchUint8 = null;
   scratchFloat32 = null;
   scratchSize = 0;
+  scratchFloatA = null;
+  scratchFloatB = null;
+  scratchFloatSize = 0;
+}
+
+function getFloatScratchBuffers(needed: number) {
+  if (scratchFloatSize < needed || !scratchFloatA || !scratchFloatB) {
+    scratchFloatA = new Float32Array(needed);
+    scratchFloatB = new Float32Array(needed);
+    scratchFloatSize = needed;
+  }
+  return { scratchFloatA, scratchFloatB };
+}
+
+function gaussianBlur1DFloat(
+  src: Float32Array,
+  dst: Float32Array,
+  width: number,
+  height: number,
+  channels: number,
+  horizontal: boolean,
+  kernelRadius: number,
+): void {
+  const { kernel, size } = buildGaussianKernel(kernelRadius);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sumR = 0, sumG = 0, sumB = 0;
+      for (let k = -size; k <= size; k++) {
+        const sx = horizontal ? clamp(x + k, 0, width - 1) : x;
+        const sy = horizontal ? y : clamp(y + k, 0, height - 1);
+        const idx = (sy * width + sx) * channels;
+        const w = kernel[k + size];
+        sumR += src[idx] * w;
+        sumG += src[idx + 1] * w;
+        sumB += src[idx + 2] * w;
+      }
+      const dIdx = (y * width + x) * channels;
+      dst[dIdx] = sumR;
+      dst[dIdx + 1] = sumG;
+      dst[dIdx + 2] = sumB;
+    }
+  }
+}
+
+// Unlike the 8-bit variant, no rounding happens between the two passes.
+function separableGaussianBlurFloat(
+  data: Float32Array,
+  width: number,
+  height: number,
+  channels: number,
+  radius: number,
+): Float32Array {
+  const len = width * height * channels;
+  const { scratchFloatA: hPass, scratchFloatB: result } = getFloatScratchBuffers(len);
+  gaussianBlur1DFloat(data, hPass, width, height, channels, true, radius);
+  gaussianBlur1DFloat(hPass, result, width, height, channels, false, radius);
+  return result;
+}
+
+function applyNoiseReductionFloat(raster: FloatRgbRaster, strength: number): void {
+  if (strength <= 0) return;
+  const { data, width, height } = raster;
+  const channels = raster.channels ?? 3;
+  const factor = strength / 100;
+  const blurred = separableGaussianBlurFloat(data, width, height, channels, 1.5);
+  // Same threshold as the 8-bit path's `lumOrig > 0.001`, expressed in 0-1.
+  const epsilon = 0.001 / 255;
+
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const i = pixel * channels;
+    const lumOrig = LUMA_R * data[i] + LUMA_G * data[i + 1] + LUMA_B * data[i + 2];
+    const lumBlur = LUMA_R * blurred[i] + LUMA_G * blurred[i + 1] + LUMA_B * blurred[i + 2];
+    const lumNew = lumOrig + (lumBlur - lumOrig) * factor;
+    const lumScale = lumOrig > epsilon ? lumNew / lumOrig : 1;
+    data[i] = clamp(data[i] * lumScale, 0, 1);
+    data[i + 1] = clamp(data[i + 1] * lumScale, 0, 1);
+    data[i + 2] = clamp(data[i + 2] * lumScale, 0, 1);
+  }
+}
+
+function applySharpenFloat(raster: FloatRgbRaster, radius: number, amount: number): void {
+  if (amount <= 0) return;
+  const { data, width, height } = raster;
+  const channels = raster.channels ?? 3;
+  const factor = amount / 100;
+  const blurred = separableGaussianBlurFloat(data, width, height, channels, radius);
+
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const i = pixel * channels;
+    data[i] = clamp(data[i] + factor * (data[i] - blurred[i]), 0, 1);
+    data[i + 1] = clamp(data[i + 1] + factor * (data[i + 1] - blurred[i + 1]), 0, 1);
+    data[i + 2] = clamp(data[i + 2] + factor * (data[i + 2] - blurred[i + 2]), 0, 1);
+  }
 }
 
 function applyNoiseReduction(imageData: ImageData, strength: number): void {
@@ -1408,6 +1550,14 @@ export interface FloatRgbRaster {
   channels?: 3 | 4;
 }
 
+// Quantization audit (16-bit export path): pixel data stays floating-point
+// end-to-end — Uint16 source → transformHighDepthRawSource (float bilinear) →
+// this function (float math, 4096-entry float curve tables, unrounded float
+// blurs) → resizeFloatRaster → toUint16Sample (the single intended 16-bit
+// quantization at encode). Remaining 8-bit quantizations are *parameters*
+// derived from preview analyses (FilmBaseSample, flare floor, residual base
+// offset, 512px highlight density); they shift global coefficients, not
+// per-pixel tonal resolution.
 export function processFloatRaster(
   raster: FloatRgbRaster,
   settings: ConversionSettings,
@@ -1443,10 +1593,7 @@ export function processFloatRaster(
 
   const data = raster.data;
   const channels = raster.channels ?? 3;
-  const lut = buildComposedCurveLuts(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
-  const fusedR = new Float32Array(256);
-  const fusedG = new Float32Array(256);
-  const fusedB = new Float32Array(256);
+  const curveTables = buildFloatCurveTables(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
   const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
   const safeContrast = clamp(effectiveSettings.contrast, -255, 258);
   const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
@@ -1473,12 +1620,6 @@ export function processFloatRaster(
     flareFloor,
     flareStrength,
   );
-
-  for (let index = 0; index < 256; index += 1) {
-    fusedR[index] = lut.r[lut.master[index]] / 255;
-    fusedG[index] = lut.g[lut.master[index]] / 255;
-    fusedB[index] = lut.b[lut.master[index]] / 255;
-  }
 
   for (let pixel = 0; pixel < raster.width * raster.height; pixel += 1) {
     const index = pixel * channels;
@@ -1569,13 +1710,9 @@ export function processFloatRaster(
           : [gray, gray, gray];
       }
 
-      const mappedR = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
-      const mappedG = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
-      const mappedB = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
-
-      r = fusedR[mappedR];
-      g = fusedG[mappedG];
-      b = fusedB[mappedB];
+      r = sampleFloatCurveTable(curveTables.r, r);
+      g = sampleFloatCurveTable(curveTables.g, g);
+      b = sampleFloatCurveTable(curveTables.b, b);
     }
 
     data[index] = clamp(r, 0, 1);
@@ -1583,5 +1720,17 @@ export function processFloatRaster(
     data[index + 2] = clamp(b, 0, 1);
   }
 
-  return { ...raster, channels };
+  const result: FloatRgbRaster = { ...raster, channels };
+
+  // Spatial operations (after per-pixel pipeline), mirroring processImageData.
+  if (comparisonMode === 'processed') {
+    if (effectiveSettings.noiseReduction.enabled && effectiveSettings.noiseReduction.luminanceStrength > 0) {
+      applyNoiseReductionFloat(result, effectiveSettings.noiseReduction.luminanceStrength);
+    }
+    if (effectiveSettings.sharpen.enabled && effectiveSettings.sharpen.amount > 0) {
+      applySharpenFloat(result, effectiveSettings.sharpen.radius, effectiveSettings.sharpen.amount);
+    }
+  }
+
+  return result;
 }

@@ -227,6 +227,7 @@ type AppShellProps = {
   onLightSourceChange: (lightSourceId: string | null) => void;
   onLabStyleChange: (labStyleId: string | null) => void;
   onAutoAdjust: () => void;
+  onAutoWhiteBalance: () => void;
   onProfileChange: (profile: FilmProfile) => void;
   onSavePreset: (name: string, metadata?: {
     filmStock?: string;
@@ -443,6 +444,7 @@ export function AppShell({
   onLightSourceChange,
   onLabStyleChange,
   onAutoAdjust,
+  onAutoWhiteBalance,
   onProfileChange,
   onSavePreset,
   onImportPreset,
@@ -614,6 +616,7 @@ export function AppShell({
                   onLightSourceChange={onLightSourceChange}
                   onLabStyleChange={onLabStyleChange}
                   onAutoAdjust={onAutoAdjust}
+                  onAutoWhiteBalance={onAutoWhiteBalance}
                 />
               </ErrorBoundary>
             </motion.div>

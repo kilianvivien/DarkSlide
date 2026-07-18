@@ -195,6 +195,112 @@ function percentileSample(cells: AnalysisCell[], percentile: number): FilmBaseSa
   return { r: collect('r'), g: collect('g'), b: collect('b') };
 }
 
+// 4-connected clustering over candidate cells, shared by the border-band
+// estimator and the borderless in-frame fallback.
+function clusterCandidateCells(
+  cells: AnalysisCell[],
+  gridW: number,
+  gridH: number,
+  isCandidate: (cell: AnalysisCell) => boolean,
+): number[][] {
+  const cellCount = gridW * gridH;
+  const clusterId = new Int32Array(cellCount).fill(-1);
+  const clusters: number[][] = [];
+  const stack: number[] = [];
+  for (let start = 0; start < cellCount; start += 1) {
+    if (clusterId[start] !== -1 || !isCandidate(cells[start])) continue;
+    const id = clusters.length;
+    const members: number[] = [];
+    clusterId[start] = id;
+    stack.push(start);
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      members.push(current);
+      const cx = current % gridW;
+      const cy = Math.floor(current / gridW);
+      const neighbors = [
+        cx > 0 ? current - 1 : -1,
+        cx < gridW - 1 ? current + 1 : -1,
+        cy > 0 ? current - gridW : -1,
+        cy < gridH - 1 ? current + gridW : -1,
+      ];
+      for (const neighbor of neighbors) {
+        if (neighbor >= 0 && clusterId[neighbor] === -1 && isCandidate(cells[neighbor])) {
+          clusterId[neighbor] = id;
+          stack.push(neighbor);
+        }
+      }
+    }
+    clusters.push(members);
+  }
+  return clusters;
+}
+
+// Borderless-scan fallback: pick the brightest low-texture interior cluster as
+// the Dmin proxy. Scoring is brightness-first (unlike the border estimator's
+// uniformity-first weights) because in-frame the discriminating evidence for
+// clear base is brightness, not coverage.
+function estimateInFrameBase(
+  interiorCells: AnalysisCell[],
+  gridW: number,
+  gridH: number,
+  scannedInteriorCells: AnalysisCell[],
+  isCandidate: (cell: AnalysisCell) => boolean,
+): FilmBaseEstimate | null {
+  if (scannedInteriorCells.length < 8) {
+    return null;
+  }
+  const clusters = clusterCandidateCells(interiorCells, gridW, gridH, isCandidate);
+  const minClusterCells = Math.max(1, Math.round(scannedInteriorCells.length * FILM_BASE_CONFIDENCE.minRegionFraction));
+  const survivors = clusters.filter((members) => members.length >= minClusterCells);
+  if (survivors.length === 0) {
+    return null;
+  }
+
+  let best: number[] | null = null;
+  let bestScore = -1;
+  for (const members of survivors) {
+    let lumSum = 0;
+    let stdSum = 0;
+    for (const index of members) {
+      lumSum += interiorCells[index].lum;
+      stdSum += interiorCells[index].stdDev;
+    }
+    const meanLum = lumSum / members.length;
+    const meanStd = stdSum / members.length;
+    const clusterFraction = members.length / scannedInteriorCells.length;
+    const sizeScore = Math.min(1, clusterFraction / (4 * FILM_BASE_CONFIDENCE.minRegionFraction));
+    const uniformityScore = clamp(1 - meanStd / FILM_BASE_CONFIDENCE.maxRegionStdDev, 0, 1);
+    const brightnessScore = clamp(
+      (meanLum - FILM_BASE_CONFIDENCE.minPlausibleLuminance) / (255 - FILM_BASE_CONFIDENCE.minPlausibleLuminance),
+      0,
+      1,
+    );
+    const score = 0.5 * brightnessScore + 0.3 * uniformityScore + 0.2 * sizeScore;
+    if (score > bestScore) {
+      bestScore = score;
+      best = members;
+    }
+  }
+  if (!best) {
+    return null;
+  }
+
+  const sample: FilmBaseSample = {
+    r: clamp(Math.round(modeClusterMean(best.map((index) => interiorCells[index].r))), 1, 255),
+    g: clamp(Math.round(modeClusterMean(best.map((index) => interiorCells[index].g))), 1, 255),
+    b: clamp(Math.round(modeClusterMean(best.map((index) => interiorCells[index].b))), 1, 255),
+  };
+
+  return {
+    sample,
+    source: 'in-frame',
+    confidence: Math.min(clamp(bestScore, 0, 1) * 0.85, FILM_BASE_CONFIDENCE.inFrameConfidenceCap),
+    rejectedCandidates: clusters.length - survivors.length,
+    clamped: false,
+  };
+}
+
 // Region-based, confidence-scored clear-film-base estimator. Parameterized by a
 // channel scale so the 8-bit (scale 1) and 16-bit (scale 255/65535) paths share
 // one implementation. Reads at most ANALYSIS_MAX_SAMPLES pixels regardless of
@@ -228,20 +334,39 @@ function estimateFilmBaseCore(
   const counts = new Uint32Array(cellCount);
   const touchesInner = new Uint8Array(cellCount);
 
+  // Interior (beyond the 12% band) accumulates into its own set of cells so
+  // the border-band statistics stay byte-identical to the border-only
+  // estimator; the interior grid only feeds the borderless-scan fallback.
+  const interiorSumR = new Float64Array(cellCount);
+  const interiorSumG = new Float64Array(cellCount);
+  const interiorSumB = new Float64Array(cellCount);
+  const interiorSumSqR = new Float64Array(cellCount);
+  const interiorSumSqG = new Float64Array(cellCount);
+  const interiorSumSqB = new Float64Array(cellCount);
+  const interiorCounts = new Uint32Array(cellCount);
+
   const pixelStep = Math.max(1, Math.round(Math.sqrt((width * height) / ANALYSIS_MAX_SAMPLES)));
 
   for (let y = 0; y < height; y += pixelStep) {
     const edgeY = Math.min(y, height - 1 - y);
     for (let x = 0; x < width; x += pixelStep) {
       const edgeDist = Math.min(x, width - 1 - x, edgeY);
-      if (edgeDist > innerInsetPx) {
-        continue; // interior image content — not a base candidate region
-      }
       const cellIndex = Math.floor(y / cellSize) * gridW + Math.floor(x / cellSize);
       const sourceIndex = (y * width + x) * stride;
       const r = (pixels[sourceIndex] ?? 0) * channelScale;
       const g = (pixels[sourceIndex + 1] ?? 0) * channelScale;
       const b = (pixels[sourceIndex + 2] ?? 0) * channelScale;
+      if (edgeDist > innerInsetPx) {
+        // Interior image content — only a candidate for the borderless fallback.
+        interiorSumR[cellIndex] += r;
+        interiorSumG[cellIndex] += g;
+        interiorSumB[cellIndex] += b;
+        interiorSumSqR[cellIndex] += r * r;
+        interiorSumSqG[cellIndex] += g * g;
+        interiorSumSqB[cellIndex] += b * b;
+        interiorCounts[cellIndex] += 1;
+        continue;
+      }
       sumR[cellIndex] += r;
       sumG[cellIndex] += g;
       sumB[cellIndex] += b;
@@ -290,6 +415,36 @@ function estimateFilmBaseCore(
     scannedCells.push(cell);
   }
 
+  const interiorCells: AnalysisCell[] = new Array(cellCount);
+  const scannedInteriorCells: AnalysisCell[] = [];
+  for (let index = 0; index < cellCount; index += 1) {
+    const n = interiorCounts[index];
+    if (n === 0) {
+      interiorCells[index] = { r: 0, g: 0, b: 0, lum: 0, stdDev: Infinity, count: 0, touchesInner: false, scanned: false };
+      continue;
+    }
+    const r = interiorSumR[index] / n;
+    const g = interiorSumG[index] / n;
+    const b = interiorSumB[index] / n;
+    const stdDev = Math.max(
+      stdDevOf(interiorSumR[index], interiorSumSqR[index], n),
+      stdDevOf(interiorSumG[index], interiorSumSqG[index], n),
+      stdDevOf(interiorSumB[index], interiorSumSqB[index], n),
+    );
+    const cell: AnalysisCell = {
+      r,
+      g,
+      b,
+      lum: LUMINANCE_R * r + LUMINANCE_G * g + LUMINANCE_B * b,
+      stdDev,
+      count: n,
+      touchesInner: false,
+      scanned: true,
+    };
+    interiorCells[index] = cell;
+    scannedInteriorCells.push(cell);
+  }
+
   if (scannedCells.length < 8) {
     return null;
   }
@@ -303,45 +458,29 @@ function estimateFilmBaseCore(
   );
 
   // 4-connected clustering over candidate cells.
-  const clusterId = new Int32Array(cellCount).fill(-1);
-  const clusters: number[][] = [];
-  const stack: number[] = [];
-  for (let start = 0; start < cellCount; start += 1) {
-    if (clusterId[start] !== -1 || !isCandidate(cells[start])) continue;
-    const id = clusters.length;
-    const members: number[] = [];
-    clusterId[start] = id;
-    stack.push(start);
-    while (stack.length > 0) {
-      const current = stack.pop()!;
-      members.push(current);
-      const cx = current % gridW;
-      const cy = Math.floor(current / gridW);
-      const neighbors = [
-        cx > 0 ? current - 1 : -1,
-        cx < gridW - 1 ? current + 1 : -1,
-        cy > 0 ? current - gridW : -1,
-        cy < gridH - 1 ? current + gridW : -1,
-      ];
-      for (const neighbor of neighbors) {
-        if (neighbor >= 0 && clusterId[neighbor] === -1 && isCandidate(cells[neighbor])) {
-          clusterId[neighbor] = id;
-          stack.push(neighbor);
-        }
-      }
-    }
-    clusters.push(members);
-  }
+  const clusters = clusterCandidateCells(cells, gridW, gridH, isCandidate);
 
   const minClusterCells = Math.max(1, Math.round(scannedCells.length * FILM_BASE_CONFIDENCE.minRegionFraction));
   const survivors = clusters.filter((members) => members.length >= minClusterCells);
   const rejectedCandidates = clusters.length - survivors.length;
 
   if (survivors.length === 0) {
+    // No clear base in the border band. Borderless-scan fallback: on a
+    // negative, unexposed film base is the brightest thing in frame, so the
+    // brightest low-texture interior patch is a usable Dmin proxy. Its
+    // confidence is capped below `accept` so it is always used-but-flagged,
+    // and the decode-time crush guard demotes a sample that would crush the
+    // frame (the known bias: an in-frame patch can be slightly denser than
+    // true base).
+    const inFrame = estimateInFrameBase(interiorCells, gridW, gridH, scannedInteriorCells, isCandidate);
+    if (inFrame) {
+      return { ...inFrame, rejectedCandidates: inFrame.rejectedCandidates + clusters.length };
+    }
     // No trustworthy clear base anywhere — conservative bright-percentile
-    // fallback so the render can never collapse to black.
+    // fallback so the render can never collapse to black. Fed by border and
+    // interior cells so borderless scans use the whole frame's statistics.
     return {
-      sample: percentileSample(scannedCells, 0.995),
+      sample: percentileSample([...scannedCells, ...scannedInteriorCells], 0.995),
       source: 'low-confidence',
       confidence: 0,
       rejectedCandidates: clusters.length,

@@ -15,6 +15,7 @@ import {
   Settings,
   Settings2,
   SlidersHorizontal,
+  Thermometer,
   Trash2,
   Wand2,
   Zap,
@@ -162,6 +163,7 @@ interface SidebarProps {
   onLightSourceChange?: (lightSourceId: string | null) => void;
   onLabStyleChange?: (labStyleId: string | null) => void;
   onAutoAdjust?: () => void;
+  onAutoWhiteBalance?: () => void;
   onDustRemovalChange?: (dustRemoval: ConversionSettings['dustRemoval']) => void;
   onDetectDust?: () => void;
   isDetectingDust?: boolean;
@@ -211,6 +213,7 @@ export const Sidebar = memo(function Sidebar({
   onLightSourceChange,
   onLabStyleChange,
   onAutoAdjust,
+  onAutoWhiteBalance,
   onDustRemovalChange,
   onDetectDust,
   isDetectingDust = false,
@@ -562,13 +565,30 @@ export const Sidebar = memo(function Sidebar({
                   />
 
                   {isColor && !settings.blackAndWhite.enabled && (
-                    <>
-                      <Slider label="Saturation" value={settings.saturation} min={0} max={200} onChange={scalarSliderHandlers.saturation} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                      <Slider label="Temperature" value={settings.temperature} min={-100} max={100} onChange={scalarSliderHandlers.temperature} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                      <Slider label="Tint" value={settings.tint} min={-100} max={100} onChange={scalarSliderHandlers.tint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                    </>
+                    <Slider label="Saturation" value={settings.saturation} min={0} max={200} onChange={scalarSliderHandlers.saturation} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   )}
                 </section>
+
+                {isColor && !settings.blackAndWhite.enabled && (
+                  <section>
+                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                      <Thermometer size={12} /> White Balance
+                      {onAutoWhiteBalance && histogramData && (
+                        <button
+                          type="button"
+                          onClick={onAutoWhiteBalance}
+                          data-tip="Auto-sets temperature and tint from a neutral-balance analysis of the image"
+                          className="ml-auto flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-200"
+                        >
+                          <Wand2 size={10} />
+                          Auto WB
+                        </button>
+                      )}
+                    </h2>
+                    <Slider label="Temperature" value={settings.temperature} min={-100} max={100} onChange={scalarSliderHandlers.temperature} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Tint" value={settings.tint} min={-100} max={100} onChange={scalarSliderHandlers.tint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  </section>
+                )}
 
                 {isColor && (
                   <section>

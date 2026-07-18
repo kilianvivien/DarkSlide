@@ -2231,18 +2231,21 @@ export default function App() {
     });
   }, []);
 
-  const handleAutoAdjust = useCallback(async () => {
+  const runAutoAnalysis = useCallback(async (mode: 'full' | 'whiteBalance') => {
     const worker = workerClientRef.current;
     if (!worker || !documentState || !displaySettings) {
       return;
     }
 
     const defaults = activeProfile.defaultSettings;
-    const hasManualAdjustments = documentState.settings.exposure !== defaults.exposure
-      || documentState.settings.temperature !== defaults.temperature
-      || documentState.settings.tint !== defaults.tint
-      || documentState.settings.blackPoint !== defaults.blackPoint
-      || documentState.settings.whitePoint !== defaults.whitePoint;
+    const hasManualAdjustments = mode === 'whiteBalance'
+      ? documentState.settings.temperature !== defaults.temperature
+        || documentState.settings.tint !== defaults.tint
+      : documentState.settings.exposure !== defaults.exposure
+        || documentState.settings.temperature !== defaults.temperature
+        || documentState.settings.tint !== defaults.tint
+        || documentState.settings.blackPoint !== defaults.blackPoint
+        || documentState.settings.whitePoint !== defaults.whitePoint;
 
     if (hasManualAdjustments && !await confirmOverwriteAutoAdjust()) {
       return;
@@ -2289,6 +2292,15 @@ export default function App() {
       || !latestDocument
       || latestDocument.renderRevision !== requestRevision
     ) {
+      return;
+    }
+
+    if (mode === 'whiteBalance') {
+      if (result.temperature === null || result.tint === null) {
+        showTransientNotice('No reliable white balance estimate for this image.');
+        return;
+      }
+      handleSettingsChange({ temperature: result.temperature, tint: result.tint });
       return;
     }
 
@@ -2345,6 +2357,9 @@ export default function App() {
     tabsRef,
     targetMaxDimension,
   ]);
+
+  const handleAutoAdjust = useCallback(() => runAutoAnalysis('full'), [runAutoAnalysis]);
+  const handleAutoWhiteBalance = useCallback(() => runAutoAnalysis('whiteBalance'), [runAutoAnalysis]);
 
   const handleOpenRollInfo = useCallback((rollId: string) => {
     setActiveRollInfoId(rollId);
@@ -2879,6 +2894,7 @@ onToggleScanningSession: toggleScanningWindow,
       onLightSourceChange={handleLightSourceChange}
       onLabStyleChange={handleLabStyleChange}
       onAutoAdjust={() => { void handleAutoAdjust(); }}
+      onAutoWhiteBalance={() => { void handleAutoWhiteBalance(); }}
       onProfileChange={handlePresetSelection}
       onSavePreset={handleSavePreset}
       onImportPreset={handleImportPreset}

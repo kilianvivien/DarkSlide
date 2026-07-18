@@ -2,6 +2,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_FILE_SIZE_BYTES } from './constants';
+import type { ConversionSettings } from './types';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -163,6 +164,7 @@ vi.mock('./components/Sidebar', () => ({
     onDustRemovalChange,
     onLightSourceChange,
     onAutoAdjust,
+    onAutoWhiteBalance,
     onExportOptionsChange,
     onExport,
     onTogglePicker,
@@ -176,6 +178,7 @@ vi.mock('./components/Sidebar', () => ({
     onDustRemovalChange?: (dustRemoval: Record<string, unknown>) => void;
     onLightSourceChange?: (lightSourceId: string | null) => void;
     onAutoAdjust?: () => void;
+    onAutoWhiteBalance?: () => void;
     onExportOptionsChange: (options: { filenameBase?: string }) => void;
     onExport: () => void;
     onTogglePicker: () => void;
@@ -208,6 +211,9 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={onAutoAdjust}>
           Auto
+        </button>
+        <button type="button" onClick={onAutoWhiteBalance}>
+          Auto WB
         </button>
         <button
           type="button"
@@ -2560,6 +2566,56 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.whitePoint).toBe(238);
     expect(latestRenderCall.settings.temperature).toBe(22);
     expect(latestRenderCall.settings.tint).toBe(3);
+  });
+
+  it('applies only temperature and tint from the Auto WB button', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.autoAnalyze.mockResolvedValue({
+      exposure: 6,
+      blackPoint: 4,
+      whitePoint: 238,
+      temperature: 22,
+      tint: 3,
+      contrast: 30,
+      midtoneBoostPoint: { x: 128, y: 150 },
+    });
+
+    render(<App />);
+    await uploadFile(createFile('auto-wb-only.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const beforeCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: ConversionSettings;
+    };
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto WB' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.autoAnalyze).toHaveBeenCalledTimes(1);
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: ConversionSettings;
+    };
+
+    expect(latestRenderCall.settings.temperature).toBe(22);
+    expect(latestRenderCall.settings.tint).toBe(3);
+    // Every tone field stays untouched by the WB-only action.
+    expect(latestRenderCall.settings.exposure).toBe(beforeCall.settings.exposure);
+    expect(latestRenderCall.settings.blackPoint).toBe(beforeCall.settings.blackPoint);
+    expect(latestRenderCall.settings.whitePoint).toBe(beforeCall.settings.whitePoint);
+    expect(latestRenderCall.settings.contrast).toBe(beforeCall.settings.contrast);
+    expect(latestRenderCall.settings.curves).toEqual(beforeCall.settings.curves);
   });
 
   it('preserves white balance and shows a notice when auto-analysis finds no neutral candidates', async () => {

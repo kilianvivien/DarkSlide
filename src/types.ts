@@ -132,6 +132,7 @@ export type FilmBaseEstimateSource =
   | 'roll'            // shared from another frame in the roll
   | 'frame-rebate'    // detected clear-film region near the image gate
   | 'outer-border'    // legacy border estimate that passed validation
+  | 'in-frame'        // borderless scan: brightest low-texture interior patch
   | 'low-confidence'; // conservative fallback, estimator evidence rejected
 
 export interface FilmBaseEstimate {
@@ -149,6 +150,7 @@ export type FilmBaseResolvedSource =
   | 'roll'
   | 'frame-rebate'
   | 'auto-estimated-border'
+  | 'auto-estimated-in-frame'
   | 'conservative-fallback'
   | 'none';
 

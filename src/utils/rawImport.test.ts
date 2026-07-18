@@ -454,6 +454,77 @@ describe('estimateFilmBase (confidence-scored)', () => {
     expect(estimate!.sample).toEqual({ r: 160, g: 151, b: 134 });
   });
 
+  it('estimates a borderless scan from the brightest low-texture in-frame patch', () => {
+    const patch: [number, number, number] = [190, 170, 150];
+    const rgb = buildRgb(320, 240, (x, y) => {
+      if (edgeDistance(x, y, 320, 240) < 29) return [30, 30, 30]; // no rebate anywhere
+      const inPatch = x >= 120 && x < 200 && y >= 100 && y < 160;
+      return inPatch ? patch : [40, 60, 120]; // dark image content elsewhere
+    });
+
+    const estimate = estimateFilmBase(rgb, 320, 240, 3);
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('in-frame');
+    expect(estimate!.sample.r).toBeCloseTo(patch[0], -1);
+    expect(estimate!.sample.g).toBeCloseTo(patch[1], -1);
+    expect(estimate!.sample.b).toBeCloseTo(patch[2], -1);
+    // Always used-but-flagged: above the reject gate, below the accept gate.
+    expect(estimate!.confidence).toBeGreaterThan(FILM_BASE_CONFIDENCE.reject);
+    expect(estimate!.confidence).toBeLessThan(FILM_BASE_CONFIDENCE.accept);
+  });
+
+  it('rejects a blown-out in-frame patch and falls back to the percentile sample', () => {
+    const rgb = buildRgb(320, 240, (x, y) => {
+      if (edgeDistance(x, y, 320, 240) < 29) return [30, 30, 30];
+      const inPatch = x >= 120 && x < 200 && y >= 100 && y < 160;
+      return inPatch ? [255, 255, 255] : [40, 60, 120]; // specular blowout, not base
+    });
+
+    const estimate = estimateFilmBase(rgb, 320, 240, 3);
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('low-confidence');
+    expect(estimate!.confidence).toBe(0);
+  });
+
+  it('rejects a bright but textured in-frame region via the texture gate', () => {
+    const rgb = buildRgb(320, 240, (x, y) => {
+      if (edgeDistance(x, y, 320, 240) < 29) return [30, 30, 30];
+      const inPatch = x >= 120 && x < 200 && y >= 100 && y < 160;
+      if (!inPatch) return [40, 60, 120];
+      return (x + y) % 2 === 0 ? [225, 225, 225] : [55, 55, 55];
+    });
+
+    const estimate = estimateFilmBase(rgb, 320, 240, 3);
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('low-confidence');
+    expect(estimate!.confidence).toBe(0);
+  });
+
+  it('prefers the frame rebate over any in-frame patch when a rebate exists', () => {
+    const rebate: [number, number, number] = [150, 210, 180];
+    const brightPatch = (x: number, y: number) => x >= 120 && x < 200 && y >= 100 && y < 160;
+    const withPatch = buildRgb(320, 240, (x, y) => {
+      const distance = edgeDistance(x, y, 320, 240);
+      if (distance < 4) return [28, 28, 28];
+      if (distance < 16) return rebate;
+      return brightPatch(x, y) ? [230, 230, 230] : [46, 40, 30];
+    });
+    const withoutPatch = buildRgb(320, 240, (x, y) => {
+      const distance = edgeDistance(x, y, 320, 240);
+      if (distance < 4) return [28, 28, 28];
+      if (distance < 16) return rebate;
+      return [46, 40, 30];
+    });
+
+    const estimateWith = estimateFilmBase(withPatch, 320, 240, 3);
+    const estimateWithout = estimateFilmBase(withoutPatch, 320, 240, 3);
+    expect(estimateWith).not.toBeNull();
+    expect(estimateWith!.source).toBe('frame-rebate');
+    // Interior content must not perturb a successful border estimate at all.
+    expect(estimateWith!.sample).toEqual(estimateWithout!.sample);
+    expect(estimateWith!.confidence).toBe(estimateWithout!.confidence);
+  });
+
   it('rejects a bright but heavily textured border via the texture gate', () => {
     // Large enough that each analysis cell spans multiple pixels, so a
     // high-frequency checkerboard produces a high per-cell std-dev.

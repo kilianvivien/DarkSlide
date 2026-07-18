@@ -440,6 +440,10 @@ export const FILM_BASE_CONFIDENCE = {
   accept: 0.6,
   // Between reject and accept: used, but flagged low-confidence.
   reject: 0.3,
+  // Ceiling for the borderless in-frame estimator: always below `accept`
+  // (so the estimate is used but flagged) yet comfortably above `reject`
+  // (so a strong in-frame patch is never demoted to the percentile fallback).
+  inFrameConfidenceCap: 0.55,
   // If more than this fraction of the positive histogram lands in the
   // bottom 8/255 after inversion, the base is catastrophic.
   maxCrushedFraction: 0.85,
