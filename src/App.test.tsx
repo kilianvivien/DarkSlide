@@ -33,6 +33,7 @@ const workerState = vi.hoisted(() => ({
   contactSheet: vi.fn(),
   sampleFilmBase: vi.fn(),
   reestimateFilmBase: vi.fn(),
+  applyFilmBaseEstimate: vi.fn(),
   disposeDocument: vi.fn(async () => ({ disposed: true })),
   evictPreviews: vi.fn(async () => ({ evicted: true })),
   trimResidentDocuments: vi.fn(async () => ({ evicted: true })),
@@ -109,6 +110,7 @@ const fileBridgeState = vi.hoisted(() => ({
   openInExternalEditor: vi.fn(),
   chooseApplicationPath: vi.fn(),
   confirmDiscard: vi.fn(),
+  confirmFilmBaseReanalysis: vi.fn(),
   confirmReplacePresetLibrary: vi.fn(),
   saveToDirectory: vi.fn(),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
@@ -488,6 +490,10 @@ vi.mock('./utils/imageWorkerClient', () => ({
       return workerState.reestimateFilmBase(...args);
     }
 
+    applyFilmBaseEstimate(...args: Parameters<typeof workerState.applyFilmBaseEstimate>) {
+      return workerState.applyFilmBaseEstimate(...args);
+    }
+
     disposeDocument(...args: Parameters<typeof workerState.disposeDocument>) {
       return workerState.disposeDocument(...args);
     }
@@ -541,6 +547,7 @@ vi.mock('./utils/fileBridge', () => ({
   openInExternalEditor: fileBridgeState.openInExternalEditor,
   chooseApplicationPath: fileBridgeState.chooseApplicationPath,
   confirmDiscard: fileBridgeState.confirmDiscard,
+  confirmFilmBaseReanalysis: fileBridgeState.confirmFilmBaseReanalysis,
   confirmReplacePresetLibrary: fileBridgeState.confirmReplacePresetLibrary,
   saveToDirectory: fileBridgeState.saveToDirectory,
   saveExportBlob: fileBridgeState.saveExportBlob,
@@ -688,6 +695,7 @@ describe('App import and preview pipeline', () => {
     workerState.contactSheet.mockReset();
     workerState.sampleFilmBase.mockReset();
     workerState.reestimateFilmBase.mockReset();
+    workerState.applyFilmBaseEstimate.mockReset();
     workerState.disposeDocument.mockClear();
     workerState.evictPreviews.mockClear();
     workerState.trimResidentDocuments.mockClear();
@@ -710,6 +718,7 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.openInExternalEditor.mockReset();
     fileBridgeState.chooseApplicationPath.mockReset();
     fileBridgeState.confirmDiscard.mockReset();
+    fileBridgeState.confirmFilmBaseReanalysis.mockReset();
     fileBridgeState.confirmReplacePresetLibrary.mockReset();
     fileBridgeState.saveToDirectory.mockReset();
     fileBridgeState.saveExportBlob.mockReset();
@@ -731,6 +740,7 @@ describe('App import and preview pipeline', () => {
       destinationDirectory: '/Users/tester/Downloads',
     });
     fileBridgeState.confirmDiscard.mockResolvedValue(true);
+    fileBridgeState.confirmFilmBaseReanalysis.mockResolvedValue(true);
     fileBridgeState.confirmReplacePresetLibrary.mockResolvedValue(true);
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -2566,7 +2576,7 @@ describe('App import and preview pipeline', () => {
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
       createRenderResult(payload.documentId, payload.revision, 300, 200)
     ));
-    workerState.reestimateFilmBase.mockResolvedValue({
+    const proposal = {
       type: 'reestimate-film-base',
       estimatedFilmBaseSample: { r: 190, g: 210, b: 200 },
       estimatedFilmBase: {
@@ -2577,7 +2587,9 @@ describe('App import and preview pipeline', () => {
         clamped: false,
       },
       estimatedDensityBalance: { scaleR: 1, scaleG: 1, scaleB: 1, source: 'auto-histogram' },
-    });
+    };
+    workerState.reestimateFilmBase.mockResolvedValue(proposal);
+    workerState.applyFilmBaseEstimate.mockResolvedValue(proposal);
 
     render(<App />);
     await uploadFile(createFile('reanalyze-crop.tiff', 'image/tiff'));
@@ -2599,7 +2611,95 @@ describe('App import and preview pipeline', () => {
         crop: expect.any(Object),
       }),
     }));
+    expect(fileBridgeState.confirmFilmBaseReanalysis).toHaveBeenCalledOnce();
+    expect(workerState.applyFilmBaseEstimate).toHaveBeenCalledWith(expect.objectContaining({
+      estimatedFilmBase: proposal.estimatedFilmBase,
+    }));
     expect(workerState.render.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('discards a delayed film-base proposal when curves or settings change during analysis', async () => {
+    const analysis = deferred<Record<string, unknown>>();
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.reestimateFilmBase.mockReturnValue(analysis.promise);
+
+    render(<App />);
+    await uploadFile(createFile('stale-reanalysis.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByText('Re-analyze Film Base'));
+    fireEvent.click(screen.getByText('Nudge Exposure'));
+    await flushMicrotasks();
+
+    await act(async () => {
+      analysis.resolve({
+        type: 'reestimate-film-base',
+        estimatedFilmBaseSample: { r: 90, g: 130, b: 110 },
+        estimatedFilmBase: {
+          sample: { r: 90, g: 130, b: 110 },
+          source: 'frame-rebate',
+          confidence: 0.7,
+          rejectedCandidates: 1,
+          clamped: false,
+        },
+        estimatedDensityBalance: null,
+      });
+    });
+    await flushMicrotasks();
+
+    expect(workerState.applyFilmBaseEstimate).not.toHaveBeenCalled();
+    expect(fileBridgeState.confirmFilmBaseReanalysis).not.toHaveBeenCalled();
+  });
+
+  it('rejects a substantially darker crop proposal without a confidence gain', async () => {
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(300, 200),
+      estimatedFilmBaseSample: { r: 150, g: 180, b: 165 },
+      estimatedFilmBase: {
+        sample: { r: 150, g: 180, b: 165 },
+        source: 'frame-rebate',
+        confidence: 0.7,
+        rejectedCandidates: 1,
+        clamped: false,
+      },
+      estimatedDensityBalance: null,
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.reestimateFilmBase.mockResolvedValue({
+      type: 'reestimate-film-base',
+      estimatedFilmBaseSample: { r: 105, g: 130, b: 118 },
+      estimatedFilmBase: {
+        sample: { r: 105, g: 130, b: 118 },
+        source: 'frame-rebate',
+        confidence: 0.72,
+        rejectedCandidates: 2,
+        clamped: false,
+      },
+      estimatedDensityBalance: null,
+    });
+
+    render(<App />);
+    await uploadFile(createFile('dark-proposal.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByText('Re-analyze Film Base'));
+    await flushMicrotasks();
+
+    expect(workerState.applyFilmBaseEstimate).not.toHaveBeenCalled();
+    expect(fileBridgeState.confirmFilmBaseReanalysis).not.toHaveBeenCalled();
   });
 
   it('applies worker auto-analysis results from the Auto button', async () => {

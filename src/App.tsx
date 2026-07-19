@@ -17,7 +17,7 @@ import { useRolls } from './hooks/useRolls';
 import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic } from './utils/diagnostics';
-import { confirmDeleteRoll, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
+import { confirmDeleteRoll, confirmFilmBaseReanalysis, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
 import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
@@ -2119,21 +2119,101 @@ export default function App() {
     }
 
     setIsReanalyzingFilmBase(true);
+    const settingsAtStart = current.settings;
     try {
       const result = await worker.reestimateFilmBase({
         documentId: current.id,
-        settings: current.settings,
+        settings: settingsAtStart,
       });
       if (activeDocumentIdRef.current !== current.id) {
         return;
       }
 
+      const latestDocument = tabsRef.current.find((tab) => tab.id === current.id)?.document ?? null;
+      if (!latestDocument || latestDocument.settings !== settingsAtStart) {
+        appendDiagnostic({
+          level: 'info',
+          code: 'FILM_BASE_PROPOSAL_STALE',
+          message: 'Settings changed while crop re-analysis was running.',
+          context: { documentId: current.id },
+        });
+        showTransientNotice('Film-base proposal was not applied because the image changed during analysis.', 'warning');
+        return;
+      }
+
+      if (!result.estimatedFilmBase || !result.estimatedFilmBaseSample) {
+        showTransientNotice('No usable film base was found outside the crop. Try sampling it manually.', 'warning');
+        return;
+      }
+
+      const currentEstimate = latestDocument.estimatedFilmBase;
+      const candidate = result.estimatedFilmBase;
+      const luminance = (sample: { r: number; g: number; b: number }) => (
+        0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b
+      );
+      const currentLuminance = currentEstimate ? luminance(currentEstimate.sample) : null;
+      const candidateLuminance = luminance(candidate.sample);
+      const confidenceImprovement = candidate.confidence - (currentEstimate?.confidence ?? 0);
+      if (
+        currentLuminance !== null
+        && candidateLuminance < currentLuminance * 0.9
+        && confidenceImprovement < 0.1
+      ) {
+        appendDiagnostic({
+          level: 'info',
+          code: 'FILM_BASE_PROPOSAL_REJECTED',
+          message: `${candidate.sample.r}/${candidate.sample.g}/${candidate.sample.b}`,
+          context: {
+            candidateConfidence: candidate.confidence,
+            currentConfidence: currentEstimate?.confidence ?? null,
+            documentId: current.id,
+            reason: 'darker-without-confidence-gain',
+          },
+        });
+        showTransientNotice('The proposed base was substantially darker without stronger evidence, so the current reference was kept.', 'warning');
+        return;
+      }
+
+      const maxChannelDifference = currentEstimate
+        ? Math.max(
+          Math.abs(candidate.sample.r - currentEstimate.sample.r),
+          Math.abs(candidate.sample.g - currentEstimate.sample.g),
+          Math.abs(candidate.sample.b - currentEstimate.sample.b),
+        )
+        : Number.POSITIVE_INFINITY;
+      const materialDifference = currentLuminance === null
+        || maxChannelDifference >= 12
+        || Math.abs(candidateLuminance - currentLuminance) >= 8;
+      if (materialDifference) {
+        const accepted = await confirmFilmBaseReanalysis(
+          currentEstimate
+            ? `${currentEstimate.sample.r}/${currentEstimate.sample.g}/${currentEstimate.sample.b}`
+            : 'none',
+          `${candidate.sample.r}/${candidate.sample.g}/${candidate.sample.b}`,
+        );
+        if (!accepted) {
+          showTransientNotice('Kept the current film-base reference.', 'success');
+          return;
+        }
+      }
+
+      const beforeCommit = tabsRef.current.find((tab) => tab.id === current.id)?.document ?? null;
+      if (!beforeCommit || beforeCommit.settings !== settingsAtStart) {
+        showTransientNotice('Film-base proposal was not applied because the image changed.', 'warning');
+        return;
+      }
+
+      const applied = await worker.applyFilmBaseEstimate({
+        documentId: current.id,
+        estimatedFilmBase: candidate,
+        estimatedDensityBalance: result.estimatedDensityBalance,
+      });
       setDocumentState((previous) => previous && previous.id === current.id
         ? {
           ...previous,
-          estimatedFilmBaseSample: result.estimatedFilmBaseSample,
-          estimatedFilmBase: result.estimatedFilmBase,
-          estimatedDensityBalance: result.estimatedDensityBalance,
+          estimatedFilmBaseSample: applied.estimatedFilmBaseSample,
+          estimatedFilmBase: applied.estimatedFilmBase,
+          estimatedDensityBalance: applied.estimatedDensityBalance,
         }
         : previous);
       // The settled-render key does not encode the estimate, so force the
@@ -2142,23 +2222,19 @@ export default function App() {
       appendDiagnostic({
         level: 'info',
         code: 'FILM_BASE_REESTIMATED',
-        message: result.estimatedFilmBaseSample
-          ? `${result.estimatedFilmBaseSample.r}/${result.estimatedFilmBaseSample.g}/${result.estimatedFilmBaseSample.b} (confidence ${result.estimatedFilmBase ? Math.round(result.estimatedFilmBase.confidence * 100) : 0}%)`
-          : 'No estimate found inside crop',
+        message: `${candidate.sample.r}/${candidate.sample.g}/${candidate.sample.b} (confidence ${Math.round(candidate.confidence * 100)}%)`,
         context: { documentId: current.id },
       });
       showTransientNotice(
-        result.estimatedFilmBaseSample
-          ? 'Re-analyzed the film base inside the current crop.'
-          : 'No usable film base found inside the crop — try sampling it manually.',
-        result.estimatedFilmBaseSample ? 'success' : 'warning',
+        'Applied the film-base estimate from outside the current crop.',
+        'success',
       );
     } catch (reanalyzeError) {
       setError(`Film-base re-analysis failed. ${formatError(reanalyzeError)}`);
     } finally {
       setIsReanalyzingFilmBase(false);
     }
-  }, [documentState, setDocumentState, showTransientNotice, setError]);
+  }, [documentState, setDocumentState, showTransientNotice, setError, tabsRef]);
 
   const handleToggleDustBrush = useCallback(() => {
     handleDustBrushActiveChange(!dustBrushActive);

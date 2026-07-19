@@ -480,34 +480,29 @@ export const Sidebar = memo(function Sidebar({
                     <Pipette size={16} className={isPickingFilmBase ? 'animate-pulse' : ''} />
                     <span className="text-sm font-medium">{filmBaseInstruction}</span>
                   </button>
-                  <div
-                    className={`mt-3 rounded-lg border px-3 py-2.5 ${filmBaseLowConfidence ? 'border-amber-500/30 bg-amber-500/10' : 'border-zinc-800 bg-zinc-900/50'}`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Active reference</p>
-                        <p role="status" className={`truncate text-xs ${filmBaseLowConfidence ? 'text-amber-300' : 'text-zinc-300'}`}>{filmBaseStatus}</p>
-                      </div>
-                      {onReanalyzeFilmBase && filmBaseSampleSource === null && (
-                        <button
-                          type="button"
-                          onClick={onReanalyzeFilmBase}
-                          disabled={isReanalyzingFilmBase}
-                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white disabled:cursor-wait disabled:opacity-60"
-                          aria-label="Re-analyze film base from the current crop"
-                          data-tip="Re-run automatic film-base detection using only the current crop."
-                        >
-                          {isReanalyzingFilmBase ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                          Re-analyze crop
-                        </button>
-                      )}
-                    </div>
-                    {filmBaseLowConfidence && (
-                      <p className="mt-2 text-[11px] leading-relaxed text-amber-200/80">
-                        Low confidence. Re-analyze the crop or sample a clear, unexposed area.
-                      </p>
+                  <div className="mt-2 flex min-w-0 items-center gap-2 px-0.5">
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${filmBaseLowConfidence ? 'bg-amber-500/70' : 'bg-zinc-600'}`} />
+                    <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Base</span>
+                    <span role="status" className={`min-w-0 flex-1 truncate text-[11px] ${filmBaseLowConfidence ? 'text-amber-300/80' : 'text-zinc-500'}`}>{filmBaseStatus}</span>
+                    {onReanalyzeFilmBase && filmBaseSampleSource === null && (
+                      <button
+                        type="button"
+                        onClick={onReanalyzeFilmBase}
+                        disabled={isReanalyzingFilmBase}
+                        className="inline-flex shrink-0 items-center gap-1 py-1 text-[10px] font-medium text-zinc-600 transition-colors hover:text-zinc-300 disabled:cursor-wait disabled:opacity-50"
+                        aria-label="Re-analyze film base outside the current crop"
+                        data-tip="Look for clear film base outside the current crop. Large changes require confirmation."
+                      >
+                        {isReanalyzingFilmBase ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                        {isReanalyzingFilmBase ? 'Analyzing…' : 'Re-analyze'}
+                      </button>
                     )}
                   </div>
+                  {filmBaseLowConfidence && (
+                    <p className="mt-1.5 pl-5 text-[10px] leading-relaxed text-amber-300/55">
+                      Low confidence — sample a clear area if the conversion looks wrong.
+                    </p>
+                  )}
                 </section>
 
                 <section>

@@ -871,6 +871,12 @@ export interface ReestimateFilmBaseResult {
   estimatedDensityBalance: DensityBalance | null;
 }
 
+export interface ApplyFilmBaseEstimateRequest {
+  documentId: string;
+  estimatedFilmBase: FilmBaseEstimate;
+  estimatedDensityBalance: DensityBalance | null;
+}
+
 export interface DiagnosticsEntry {
   id: string;
   level: 'info' | 'error';

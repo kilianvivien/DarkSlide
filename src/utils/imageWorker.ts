@@ -4,6 +4,7 @@ import UTIF from 'utif';
 import {
   AutoAnalyzeRequest,
   AutoAnalyzeResult,
+  ApplyFilmBaseEstimateRequest,
   ColorProfileId,
   CancelTileJobRequest,
   ContactSheetRequest,
@@ -1705,28 +1706,60 @@ function handleSampleFilmBase(payload: SampleRequest) {
   return sampleRegionFromTransformedCanvas(transformed, payload);
 }
 
-// Crop-scoped film-base re-analysis: re-run the estimator on the rotated +
-// cropped frame. The decode-time estimate sees the whole scan (holder,
-// borders, dense surround); the crop excludes exactly those poisoned regions,
-// so this is the user-triggerable recovery path for a bad startup estimate.
+// Crop-guided film-base re-analysis: preserve the original rotated frame and
+// inspect only pixels outside the crop. Cropping first would turn scene content
+// into a synthetic border that the rebate estimator could trust by mistake.
 const REESTIMATE_ANALYSIS_MAX_DIMENSION = 2048;
 
 function handleReestimateFilmBase(payload: ReestimateFilmBaseRequest): ReestimateFilmBaseResult {
   const document = getStoredDocument(payload.documentId);
   const preview = getOrCreatePreviewByMaxDimension(document, REESTIMATE_ANALYSIS_MAX_DIMENSION);
   const rotatedCanvas = renderRotatedCanvasForJob(preview.canvas, payload.settings);
-  const transformed = renderCroppedCanvasForJob(rotatedCanvas, payload.settings);
-  releaseCanvas(rotatedCanvas);
-  const context = transformed.canvas.getContext('2d', { willReadFrequently: true });
+  const context = rotatedCanvas.getContext('2d', { willReadFrequently: true });
   if (!context) {
-    releaseCanvas(transformed.canvas);
+    releaseCanvas(rotatedCanvas);
     throw new Error('Could not read film-base re-analysis canvas.');
   }
-  const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
-  releaseCanvas(transformed.canvas);
+  const imageData = context.getImageData(0, 0, rotatedCanvas.width, rotatedCanvas.height);
+  const cropBounds = getCropPixelBounds(
+    normalizeCrop(payload.settings),
+    rotatedCanvas.width,
+    rotatedCanvas.height,
+  );
+  releaseCanvas(rotatedCanvas);
+
+  const outsidePixelCount = imageData.width * imageData.height - cropBounds.width * cropBounds.height;
+  if (outsidePixelCount < imageData.width * imageData.height * 0.005) {
+    return {
+      type: 'reestimate-film-base',
+      estimatedFilmBaseSample: null,
+      estimatedFilmBase: null,
+      estimatedDensityBalance: null,
+    } satisfies ReestimateFilmBaseResult;
+  }
+
+  // Keep the original frame geometry and suppress only pixels inside the
+  // user's crop. Running the border estimator on a cropped raster invents a
+  // new "frame edge" from scene content and can mislabel it as rebate.
+  const outsideCrop = new ImageData(
+    new Uint8ClampedArray(imageData.data),
+    imageData.width,
+    imageData.height,
+  );
+  const cropRight = cropBounds.x + cropBounds.width;
+  const cropBottom = cropBounds.y + cropBounds.height;
+  for (let y = cropBounds.y; y < cropBottom; y += 1) {
+    for (let x = cropBounds.x; x < cropRight; x += 1) {
+      const offset = (y * outsideCrop.width + x) * 4;
+      outsideCrop.data[offset] = 0;
+      outsideCrop.data[offset + 1] = 0;
+      outsideCrop.data[offset + 2] = 0;
+      outsideCrop.data[offset + 3] = 255;
+    }
+  }
 
   const rawEstimate = normalizeFilmBaseEstimate(
-    estimateFilmBase(imageData.data, imageData.width, imageData.height, 4),
+    estimateFilmBase(outsideCrop.data, outsideCrop.width, outsideCrop.height, 4),
   );
   const priorDensityBalance = rawEstimate
     ? computeDensityBalance(imageData, rawEstimate.sample)
@@ -1740,13 +1773,21 @@ function handleReestimateFilmBase(payload: ReestimateFilmBaseRequest): Reestimat
     )
     : { estimate: null, densityBalance: null };
 
-  document.estimatedFilmBase = guarded.estimate;
-  document.estimatedFilmBaseSample = guarded.estimate?.sample ?? null;
-  document.estimatedDensityBalance = guarded.densityBalance;
-  // The pinned analyses embed the old estimate — recompute from scratch.
+  return {
+    type: 'reestimate-film-base',
+    estimatedFilmBaseSample: guarded.estimate?.sample ?? null,
+    estimatedFilmBase: guarded.estimate,
+    estimatedDensityBalance: guarded.densityBalance,
+  } satisfies ReestimateFilmBaseResult;
+}
+
+function handleApplyFilmBaseEstimate(payload: ApplyFilmBaseEstimateRequest): ReestimateFilmBaseResult {
+  const document = getStoredDocument(payload.documentId);
+  document.estimatedFilmBase = payload.estimatedFilmBase;
+  document.estimatedFilmBaseSample = payload.estimatedFilmBase.sample;
+  document.estimatedDensityBalance = payload.estimatedDensityBalance;
   document.residualBaseCache.clear();
   document.highlightDensityCache.clear();
-
   return {
     type: 'reestimate-film-base',
     estimatedFilmBaseSample: document.estimatedFilmBaseSample,
@@ -2069,6 +2110,9 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         return;
       case 'reestimate-film-base':
         reply(request, handleReestimateFilmBase(request.payload));
+        return;
+      case 'apply-film-base-estimate':
+        reply(request, handleApplyFilmBaseEstimate(request.payload));
         return;
       case 'conversion-analysis':
         reply(request, handleConversionAnalysis(request.payload));

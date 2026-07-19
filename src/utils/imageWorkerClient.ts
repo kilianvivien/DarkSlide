@@ -1,6 +1,7 @@
 import {
   AutoAnalyzeRequest,
   AutoAnalyzeResult,
+  ApplyFilmBaseEstimateRequest,
   ColorProfileId,
   ContactSheetRequest,
   ContactSheetResult,
@@ -84,6 +85,7 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   'cancel-job': 5_000,
   'sample-film-base': 10_000,
   'reestimate-film-base': 10_000,
+  'apply-film-base-estimate': 10_000,
   'conversion-analysis': 10_000,
   'detect-frame': 10_000,
   'compute-flare': 10_000,
@@ -1534,8 +1536,16 @@ export class ImageWorkerClient {
       () => this.request<ReestimateFilmBaseResult>('reestimate-film-base', payload),
       true,
     );
-    // The cached pinned analysis embeds the old estimate — drop it so draft
-    // frames do not keep rendering from stale conversion parameters.
+    return result;
+  }
+
+  async applyFilmBaseEstimate(payload: ApplyFilmBaseEstimateRequest) {
+    await this.ensureDocumentLoaded(payload.documentId);
+    const result = await this.requestWithDocumentRecovery(
+      payload.documentId,
+      () => this.request<ReestimateFilmBaseResult>('apply-film-base-estimate', payload),
+      true,
+    );
     this.lastConversionAnalysis.delete(payload.documentId);
     return result;
   }

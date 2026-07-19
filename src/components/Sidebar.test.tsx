@@ -128,7 +128,7 @@ describe('Sidebar', () => {
 
     expect(screen.getByText('In-frame estimate · 25%')).toBeInTheDocument();
     expect(screen.getByText(/Low confidence/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Re-analyze film base from the current crop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Re-analyze film base outside the current crop' }));
     expect(onReanalyzeFilmBase).toHaveBeenCalledOnce();
   });
 

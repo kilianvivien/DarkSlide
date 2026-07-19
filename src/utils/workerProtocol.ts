@@ -1,6 +1,7 @@
 import type {
   AutoAnalyzeRequest,
   AutoAnalyzeResult,
+  ApplyFilmBaseEstimateRequest,
   CancelTileJobRequest,
   ContactSheetRequest,
   ContactSheetResult,
@@ -62,6 +63,7 @@ export type WorkerRequest =
   | { type: 'cancel-job'; payload: CancelTileJobRequest }
   | { type: 'sample-film-base'; payload: SampleRequest }
   | { type: 'reestimate-film-base'; payload: ReestimateFilmBaseRequest }
+  | { type: 'apply-film-base-estimate'; payload: ApplyFilmBaseEstimateRequest }
   | { type: 'conversion-analysis'; payload: ConversionAnalysisRequest }
   | { type: 'detect-frame'; payload: DetectFramePayload }
   | { type: 'compute-flare'; payload: ComputeFlarePayload }

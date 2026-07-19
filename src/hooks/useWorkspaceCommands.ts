@@ -1511,7 +1511,9 @@ export function useWorkspaceCommands({
               baseDensity: filmBaseParams.baseDensity,
               densityScale: filmBaseParams.densityScale,
               densityScaleSource: filmBaseParams.densityScaleSource,
-              filmBaseSampleSource: documentState.settings.filmBaseSampleSource ?? 'manual',
+              filmBaseSampleSource: documentState.settings.filmBaseSample
+                ? (documentState.settings.filmBaseSampleSource ?? 'manual')
+                : null,
               lowConfidence: filmBaseParams.lowConfidence,
             },
           };

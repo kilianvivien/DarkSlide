@@ -697,6 +697,20 @@ export async function confirmOverwriteAutoAdjust(): Promise<boolean> {
   return window.confirm(message);
 }
 
+export async function confirmFilmBaseReanalysis(current: string, proposed: string): Promise<boolean> {
+  const message = `The proposed film base (${proposed}) differs substantially from the active reference (${current}). Apply it?`;
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Film Base Re-analysis',
+      kind: 'warning',
+      okLabel: 'Apply New Base',
+      cancelLabel: 'Keep Current',
+    });
+  }
+  return window.confirm(message);
+}
+
 // Tauri has no native text-input dialog; this wraps window.prompt for a consistent call site.
 export function promptText(message: string, defaultValue: string): string | null {
   return window.prompt(message, defaultValue);
