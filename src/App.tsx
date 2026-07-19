@@ -2141,12 +2141,19 @@ export default function App() {
         return;
       }
 
+      const currentEstimate = latestDocument.estimatedFilmBase;
       if (!result.estimatedFilmBase || !result.estimatedFilmBaseSample) {
-        showTransientNotice('No usable film base was found outside the crop. Try sampling it manually.', 'warning');
+        if (currentEstimate) {
+          showTransientNotice(
+            `No better film-base reference was found outside the crop. The current automatic estimate (${Math.round(currentEstimate.confidence * 100)}%) was kept.`,
+            'info',
+          );
+        } else {
+          showTransientNotice('No usable film base was found outside the crop. Try sampling a clear area manually.', 'warning');
+        }
         return;
       }
 
-      const currentEstimate = latestDocument.estimatedFilmBase;
       const candidate = result.estimatedFilmBase;
       const luminance = (sample: { r: number; g: number; b: number }) => (
         0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b

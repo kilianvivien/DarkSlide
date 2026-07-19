@@ -2702,6 +2702,44 @@ describe('App import and preview pipeline', () => {
     expect(fileBridgeState.confirmFilmBaseReanalysis).not.toHaveBeenCalled();
   });
 
+  it('explains that a confident active base is retained when crop re-analysis finds no candidate', async () => {
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(300, 200),
+      estimatedFilmBaseSample: { r: 150, g: 180, b: 165 },
+      estimatedFilmBase: {
+        sample: { r: 150, g: 180, b: 165 },
+        source: 'frame-rebate',
+        confidence: 0.91,
+        rejectedCandidates: 1,
+        clamped: false,
+      },
+      estimatedDensityBalance: null,
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.reestimateFilmBase.mockResolvedValue({
+      type: 'reestimate-film-base',
+      estimatedFilmBaseSample: null,
+      estimatedFilmBase: null,
+      estimatedDensityBalance: null,
+    });
+
+    render(<App />);
+    await uploadFile(createFile('keep-confident-base.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByText('Re-analyze Film Base'));
+    await flushMicrotasks();
+
+    expect(screen.getByText('No better film-base reference was found outside the crop. The current automatic estimate (91%) was kept.')).toBeInTheDocument();
+    expect(workerState.applyFilmBaseEstimate).not.toHaveBeenCalled();
+  });
+
   it('applies worker auto-analysis results from the Auto button', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; settings: { exposure: number; blackPoint: number; whitePoint: number; temperature: number; tint: number } }) => (

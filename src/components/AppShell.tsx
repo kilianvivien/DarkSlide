@@ -8,6 +8,7 @@ import {
   ExternalLink,
   FileWarning,
   Image as ImageIcon,
+  Info,
   Loader2,
   PanelLeft,
   PanelLeftClose,
@@ -1051,10 +1052,14 @@ export function AppShell({
                       className={`pointer-events-auto flex items-center gap-3 rounded-xl px-4 py-3 text-sm shadow-2xl backdrop-blur-xl ${
                         transientNotice.tone === 'success'
                           ? 'border border-emerald-800/60 bg-emerald-950/55 text-emerald-100'
-                          : 'border border-amber-800/60 bg-amber-950/55 text-amber-100'
+                          : transientNotice.tone === 'info'
+                            ? 'border border-zinc-700/70 bg-zinc-900/90 text-zinc-200'
+                            : 'border border-amber-800/60 bg-amber-950/55 text-amber-100'
                       }`}
                     >
-                      <FileWarning size={18} className={`shrink-0 ${transientNotice.tone === 'success' ? 'text-emerald-300' : 'text-amber-300'}`} />
+                      {transientNotice.tone === 'info'
+                        ? <Info size={18} className="shrink-0 text-zinc-400" />
+                        : <FileWarning size={18} className={`shrink-0 ${transientNotice.tone === 'success' ? 'text-emerald-300' : 'text-amber-300'}`} />}
                       <span className="min-w-0 flex-1">{transientNotice.message}</span>
                       <button type="button" onClick={() => onSetTransientNotice(null)} aria-label="Dismiss notification" className="shrink-0 opacity-50 hover:opacity-100">✕</button>
                     </motion.div>

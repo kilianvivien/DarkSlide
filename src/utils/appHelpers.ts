@@ -202,7 +202,7 @@ export type BlockingOverlayState = {
 
 export type TransientNoticeState = {
   message: string;
-  tone?: 'warning' | 'success';
+  tone?: 'info' | 'warning' | 'success';
 };
 
 export type SuggestionNoticeState = {

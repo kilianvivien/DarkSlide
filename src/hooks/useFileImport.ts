@@ -40,7 +40,7 @@ type BlockingOverlayState = {
 
 type TransientNoticeState = {
   message: string;
-  tone?: 'warning' | 'success';
+  tone?: 'info' | 'warning' | 'success';
 } | null;
 
 type TabsApi = {
