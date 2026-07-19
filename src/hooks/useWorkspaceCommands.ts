@@ -104,7 +104,8 @@ function buildProfileSettingsForDocument(
     ? rawImportProfile.defaultSettings
     : profile.defaultSettings;
   const nextSettings = createDefaultSettings(structuredClone(profileDefaults));
-  const scanFilmBaseSample = currentDocument?.settings.filmBaseSample
+  const activeFilmBaseSample = currentDocument?.settings.filmBaseSample ?? null;
+  const scanFilmBaseSample = activeFilmBaseSample
     ?? currentDocument?.estimatedFilmBaseSample
     ?? null;
   const shouldUseDirectBase = currentDocument
@@ -113,8 +114,18 @@ function buildProfileSettingsForDocument(
 
   if (!usesRawImportProfileDefaults && shouldUseDirectBase && !nextSettings.filmBaseSample && scanFilmBaseSample) {
     nextSettings.filmBaseSample = structuredClone(scanFilmBaseSample);
+    if (activeFilmBaseSample && currentDocument?.settings.filmBaseSampleSource) {
+      nextSettings.filmBaseSampleSource = currentDocument.settings.filmBaseSampleSource;
+    }
   } else if (currentDocument && isRawWorkspaceDocument(currentDocument) && !shouldUseDirectBase) {
-    nextSettings.filmBaseSample = null;
+    // Presets change the look, not the physical base reference of this scan:
+    // a sample the user (or roll) already established on a negative survives,
+    // only estimate-driven flows fall back to the confidence-aware estimate.
+    const keepsActiveSample = (profile.filmType ?? 'negative') === 'negative' && activeFilmBaseSample;
+    nextSettings.filmBaseSample = keepsActiveSample ? structuredClone(activeFilmBaseSample) : null;
+    if (keepsActiveSample && currentDocument.settings.filmBaseSampleSource) {
+      nextSettings.filmBaseSampleSource = currentDocument.settings.filmBaseSampleSource;
+    }
   }
 
   return nextSettings;
@@ -1366,9 +1377,14 @@ export function useWorkspaceCommands({
           y,
         });
 
-        if (shouldUseDirectRawFilmBase(isRawWorkspaceDocument(documentState), activeProfile, documentState.settings)) {
+        // Negatives run the density inversion, and a manual sample is the
+        // strongest base evidence there is — feed it to the density stage even
+        // when the frame renders monochrome (previously the B&W toggle silently
+        // rerouted it into channel balances and left filmBaseSample null).
+        if ((activeProfile.filmType ?? 'negative') === 'negative') {
           handleSettingsChange({
             filmBaseSample: sample,
+            filmBaseSampleSource: 'manual',
           });
         } else {
           handleSettingsChange(getFilmBaseCorrectionSettings(sample));
@@ -1517,9 +1533,10 @@ export function useWorkspaceCommands({
 
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const file = event.dataTransfer.files?.[0];
-    if (!file) return;
-    await importFile(file, getNativePathFromFile(file));
+    const files = Array.from(event.dataTransfer.files ?? []);
+    for (const file of files) {
+      await importFile(file, getNativePathFromFile(file));
+    }
   }, [importFile]);
 
   const handleSelectTab = useCallback((tabId: string) => {

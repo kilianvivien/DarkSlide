@@ -206,6 +206,8 @@ type AppShellProps = {
   onInteractionEnd: () => void;
   onLevelInteractionChange: React.Dispatch<React.SetStateAction<boolean>>;
   onToggleFilmBasePicker: () => void;
+  onReanalyzeFilmBase: () => void;
+  isReanalyzingFilmBase: boolean;
   onExportClick: () => void;
   onQuickExport: (preset: QuickExportPreset) => void;
   onSaveQuickExportPreset: () => void;
@@ -423,6 +425,8 @@ export function AppShell({
   onInteractionEnd,
   onLevelInteractionChange,
   onToggleFilmBasePicker,
+  onReanalyzeFilmBase,
+  isReanalyzingFilmBase,
   onExportClick,
   onQuickExport,
   onSaveQuickExportPreset,
@@ -589,7 +593,11 @@ export function AppShell({
                   lightSourceProfiles={lightSourceProfiles}
                   histogramData={documentState?.histogram ?? null}
                   isPickingFilmBase={isPickingFilmBase}
+                  isReanalyzingFilmBase={isReanalyzingFilmBase}
+                  estimatedFilmBase={documentState?.estimatedFilmBase ?? null}
+                  filmBaseSampleSource={documentState?.settings.filmBaseSampleSource ?? null}
                   onTogglePicker={onToggleFilmBasePicker}
+                  onReanalyzeFilmBase={onReanalyzeFilmBase}
                   onExport={onExportClick}
                   onQuickExport={onQuickExport}
                   onSaveQuickExportPreset={onSaveQuickExportPreset}
@@ -763,15 +771,41 @@ export function AppShell({
 
           <ErrorBoundary>
             <div
+              data-testid="image-drop-zone"
               ref={viewportRef}
               className={`relative flex flex-1 items-center justify-center overflow-hidden p-8 ${isDragActive ? 'bg-zinc-900/60' : ''}`}
               onDragOver={(event) => {
                 event.preventDefault();
                 onSetIsDragActive(true);
               }}
-              onDragLeave={() => onSetIsDragActive(false)}
-              onDrop={(event) => { void onDropFile(event); }}
+              onDragLeave={(event) => {
+                const nextTarget = event.relatedTarget;
+                if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+                  onSetIsDragActive(false);
+                }
+              }}
+              onDrop={(event) => {
+                onSetIsDragActive(false);
+                void onDropFile(event);
+              }}
             >
+              <AnimatePresence>
+                {isDragActive && (
+                  <motion.div
+                    aria-hidden="true"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="pointer-events-none absolute inset-4 z-40 flex items-center justify-center rounded-3xl border-2 border-dashed border-zinc-500/70 bg-zinc-950/70 backdrop-blur-sm"
+                  >
+                    <div className="flex flex-col items-center gap-3 text-center">
+                      <Upload size={34} className="text-zinc-300" />
+                      <p className="text-base font-semibold text-zinc-100">Drop files to import</p>
+                      <p className="text-xs text-zinc-400">TIFF, JPEG, PNG, WebP, or desktop RAW files</p>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
               <AnimatePresence mode="wait">
                 {!documentState ? (
                   <motion.div
@@ -1002,65 +1036,79 @@ export function AppShell({
                 </div>
               )}
 
-              {error && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="absolute bottom-8 right-8 z-50 flex max-w-md items-center gap-3 rounded-xl border border-red-900/50 bg-red-950/50 px-4 py-3 text-sm text-red-200 shadow-2xl backdrop-blur-xl"
-                >
-                  <FileWarning size={18} className="shrink-0 text-red-400" />
-                  <span>{error}</span>
-                  <button onClick={() => onSetError(null)} className="ml-2 opacity-50 hover:opacity-100">✕</button>
-                </motion.div>
-              )}
+              <div
+                data-testid="notification-stack"
+                className="pointer-events-none absolute bottom-8 right-8 z-50 flex w-[min(28rem,calc(100%-4rem))] flex-col items-stretch gap-3"
+              >
+                <AnimatePresence initial={false}>
+                  {transientNotice && (
+                    <motion.div
+                      key="transient-notice"
+                      layout
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 12 }}
+                      className={`pointer-events-auto flex items-center gap-3 rounded-xl px-4 py-3 text-sm shadow-2xl backdrop-blur-xl ${
+                        transientNotice.tone === 'success'
+                          ? 'border border-emerald-800/60 bg-emerald-950/55 text-emerald-100'
+                          : 'border border-amber-800/60 bg-amber-950/55 text-amber-100'
+                      }`}
+                    >
+                      <FileWarning size={18} className={`shrink-0 ${transientNotice.tone === 'success' ? 'text-emerald-300' : 'text-amber-300'}`} />
+                      <span className="min-w-0 flex-1">{transientNotice.message}</span>
+                      <button type="button" onClick={() => onSetTransientNotice(null)} aria-label="Dismiss notification" className="shrink-0 opacity-50 hover:opacity-100">✕</button>
+                    </motion.div>
+                  )}
 
-              {suggestionNotice && (
-                <motion.div
-                  initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                  transition={{ type: 'spring', bounce: 0.2, duration: 0.35 }}
-                  className="absolute bottom-20 right-8 z-50 flex max-w-md items-center gap-3 rounded-2xl border border-zinc-700/70 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-200 shadow-2xl shadow-black/50 backdrop-blur-xl"
-                >
-                  <ImageIcon size={16} className="shrink-0 text-zinc-400" />
-                  <span className="min-w-0 flex-1 leading-snug text-zinc-300">{suggestionNotice.message}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      suggestionNotice.onAction();
-                      onSetSuggestionNotice(null);
-                    }}
-                    className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
-                  >
-                    {suggestionNotice.actionLabel}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSetSuggestionNotice(null)}
-                    className="shrink-0 text-zinc-600 transition-colors hover:text-zinc-300"
-                    aria-label="Dismiss suggestion"
-                  >
-                    <X size={13} />
-                  </button>
-                </motion.div>
-              )}
+                  {error && (
+                    <motion.div
+                      key="error-notice"
+                      layout
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 12 }}
+                      className="pointer-events-auto flex items-center gap-3 rounded-xl border border-red-900/50 bg-red-950/50 px-4 py-3 text-sm text-red-200 shadow-2xl backdrop-blur-xl"
+                    >
+                      <FileWarning size={18} className="shrink-0 text-red-400" />
+                      <span className="min-w-0 flex-1">{error}</span>
+                      <button type="button" onClick={() => onSetError(null)} aria-label="Dismiss error" className="shrink-0 opacity-50 hover:opacity-100">✕</button>
+                    </motion.div>
+                  )}
 
-              {transientNotice && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 20 }}
-                  className={`absolute bottom-28 right-8 z-50 flex max-w-md items-center gap-3 rounded-xl px-4 py-3 text-sm shadow-2xl backdrop-blur-xl ${
-                    transientNotice.tone === 'success'
-                      ? 'border border-emerald-800/60 bg-emerald-950/55 text-emerald-100'
-                      : 'border border-amber-800/60 bg-amber-950/55 text-amber-100'
-                  }`}
-                >
-                  <FileWarning size={18} className={`shrink-0 ${transientNotice.tone === 'success' ? 'text-emerald-300' : 'text-amber-300'}`} />
-                  <span>{transientNotice.message}</span>
-                  <button onClick={() => onSetTransientNotice(null)} className="ml-2 opacity-50 hover:opacity-100">✕</button>
-                </motion.div>
-              )}
+                  {suggestionNotice && (
+                    <motion.div
+                      key="suggestion-notice"
+                      layout
+                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                      transition={{ type: 'spring', bounce: 0.2, duration: 0.35 }}
+                      className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-zinc-700/70 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-200 shadow-2xl shadow-black/50 backdrop-blur-xl"
+                    >
+                      <ImageIcon size={16} className="shrink-0 text-zinc-400" />
+                      <span className="min-w-0 flex-1 leading-snug text-zinc-300">{suggestionNotice.message}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          suggestionNotice.onAction();
+                          onSetSuggestionNotice(null);
+                        }}
+                        className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
+                      >
+                        {suggestionNotice.actionLabel}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onSetSuggestionNotice(null)}
+                        className="shrink-0 text-zinc-600 transition-colors hover:text-zinc-300"
+                        aria-label="Dismiss suggestion"
+                      >
+                        <X size={13} />
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
           </ErrorBoundary>
         </main>

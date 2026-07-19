@@ -428,7 +428,8 @@ function sampleChannelToDensity(
 }
 
 export function resolveDensityInversionParams(
-  settings: Pick<ConversionSettings, 'filmBaseSample' | 'filmBaseSampleSource' | 'flareCorrection'>,
+  settings: Pick<ConversionSettings, 'filmBaseSample' | 'filmBaseSampleSource' | 'flareCorrection'>
+    & Partial<Pick<ConversionSettings, 'blackAndWhite'>>,
   isColor: boolean,
   filmType: FilmProfileType,
   profileId: string | null = null,
@@ -443,6 +444,10 @@ export function resolveDensityInversionParams(
     return DISABLED_DENSITY_INVERSION;
   }
 
+  // Monochrome intent must include "color profile + B&W mix enabled", not just
+  // bw-type profiles — B&W scans converted through a color profile otherwise
+  // bypass every B&W base safety below (the crushed-B&W bug of 2026-07-19).
+  const monochrome = !isColor || settings.blackAndWhite?.enabled === true;
   const estimate = normalizeFilmBaseEstimate(estimatedFilmBaseSample);
   // Border estimates are captured in the decoded image profile, so they need
   // the same profile transform as the pixels before any density math.
@@ -468,7 +473,7 @@ export function resolveDensityInversionParams(
   // signal. For an *estimated* base, collapse to a single luminance Dmin at low
   // confidence, and blend halfway toward luminance at high confidence. Manual
   // B&W samples are left byte-identical (the user's explicit reference).
-  if (!isColor && usingEstimateSample && resolvedSample) {
+  if (monochrome && usingEstimateSample && resolvedSample) {
     const lumValue = 0.299 * resolvedSample.r + 0.587 * resolvedSample.g + 0.114 * resolvedSample.b;
     const lumFlareFloor = 0.299 * flareFloorNormalized[0] + 0.587 * flareFloorNormalized[1] + 0.114 * flareFloorNormalized[2];
     const baseDensityLum = sampleChannelToDensity(lumValue, outputProfileId, lumFlareFloor, flareStrength);
@@ -483,8 +488,10 @@ export function resolveDensityInversionParams(
     }
   }
 
-  const densityBalance = resolveDensityBalance(isColor, profileId, estimatedDensityBalance);
-  const densityScaleLowConfidence = isColor && densityBalance.source === 'clamp-rejected';
+  // A monochrome render has no dye-layer contrast mismatch to normalize —
+  // per-channel density scales only tilt the channels feeding the B&W mix.
+  const densityBalance = resolveDensityBalance(isColor && !monochrome, profileId, estimatedDensityBalance);
+  const densityScaleLowConfidence = isColor && !monochrome && densityBalance.source === 'clamp-rejected';
 
   // Below the reject gate (or an explicitly refused estimate) the evidence is
   // too weak to trust as a hard density zero point. The estimate's own sample
@@ -508,7 +515,7 @@ export function resolveDensityInversionParams(
     baseDensity,
     densityScale: [densityBalance.scaleR, densityBalance.scaleG, densityBalance.scaleB],
     baseSampleSource,
-    densityScaleSource: isColor ? densityBalance.source : 'neutral',
+    densityScaleSource: isColor && !monochrome ? densityBalance.source : 'neutral',
     baseConfidence,
     lowConfidence: estimateLowConfidence || densityScaleLowConfidence,
   };

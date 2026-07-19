@@ -855,6 +855,22 @@ export interface SampleRequest {
   y: number;
 }
 
+// Re-run the clear-film-base estimator inside the current rotation + crop.
+// The decode-time estimate sees the whole scan (holder, borders, dense
+// surround); the user's crop is direct evidence of where the frame actually
+// is, so a re-analysis can recover from a poisoned first estimate.
+export interface ReestimateFilmBaseRequest {
+  documentId: string;
+  settings: ConversionSettings;
+}
+
+export interface ReestimateFilmBaseResult {
+  type: 'reestimate-film-base';
+  estimatedFilmBaseSample: FilmBaseSample | null;
+  estimatedFilmBase: FilmBaseEstimate | null;
+  estimatedDensityBalance: DensityBalance | null;
+}
+
 export interface DiagnosticsEntry {
   id: string;
   level: 'info' | 'error';

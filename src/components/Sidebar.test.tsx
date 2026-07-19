@@ -81,6 +81,57 @@ describe('Sidebar', () => {
     expect(screen.getByText('Sample Film Base')).toBeInTheDocument();
   });
 
+  it('keeps low-confidence base provenance visible and re-analyzes from the crop', () => {
+    const onReanalyzeFilmBase = vi.fn();
+
+    render(
+      <Sidebar
+        settings={createDefaultSettings()}
+        exportOptions={{ ...DEFAULT_EXPORT_OPTIONS, filenameBase: 'test' }}
+        quickExportPresets={[]}
+        colorManagement={DEFAULT_COLOR_MANAGEMENT}
+        sourceMetadata={null}
+        cropImageWidth={4032}
+        cropImageHeight={6048}
+        onSettingsChange={vi.fn()}
+        onExportOptionsChange={vi.fn()}
+        onColorManagementChange={vi.fn()}
+        activeProfile={FILM_PROFILES[0] ?? null}
+        histogramData={null}
+        isPickingFilmBase={false}
+        estimatedFilmBase={{
+          sample: { r: 91, g: 140, b: 120 },
+          source: 'in-frame',
+          confidence: 0.25,
+          rejectedCandidates: 238,
+          clamped: false,
+        }}
+        onTogglePicker={vi.fn()}
+        onReanalyzeFilmBase={onReanalyzeFilmBase}
+        onExport={vi.fn()}
+        onQuickExport={vi.fn()}
+        onSaveQuickExportPreset={vi.fn()}
+        onDeleteQuickExportPreset={vi.fn()}
+        onOpenBatchExport={vi.fn()}
+        isExporting={false}
+        activeTab="adjust"
+        onTabChange={vi.fn()}
+        cropTab="Film"
+        onCropTabChange={vi.fn()}
+        onCropDone={vi.fn()}
+        onResetCrop={vi.fn()}
+        activePointPicker={null}
+        onSetPointPicker={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('In-frame estimate · 25%')).toBeInTheDocument();
+    expect(screen.getByText(/Low confidence/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Re-analyze film base from the current crop' }));
+    expect(onReanalyzeFilmBase).toHaveBeenCalledOnce();
+  });
+
   it('shows black-and-white conversion sliders for color profiles when enabled', () => {
     const colorProfile = FILM_PROFILES.find((profile) => profile.type === 'color');
     expect(colorProfile).toBeTruthy();

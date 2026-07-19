@@ -41,7 +41,6 @@ function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings'
 
 export default function App() {
   const RENDER_INDICATOR_DELAY_MS = 450;
-  const HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD = 0.01;
   const LARGE_SETTLED_PREVIEW_BITMAP_PIXELS = 8_000_000;
   const WORKER_MEMORY_EVICT_HIGH_WATERMARK_BYTES = 768 * 1024 * 1024;
   const WORKER_MEMORY_EVICT_LOW_WATERMARK_BYTES = 640 * 1024 * 1024;
@@ -84,6 +83,7 @@ export default function App() {
   const [isLeftPaneOpen, setIsLeftPaneOpen] = useState(true);
   const [isRightPaneOpen, setIsRightPaneOpen] = useState(true);
   const [isPickingFilmBase, setIsPickingFilmBase] = useState(false);
+  const [isReanalyzingFilmBase, setIsReanalyzingFilmBase] = useState(false);
   const [activePointPicker, setActivePointPicker] = useState<PointPickerMode | null>(null);
   const [comparisonMode, setComparisonMode] = useState<'processed' | 'original'>('processed');
   const [isDragActive, setIsDragActive] = useState(false);
@@ -209,7 +209,6 @@ export default function App() {
   const settledAdaptiveStateRef = useRef(new Map<string, {
     committedHighlightDensity: number;
     lastSettledKey: string | null;
-    followUpCompletedForKey: string | null;
   }>());
   const enqueuePreviewRenderRef = useRef<((request: QueuedPreviewRender, priority: 'draft' | 'settled') => void) | null>(null);
   const cancelPendingPreviewRenderRef = useRef<(() => void) | null>(null);
@@ -360,7 +359,6 @@ export default function App() {
     const initial = {
       committedHighlightDensity: 0,
       lastSettledKey: null,
-      followUpCompletedForKey: null,
     };
     settledAdaptiveStateRef.current.set(documentId, initial);
     return initial;
@@ -1249,7 +1247,6 @@ export default function App() {
     });
     if (shouldTrackHeavyRenderIndicator && adaptiveState.lastSettledKey !== renderKey) {
       adaptiveState.lastSettledKey = renderKey;
-      adaptiveState.followUpCompletedForKey = null;
     }
 
     const shouldLogInteractiveDraftDiagnostics = !(previewMode === 'draft' && interactionQuality !== null);
@@ -1413,41 +1410,10 @@ export default function App() {
       });
       if (shouldTrackHeavyRenderIndicator) {
         lastCompletedSettledRenderKeyRef.current = renderKey;
+        // Settled frames (GPU and CPU worker alike) are already rendered with
+        // the freshly pinned analysis, so no silent follow-up re-render is
+        // needed — the committed value only seeds draft-frame estimates.
         adaptiveState.committedHighlightDensity = result.highlightDensity;
-        if (
-          nextComparisonMode === 'processed'
-          && adaptiveState.lastSettledKey === renderKey
-          && adaptiveState.followUpCompletedForKey !== renderKey
-          && Math.abs(result.highlightDensity - (resolvedHighlightDensityEstimate ?? 0)) > HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD
-        ) {
-          adaptiveState.followUpCompletedForKey = renderKey;
-          enqueuePreviewRenderRef.current?.({
-            documentId,
-            settings,
-            isColor,
-            profileId,
-            filmType,
-            estimatedDensityBalance,
-            comparisonMode: nextComparisonMode,
-            targetMaxDimension: nextTargetMaxDimension,
-            inputProfileId,
-            outputProfileId,
-            previewMode: 'settled',
-            interactionQuality: null,
-            histogramMode,
-            maskTuning,
-            colorMatrix,
-            tonalCharacter,
-            labStyleToneCurve,
-            labStyleChannelCurves,
-            labTonalCharacterOverride,
-            labSaturationBias,
-            labTemperatureBias,
-            highlightDensityEstimate: result.highlightDensity,
-            flareFloor,
-            lightSourceBias,
-          }, 'settled');
-        }
       }
       if (shouldLogInteractiveDraftDiagnostics) {
         void refreshRenderBackendDiagnostics();
@@ -1482,7 +1448,7 @@ export default function App() {
         void refreshRenderBackendDiagnostics();
       }
     }
-  }, [HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD, LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, flushPendingPreview, getSettledAdaptiveState, maybeNotifyLowConfidenceFilmBase, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, tabsRef]);
+  }, [LARGE_SETTLED_PREVIEW_BITMAP_PIXELS, cancelPendingPreviewRetry, clearRenderIndicator, createPreviewRenderKey, flushPendingPreview, getSettledAdaptiveState, maybeNotifyLowConfidenceFilmBase, maybeSuggestBlackAndWhiteConversion, refreshRenderBackendDiagnostics, scheduleRenderIndicator, setDocumentState, tabsRef]);
 
   const {
     enqueueRender: enqueuePreviewRender,
@@ -1894,6 +1860,72 @@ export default function App() {
     getRollById,
   });
 
+  // Browser DataTransfer does not reliably expose native paths in Tauri v2,
+  // while RAW decoding requires one. Listen to the desktop webview's native
+  // drop event and feed every path through the same path-opening/import flow
+  // used by recent files and File > Open.
+  useEffect(() => {
+    if (!usesNativeFileDialogs) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void import('@tauri-apps/api/webview')
+      .then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === 'enter' || payload.type === 'over') {
+          setIsDragActive(true);
+          return;
+        }
+        if (payload.type === 'leave') {
+          setIsDragActive(false);
+          return;
+        }
+
+        setIsDragActive(false);
+        void (async () => {
+          for (const path of payload.paths) {
+            try {
+              const result = await openImageFileByPath(path);
+              if (result) {
+                await importFile(result.file, result.path, result.size);
+              }
+            } catch (dropError) {
+              const message = formatError(dropError, { preservePrefix: true });
+              appendDiagnostic({
+                level: 'error',
+                code: 'DROP_IMPORT_FAILED',
+                message,
+                context: { path },
+              });
+              setError(`Could not import dropped file. ${message}`);
+            }
+          }
+        })();
+      }))
+      .then((stopListening) => {
+        if (disposed) {
+          stopListening();
+        } else {
+          unlisten = stopListening;
+        }
+      })
+      .catch((dropListenerError) => {
+        appendDiagnostic({
+          level: 'error',
+          code: 'DROP_LISTENER_FAILED',
+          message: formatError(dropListenerError),
+        });
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [importFile, usesNativeFileDialogs]);
+
   useEffect(() => {
     convertToBlackAndWhiteActionRef.current = (documentId: string) => {
       if (!documentState || documentState.id !== documentId) {
@@ -2078,6 +2110,55 @@ export default function App() {
     setDustBrushActive(false);
     handleToggleFilmBasePicker();
   }, [handleToggleFilmBasePicker]);
+
+  const handleReanalyzeFilmBase = useCallback(async () => {
+    const worker = workerClientRef.current;
+    const current = documentState;
+    if (!worker || !current || current.status === 'loading') {
+      return;
+    }
+
+    setIsReanalyzingFilmBase(true);
+    try {
+      const result = await worker.reestimateFilmBase({
+        documentId: current.id,
+        settings: current.settings,
+      });
+      if (activeDocumentIdRef.current !== current.id) {
+        return;
+      }
+
+      setDocumentState((previous) => previous && previous.id === current.id
+        ? {
+          ...previous,
+          estimatedFilmBaseSample: result.estimatedFilmBaseSample,
+          estimatedFilmBase: result.estimatedFilmBase,
+          estimatedDensityBalance: result.estimatedDensityBalance,
+        }
+        : previous);
+      // The settled-render key does not encode the estimate, so force the
+      // next settled pass to actually re-render with the new base.
+      lastCompletedSettledRenderKeyRef.current = null;
+      appendDiagnostic({
+        level: 'info',
+        code: 'FILM_BASE_REESTIMATED',
+        message: result.estimatedFilmBaseSample
+          ? `${result.estimatedFilmBaseSample.r}/${result.estimatedFilmBaseSample.g}/${result.estimatedFilmBaseSample.b} (confidence ${result.estimatedFilmBase ? Math.round(result.estimatedFilmBase.confidence * 100) : 0}%)`
+          : 'No estimate found inside crop',
+        context: { documentId: current.id },
+      });
+      showTransientNotice(
+        result.estimatedFilmBaseSample
+          ? 'Re-analyzed the film base inside the current crop.'
+          : 'No usable film base found inside the crop — try sampling it manually.',
+        result.estimatedFilmBaseSample ? 'success' : 'warning',
+      );
+    } catch (reanalyzeError) {
+      setError(`Film-base re-analysis failed. ${formatError(reanalyzeError)}`);
+    } finally {
+      setIsReanalyzingFilmBase(false);
+    }
+  }, [documentState, setDocumentState, showTransientNotice, setError]);
 
   const handleToggleDustBrush = useCallback(() => {
     handleDustBrushActiveChange(!dustBrushActive);
@@ -2769,6 +2850,7 @@ onToggleScanningSession: toggleScanningWindow,
       isLeftPaneOpen={isLeftPaneOpen}
       isRightPaneOpen={isRightPaneOpen}
       isPickingFilmBase={isPickingFilmBase}
+      isReanalyzingFilmBase={isReanalyzingFilmBase}
       activePointPicker={activePointPicker}
       isAdjustingLevel={isAdjustingLevel}
       isAdjustingCrop={isAdjustingCrop}
@@ -2873,6 +2955,7 @@ onToggleScanningSession: toggleScanningWindow,
       onInteractionEnd={handleInteractionEnd}
       onLevelInteractionChange={setIsAdjustingLevel}
       onToggleFilmBasePicker={handleFilmBasePickerToggle}
+      onReanalyzeFilmBase={handleReanalyzeFilmBase}
       onExportClick={handleExportClick}
       onQuickExport={(preset) => { void handleQuickExport(preset); }}
       onSaveQuickExportPreset={handleSaveQuickExportPreset}

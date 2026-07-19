@@ -21,6 +21,8 @@ import type {
   RawExportResult,
   ReadTileRequest,
   ReadTileResult,
+  ReestimateFilmBaseRequest,
+  ReestimateFilmBaseResult,
   RenderRequest,
   RenderResult,
   SampleRequest,
@@ -59,6 +61,7 @@ export type WorkerRequest =
   | { type: 'read-tile'; payload: ReadTileRequest }
   | { type: 'cancel-job'; payload: CancelTileJobRequest }
   | { type: 'sample-film-base'; payload: SampleRequest }
+  | { type: 'reestimate-film-base'; payload: ReestimateFilmBaseRequest }
   | { type: 'conversion-analysis'; payload: ConversionAnalysisRequest }
   | { type: 'detect-frame'; payload: DetectFramePayload }
   | { type: 'compute-flare'; payload: ComputeFlarePayload }
@@ -82,6 +85,7 @@ export type WorkerSuccessPayload =
   | RawExportResult
   | ContactSheetResult
   | FilmBaseSample
+  | ReestimateFilmBaseResult
   | DetectedFrame
   | [number, number, number]
   | WorkerMemoryDiagnostics

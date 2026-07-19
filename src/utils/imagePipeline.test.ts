@@ -332,6 +332,50 @@ describe('resolveDensityInversionParams confidence handling', () => {
     expect(params.baseDensity[1]).toBeCloseTo(params.baseDensity[2]);
   });
 
+  it('uses the B&W-safe base strategy for a color profile rendering monochrome', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 91, g: 140, b: 120 }, source: 'in-frame', confidence: 0.25, rejectedCandidates: 238, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      { ...settingsNoManual, blackAndWhite: { enabled: true, redMix: 0, greenMix: 0, blueMix: 0, tone: 0 } },
+      true,
+      'negative',
+      null,
+      estimate,
+      { scaleR: 1.2, scaleG: 1, scaleB: 0.8, source: 'auto-histogram' },
+      'srgb',
+      'srgb',
+      null,
+      0.5,
+    );
+
+    expect(params.baseDensity[0]).toBeCloseTo(params.baseDensity[1]);
+    expect(params.baseDensity[1]).toBeCloseTo(params.baseDensity[2]);
+    expect(params.densityScale).toEqual([1, 1, 1]);
+    expect(params.densityScaleSource).toBe('neutral');
+  });
+
+  it('retains color density balancing when the B&W toggle is disabled', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 114, g: 174, b: 154 }, source: 'frame-rebate', confidence: 0.7, rejectedCandidates: 2, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      { ...settingsNoManual, blackAndWhite: { enabled: false, redMix: 0, greenMix: 0, blueMix: 0, tone: 0 } },
+      true,
+      'negative',
+      null,
+      estimate,
+      { scaleR: 1.1, scaleG: 1, scaleB: 0.9, source: 'auto-histogram' },
+      'srgb',
+      'srgb',
+      null,
+      0.5,
+    );
+
+    expect(params.densityScale).toEqual([1.1, 1, 0.9]);
+    expect(params.densityScaleSource).toBe('auto-histogram');
+  });
+
   it('keeps a manual B&W base per-channel (luminance-first does not leak into manual)', () => {
     const params = resolveDensityInversionParams(
       { filmBaseSample: { r: 120, g: 180, b: 150 }, flareCorrection: 50 },

@@ -28,6 +28,8 @@ import {
   PreviewMode,
   ReadTileRequest,
   ReadTileResult,
+  ReestimateFilmBaseRequest,
+  ReestimateFilmBaseResult,
   RenderBackendMode,
   RenderBackendDiagnostics,
   RenderJobDiagnosticsSnapshot,
@@ -81,6 +83,7 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   'read-tile': 10_000,
   'cancel-job': 5_000,
   'sample-film-base': 10_000,
+  'reestimate-film-base': 10_000,
   'conversion-analysis': 10_000,
   'detect-frame': 10_000,
   'compute-flare': 10_000,
@@ -1522,6 +1525,19 @@ export class ImageWorkerClient {
       () => this.request<FilmBaseSample>('sample-film-base', payload),
       true,
     );
+  }
+
+  async reestimateFilmBase(payload: ReestimateFilmBaseRequest) {
+    await this.ensureDocumentLoaded(payload.documentId);
+    const result = await this.requestWithDocumentRecovery(
+      payload.documentId,
+      () => this.request<ReestimateFilmBaseResult>('reestimate-film-base', payload),
+      true,
+    );
+    // The cached pinned analysis embeds the old estimate — drop it so draft
+    // frames do not keep rendering from stale conversion parameters.
+    this.lastConversionAnalysis.delete(payload.documentId);
+    return result;
   }
 
   async autoAnalyze(payload: AutoAnalyzeRequest) {

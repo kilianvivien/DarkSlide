@@ -12,6 +12,7 @@ import {
   Loader2,
   Pipette,
   Plus,
+  RefreshCw,
   Settings,
   Settings2,
   SlidersHorizontal,
@@ -20,7 +21,7 @@ import {
   Wand2,
   Zap,
 } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, PointPickerMode, QuickExportPreset, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmBaseEstimate, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, PointPickerMode, QuickExportPreset, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
@@ -28,7 +29,7 @@ import { Slider } from './Slider';
 import { DustPane } from './DustPane';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
-import { DEFAULT_DUST_REMOVAL, resolveDustRemovalSettings } from '../constants';
+import { DEFAULT_DUST_REMOVAL, FILM_BASE_CONFIDENCE, resolveDustRemovalSettings } from '../constants';
 
 const ADJUST_PANE_INITIAL = { opacity: 0, x: -10 };
 const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0 };
@@ -141,7 +142,11 @@ interface SidebarProps {
   lightSourceProfiles?: LightSourceProfile[];
   histogramData: HistogramData | null;
   isPickingFilmBase: boolean;
+  isReanalyzingFilmBase?: boolean;
+  estimatedFilmBase?: FilmBaseEstimate | null;
+  filmBaseSampleSource?: 'manual' | 'roll' | null;
   onTogglePicker: () => void;
+  onReanalyzeFilmBase?: () => void;
   onExport: () => void;
   onQuickExport: (preset: QuickExportPreset) => void;
   onSaveQuickExportPreset: () => void;
@@ -194,7 +199,11 @@ export const Sidebar = memo(function Sidebar({
   lightSourceProfiles = [],
   histogramData,
   isPickingFilmBase,
+  isReanalyzingFilmBase = false,
+  estimatedFilmBase = null,
+  filmBaseSampleSource = null,
   onTogglePicker,
+  onReanalyzeFilmBase,
   onExport,
   onQuickExport,
   onSaveQuickExportPreset,
@@ -230,6 +239,16 @@ export const Sidebar = memo(function Sidebar({
   const filmBaseInstruction = isPickingFilmBase
     ? 'Click an unexposed film-base area…'
     : 'Sample Film Base';
+  const filmBaseLowConfidence = filmBaseSampleSource === null
+    && estimatedFilmBase !== null
+    && (estimatedFilmBase.confidence < FILM_BASE_CONFIDENCE.accept || estimatedFilmBase.source === 'low-confidence');
+  const filmBaseStatus = filmBaseSampleSource === 'manual'
+    ? 'Manual sample'
+    : filmBaseSampleSource === 'roll'
+      ? 'Roll sample'
+      : estimatedFilmBase
+        ? `${estimatedFilmBase.source === 'frame-rebate' ? 'Frame rebate' : estimatedFilmBase.source === 'in-frame' ? 'In-frame estimate' : estimatedFilmBase.source === 'low-confidence' ? 'Conservative fallback' : 'Automatic estimate'} · ${Math.round(estimatedFilmBase.confidence * 100)}%`
+        : 'No base reference';
 
   useEffect(() => {
     const element = contentRef.current;
@@ -461,6 +480,34 @@ export const Sidebar = memo(function Sidebar({
                     <Pipette size={16} className={isPickingFilmBase ? 'animate-pulse' : ''} />
                     <span className="text-sm font-medium">{filmBaseInstruction}</span>
                   </button>
+                  <div
+                    className={`mt-3 rounded-lg border px-3 py-2.5 ${filmBaseLowConfidence ? 'border-amber-500/30 bg-amber-500/10' : 'border-zinc-800 bg-zinc-900/50'}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Active reference</p>
+                        <p role="status" className={`truncate text-xs ${filmBaseLowConfidence ? 'text-amber-300' : 'text-zinc-300'}`}>{filmBaseStatus}</p>
+                      </div>
+                      {onReanalyzeFilmBase && filmBaseSampleSource === null && (
+                        <button
+                          type="button"
+                          onClick={onReanalyzeFilmBase}
+                          disabled={isReanalyzingFilmBase}
+                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                          aria-label="Re-analyze film base from the current crop"
+                          data-tip="Re-run automatic film-base detection using only the current crop."
+                        >
+                          {isReanalyzingFilmBase ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                          Re-analyze crop
+                        </button>
+                      )}
+                    </div>
+                    {filmBaseLowConfidence && (
+                      <p className="mt-2 text-[11px] leading-relaxed text-amber-200/80">
+                        Low confidence. Re-analyze the crop or sample a clear, unexposed area.
+                      </p>
+                    )}
+                  </div>
                 </section>
 
                 <section>

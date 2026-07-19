@@ -31,6 +31,8 @@ import {
   RawExportResult,
   ReadTileRequest,
   ReadTileResult,
+  ReestimateFilmBaseRequest,
+  ReestimateFilmBaseResult,
   RenderRequest,
   RenderResult,
   SampleRequest,
@@ -1703,6 +1705,56 @@ function handleSampleFilmBase(payload: SampleRequest) {
   return sampleRegionFromTransformedCanvas(transformed, payload);
 }
 
+// Crop-scoped film-base re-analysis: re-run the estimator on the rotated +
+// cropped frame. The decode-time estimate sees the whole scan (holder,
+// borders, dense surround); the crop excludes exactly those poisoned regions,
+// so this is the user-triggerable recovery path for a bad startup estimate.
+const REESTIMATE_ANALYSIS_MAX_DIMENSION = 2048;
+
+function handleReestimateFilmBase(payload: ReestimateFilmBaseRequest): ReestimateFilmBaseResult {
+  const document = getStoredDocument(payload.documentId);
+  const preview = getOrCreatePreviewByMaxDimension(document, REESTIMATE_ANALYSIS_MAX_DIMENSION);
+  const rotatedCanvas = renderRotatedCanvasForJob(preview.canvas, payload.settings);
+  const transformed = renderCroppedCanvasForJob(rotatedCanvas, payload.settings);
+  releaseCanvas(rotatedCanvas);
+  const context = transformed.canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    releaseCanvas(transformed.canvas);
+    throw new Error('Could not read film-base re-analysis canvas.');
+  }
+  const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
+  releaseCanvas(transformed.canvas);
+
+  const rawEstimate = normalizeFilmBaseEstimate(
+    estimateFilmBase(imageData.data, imageData.width, imageData.height, 4),
+  );
+  const priorDensityBalance = rawEstimate
+    ? computeDensityBalance(imageData, rawEstimate.sample)
+    : null;
+  const guarded = rawEstimate
+    ? applyCrushGuard(
+      rawEstimate,
+      imageData,
+      computeBrightPercentileSample(imageData.data, imageData.width, imageData.height, 4),
+      priorDensityBalance,
+    )
+    : { estimate: null, densityBalance: null };
+
+  document.estimatedFilmBase = guarded.estimate;
+  document.estimatedFilmBaseSample = guarded.estimate?.sample ?? null;
+  document.estimatedDensityBalance = guarded.densityBalance;
+  // The pinned analyses embed the old estimate — recompute from scratch.
+  document.residualBaseCache.clear();
+  document.highlightDensityCache.clear();
+
+  return {
+    type: 'reestimate-film-base',
+    estimatedFilmBaseSample: document.estimatedFilmBaseSample,
+    estimatedFilmBase: document.estimatedFilmBase,
+    estimatedDensityBalance: document.estimatedDensityBalance,
+  } satisfies ReestimateFilmBaseResult;
+}
+
 function canUseHighDepthRawExport(document: StoredDocument, payload: ExportRequest) {
   return Boolean(
     document.highDepthRawSource
@@ -2014,6 +2066,9 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         return;
       case 'sample-film-base':
         reply(request, handleSampleFilmBase(request.payload));
+        return;
+      case 'reestimate-film-base':
+        reply(request, handleReestimateFilmBase(request.payload));
         return;
       case 'conversion-analysis':
         reply(request, handleConversionAnalysis(request.payload));

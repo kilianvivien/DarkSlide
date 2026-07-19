@@ -32,6 +32,7 @@ const workerState = vi.hoisted(() => ({
   export: vi.fn(),
   contactSheet: vi.fn(),
   sampleFilmBase: vi.fn(),
+  reestimateFilmBase: vi.fn(),
   disposeDocument: vi.fn(async () => ({ disposed: true })),
   evictPreviews: vi.fn(async () => ({ evicted: true })),
   trimResidentDocuments: vi.fn(async () => ({ evicted: true })),
@@ -89,6 +90,12 @@ const tauriEventState = vi.hoisted(() => ({
 const webviewWindowState = vi.hoisted(() => ({
   getByLabel: vi.fn(),
   constructorCalls: [] as Array<{ label: string; options: unknown }>,
+}));
+
+const webviewState = vi.hoisted(() => ({
+  dragDropHandler: null as ((event: { payload: { type: string; paths?: string[] } }) => void) | null,
+  unlisten: vi.fn(),
+  onDragDropEvent: vi.fn(),
 }));
 
 const fileBridgeState = vi.hoisted(() => ({
@@ -153,6 +160,12 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
   },
 }));
 
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: webviewState.onDragDropEvent,
+  }),
+}));
+
 vi.mock('./components/Sidebar', () => ({
   Sidebar: ({
     exportOptions,
@@ -168,6 +181,7 @@ vi.mock('./components/Sidebar', () => ({
     onExportOptionsChange,
     onExport,
     onTogglePicker,
+    onReanalyzeFilmBase,
   }: {
     exportOptions: { filenameBase: string };
     lightSourceId?: string | null;
@@ -182,6 +196,7 @@ vi.mock('./components/Sidebar', () => ({
     onExportOptionsChange: (options: { filenameBase?: string }) => void;
     onExport: () => void;
     onTogglePicker: () => void;
+    onReanalyzeFilmBase?: () => void;
   }) => {
     const [, setExposure] = React.useState(0);
     const [, setBlackAndWhiteEnabled] = React.useState(false);
@@ -201,6 +216,9 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={onTogglePicker}>
           Toggle Film Base Picker
+        </button>
+        <button type="button" onClick={onReanalyzeFilmBase}>
+          Re-analyze Film Base
         </button>
         <div>Current Light Source: {lightSourceId ?? 'auto'}</div>
         <button type="button" onClick={() => onLightSourceChange?.(null)}>
@@ -466,6 +484,10 @@ vi.mock('./utils/imageWorkerClient', () => ({
       return workerState.sampleFilmBase(...args);
     }
 
+    reestimateFilmBase(...args: Parameters<typeof workerState.reestimateFilmBase>) {
+      return workerState.reestimateFilmBase(...args);
+    }
+
     disposeDocument(...args: Parameters<typeof workerState.disposeDocument>) {
       return workerState.disposeDocument(...args);
     }
@@ -650,6 +672,13 @@ describe('App import and preview pipeline', () => {
     tauriEventState.listen.mockClear();
     webviewWindowState.getByLabel.mockReset();
     webviewWindowState.constructorCalls.length = 0;
+    webviewState.dragDropHandler = null;
+    webviewState.unlisten.mockReset();
+    webviewState.onDragDropEvent.mockReset();
+    webviewState.onDragDropEvent.mockImplementation(async (handler) => {
+      webviewState.dragDropHandler = handler;
+      return webviewState.unlisten;
+    });
     workerState.decode.mockReset();
     workerState.detectDust.mockReset();
     workerState.detectFrame.mockReset();
@@ -658,6 +687,7 @@ describe('App import and preview pipeline', () => {
     workerState.export.mockReset();
     workerState.contactSheet.mockReset();
     workerState.sampleFilmBase.mockReset();
+    workerState.reestimateFilmBase.mockReset();
     workerState.disposeDocument.mockClear();
     workerState.evictPreviews.mockClear();
     workerState.trimResidentDocuments.mockClear();
@@ -1106,9 +1136,9 @@ describe('App import and preview pipeline', () => {
       size: 12_345_678,
     });
     coreState.invoke.mockResolvedValue({
-      width: 8,
-      height: 8,
-      data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [76, 73, 68][index % 3]),
+      width: 32,
+      height: 32,
+      data: Array.from({ length: 32 * 32 * 3 }, (_, index) => [76, 73, 68][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
     });
@@ -1168,15 +1198,20 @@ describe('App import and preview pipeline', () => {
       orientation: 6,
     });
     workerState.decode.mockResolvedValue({
-      ...createDecodedImage(8, 8),
+      ...createDecodedImage(32, 32),
       estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
     });
-    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; targetMaxDimension: number }) => (
-      createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension, {
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; targetMaxDimension: number }) => {
+      const result = createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension, {
         lowConfidence: true,
         baseSampleSource: 'conservative-fallback',
-      })
-    ));
+      });
+      result.imageData = createRenderImageData(payload.targetMaxDimension, payload.targetMaxDimension, (x, y) => {
+        const base = 52 + ((x + y) % 96);
+        return [base, base + 2, base + 4];
+      });
+      return result;
+    });
 
     render(<App />);
 
@@ -1189,7 +1224,13 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(screen.getByText(/Automatic conversion confidence is low for this frame/)).toBeInTheDocument();
+    const confidenceNotice = screen.getByText(/Automatic conversion confidence is low for this frame/);
+    const monochromeSuggestion = screen.getByText('This scan looks monochrome. Convert it to black and white?');
+    const notificationStack = screen.getByTestId('notification-stack');
+    expect(confidenceNotice).toBeInTheDocument();
+    expect(monochromeSuggestion).toBeInTheDocument();
+    expect(notificationStack).toContainElement(confidenceNotice);
+    expect(notificationStack).toContainElement(monochromeSuggestion);
   });
 
   it('does not raise the low-confidence notice for a confident RAW render', async () => {
@@ -2374,7 +2415,7 @@ describe('App import and preview pipeline', () => {
     expect(document.querySelector('[data-tip="Showing Original — click to return"]')).toBeTruthy();
   });
 
-  it('applies film-base sampling as a color-balance correction without changing exposure', async () => {
+  it('applies film-base sampling directly to the negative density stage without changing exposure', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number; settings: { exposure: number } }) => (
       createRenderResult(payload.documentId, payload.revision, 300, 200)
@@ -2416,17 +2457,19 @@ describe('App import and preview pipeline', () => {
         redBalance: number;
         greenBalance: number;
         blueBalance: number;
-        filmBaseSample: null;
+        filmBaseSample: { r: number; g: number; b: number };
+        filmBaseSampleSource: 'manual';
       };
     };
 
     expect(latestRenderCall.settings.exposure).toBe(0);
     expect(latestRenderCall.settings.temperature).toBe(0);
     expect(latestRenderCall.settings.tint).toBe(0);
-    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo((255 - 151) / (255 - 168));
+    expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 168, g: 151, b: 134 });
+    expect(latestRenderCall.settings.filmBaseSampleSource).toBe('manual');
+    expect(latestRenderCall.settings.redBalance).toBe(1.12);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo((255 - 151) / (255 - 134));
+    expect(latestRenderCall.settings.blueBalance).toBe(0.9);
   });
 
   it('uses film-base sampling to rerun standard RAW color-negative conversion with the sampled base', async () => {
@@ -2516,6 +2559,47 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.greenBalance).toBeCloseTo(beforeSampleRenderCall.settings.greenBalance);
     expect(latestRenderCall.settings.blueBalance).toBeCloseTo(beforeSampleRenderCall.settings.blueBalance);
     expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 81, g: 94, b: 47 });
+  });
+
+  it('re-analyzes the film base using the current crop and re-renders with the result', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.reestimateFilmBase.mockResolvedValue({
+      type: 'reestimate-film-base',
+      estimatedFilmBaseSample: { r: 190, g: 210, b: 200 },
+      estimatedFilmBase: {
+        sample: { r: 190, g: 210, b: 200 },
+        source: 'in-frame',
+        confidence: 0.55,
+        rejectedCandidates: 2,
+        clamped: false,
+      },
+      estimatedDensityBalance: { scaleR: 1, scaleG: 1, scaleB: 1, source: 'auto-histogram' },
+    });
+
+    render(<App />);
+    await uploadFile(createFile('reanalyze-crop.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByText('Re-analyze Film Base'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.reestimateFilmBase).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({
+        crop: expect.any(Object),
+      }),
+    }));
+    expect(workerState.render.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('applies worker auto-analysis results from the Auto button', async () => {
@@ -2869,7 +2953,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
   });
 
-  it('runs at most one settled highlight-density follow-up for the same stable preview input', async () => {
+  it('does not silently follow a settled render with a duplicate highlight-density render', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: {
       documentId: string;
@@ -2878,13 +2962,8 @@ describe('App import and preview pipeline', () => {
       highlightDensityEstimate?: number;
     }) => {
       const result = createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension);
-      if (payload.revision === 1) {
-        expect(payload.highlightDensityEstimate ?? 0).toBe(0);
-        result.highlightDensity = 0.25;
-      } else if (payload.revision === 2) {
-        expect(payload.highlightDensityEstimate).toBeCloseTo(0.25, 5);
-        result.highlightDensity = 0.25;
-      }
+      expect(payload.highlightDensityEstimate ?? 0).toBe(0);
+      result.highlightDensity = 0.25;
       return result;
     });
 
@@ -2904,8 +2983,8 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(workerState.render).toHaveBeenCalledTimes(2);
-    expect(workerState.render.mock.calls[1]?.[0]).toMatchObject({
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+    expect(workerState.render.mock.calls[0]?.[0]).toMatchObject({
       previewMode: 'settled',
       interactionQuality: null,
     });
@@ -3426,6 +3505,69 @@ describe('App import and preview pipeline', () => {
     expect(fileBridgeState.openImageFile).toHaveBeenCalledTimes(1);
     expect(workerState.decode).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/640 × 480 px/)).toBeInTheDocument();
+  });
+
+  it('imports every file from a browser drag-and-drop operation', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(640, 480));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.drop(screen.getByTestId('image-drop-zone'), {
+        dataTransfer: {
+          files: [
+            createFile('drop-one.tiff', 'image/tiff'),
+            createFile('drop-two.jpg', 'image/jpeg'),
+          ],
+        },
+      });
+    });
+    await flushMicrotasks();
+
+    expect(workerState.decode).toHaveBeenCalledTimes(2);
+  });
+
+  it('imports dropped RAW paths through the Tauri native drag-and-drop event', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    coreState.invoke.mockImplementation(async (command: string) => {
+      if (command === 'drain_opened_files') return [];
+      return {
+        width: 8,
+        height: 8,
+        data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
+        color_space: 'sRGB',
+        orientation: 1,
+      };
+    });
+    fileBridgeState.openImageFileByPath.mockResolvedValue({
+      file: createFile('dropped.nef', 'application/octet-stream'),
+      path: '/Users/tester/dropped.nef',
+      size: 12_345_678,
+    });
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(8, 8, { extension: '.nef', mime: 'image/x-raw-rgba' }),
+      estimatedFilmBaseSample: { r: 89, g: 105, b: 55 },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 8, 8)
+    ));
+
+    render(<App />);
+    await flushMicrotasks();
+    expect(webviewState.dragDropHandler).not.toBeNull();
+
+    await act(async () => {
+      webviewState.dragDropHandler?.({
+        payload: { type: 'drop', paths: ['/Users/tester/dropped.nef'] },
+      });
+    });
+    await flushMicrotasks();
+
+    expect(fileBridgeState.openImageFileByPath).toHaveBeenCalledWith('/Users/tester/dropped.nef');
+    expect(workerState.decode).toHaveBeenCalledTimes(1);
   });
 
   it('imports files opened from the macOS app icon', async () => {
