@@ -2,6 +2,7 @@ import {
   ColorProfileId,
   ColorMatrix,
   ConversionSettings,
+  CubeLut,
   CurvePoint,
   DensityBalance,
   FilmBaseSample,
@@ -16,10 +17,13 @@ import {
   buildCurveLutBuffer,
   buildProcessingUniforms,
 } from '../imagePipeline';
+import { cubeLutSignature } from '../cubeLut';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
-const PROCESSING_UNIFORM_BYTES = 84 * 4;
+const PROCESSING_UNIFORM_BYTES = 92 * 4;
 const CURVE_LUT_BYTES = 1024 * 4;
+// Minimum storage-buffer binding for the profile LUT when none is active.
+const EMPTY_CUBE_LUT_BYTES = 3 * 4;
 const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
 const TILE_SIZE = 1024;
@@ -95,6 +99,12 @@ export class WebGPUPipeline {
 
   private readonly curveLutBuffer: GPUBuffer;
 
+  // Profile LUT table. Grown on demand; a 3-float placeholder keeps binding 3
+  // satisfied when no LUT is active (the shader still declares it).
+  private cubeLutBuffer: GPUBuffer;
+
+  private cubeLutBufferFloats = 0;
+
   private readonly blurUniformBuffer: GPUBuffer;
 
   private readonly effectUniformBuffer: GPUBuffer;
@@ -131,6 +141,8 @@ export class WebGPUPipeline {
 
   private lastCurveLutHash: number | null = null;
 
+  private lastCubeLutSignature: string | null = null;
+
   private lost = false;
 
   private lostReason = '';
@@ -153,6 +165,10 @@ export class WebGPUPipeline {
     });
     this.curveLutBuffer = device.createBuffer({
       size: CURVE_LUT_BYTES,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    this.cubeLutBuffer = device.createBuffer({
+      size: EMPTY_CUBE_LUT_BYTES,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
     this.blurUniformBuffer = device.createBuffer({
@@ -224,6 +240,8 @@ export class WebGPUPipeline {
       this.lostMessage = info.message ?? 'GPU device was lost.';
       this.lastProcessingUniformsHash = null;
       this.lastCurveLutHash = null;
+    this.lastCubeLutSignature = null;
+      this.lastCubeLutSignature = null;
     });
   }
 
@@ -487,6 +505,7 @@ export class WebGPUPipeline {
     residualBaseOffset: [number, number, number] | null = null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
+    cubeLut: CubeLut | null = null,
   ) {
     this.assertUsable();
 
@@ -547,6 +566,7 @@ export class WebGPUPipeline {
       lightSourceBias,
       estimatedFilmBaseSample,
       estimatedDensityBalance,
+      cubeLut,
     );
     const processingUniformsHash = hashFloat32Array(processingUniforms);
     if (processingUniformsHash !== this.lastProcessingUniformsHash) {
@@ -565,6 +585,8 @@ export class WebGPUPipeline {
       this.lastCurveLutHash = curveLutHash;
     }
 
+    this.uploadCubeLut(cubeLut);
+
     const encoder = this.device.createCommandEncoder();
 
     this.renderSingleInput(
@@ -575,6 +597,7 @@ export class WebGPUPipeline {
       [
         { binding: 1, resource: { buffer: this.processingUniformBuffer } },
         { binding: 2, resource: { buffer: this.curveLutBuffer } },
+        { binding: 3, resource: { buffer: this.cubeLutBuffer } },
       ],
     );
 
@@ -690,6 +713,7 @@ export class WebGPUPipeline {
     residualBaseOffset: [number, number, number] | null = null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
+    cubeLut: CubeLut | null = null,
   ) {
     if (comparisonMode === 'original') {
       return copyWholeImage(imageData.data, imageData.width, imageData.height);
@@ -718,6 +742,7 @@ export class WebGPUPipeline {
       residualBaseOffset,
       flareFloor,
       lightSourceBias,
+      cubeLut,
     );
   }
 
@@ -744,6 +769,7 @@ export class WebGPUPipeline {
     residualBaseOffset: [number, number, number] | null = null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
+    cubeLut: CubeLut | null = null,
   ) {
     return this.processImageData(
       imageData,
@@ -768,6 +794,7 @@ export class WebGPUPipeline {
       residualBaseOffset,
       flareFloor,
       lightSourceBias,
+      cubeLut,
     );
   }
 
@@ -804,6 +831,7 @@ export class WebGPUPipeline {
       null,
       null,
       [1, 1, 1],
+      null,
     );
   }
 
@@ -830,6 +858,7 @@ export class WebGPUPipeline {
     residualBaseOffset: [number, number, number] | null = null,
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
+    cubeLut: CubeLut | null = null,
   ) {
     const processed = await this.processImageData(
       tile.imageData,
@@ -854,6 +883,7 @@ export class WebGPUPipeline {
       residualBaseOffset,
       flareFloor,
       lightSourceBias,
+      cubeLut,
     );
     return copyTrimmedTile(
       processed.data,
@@ -864,6 +894,35 @@ export class WebGPUPipeline {
       tile.haloRight,
       tile.haloBottom,
     );
+  }
+
+  /**
+   * Uploads the profile LUT, reallocating only when the table grows. Uploads
+   * are skipped while the same LUT stays active, so a drag does not re-send
+   * megabytes per frame.
+   */
+  private uploadCubeLut(cubeLut: CubeLut | null) {
+    if (!cubeLut) {
+      this.lastCubeLutSignature = null;
+      return;
+    }
+
+    const signature = cubeLutSignature(cubeLut);
+    if (signature === this.lastCubeLutSignature) {
+      return;
+    }
+
+    if (cubeLut.data.length > this.cubeLutBufferFloats) {
+      this.cubeLutBuffer.destroy();
+      this.cubeLutBuffer = this.device.createBuffer({
+        size: cubeLut.data.length * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      this.cubeLutBufferFloats = cubeLut.data.length;
+    }
+
+    this.device.queue.writeBuffer(this.cubeLutBuffer, 0, cubeLut.data);
+    this.lastCubeLutSignature = signature;
   }
 
   destroy() {
@@ -880,10 +939,12 @@ export class WebGPUPipeline {
     this.readbackBuffer?.destroy();
     this.processingUniformBuffer.destroy();
     this.curveLutBuffer.destroy();
+    this.cubeLutBuffer.destroy();
     this.blurUniformBuffer.destroy();
     this.effectUniformBuffer.destroy();
     this.lastProcessingUniformsHash = null;
     this.lastCurveLutHash = null;
+    this.lastCubeLutSignature = null;
     this.device.destroy();
   }
 }

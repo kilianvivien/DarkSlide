@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowDownUp, Check, ChevronDown, Copy, Download, Film, FolderOpen, FolderPlus, Info, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Unlink2, Upload, X } from 'lucide-react';
+import { ArrowDownUp, Box, Check, ChevronDown, Copy, Download, Film, FolderOpen, FolderPlus, Grid3x3, Info, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Unlink2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from '../constants';
-import { confirmDeletePreset, isDesktopShell, savePresetFile, openPresetFile } from '../utils/fileBridge';
-import { validateDarkslideFile } from '../utils/presetStore';
+import { confirmDeletePreset, isDesktopShell, saveCubeLutFile, savePresetFile, openPresetFile } from '../utils/fileBridge';
+import { CubeLutParseError, parseCubeLut, serializeCubeLut } from '../utils/cubeLut';
+import { bakePresetToCubeLut, createProfileFromCubeLut, cubeLutPerformsInversion } from '../utils/presetLutExport';
+import { encodeProfileForTransport, validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
 import { getRollAccent } from '../utils/rolls';
 import { DarkslidePresetFile, DocumentTab, FilmProfile, FilmProfileCategory, PresetFolder, Roll, ScannerType } from '../types';
@@ -118,6 +120,8 @@ function formatTag(tag: string | undefined) {
       return 'RAW';
     case 'non-raw':
       return 'Non-RAW';
+    case 'lut':
+      return '3D LUT';
     default:
       return tag;
   }
@@ -437,6 +441,33 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     setImportConflict(null);
   };
 
+  const processImportedCubeLut = (content: string, fileName: string) => {
+    let lut;
+
+    try {
+      lut = parseCubeLut(content);
+    } catch (error) {
+      const detail = error instanceof CubeLutParseError ? error.message : String(error);
+      onError?.(`LUT import failed. ${fileName}: ${detail}`);
+      return;
+    }
+
+    const baseName = fileName.replace(/\.cube$/i, '');
+    handleImportPayload({
+      darkslideVersion: DARKSLIDE_PRESET_FILE_VERSION,
+      profile: createProfileFromCubeLut(lut, baseName),
+    });
+
+    if (!cubeLutPerformsInversion(lut)) {
+      // The LUT runs in place of DarkSlide's inversion, so a look-only LUT
+      // leaves a negative scan un-inverted. Say so rather than let it surprise.
+      onError?.(
+        `${fileName} does not invert — it looks like a grading LUT rather than a negative conversion. `
+        + 'DarkSlide runs a preset LUT in place of its own inversion, so negatives will stay negative.',
+      );
+    }
+  };
+
   const processImportedText = (content: string, fileName: string) => {
     let parsed: unknown;
 
@@ -457,8 +488,15 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   };
 
   const handleImportFile = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.darkslide')) {
-      onError?.('Preset import failed. Choose a .darkslide preset file.');
+    const name = file.name.toLowerCase();
+
+    if (name.endsWith('.cube')) {
+      processImportedCubeLut(await file.text(), file.name);
+      return;
+    }
+
+    if (!name.endsWith('.darkslide')) {
+      onError?.('Preset import failed. Choose a .darkslide preset or a .cube LUT.');
       return;
     }
 
@@ -480,7 +518,11 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         return;
       }
 
-      processImportedText(opened.content, opened.fileName);
+      if (opened.fileName.toLowerCase().endsWith('.cube')) {
+        processImportedCubeLut(opened.content, opened.fileName);
+      } else {
+        processImportedText(opened.content, opened.fileName);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       onError?.(`Preset import failed. ${message}`);
@@ -492,13 +534,31 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       await savePresetFile(
         JSON.stringify({
           darkslideVersion: DARKSLIDE_PRESET_FILE_VERSION,
-          profile,
+          // A LUT is a Float32Array; it has to go through the base64 transport
+          // encoding or JSON.stringify would emit it as a giant keyed object
+          // that no longer round-trips on import.
+          profile: encodeProfileForTransport(profile),
         }, null, 2),
         `${slugifyPresetName(profile.name)}.darkslide`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       onError?.(`Preset export failed. ${message}`);
+    }
+  };
+
+  const handleExportPresetAsCubeLut = async (profile: FilmProfile) => {
+    try {
+      await saveCubeLutFile(
+        serializeCubeLut(
+          bakePresetToCubeLut(profile),
+          `Baked by DarkSlide from the "${profile.name}" preset. Input: raw negative scan. Output: finished positive.`,
+        ),
+        `${slugifyPresetName(profile.name)}.cube`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onError?.(`LUT export failed. ${message}`);
     }
   };
 
@@ -549,6 +609,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       formatScannerType(stock.scannerType) ? ['Scanner', formatScannerType(stock.scannerType)] : null,
       lightSourceName ? ['Light source', lightSourceName] : null,
       labStyleName ? ['Lab style', labStyleName] : null,
+      stock.lut ? ['LUT', `${stock.lut.size}×${stock.lut.size}×${stock.lut.size}`] : null,
     ].filter((entry): entry is [string, string] => entry !== null);
     const isExpanded = activeStockId === stock.id;
 
@@ -564,7 +625,11 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         >
           {/* Top row: icon + name + action buttons */}
           <div className="flex w-full items-center gap-3">
-            <Film size={14} className="shrink-0 text-zinc-600" />
+            {/* A LUT preset carries an opaque conversion table rather than
+                DarkSlide's own inversion, so it gets its own mark. */}
+            {stock.lut
+              ? <Box size={14} className="shrink-0 text-zinc-600" />
+              : <Film size={14} className="shrink-0 text-zinc-600" />}
             <div className="min-w-0 flex-1">
               <span className="font-medium truncate block">{stock.name}</span>
               {!isExpanded && compactMeta.length > 0 && (
@@ -611,6 +676,24 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                 data-tip="Export Preset"
               >
                 <Download size={12} />
+              </span>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleExportPresetAsCubeLut(stock);
+                }}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); void handleExportPresetAsCubeLut(stock); } }}
+                aria-label={`Export ${stock.name} as a .cube LUT`}
+                className={`p-1 rounded transition-colors ${
+                  isExpanded
+                    ? 'text-zinc-500 hover:text-zinc-950 hover:bg-zinc-300'
+                    : 'text-zinc-600 hover:text-zinc-100 hover:bg-zinc-800'
+                }`}
+                data-tip="Export as .cube LUT"
+              >
+                <Grid3x3 size={12} />
               </span>
               <span
                 role="button"
@@ -707,7 +790,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
       <input
         ref={fileInputRef}
         type="file"
-        accept=".darkslide"
+        accept=".darkslide,.cube"
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0];
@@ -1217,7 +1300,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
           >
             {isDropTarget && (
               <div className="rounded-lg border border-dashed border-zinc-400 bg-zinc-900/50 py-4 text-center text-[11px] text-zinc-400">
-                Drop .darkslide file here
+                Drop a .darkslide preset or .cube LUT here
               </div>
             )}
 

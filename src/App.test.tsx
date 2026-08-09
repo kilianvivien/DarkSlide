@@ -1,7 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_FILE_SIZE_BYTES } from './constants';
+import { createDefaultSettings, MAX_FILE_SIZE_BYTES } from './constants';
 import type { ConversionSettings } from './types';
 
 type Deferred<T> = {
@@ -1935,6 +1935,60 @@ describe('App import and preview pipeline', () => {
     };
     expect(screen.getByText('Current Light Source: daylight')).toBeInTheDocument();
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.98, 0.95]);
+  });
+
+  it('carries a profile LUT into a preset saved from it, and into the render', async () => {
+    const lut = {
+      size: 2,
+      title: 'Phoenix',
+      domainMin: [0, 0, 0] as [number, number, number],
+      domainMax: [1, 1, 1] as [number, number, number],
+      // Inverting table: black in → white out.
+      data: new Float32Array([
+        1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1,
+        1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0,
+      ]),
+    };
+    customPresetState.presets = [{
+      id: 'custom-lut',
+      version: 1,
+      name: 'Phoenix LUT',
+      type: 'color',
+      filmType: 'negative',
+      description: 'Imported LUT',
+      defaultSettings: createDefaultSettings(),
+      lut,
+      isCustom: true,
+    }];
+
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    render(<App />);
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Phoenix LUT' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    // The active LUT reaches the worker.
+    const lutRenderCall = workerState.render.mock.calls.at(-1)?.[0] as { cubeLut?: { size: number } | null };
+    expect(lutRenderCall.cubeLut?.size).toBe(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    await flushMicrotasks();
+
+    const saved = customPresetState.presets.find((preset) => preset.name === 'Saved Custom Preset') as
+      { lut?: { size: number; data: Float32Array }; tags?: string[] } | undefined;
+    expect(saved?.lut?.size).toBe(2);
+    expect(Array.from(saved?.lut?.data ?? [])).toEqual(Array.from(lut.data));
+    expect(saved?.tags).toContain('lut');
   });
 
   it('keeps the current crop and rotation when applying a custom preset saved without framing', async () => {

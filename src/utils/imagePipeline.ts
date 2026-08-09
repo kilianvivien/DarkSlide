@@ -2,6 +2,7 @@ import {
   ColorProfileId,
   ColorMatrix,
   ConversionSettings,
+  CubeLut,
   DensityBalance,
   CurvePoint,
   CropSettings,
@@ -18,6 +19,7 @@ import {
 } from '../types';
 import { DENSITY_TO_POSITIVE_GAMMA, FILM_BASE_CONFIDENCE, FILM_STOCK_DENSITY_PRESETS, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
 import { convertRgbBetweenProfiles, decodeProfileChannel, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
+import { sampleCubeLut } from './cubeLut';
 import { clamp } from './math';
 
 const LUMA_R = 0.299;
@@ -984,6 +986,7 @@ export function buildProcessingUniforms(
   lightSourceBias: [number, number, number] = [1, 1, 1],
   estimatedFilmBaseSample: FilmBaseSample | FilmBaseEstimate | null = null,
   estimatedDensityBalance: DensityBalance | null = null,
+  cubeLut: CubeLut | null = null,
 ) {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
   const effectiveTonalCharacter = tonalCharacter
@@ -1116,6 +1119,16 @@ export function buildProcessingUniforms(
     densityInversion.densityScale[0],
     densityInversion.densityScale[1],
     densityInversion.densityScale[2],
+    0,
+
+    cubeLut?.size ?? 0,
+    cubeLut?.domainMin[0] ?? 0,
+    cubeLut?.domainMin[1] ?? 0,
+    cubeLut?.domainMin[2] ?? 0,
+
+    cubeLut?.domainMax[0] ?? 1,
+    cubeLut?.domainMax[1] ?? 1,
+    cubeLut?.domainMax[2] ?? 1,
     0,
   ]);
 }
@@ -1380,6 +1393,7 @@ export function processImageData(
   lightSourceBias: [number, number, number] = [1, 1, 1],
   estimatedFilmBaseSample: FilmBaseSample | FilmBaseEstimate | null = null,
   estimatedDensityBalance: DensityBalance | null = null,
+  cubeLut: CubeLut | null = null,
 ): HistogramData {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
   const effectiveTonalCharacter = tonalCharacter
@@ -1437,19 +1451,25 @@ export function processImageData(
     [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
 
     if (comparisonMode === 'processed') {
-      [r, g, b] = applyInversionStage(
-        r,
-        g,
-        b,
-        filmType,
-        outputProfileId,
-        filmBaseBalance,
-        densityInversion,
-        flareFloorNormalized,
-        flareStrength,
-        lightSourceBias,
-        residualBaseOffset,
-      );
+      // A profile LUT performs the negative→positive conversion itself, so it
+      // stands in for the whole inversion stage (flare correction, light-source
+      // correction, density inversion, film-base compensation) rather than
+      // layering on top of it.
+      [r, g, b] = cubeLut
+        ? sampleCubeLut(cubeLut, r, g, b)
+        : applyInversionStage(
+          r,
+          g,
+          b,
+          filmType,
+          outputProfileId,
+          filmBaseBalance,
+          densityInversion,
+          flareFloorNormalized,
+          flareStrength,
+          lightSourceBias,
+          residualBaseOffset,
+        );
 
       if (colorMatrix) {
         [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);
@@ -1588,6 +1608,7 @@ export function processFloatRaster(
   lightSourceBias: [number, number, number] = [1, 1, 1],
   estimatedFilmBaseSample: FilmBaseSample | FilmBaseEstimate | null = null,
   estimatedDensityBalance: DensityBalance | null = null,
+  cubeLut: CubeLut | null = null,
 ): FloatRgbRaster {
   const effectiveSettings = resolveEffectiveSettings(settings, maskTuning);
   const effectiveTonalCharacter = tonalCharacter
@@ -1637,19 +1658,25 @@ export function processFloatRaster(
     [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
 
     if (comparisonMode === 'processed') {
-      [r, g, b] = applyInversionStage(
-        r,
-        g,
-        b,
-        filmType,
-        outputProfileId,
-        filmBaseBalance,
-        densityInversion,
-        flareFloorNormalized,
-        flareStrength,
-        lightSourceBias,
-        residualBaseOffset,
-      );
+      // A profile LUT performs the negative→positive conversion itself, so it
+      // stands in for the whole inversion stage (flare correction, light-source
+      // correction, density inversion, film-base compensation) rather than
+      // layering on top of it.
+      [r, g, b] = cubeLut
+        ? sampleCubeLut(cubeLut, r, g, b)
+        : applyInversionStage(
+          r,
+          g,
+          b,
+          filmType,
+          outputProfileId,
+          filmBaseBalance,
+          densityInversion,
+          flareFloorNormalized,
+          flareStrength,
+          lightSourceBias,
+          residualBaseOffset,
+        );
 
       if (colorMatrix) {
         [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);

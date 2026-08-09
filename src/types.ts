@@ -335,6 +335,21 @@ export interface SidecarFile {
   labStyleId?: string;
 }
 
+/**
+ * A 3D colour lookup table loaded from a .cube file. `data` holds size³ RGB
+ * triplets ordered red-fastest: index = (r + g * size + b * size²) * 3.
+ *
+ * The table is treated as operating in DarkSlide's working space; any colour
+ * space named in the source file's comments is not honoured.
+ */
+export interface CubeLut {
+  size: number;
+  title?: string;
+  domainMin: [number, number, number];
+  domainMax: [number, number, number];
+  data: Float32Array;
+}
+
 export interface FilmProfile {
   id: string;
   version: number;
@@ -356,6 +371,17 @@ export interface FilmProfile {
   lightSourceId?: string | null;
   folderId?: string | null;
   labStyleId?: string | null;
+  /**
+   * A 3D LUT imported from a .cube file. When present it performs the
+   * negative→positive conversion in place of the density-inversion and
+   * film-base compensation stages; every parametric adjustment still applies
+   * on top of the LUT's output.
+   *
+   * Held in memory and in IndexedDB as a live Float32Array. It is stripped from
+   * the localStorage mirror (see presetStore) and travels through .darkslide
+   * files in the serialized `lut` form.
+   */
+  lut?: CubeLut | null;
 }
 
 export interface DarkslidePresetFile {
@@ -503,6 +529,7 @@ export interface RenderRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  cubeLut?: CubeLut | null;
   labStyleToneCurve?: CurvePoint[];
   labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] };
   labTonalCharacterOverride?: Partial<TonalCharacter>;
@@ -556,6 +583,7 @@ export interface ExportRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  cubeLut?: CubeLut | null;
   labStyleToneCurve?: CurvePoint[];
   labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] };
   labTonalCharacterOverride?: Partial<TonalCharacter>;
@@ -753,6 +781,7 @@ export interface AutoAnalyzeRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  cubeLut?: CubeLut | null;
   labStyleToneCurve?: CurvePoint[];
   labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] };
   labTonalCharacterOverride?: Partial<TonalCharacter>;
@@ -780,6 +809,7 @@ export interface ConversionAnalysisRequest {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  cubeLut?: CubeLut | null;
   labStyleToneCurve?: CurvePoint[];
   labStyleChannelCurves?: { r?: CurvePoint[]; g?: CurvePoint[]; b?: CurvePoint[] };
   labTonalCharacterOverride?: Partial<TonalCharacter>;
@@ -818,6 +848,7 @@ export interface DustDetectRequest {
   isColor: boolean;
   profileId?: string | null;
   filmType?: FilmProfileType;
+  cubeLut?: CubeLut | null;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
   sensitivity: number;

@@ -1,5 +1,6 @@
 import { DARKSLIDE_PRESET_FILE_VERSION } from '../constants';
 import { DarkslidePresetBackupFile, DarkslidePresetFile, FilmProfile, PresetFolder, VersionedPresetStore } from '../types';
+import { deserializeCubeLutFromJson, isValidCubeLut, serializeCubeLutForJson } from './cubeLut';
 
 const STORAGE_KEY = 'darkslide_custom_presets_v1';
 const IDB_NAME = 'darkslide';
@@ -38,10 +39,66 @@ function isValidProfile(value: unknown): value is FilmProfile {
     && (value.type === 'color' || value.type === 'bw')
     && isValidScannerType(value.scannerType)
     && (value.lightSourceId === undefined || value.lightSourceId === null || typeof value.lightSourceId === 'string')
+    && (value.lut == null || isValidCubeLut(value.lut))
     && isRecord(defaultSettings)
     && typeof defaultSettings.exposure === 'number'
     && typeof defaultSettings.contrast === 'number'
   );
+}
+
+/**
+ * Replaces a profile's live `lut` (a Float32Array) with its JSON-safe encoding
+ * so it can travel inside a .darkslide file.
+ */
+export function encodeProfileForTransport(profile: FilmProfile): Record<string, unknown> {
+  const { lut, ...rest } = profile;
+  const encoded: Record<string, unknown> = { ...structuredClone(rest) };
+
+  if (lut) {
+    encoded.lut = serializeCubeLutForJson(lut);
+  }
+
+  return encoded;
+}
+
+/**
+ * Inverse of `encodeProfileForTransport`. A LUT that fails to decode is dropped
+ * rather than left in a half-valid state — `isValidProfile` would reject the
+ * whole preset otherwise, losing the settings along with it.
+ */
+export function decodeProfileFromTransport(raw: unknown): unknown {
+  if (!isRecord(raw) || raw.lut == null) {
+    return raw;
+  }
+
+  // Already a live LUT (same-session structured clone rather than JSON).
+  if (isValidCubeLut(raw.lut)) {
+    return raw;
+  }
+
+  const decoded = deserializeCubeLutFromJson(raw.lut);
+  if (!decoded) {
+    const { lut: _dropped, ...rest } = raw;
+    return rest;
+  }
+
+  return { ...raw, lut: decoded };
+}
+
+/**
+ * Drops LUT payloads before a profile is mirrored into localStorage. A single
+ * 35³ table is ~500 KB of Float32 and would exhaust the 5 MB quota; IndexedDB
+ * stores the array natively and stays the source of truth for LUT presets.
+ */
+function stripLutForLocalStorage(presets: FilmProfile[]): FilmProfile[] {
+  return presets.map((preset) => {
+    if (!preset.lut) {
+      return preset;
+    }
+
+    const { lut: _lut, ...rest } = preset;
+    return rest;
+  });
 }
 
 export function validateDarkslideFile(raw: unknown): DarkslidePresetFile | null {
@@ -49,11 +106,12 @@ export function validateDarkslideFile(raw: unknown): DarkslidePresetFile | null 
     return null;
   }
 
-  if (typeof raw.darkslideVersion !== 'string' || !isValidProfile(raw.profile)) {
+  const profile = decodeProfileFromTransport(raw.profile);
+  if (typeof raw.darkslideVersion !== 'string' || !isValidProfile(profile)) {
     return null;
   }
 
-  return raw as unknown as DarkslidePresetFile;
+  return { ...raw, profile } as unknown as DarkslidePresetFile;
 }
 
 export function createPresetBackupFile(
@@ -66,7 +124,7 @@ export function createPresetBackupFile(
     kind: 'preset-backup',
     version: 1,
     exportedAt,
-    presets: structuredClone(presets),
+    presets: presets.map(encodeProfileForTransport) as unknown as FilmProfile[],
     folders: structuredClone(folders),
   };
 }
@@ -87,17 +145,18 @@ export function validatePresetBackupFile(raw: unknown): DarkslidePresetBackupFil
     return null;
   }
 
-  if (!raw.presets.every(isValidProfile) || !raw.folders.every(isValidPresetFolder)) {
+  const presets = raw.presets.map(decodeProfileFromTransport);
+  if (!presets.every(isValidProfile) || !raw.folders.every(isValidPresetFolder)) {
     return null;
   }
 
   const folderIds = new Set(raw.folders.map((folder) => folder.id));
-  const allPresetFoldersExist = raw.presets.every((preset) => preset.folderId == null || folderIds.has(preset.folderId));
+  const allPresetFoldersExist = presets.every((preset) => preset.folderId == null || folderIds.has(preset.folderId));
   if (!allPresetFoldersExist) {
     return null;
   }
 
-  return raw as unknown as DarkslidePresetBackupFile;
+  return { ...raw, presets } as unknown as DarkslidePresetBackupFile;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,9 +280,14 @@ export function savePresetStore(presets: FilmProfile[], folders?: PresetFolder[]
     folders,
   };
 
-  // Write to localStorage synchronously for immediate availability
+  // Write to localStorage synchronously for immediate availability, minus any
+  // LUT payloads (see stripLutForLocalStorage). LUT presets therefore render
+  // without their table for the moment between first paint and the IDB load.
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      ...payload,
+      presets: stripLutForLocalStorage(presets),
+    }));
   } catch {
     // localStorage full — IDB will be the source of truth
   }

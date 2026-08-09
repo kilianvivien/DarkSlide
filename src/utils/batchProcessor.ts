@@ -80,6 +80,7 @@ async function analyzeBatchHighlightDensity(
     maskTuning: FilmProfile['maskTuning'];
     colorMatrix: FilmProfile['colorMatrix'];
     tonalCharacter: FilmProfile['tonalCharacter'];
+    cubeLut: FilmProfile['lut'];
     labStyleToneCurve: LabStyleProfile['toneCurve'] | undefined;
     labStyleChannelCurves: LabStyleProfile['channelCurves'] | undefined;
     labTonalCharacterOverride: LabStyleProfile['tonalCharacterOverride'] | undefined;
@@ -117,6 +118,7 @@ async function analyzeBatchHighlightDensity(
       maskTuning: params.maskTuning,
       colorMatrix: params.colorMatrix,
       tonalCharacter: params.tonalCharacter,
+      cubeLut: params.cubeLut ?? null,
       labStyleToneCurve: params.labStyleToneCurve,
       labStyleChannelCurves: params.labStyleChannelCurves,
       labTonalCharacterOverride: params.labTonalCharacterOverride,
@@ -287,6 +289,7 @@ export async function* runBatch(
         maskTuning: sharedProfile.maskTuning,
         colorMatrix: sharedProfile.colorMatrix,
         tonalCharacter: sharedProfile.tonalCharacter,
+        cubeLut: sharedProfile.lut ?? null,
         labStyleToneCurve: sharedLabStyle?.toneCurve,
         labStyleChannelCurves: sharedLabStyle?.channelCurves,
         labTonalCharacterOverride: sharedLabStyle?.tonalCharacterOverride,
@@ -313,6 +316,7 @@ export async function* runBatch(
             maskTuning: sharedProfile.maskTuning,
             colorMatrix: sharedProfile.colorMatrix,
             tonalCharacter: sharedProfile.tonalCharacter,
+            cubeLut: sharedProfile.lut ?? null,
             labStyleToneCurve: sharedLabStyle?.toneCurve,
             labStyleChannelCurves: sharedLabStyle?.channelCurves,
             labTonalCharacterOverride: sharedLabStyle?.tonalCharacterOverride,
@@ -345,6 +349,7 @@ export async function* runBatch(
           maskTuning: sharedProfile.maskTuning,
           colorMatrix: sharedProfile.colorMatrix,
           tonalCharacter: sharedProfile.tonalCharacter,
+          cubeLut: sharedProfile.lut ?? null,
           labStyleToneCurve: sharedLabStyle?.toneCurve,
           labStyleChannelCurves: sharedLabStyle?.channelCurves,
           labTonalCharacterOverride: sharedLabStyle?.tonalCharacterOverride,
@@ -370,6 +375,7 @@ export async function* runBatch(
         maskTuning: sharedProfile.maskTuning,
         colorMatrix: sharedProfile.colorMatrix,
         tonalCharacter: sharedProfile.tonalCharacter,
+        cubeLut: sharedProfile.lut ?? null,
         labStyleToneCurve: sharedLabStyle?.toneCurve,
         labStyleChannelCurves: sharedLabStyle?.channelCurves,
         labTonalCharacterOverride: sharedLabStyle?.tonalCharacterOverride,

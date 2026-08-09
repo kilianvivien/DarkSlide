@@ -1,11 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings } from '../constants';
+import { parseCubeLut } from '../utils/cubeLut';
+import { validateDarkslideFile } from '../utils/presetStore';
 
 const fileBridgeState = vi.hoisted(() => ({
   confirmDeletePreset: vi.fn(),
   openPresetFile: vi.fn(),
   savePresetFile: vi.fn(),
+  saveCubeLutFile: vi.fn(),
 }));
 
 vi.mock('../utils/fileBridge', () => ({
@@ -13,6 +16,7 @@ vi.mock('../utils/fileBridge', () => ({
   isDesktopShell: () => false,
   openPresetFile: fileBridgeState.openPresetFile,
   savePresetFile: fileBridgeState.savePresetFile,
+  saveCubeLutFile: fileBridgeState.saveCubeLutFile,
 }));
 
 import { PresetsPane } from './PresetsPane';
@@ -360,5 +364,149 @@ describe('PresetsPane', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^rolls$/i }));
     expect(screen.queryByRole('button', { name: /apply stored film base/i })).not.toBeInTheDocument();
+  });
+  it('imports a .cube LUT as a custom preset', async () => {
+    const onImportPreset = vi.fn();
+    const cubeText = [
+      'TITLE "Phoenix Test"',
+      'LUT_3D_SIZE 2',
+      // Black in → white out, white in → black out: an inverting conversion LUT.
+      '1 1 1', '0 1 1', '1 0 1', '0 0 1',
+      '1 1 0', '0 1 0', '1 0 0', '0 0 0',
+    ].join('\n');
+
+    const { container } = render(
+      <PresetsPane
+        activeStockId="generic-color"
+        onStockChange={vi.fn()}
+        customPresets={[]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={onImportPreset}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.accept).toContain('.cube');
+
+    const file = new File([cubeText], 'Phoenix.cube', { type: 'text/plain' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(cubeText) });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(onImportPreset).toHaveBeenCalled());
+
+    const imported = onImportPreset.mock.calls[0][0];
+    expect(imported.name).toBe('Phoenix Test');
+    expect(imported.lut.size).toBe(2);
+    expect(imported.lut.data).toHaveLength(24);
+  });
+
+  it('reports a malformed .cube file instead of importing it', async () => {
+    const onImportPreset = vi.fn();
+    const onError = vi.fn();
+    const badText = 'LUT_1D_SIZE 32\n0 0 0';
+
+    const { container } = render(
+      <PresetsPane
+        activeStockId="generic-color"
+        onStockChange={vi.fn()}
+        customPresets={[]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={onImportPreset}
+        onDeletePreset={vi.fn()}
+        onError={onError}
+      />,
+    );
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([badText], 'bad.cube', { type: 'text/plain' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(badText) });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringMatching(/3D LUT/)));
+    expect(onImportPreset).not.toHaveBeenCalled();
+  });
+
+  it('exports a custom preset as a baked .cube LUT', async () => {
+    fileBridgeState.saveCubeLutFile.mockResolvedValue('saved');
+
+    render(
+      <PresetsPane
+        activeStockId="custom-1"
+        onStockChange={vi.fn()}
+        customPresets={[{
+          id: 'custom-1',
+          version: 1,
+          name: 'Portra 400 Push',
+          type: 'color',
+          description: 'Imported',
+          defaultSettings: createDefaultSettings(),
+        }]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /custom/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export portra 400 push as a \.cube lut/i }));
+
+    await waitFor(() => expect(fileBridgeState.saveCubeLutFile).toHaveBeenCalled());
+
+    const [text, filename] = fileBridgeState.saveCubeLutFile.mock.calls[0];
+    expect(filename).toBe('portra-400-push.cube');
+    expect(text).toContain('LUT_3D_SIZE 33');
+    expect(text).toContain('TITLE "Portra 400 Push"');
+    expect(text.split('\n').filter((line: string) => /^[\d.-]/.test(line))).toHaveLength(33 ** 3);
+  });
+  it('round-trips a LUT preset through a .darkslide export', async () => {
+    fileBridgeState.savePresetFile.mockResolvedValue('saved');
+    const lutSource = [
+      'LUT_3D_SIZE 2',
+      '1 1 1', '0 1 1', '1 0 1', '0 0 1',
+      '1 1 0', '0 1 0', '1 0 0', '0 0 0',
+    ].join('\n');
+    const lut = parseCubeLut(lutSource);
+
+    render(
+      <PresetsPane
+        activeStockId="custom-lut"
+        onStockChange={vi.fn()}
+        customPresets={[{
+          id: 'custom-lut',
+          version: 1,
+          name: 'Phoenix LUT',
+          type: 'color',
+          description: 'Imported',
+          defaultSettings: createDefaultSettings(),
+          lut,
+        }]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /custom/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^export phoenix lut$/i }));
+
+    await waitFor(() => expect(fileBridgeState.savePresetFile).toHaveBeenCalled());
+
+    const [json, filename] = fileBridgeState.savePresetFile.mock.calls[0];
+    expect(filename).toBe('phoenix-lut.darkslide');
+    // A raw Float32Array would stringify to a keyed object and blow the file up.
+    expect(json.length).toBeLessThan(20_000);
+
+    const reimported = validateDarkslideFile(JSON.parse(json));
+    expect(reimported).not.toBeNull();
+    expect(reimported!.profile.lut?.size).toBe(2);
+    expect(reimported!.profile.lut?.data).toBeInstanceOf(Float32Array);
+    for (let index = 0; index < lut.data.length; index += 1) {
+      expect(reimported!.profile.lut!.data[index]).toBeCloseTo(lut.data[index], 4);
+    }
   });
 });

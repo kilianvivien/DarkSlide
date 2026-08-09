@@ -225,6 +225,14 @@ export const MAX_OPEN_TABS = 8;
 export const PREVIEW_LEVELS = [512, 1024, 2048, 4096];
 export const DIAGNOSTICS_LIMIT = 100;
 export const DARKSLIDE_PRESET_FILE_VERSION = '1.0.0';
+export const CUBE_LUT_EXTENSION = '.cube';
+export const CUBE_LUT_MIN_SIZE = 2;
+// 129³ × 3 floats ≈ 25 MB — beyond this a LUT stops being practical to hold in
+// memory, transfer to the worker, and upload as a GPU storage buffer.
+export const CUBE_LUT_MAX_SIZE = 129;
+// Size used when baking a preset out to .cube. 33 is the industry-standard
+// grading-LUT size and keeps the file around 1 MB.
+export const CUBE_LUT_EXPORT_SIZE = 33;
 
 export interface AspectRatioEntry {
   name: string;

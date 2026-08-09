@@ -139,8 +139,45 @@ describe('processImageData', () => {
 });
 
 describe('buildProcessingUniforms', () => {
-  it('keeps the GPU uniform payload aligned at 84 floats', () => {
-    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(84);
+  it('keeps the GPU uniform payload aligned at 92 floats', () => {
+    expect(buildProcessingUniforms(neutralSettings, true, 'processed')).toHaveLength(92);
+  });
+
+  it('reports no profile LUT by default and an identity domain when one is bound', () => {
+    const withoutLut = buildProcessingUniforms(neutralSettings, true, 'processed');
+    expect(withoutLut[84]).toBe(0);
+
+    const lut = {
+      size: 17,
+      domainMin: [0, 0, 0] as [number, number, number],
+      domainMax: [1, 1, 1] as [number, number, number],
+      data: new Float32Array(17 ** 3 * 3),
+    };
+    const withLut = buildProcessingUniforms(
+      neutralSettings,
+      true,
+      'processed',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      0,
+      0,
+      'srgb',
+      'srgb',
+      null,
+      'negative',
+      null,
+      null,
+      [1, 1, 1],
+      null,
+      null,
+      lut,
+    );
+    expect(withLut[84]).toBe(17);
+    expect(Array.from(withLut.slice(85, 88))).toEqual([0, 0, 0]);
+    expect(Array.from(withLut.slice(88, 91))).toEqual([1, 1, 1]);
   });
 
 });

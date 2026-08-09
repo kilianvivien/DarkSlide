@@ -9,6 +9,7 @@ import {
   ConversionAnalysisResult,
   ConversionParametersDebug,
   ConversionSettings,
+  CubeLut,
   DecodeRequest,
   DensityBalance,
   DecodedImage,
@@ -860,6 +861,7 @@ export class ImageWorkerClient {
       maskTuning: payload.maskTuning,
       colorMatrix: payload.colorMatrix,
       tonalCharacter: payload.tonalCharacter,
+      cubeLut: payload.cubeLut,
       labStyleToneCurve: payload.labStyleToneCurve,
       labStyleChannelCurves: payload.labStyleChannelCurves,
       labTonalCharacterOverride: payload.labTonalCharacterOverride,
@@ -891,6 +893,7 @@ export class ImageWorkerClient {
     residualBaseOffset?: [number, number, number] | null,
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
+    cubeLut?: RenderRequest['cubeLut'],
   ) {
     const imageData = new ImageData(
       new Uint8ClampedArray(prepared.width * prepared.height * 4),
@@ -935,6 +938,7 @@ export class ImageWorkerClient {
           residualBaseOffset ?? null,
           flareFloor,
           lightSourceBias,
+          cubeLut ?? null,
         )
         : trimTileImageData(rawTile);
 
@@ -974,6 +978,7 @@ export class ImageWorkerClient {
     residualBaseOffset?: [number, number, number] | null,
     flareFloor?: RenderRequest['flareFloor'],
     lightSourceBias?: RenderRequest['lightSourceBias'],
+    cubeLut?: RenderRequest['cubeLut'],
   ) {
     const phaseTimings = createEmptyPhaseTimings();
     const rawPreview = await this.readTile({
@@ -1016,6 +1021,7 @@ export class ImageWorkerClient {
         previewResidualBaseOffset,
         flareFloor,
         lightSourceBias,
+        cubeLut ?? null,
       );
       phaseTimings.gpuProcessReadbackMs = Math.round(performance.now() - gpuStartedAt);
       histogramSourceImageData = processedImage;
@@ -1382,6 +1388,7 @@ export class ImageWorkerClient {
         residualBaseOffset,
         payload.flareFloor,
         payload.lightSourceBias,
+        payload.cubeLut ?? null,
       );
       phaseTimings.gpuProcessReadbackMs = assembled.phaseTimings.gpuProcessReadbackMs;
       phaseTimings.histogramBuildMs = assembled.phaseTimings.histogramBuildMs;
@@ -1583,6 +1590,7 @@ export class ImageWorkerClient {
     isColor: boolean;
     profileId?: string | null;
     filmType?: FilmProfileType;
+    cubeLut?: CubeLut | null;
     flareFloor?: [number, number, number] | null;
     lightSourceBias?: [number, number, number];
     sensitivity: number;
@@ -1705,6 +1713,7 @@ export class ImageWorkerClient {
         residualBaseOffset,
         payload.flareFloor,
         payload.lightSourceBias,
+        payload.cubeLut ?? null,
       );
       await this.cancelTileJob(payload.documentId, jobId);
 

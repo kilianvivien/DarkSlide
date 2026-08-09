@@ -20,6 +20,7 @@ import { appendDiagnostic } from './utils/diagnostics';
 import { confirmDeleteRoll, confirmFilmBaseReanalysis, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
 import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
+import { cubeLutSignature } from './utils/cubeLut';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
 import { analyzeMonochromeSuggestion } from './utils/autoAnalysis';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
@@ -341,6 +342,7 @@ export default function App() {
     maskTuning?: MaskTuning;
     colorMatrix?: ColorMatrix;
     tonalCharacter?: TonalCharacter;
+    cubeLutKey?: string | null;
     labStyleToneCurve?: FilmProfile['toneCurve'];
     labStyleChannelCurves?: { r?: FilmProfile['toneCurve']; g?: FilmProfile['toneCurve']; b?: FilmProfile['toneCurve'] };
     labTonalCharacterOverride?: Partial<TonalCharacter>;
@@ -1207,6 +1209,7 @@ export default function App() {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      cubeLut,
       labStyleToneCurve,
       labStyleChannelCurves,
       labTonalCharacterOverride,
@@ -1237,6 +1240,7 @@ export default function App() {
       maskTuning,
       colorMatrix,
       tonalCharacter,
+      cubeLutKey: cubeLut ? cubeLutSignature(cubeLut) : null,
       labStyleToneCurve,
       labStyleChannelCurves,
       labTonalCharacterOverride,
@@ -1291,6 +1295,7 @@ export default function App() {
         maskTuning,
         colorMatrix,
         tonalCharacter,
+        cubeLut,
         labStyleToneCurve,
         labStyleChannelCurves,
         labTonalCharacterOverride,
@@ -1503,6 +1508,7 @@ export default function App() {
     const isColor = usesColorChannelPipeline({ type: activeProfile.type });
     const profileMaskTuning = activeProfile.maskTuning;
     const profileColorMatrix = activeProfile.colorMatrix;
+    const profileCubeLut = activeProfile.lut ?? null;
     const profileTonalCharacter = activeProfile.tonalCharacter;
     const profileFilmType = activeProfile.filmType ?? 'negative';
     const highlightDensityEstimate = getSettledAdaptiveState(documentId).committedHighlightDensity;
@@ -1542,6 +1548,7 @@ export default function App() {
       maskTuning: profileMaskTuning,
       colorMatrix: profileColorMatrix,
       tonalCharacter: profileTonalCharacter,
+      cubeLut: profileCubeLut,
       labStyleToneCurve: activeLabStyle?.toneCurve,
       labStyleChannelCurves: activeLabStyle?.channelCurves,
       labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
@@ -1565,6 +1572,7 @@ export default function App() {
         maskTuning: profileMaskTuning,
         colorMatrix: profileColorMatrix,
         tonalCharacter: profileTonalCharacter,
+        cubeLutKey: profileCubeLut ? cubeLutSignature(profileCubeLut) : null,
         labStyleToneCurve: activeLabStyle?.toneCurve,
         labStyleChannelCurves: activeLabStyle?.channelCurves,
         labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
@@ -1598,6 +1606,7 @@ export default function App() {
         maskTuning: profileMaskTuning,
         colorMatrix: profileColorMatrix,
         tonalCharacter: profileTonalCharacter,
+        cubeLut: profileCubeLut,
         labStyleToneCurve: activeLabStyle?.toneCurve,
         labStyleChannelCurves: activeLabStyle?.channelCurves,
         labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
@@ -1679,6 +1688,7 @@ export default function App() {
     activeProfile.colorMatrix,
     activeProfile.filmType,
     activeProfile.id,
+    activeProfile.lut,
     activeProfile.maskTuning,
     activeProfile.tonalCharacter,
     activeProfile.type,
@@ -2315,6 +2325,7 @@ export default function App() {
           isColor: usesColorChannelPipeline({ type: activeProfile.type }),
           profileId: activeProfile.id,
           filmType: activeProfile.filmType,
+          cubeLut: activeProfile.lut ?? null,
           flareFloor: documentState.estimatedFlare ?? null,
           lightSourceBias: lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1],
           sensitivity: dustRemoval.autoSensitivity,
@@ -2341,7 +2352,7 @@ export default function App() {
     } finally {
       setIsDetectingDust(false);
     }
-  }, [activeProfile.filmType, activeProfile.id, activeProfile.type, documentState, handleSettingsChange, isDetectingDust, lightSourceProfilesById, pushHistoryEntry, showTransientNotice, tabsRef]);
+  }, [activeProfile.filmType, activeProfile.id, activeProfile.lut, activeProfile.type, documentState, handleSettingsChange, isDetectingDust, lightSourceProfilesById, pushHistoryEntry, showTransientNotice, tabsRef]);
 
   const lastAutoDustDetectionKeyRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2432,6 +2443,7 @@ export default function App() {
       maskTuning: activeProfile.maskTuning,
       colorMatrix: activeProfile.colorMatrix,
       tonalCharacter: activeProfile.tonalCharacter,
+      cubeLut: activeProfile.lut ?? null,
       labStyleToneCurve: activeLabStyle?.toneCurve,
       labStyleChannelCurves: activeLabStyle?.channelCurves,
       labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
@@ -2629,6 +2641,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       maskTuning: profile.maskTuning,
       colorMatrix: profile.colorMatrix,
       tonalCharacter: profile.tonalCharacter,
+      cubeLut: profile.lut ?? null,
       labStyleToneCurve: labStyle?.toneCurve,
       labStyleChannelCurves: labStyle?.channelCurves,
       labTonalCharacterOverride: labStyle?.tonalCharacterOverride,
@@ -2736,6 +2749,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       maskTuning: profile.maskTuning,
       colorMatrix: profile.colorMatrix,
       tonalCharacter: profile.tonalCharacter,
+      cubeLut: profile.lut ?? null,
       labStyleToneCurve: labStyle?.toneCurve,
       labStyleChannelCurves: labStyle?.channelCurves,
       labTonalCharacterOverride: labStyle?.tonalCharacterOverride,

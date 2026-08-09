@@ -4,6 +4,7 @@ import {
   ColorMatrix,
   ColorProfileId,
   ConversionSettings,
+  CubeLut,
   DensityBalance,
   FilmProfile,
   HistogramMode,
@@ -185,6 +186,7 @@ export type QueuedPreviewRender = {
   maskTuning?: MaskTuning;
   colorMatrix?: ColorMatrix;
   tonalCharacter?: TonalCharacter;
+  cubeLut?: CubeLut | null;
   labStyleToneCurve?: FilmProfile['toneCurve'];
   labStyleChannelCurves?: { r?: FilmProfile['toneCurve']; g?: FilmProfile['toneCurve']; b?: FilmProfile['toneCurve'] };
   labTonalCharacterOverride?: Partial<TonalCharacter>;

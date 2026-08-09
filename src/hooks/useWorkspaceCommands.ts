@@ -923,8 +923,13 @@ export function useWorkspaceCommands({
       category: activeProfile.category,
       description: 'Custom DarkSlide preset',
       defaultSettings: presetSettings,
+      // A LUT preset's whole conversion lives in its table, so saving a new
+      // preset from one has to carry it over — without it the saved preset
+      // falls back to DarkSlide's own inversion and looks nothing like what
+      // was on screen when the user hit Save.
+      lut: activeProfile.lut ?? null,
       isCustom: true,
-      tags: savePresetTags,
+      tags: activeProfile.lut ? [...savePresetTags, 'lut'] : savePresetTags,
       filmStock: metadata?.filmStock?.trim() ? metadata.filmStock.trim() : null,
       scannerType: metadata?.scannerType ?? null,
       includesFraming: Boolean(metadata?.saveFraming),
@@ -937,7 +942,7 @@ export function useWorkspaceCommands({
       profileId: newPreset.id,
       dirty: false,
     }));
-  }, [activeProfile.category, activeProfile.filmType, activeProfile.type, documentState, savePreset, savePresetTags, updateDocument]);
+  }, [activeProfile.category, activeProfile.filmType, activeProfile.lut, activeProfile.type, documentState, savePreset, savePresetTags, updateDocument]);
 
   const handleImportPreset = useCallback((profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => {
     importPreset({
@@ -1012,6 +1017,7 @@ export function useWorkspaceCommands({
         maskTuning: activeProfile.maskTuning,
         colorMatrix: activeProfile.colorMatrix,
         tonalCharacter: activeProfile.tonalCharacter,
+        cubeLut: activeProfile.lut ?? null,
         labStyleToneCurve: activeLabStyle?.toneCurve,
         labStyleChannelCurves: activeLabStyle?.channelCurves,
         labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
@@ -1102,7 +1108,7 @@ export function useWorkspaceCommands({
       void refreshRenderBackendDiagnostics();
     }
     return null;
-  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.name, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, getRollById, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.lut, activeProfile.id, activeProfile.maskTuning, activeProfile.name, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, getRollById, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleDownload = useCallback(async () => {
     await runExport();
@@ -1170,6 +1176,7 @@ export function useWorkspaceCommands({
         maskTuning: activeProfile.maskTuning,
         colorMatrix: activeProfile.colorMatrix,
         tonalCharacter: activeProfile.tonalCharacter,
+        cubeLut: activeProfile.lut ?? null,
         labStyleToneCurve: activeLabStyle?.toneCurve,
         labStyleChannelCurves: activeLabStyle?.channelCurves,
         labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
@@ -1211,7 +1218,7 @@ export function useWorkspaceCommands({
       setError(`Open in editor failed. ${message}`);
       setDocumentState((current) => current ? { ...current, status: 'error', errorCode: 'OPEN_IN_EDITOR_FAILED' } : current);
     }
-  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.id, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
+  }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.lut, activeProfile.id, activeProfile.maskTuning, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, prefsSnapshotRef, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleLightSourceChange = useCallback((lightSourceId: string | null) => {
     updateDocument((current) => {

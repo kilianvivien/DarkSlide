@@ -29,6 +29,11 @@ const PRESET_FILTER = {
   extensions: ['darkslide'],
 };
 
+const CUBE_LUT_FILTER = {
+  name: 'Cube LUT',
+  extensions: ['cube'],
+};
+
 const PRESET_BACKUP_FILTER = {
   name: 'DarkSlide Preset Backup',
   extensions: ['darkslide-library'],
@@ -417,7 +422,11 @@ export async function openPresetFile(): Promise<{ content: string; fileName: str
     title: 'Import Preset',
     directory: false,
     multiple: false,
-    filters: [PRESET_FILTER],
+    filters: [
+      { name: 'Preset or LUT', extensions: [...PRESET_FILTER.extensions, ...CUBE_LUT_FILTER.extensions] },
+      PRESET_FILTER,
+      CUBE_LUT_FILTER,
+    ],
   });
 
   if (!selected || Array.isArray(selected)) {
@@ -428,6 +437,31 @@ export async function openPresetFile(): Promise<{ content: string; fileName: str
     content: await readTextFile(selected),
     fileName: getFileName(selected),
   };
+}
+
+export async function saveCubeLutFile(text: string, filename: string): Promise<'saved' | 'cancelled'> {
+  if (isDesktopShell()) {
+    const [{ save }, { writeTextFile }] = await Promise.all([
+      import('@tauri-apps/plugin-dialog'),
+      import('@tauri-apps/plugin-fs'),
+    ]);
+
+    const selected = await save({
+      title: 'Export LUT',
+      defaultPath: filename,
+      filters: [CUBE_LUT_FILTER],
+    });
+
+    if (!selected) {
+      return 'cancelled';
+    }
+
+    await writeTextFile(selected, text);
+    return 'saved';
+  }
+
+  triggerBrowserDownload(new Blob([text], { type: 'text/plain' }), filename);
+  return 'saved';
 }
 
 export async function savePresetBackupFile(json: string, filename: string): Promise<'saved' | 'cancelled'> {

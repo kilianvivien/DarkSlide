@@ -107,6 +107,18 @@ struct Uniforms {
   densityScaleG: f32,
   densityScaleB: f32,
   _pad20: f32,
+
+  // 0 when no profile LUT is active; otherwise the edge length of the 3D table
+  // bound at @binding(3).
+  cubeLutSize: f32,
+  cubeLutDomainMinR: f32,
+  cubeLutDomainMinG: f32,
+  cubeLutDomainMinB: f32,
+
+  cubeLutDomainMaxR: f32,
+  cubeLutDomainMaxG: f32,
+  cubeLutDomainMaxB: f32,
+  _pad21: f32,
 };
 
 struct BlurParams {
@@ -286,6 +298,46 @@ fn textureCoord(position: vec4<f32>) -> vec2<i32> {
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> uniforms: Uniforms;
 @group(0) @binding(2) var<storage, read> curveLuts: array<f32>;
+// Profile LUT table, red-fastest RGB triplets. Bound to a 3-float placeholder
+// when uniforms.cubeLutSize is 0, so the bind group layout never changes.
+@group(0) @binding(3) var<storage, read> cubeLut: array<f32>;
+
+fn cubeLutTexel(r: u32, g: u32, b: u32, size: u32) -> vec3<f32> {
+  let base = (r + g * size + b * size * size) * 3u;
+  return vec3<f32>(cubeLut[base], cubeLut[base + 1u], cubeLut[base + 2u]);
+}
+
+// Trilinear sample of the profile LUT. Mirrors sampleCubeLut() in cubeLut.ts —
+// the CPU and GPU previews have to agree pixel for pixel.
+fn sampleCubeLut(color: vec3<f32>, uniforms: Uniforms) -> vec3<f32> {
+  let size = u32(uniforms.cubeLutSize);
+  let last = f32(size - 1u);
+  let domainMin = vec3<f32>(uniforms.cubeLutDomainMinR, uniforms.cubeLutDomainMinG, uniforms.cubeLutDomainMinB);
+  let domainMax = vec3<f32>(uniforms.cubeLutDomainMaxR, uniforms.cubeLutDomainMaxG, uniforms.cubeLutDomainMaxB);
+
+  let normalized = clamp((color - domainMin) / (domainMax - domainMin), vec3<f32>(0.0), vec3<f32>(1.0)) * last;
+  let lowF = floor(normalized);
+  let frac = normalized - lowF;
+
+  let low = vec3<u32>(min(lowF, vec3<f32>(last)));
+  let high = min(low + vec3<u32>(1u), vec3<u32>(size - 1u));
+
+  let c000 = cubeLutTexel(low.x, low.y, low.z, size);
+  let c100 = cubeLutTexel(high.x, low.y, low.z, size);
+  let c010 = cubeLutTexel(low.x, high.y, low.z, size);
+  let c110 = cubeLutTexel(high.x, high.y, low.z, size);
+  let c001 = cubeLutTexel(low.x, low.y, high.z, size);
+  let c101 = cubeLutTexel(high.x, low.y, high.z, size);
+  let c011 = cubeLutTexel(low.x, high.y, high.z, size);
+  let c111 = cubeLutTexel(high.x, high.y, high.z, size);
+
+  let c00 = mix(c000, c100, frac.x);
+  let c10 = mix(c010, c110, frac.x);
+  let c01 = mix(c001, c101, frac.x);
+  let c11 = mix(c011, c111, frac.x);
+
+  return mix(mix(c00, c10, frac.y), mix(c01, c11, frac.y), frac.z);
+}
 
 fn lookupCurve(channel: u32, value: f32) -> f32 {
   let idx = clamp(u32(round(clampF(value, 0.0, 1.0) * 255.0)), 0u, 255u);
@@ -302,33 +354,42 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
   var b = converted.z;
 
   if (uniforms.processMode > 0.5) {
-    r = max(r - uniforms.flareFloorR * uniforms.flareStrength, 0.0);
-    g = max(g - uniforms.flareFloorG * uniforms.flareStrength, 0.0);
-    b = max(b - uniforms.flareFloorB * uniforms.flareStrength, 0.0);
-
-    r = clampF(r / max(uniforms.lightSourceBiasR, 0.05), 0.0, 1.0);
-    g = clampF(g / max(uniforms.lightSourceBiasG, 0.05), 0.0, 1.0);
-    b = clampF(b / max(uniforms.lightSourceBiasB, 0.05), 0.0, 1.0);
-
-    if (uniforms.densityInversionEnabled > 0.5) {
-      r = applyDensityInversion(r, uniforms.outputTransferMode, uniforms.baseDensityR, uniforms.densityScaleR, uniforms.hdGammaR);
-      g = applyDensityInversion(g, uniforms.outputTransferMode, uniforms.baseDensityG, uniforms.densityScaleG, uniforms.hdGammaG);
-      b = applyDensityInversion(b, uniforms.outputTransferMode, uniforms.baseDensityB, uniforms.densityScaleB, uniforms.hdGammaB);
+    // A profile LUT performs the negative→positive conversion itself and so
+    // stands in for the entire inversion stage.
+    if (uniforms.cubeLutSize > 1.5) {
+      let mapped = sampleCubeLut(vec3<f32>(r, g, b), uniforms);
+      r = mapped.x;
+      g = mapped.y;
+      b = mapped.z;
     } else {
-      if (uniforms.isSlide <= 0.5) {
-        r = 1.0 - r;
-        g = 1.0 - g;
-        b = 1.0 - b;
+      r = max(r - uniforms.flareFloorR * uniforms.flareStrength, 0.0);
+      g = max(g - uniforms.flareFloorG * uniforms.flareStrength, 0.0);
+      b = max(b - uniforms.flareFloorB * uniforms.flareStrength, 0.0);
+
+      r = clampF(r / max(uniforms.lightSourceBiasR, 0.05), 0.0, 1.0);
+      g = clampF(g / max(uniforms.lightSourceBiasG, 0.05), 0.0, 1.0);
+      b = clampF(b / max(uniforms.lightSourceBiasB, 0.05), 0.0, 1.0);
+
+      if (uniforms.densityInversionEnabled > 0.5) {
+        r = applyDensityInversion(r, uniforms.outputTransferMode, uniforms.baseDensityR, uniforms.densityScaleR, uniforms.hdGammaR);
+        g = applyDensityInversion(g, uniforms.outputTransferMode, uniforms.baseDensityG, uniforms.densityScaleG, uniforms.hdGammaG);
+        b = applyDensityInversion(b, uniforms.outputTransferMode, uniforms.baseDensityB, uniforms.densityScaleB, uniforms.hdGammaB);
+      } else {
+        if (uniforms.isSlide <= 0.5) {
+          r = 1.0 - r;
+          g = 1.0 - g;
+          b = 1.0 - b;
+        }
+
+        r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
+        g = applyFilmBaseCompensation(g, uniforms.filmBaseG);
+        b = applyFilmBaseCompensation(b, uniforms.filmBaseB);
       }
 
-      r = applyFilmBaseCompensation(r, uniforms.filmBaseR);
-      g = applyFilmBaseCompensation(g, uniforms.filmBaseG);
-      b = applyFilmBaseCompensation(b, uniforms.filmBaseB);
+      r = max(0.0, r - uniforms.residualBaseOffsetR);
+      g = max(0.0, g - uniforms.residualBaseOffsetG);
+      b = max(0.0, b - uniforms.residualBaseOffsetB);
     }
-
-    r = max(0.0, r - uniforms.residualBaseOffsetR);
-    g = max(0.0, g - uniforms.residualBaseOffsetG);
-    b = max(0.0, b - uniforms.residualBaseOffsetB);
 
     if (uniforms.hasColorMatrix > 0.5) {
       let nr = uniforms.cm0 * r + uniforms.cm1 * g + uniforms.cm2 * b;

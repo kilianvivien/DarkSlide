@@ -13,6 +13,7 @@ import {
   ConversionAnalysisResult,
   ConversionParametersDebug,
   ConversionSettings,
+  CubeLut,
   DecodeRequest,
   DensityBalance,
   DecodedImage,
@@ -76,6 +77,7 @@ import { projectDustMarkFromTransformedSpace } from './dustGeometry';
 import {
   prepareGeometryCacheEntry,
 } from './workerGeometryCache';
+import { sampleCubeLut } from './cubeLut';
 import { clamp } from './math';
 import { computeBrightPercentileSample, estimateFilmBase, mirrorFromExifOrientation } from './rawImport';
 import { usesColorChannelPipeline } from './pipelineIntent';
@@ -550,6 +552,7 @@ function getPinnedHighlightDensity(
     payload.lightSourceBias ?? [1, 1, 1],
     document.estimatedFilmBase,
     document.estimatedDensityBalance,
+    payload.cubeLut ?? null,
   );
 
   return rememberAnalysisResult(document.highlightDensityCache, cacheKey, computeHighlightDensity(histogram));
@@ -1067,6 +1070,7 @@ interface AnalysisInversionOptions {
   isColor: boolean;
   profileId?: string | null;
   filmType?: FilmProfileType;
+  cubeLut?: CubeLut | null;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
 }
@@ -1110,19 +1114,23 @@ function applyAnalysisInversionStage(
     let g = data[index + 1] / 255;
     let b = data[index + 2] / 255;
 
-    [r, g, b] = applyInversionStage(
-      r,
-      g,
-      b,
-      filmType,
-      outputProfileId,
-      filmBaseBalance,
-      densityInversion,
-      flareFloorNormalized,
-      flareStrength,
-      lightSourceBias,
-      residualBaseOffset,
-    );
+    // Keep analysis in step with rendering: a profile LUT replaces the whole
+    // inversion stage there, so it must replace it here too.
+    [r, g, b] = options.cubeLut
+      ? sampleCubeLut(options.cubeLut, r, g, b)
+      : applyInversionStage(
+        r,
+        g,
+        b,
+        filmType,
+        outputProfileId,
+        filmBaseBalance,
+        densityInversion,
+        flareFloorNormalized,
+        flareStrength,
+        lightSourceBias,
+        residualBaseOffset,
+      );
 
     r *= options.settings.redBalance;
     g *= options.settings.greenBalance;
@@ -1577,6 +1585,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.lightSourceBias ?? [1, 1, 1],
     document.estimatedFilmBase,
     document.estimatedDensityBalance,
+    payload.cubeLut ?? null,
   );
 
   const whiteBalanceImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
@@ -1662,6 +1671,7 @@ function handleRender(payload: RenderRequest) {
       payload.lightSourceBias ?? [1, 1, 1],
       document.estimatedFilmBase,
       document.estimatedDensityBalance,
+      payload.cubeLut ?? null,
     );
   const highlightDensity = usesProcessedPipeline ? pinnedHighlightDensity : computeHighlightDensity(histogram);
 
@@ -1848,6 +1858,7 @@ async function handleExport(payload: ExportRequest) {
         payload.lightSourceBias ?? [1, 1, 1],
         document.estimatedFilmBase,
         document.estimatedDensityBalance,
+        payload.cubeLut ?? null,
       );
     }
 
@@ -1916,6 +1927,7 @@ async function handleExport(payload: ExportRequest) {
     payload.lightSourceBias ?? [1, 1, 1],
     document.estimatedFilmBase,
     document.estimatedDensityBalance,
+    payload.cubeLut ?? null,
   );
   ctx.putImageData(imageData, 0, 0);
 
@@ -2026,6 +2038,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1],
       document.estimatedFilmBase,
       document.estimatedDensityBalance,
+      profile.lut ?? null,
     );
 
     const col = index % columns;

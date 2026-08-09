@@ -10,7 +10,13 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v1.1.0
+## What's New in v1.2.0
+
+- **Import `.cube` LUTs as presets** — drop a 3D LUT on the Custom tab (or pick it through Import) and it becomes a custom preset. The LUT performs the negative→positive conversion in place of DarkSlide's own inversion, and every slider still applies on top of it
+- **Export any preset as a `.cube` LUT** — bake a preset's full conversion into a 33×33×33 LUT that turns a raw negative scan into a finished positive in Resolve, Premiere, or anything else that reads `.cube`
+- **LUT presets are marked throughout** — a distinct icon in the browser, a `3D LUT` tag with the table size, and a `(LUT)` marker on the preview status bar
+
+### Earlier in v1.1.0
 
 - **True 16-bit export fidelity** — high-bit-depth exports now keep float precision through curves, sharpening, and noise reduction, avoiding the intermediate 8-bit rounding that could quantize smooth tones
 - **Auto White Balance** — a new one-click control neutralizes color casts by applying temperature and tint from DarkSlide's neutral-balance analysis
@@ -74,6 +80,7 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 ### Convert & Edit
 - **Instant negative-to-positive conversion** with real-time preview
 - **Film stock profiles** — 40+ built-in color and black & white stocks to match the look of popular films
+- **Convert with a `.cube` LUT** — import a 3D LUT and it handles the negative-to-positive conversion in place of DarkSlide's own inversion, with every slider still available on top
 - **Full editing controls** — exposure, contrast, saturation, temperature, tint, curves, black & white points, and highlight protection
 - **Auto White Balance** — neutralize color casts in one click while retaining full control over temperature and tint
 - **Black & white mode** with per-channel luminance mixing for fine-tuned tonal control
@@ -87,6 +94,7 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **Contact sheet generation** — create a grid overview of your scans
 - **High-bit-depth output** — export 16-bit PNG or TIFF files with float precision preserved through curves, sharpening, and noise reduction
 - **Save and share presets** — create custom looks, organize them in folders, and export/import as `.darkslide` files
+- **3D LUT interchange** — import `.cube` LUTs as presets and bake any preset back out to `.cube`
 - **Searchable preset browser** with sorting and tag display
 
 ### Dust & Scratch Removal
