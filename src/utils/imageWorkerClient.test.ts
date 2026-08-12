@@ -836,6 +836,129 @@ describe('ImageWorkerClient', () => {
     expect(gpuState.instance.processPreviewImage).toHaveBeenCalledTimes(1);
   });
 
+  it('retains film-base calibration after the decode recovery cache expires', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const filmBaseEstimate = {
+      sample: { r: 104, g: 160, b: 132 },
+      source: 'frame-rebate' as const,
+      confidence: 0.704,
+      rejectedCandidates: 42,
+      clamped: false,
+    };
+    const densityBalance = {
+      scaleR: 1.047,
+      scaleG: 1,
+      scaleB: 0.957,
+      source: 'auto-histogram' as const,
+    };
+
+    const decoded = client.decode({
+      documentId: 'doc-1',
+      buffer: new ArrayBuffer(8),
+      fileName: 'scan.nef',
+      mime: 'image/x-raw-rgba',
+      size: 8,
+    });
+    const decodeRequest = worker.postedMessages[0];
+    worker.onmessage?.({
+      data: {
+        id: decodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'doc-1',
+            name: 'scan.nef',
+            mime: 'image/x-raw-rgba',
+            extension: '.nef',
+            size: 8,
+            width: 10,
+            height: 10,
+          },
+          previewLevels: [],
+          estimatedFilmBaseSample: filmBaseEstimate.sample,
+          estimatedFilmBase: filmBaseEstimate,
+          estimatedDensityBalance: densityBalance,
+        },
+      },
+    } as MessageEvent);
+    await decoded;
+
+    // The recovery buffer is intentionally short-lived. Calibration must not
+    // share that lifetime or a later curve render will lose its inversion base.
+    vi.advanceTimersByTime(60_001);
+
+    const pending = client.render(createRenderPayload());
+    await flushAsyncWork();
+
+    const prepareRequest = worker.postedMessages[1];
+    expect(prepareRequest?.type).toBe('prepare-tile-job');
+    worker.onmessage?.({
+      data: {
+        id: prepareRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:1:preview',
+          sourceKind: 'preview',
+          width: 1,
+          height: 1,
+          previewLevelId: 'preview-1024',
+          tileSize: 1024,
+          halo: 0,
+          geometryCacheHit: false,
+        },
+      },
+    } as MessageEvent);
+    await flushAsyncWork();
+
+    const tileRequest = worker.postedMessages[2];
+    expect(tileRequest?.type).toBe('read-tile');
+    worker.onmessage?.({
+      data: {
+        id: tileRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:1:preview',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          haloLeft: 0,
+          haloTop: 0,
+          haloRight: 0,
+          haloBottom: 0,
+          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+        },
+      },
+    } as MessageEvent);
+    await flushAsyncWork();
+
+    const cancelRequest = worker.postedMessages[3];
+    expect(cancelRequest?.type).toBe('cancel-job');
+    worker.onmessage?.({
+      data: {
+        id: cancelRequest?.id,
+        ok: true,
+        payload: { cancelled: true },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toMatchObject({ documentId: 'doc-1' });
+    const gpuArguments = gpuState.instance.processPreviewImage.mock.calls[0];
+    expect(gpuArguments).toContainEqual(filmBaseEstimate);
+    expect(gpuArguments).toContainEqual(densityBalance);
+  });
+
   it('requests large preview bitmaps from the worker and returns the transferred bitmap', async () => {
     const { ImageWorkerClient } = await import('./imageWorkerClient');
     const client = new ImageWorkerClient();

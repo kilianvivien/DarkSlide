@@ -73,6 +73,11 @@ type CachedDecodeRequest = {
   evictionTimeout: number | null;
 };
 
+type DocumentCalibration = {
+  estimatedFilmBaseSample: FilmBaseSample | null;
+  estimatedFilmBase: FilmBaseEstimate | null;
+  estimatedDensityBalance: DensityBalance | null;
+};
 
 const MISSING_DOCUMENT_MESSAGE = 'The image document is no longer available.';
 const DECODE_CACHE_TTL_MS = 60_000;
@@ -230,6 +235,11 @@ export class ImageWorkerClient {
   private pending = new Map<string, PendingResolver>();
 
   private decodeCache = new Map<string, CachedDecodeRequest>();
+
+  // Calibration is tiny document state, not decode-recovery data. Keep it for
+  // the document's full lifetime so evicting the potentially huge source
+  // buffer after DECODE_CACHE_TTL_MS cannot silently change GPU conversion.
+  private documentCalibration = new Map<string, DocumentCalibration>();
 
   private documentRecovery = new Map<string, Promise<void>>();
 
@@ -1157,6 +1167,11 @@ export class ImageWorkerClient {
       workerEpoch: this.workerEpoch,
       evictionTimeout: null,
     });
+    this.documentCalibration.set(payload.documentId, {
+      estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
+      estimatedFilmBase: decoded.estimatedFilmBase ?? null,
+      estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
+    });
     this.scheduleDecodeCacheEviction(payload.documentId);
     return decoded;
   }
@@ -1240,16 +1255,16 @@ export class ImageWorkerClient {
 
   private async renderInternal(payload: RenderRequest, allowRecovery: boolean): Promise<RenderResult> {
     const activePreviewJobId = this.activePreviewJobIds.get(payload.documentId) ?? null;
-    const cachedDecode = this.decodeCache.get(payload.documentId);
+    const calibration = this.documentCalibration.get(payload.documentId);
     // Prefer the confidence-carrying estimate (source of truth from decode) so
     // the GPU uniforms resolve the same base density/provenance as the worker's
     // conversion analysis — the bare sample loses the confidence signal that
     // drives B&W luminance-first and conservative-fallback handling.
-    const estimatedFilmBaseSample = cachedDecode?.estimatedFilmBase
+    const estimatedFilmBaseSample = calibration?.estimatedFilmBase
       ?? payload.estimatedFilmBaseSample
-      ?? cachedDecode?.estimatedFilmBaseSample
+      ?? calibration?.estimatedFilmBaseSample
       ?? null;
-    const estimatedDensityBalance = payload.estimatedDensityBalance ?? cachedDecode?.estimatedDensityBalance ?? null;
+    const estimatedDensityBalance = payload.estimatedDensityBalance ?? calibration?.estimatedDensityBalance ?? null;
     await this.cancelTileJob(payload.documentId, activePreviewJobId, true);
 
     const jobId = this.createJobId(payload.documentId, payload.revision, 'preview');
@@ -1553,6 +1568,11 @@ export class ImageWorkerClient {
       () => this.request<ReestimateFilmBaseResult>('apply-film-base-estimate', payload),
       true,
     );
+    this.documentCalibration.set(payload.documentId, {
+      estimatedFilmBaseSample: result.estimatedFilmBaseSample,
+      estimatedFilmBase: result.estimatedFilmBase,
+      estimatedDensityBalance: result.estimatedDensityBalance,
+    });
     this.lastConversionAnalysis.delete(payload.documentId);
     return result;
   }
@@ -1622,10 +1642,11 @@ export class ImageWorkerClient {
 
   private async exportInternal(payload: ExportRequest, allowRecovery: boolean): Promise<ExportResult> {
     const cachedDecode = this.decodeCache.get(payload.documentId);
+    const calibration = this.documentCalibration.get(payload.documentId);
     // Prefer the confidence-carrying estimate so GPU-tiled export resolves the
     // same base as the worker analysis (matches the preview render path).
-    const estimatedFilmBaseSample = cachedDecode?.estimatedFilmBase ?? cachedDecode?.estimatedFilmBaseSample ?? null;
-    const estimatedDensityBalance = payload.estimatedDensityBalance ?? cachedDecode?.estimatedDensityBalance ?? null;
+    const estimatedFilmBaseSample = calibration?.estimatedFilmBase ?? calibration?.estimatedFilmBaseSample ?? null;
+    const estimatedDensityBalance = payload.estimatedDensityBalance ?? calibration?.estimatedDensityBalance ?? null;
     const wantsHighDepthRawExport = cachedDecode?.payload.mime === 'image/x-raw-rgba'
       && payload.options.bitDepth === 16
       && (payload.options.format === 'image/tiff' || payload.options.format === 'image/png');
@@ -1832,6 +1853,7 @@ export class ImageWorkerClient {
       window.clearTimeout(cached.evictionTimeout);
     }
     this.decodeCache.delete(documentId);
+    this.documentCalibration.delete(documentId);
     this.documentRecovery.delete(documentId);
     this.activePreviewJobIds.delete(documentId);
     return this.request<{ disposed: true }>('dispose', { documentId });
