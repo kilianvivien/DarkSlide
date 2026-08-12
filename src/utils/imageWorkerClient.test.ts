@@ -133,6 +133,20 @@ function createRenderPayload() {
   };
 }
 
+function createExportOptions() {
+  return {
+    format: 'image/tiff' as const,
+    bitDepth: 8 as const,
+    quality: 1,
+    filenameBase: 'scan',
+    embedMetadata: false,
+    outputProfileId: 'srgb',
+    embedOutputProfile: false,
+    saveSidecar: false,
+    targetMaxDimension: null,
+  };
+}
+
 Object.defineProperty(globalThis, 'Worker', {
   configurable: true,
   writable: true,
@@ -257,6 +271,164 @@ describe('ImageWorkerClient', () => {
     await rejection;
     expect(firstWorker.terminate).toHaveBeenCalledTimes(1);
     expect(MockWorker.instances).toHaveLength(2);
+  });
+
+  it('extends the deadline of requests queued behind an export instead of restarting the worker', async () => {
+    vi.useFakeTimers();
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const exported = client.export({
+      ...createRenderPayload(),
+      options: createExportOptions(),
+    } as never);
+
+    await flushAsyncWork();
+    const exportRequest = worker.postedMessages[0];
+    expect(exportRequest?.type).toBe('export');
+
+    // A preview render posted while the export owns the single worker thread is
+    // starved, not hung: it must not be read as a dead worker.
+    const pendingRender = client.render(createRenderPayload());
+    await flushAsyncWork();
+    const renderRequest = worker.postedMessages[1];
+    expect(renderRequest?.type).toBe('render');
+
+    await vi.advanceTimersByTimeAsync(25_000);
+
+    expect(worker.terminate).not.toHaveBeenCalled();
+    expect(MockWorker.instances).toHaveLength(1);
+    expect(diagnosticsState.appendDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'WORKER_REQUEST_DEADLINE_EXTENDED' }),
+    );
+
+    worker.onmessage?.({
+      data: {
+        id: renderRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 1,
+          width: 1,
+          height: 1,
+          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+          histogram: { r: [], g: [], b: [], l: [] },
+          previewLevelId: 'preview-1024',
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pendingRender).resolves.toMatchObject({ documentId: 'doc-1', revision: 1 });
+
+    worker.onmessage?.({
+      data: {
+        id: exportRequest?.id,
+        ok: true,
+        payload: {
+          blob: new Blob(['tiff'], { type: 'image/tiff' }),
+          filename: 'scan.tiff',
+          bitDepthDowngraded: false,
+        },
+      },
+    } as MessageEvent);
+
+    await expect(exported).resolves.toMatchObject({ filename: 'scan.tiff' });
+  });
+
+  it('still restarts the worker when the export itself times out', async () => {
+    vi.useFakeTimers();
+    const { ImageWorkerClient, WorkerRequestTimeoutError } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const exported = client.export({
+      ...createRenderPayload(),
+      options: createExportOptions(),
+    } as never);
+    const rejection = expect(exported).rejects.toBeInstanceOf(WorkerRequestTimeoutError);
+
+    await flushAsyncWork();
+    expect(worker.postedMessages[0]?.type).toBe('export');
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await rejection;
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+    expect(MockWorker.instances).toHaveLength(2);
+  });
+
+  it('drops a timed-out cancel-job without taking the worker down', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const pending = client.render(createRenderPayload());
+    await flushAsyncWork();
+
+    const prepareRequest = worker.postedMessages[0];
+    expect(prepareRequest?.type).toBe('prepare-tile-job');
+    worker.onmessage?.({
+      data: {
+        id: prepareRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:1:preview',
+          sourceKind: 'preview',
+          width: 1,
+          height: 1,
+          previewLevelId: 'preview-1024',
+          tileSize: 1024,
+          halo: 0,
+          geometryCacheHit: false,
+        },
+      },
+    } as MessageEvent);
+    await flushAsyncWork();
+
+    const tileRequest = worker.postedMessages[1];
+    expect(tileRequest?.type).toBe('read-tile');
+    worker.onmessage?.({
+      data: {
+        id: tileRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          jobId: 'doc-1:1:preview',
+          x: 0,
+          y: 0,
+          width: 1,
+          height: 1,
+          haloLeft: 0,
+          haloTop: 0,
+          haloRight: 0,
+          haloBottom: 0,
+          imageData: new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1),
+        },
+      },
+    } as MessageEvent);
+    await flushAsyncWork();
+
+    expect(worker.postedMessages[2]?.type).toBe('cancel-job');
+
+    // Never answered: cancellation is advisory, so its timeout must reject only
+    // itself rather than terminating the worker and every job riding on it.
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(worker.terminate).not.toHaveBeenCalled();
+    expect(MockWorker.instances).toHaveLength(1);
+    expect(diagnosticsState.appendDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'WORKER_REQUEST_DROPPED' }),
+    );
+    await expect(pending).resolves.toMatchObject({ documentId: 'doc-1' });
   });
 
   it('re-decodes cached documents after a worker restart before rendering again', async () => {
@@ -1692,6 +1864,27 @@ describe('ImageWorkerClient', () => {
     }));
     expect(diagnosticsState.appendDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
       code: 'GPU_DEVICE_LOST',
+      level: 'error',
+    }));
+  });
+
+  it('does not report a device loss for a failure raised after the pipeline was already reset', async () => {
+    const onGPUDeviceLost = vi.fn();
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient({ onGPUDeviceLost });
+
+    // One GPU fault can fail an export and a preview at once: the second
+    // report arrives with the pipeline already destroyed, and must not be
+    // dressed up as a fresh device loss on an "unknown" adapter.
+    (client as unknown as { handleGPUFailure(error: unknown): void })
+      .handleGPUFailure(new Error('The operation was aborted.'));
+
+    expect(onGPUDeviceLost).not.toHaveBeenCalled();
+    expect(diagnosticsState.appendDiagnostic).not.toHaveBeenCalledWith(expect.objectContaining({
+      code: 'GPU_DEVICE_LOST',
+    }));
+    expect(diagnosticsState.appendDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'GPU_FAILURE',
       level: 'error',
     }));
   });

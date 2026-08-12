@@ -7,12 +7,18 @@ type UseRenderQueueOptions<T> = {
   render: (request: T) => Promise<void>;
   cancelActive?: (request: T) => void | Promise<void>;
   onCoalesced?: () => void;
+  /**
+   * Hold the queue without dropping it. Requests keep coalescing while paused
+   * and the newest one drains on resume. Used while an export owns the worker.
+   */
+  paused?: boolean;
 };
 
 export function useRenderQueue<T>({
   render,
   cancelActive,
   onCoalesced,
+  paused = false,
 }: UseRenderQueueOptions<T>) {
   const renderEvent = useEvent(render);
   const cancelActiveEvent = useEvent((request: T) => {
@@ -24,6 +30,10 @@ export function useRenderQueue<T>({
 
   const queuedRef = useRef<T | null>(null);
   const inFlightRef = useRef(false);
+  // Assigned during render, not in an effect: an enqueue between the pause
+  // commit and an effect would otherwise slip through and drain.
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
   const draftFrameRef = useRef<number | null>(null);
   const settledTimerRef = useRef<number | null>(null);
   const [isRendering, setIsRendering] = useState(false);
@@ -44,7 +54,7 @@ export function useRenderQueue<T>({
       return;
     }
 
-    while (queuedRef.current) {
+    while (queuedRef.current && !pausedRef.current) {
       const next = queuedRef.current;
       queuedRef.current = null;
       inFlightRef.current = true;
@@ -93,6 +103,12 @@ export function useRenderQueue<T>({
     queuedRef.current = null;
     clearScheduled();
   }, [clearScheduled]);
+
+  useEffect(() => {
+    if (!paused && queuedRef.current) {
+      void drainQueue();
+    }
+  }, [drainQueue, paused]);
 
   useEffect(() => cancelPending, [cancelPending]);
 

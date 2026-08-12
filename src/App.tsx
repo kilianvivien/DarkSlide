@@ -134,6 +134,9 @@ export default function App() {
   const [blockingOverlay, setBlockingOverlay] = useState<BlockingOverlayState | null>(null);
   const [suggestionNotice, setSuggestionNotice] = useState<SuggestionNoticeState | null>(null);
   const [transientNotice, setTransientNotice] = useState<TransientNoticeState | null>(null);
+  // Driven by the worker client so every export entry point (single, batch,
+  // contact sheet) holds back preview renders while the export owns the worker.
+  const [isExportInFlight, setIsExportInFlight] = useState(false);
   const [showTabSwitchOverlay, setShowTabSwitchOverlay] = useState(false);
   const [tabSwitchOverlayKey, setTabSwitchOverlayKey] = useState(0);
   const [renderBackendDiagnostics, setRenderBackendDiagnostics] = useState<RenderBackendDiagnostics>({
@@ -893,6 +896,7 @@ export default function App() {
       onGPUDeviceLost: (message) => {
         showTransientNotice(message || 'GPU unavailable — retrying on the next render');
       },
+      onExportStateChange: setIsExportInFlight,
     });
     void workerClientRef.current.getGPUDiagnostics().then(setRenderBackendDiagnostics).catch(() => {
       // Ignore diagnostics refresh failures during startup.
@@ -1468,6 +1472,10 @@ export default function App() {
     onCoalesced: () => {
       workerClientRef.current?.noteCoalescedPreviewRequest();
     },
+    // Preview renders and a full-resolution export share one worker thread and
+    // one GPU device. Queue previews until the export is done rather than
+    // interleaving them with it.
+    paused: isExportInFlight,
   });
 
   useEffect(() => {
@@ -1583,7 +1591,10 @@ export default function App() {
       })
       : null;
 
-    if (tabSwitchDraftRef.current === documentId && !isDraftPreview && previewMode === 'settled') {
+    // The tab-switch draft bypasses the render queue, so it needs the same
+    // export guard; it falls through to the queue and drains once the export
+    // releases the worker.
+    if (!isExportInFlight && tabSwitchDraftRef.current === documentId && !isDraftPreview && previewMode === 'settled') {
       tabSwitchDraftRef.current = null;
       cancelScheduledInteractivePreview();
 
@@ -1705,6 +1716,7 @@ export default function App() {
     clearRenderIndicator,
     isDraftPreview,
     isAdjustingCrop,
+    isExportInFlight,
     isInteractingWithPreviewControls,
     isPanDragging,
     isZooming,

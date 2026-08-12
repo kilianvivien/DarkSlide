@@ -56,6 +56,7 @@ type ImageWorkerClientOptions = {
   gpuEnabled?: boolean;
   onBackendDiagnosticsChange?: (diagnostics: RenderBackendDiagnostics) => void;
   onGPUDeviceLost?: (message: string) => void;
+  onExportStateChange?: (isExporting: boolean) => void;
 };
 
 type PendingResolver = {
@@ -102,6 +103,15 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   dispose: 5_000,
   'evict-previews': 5_000,
 };
+
+// The worker is single-threaded and processes messages in order, so anything
+// posted while one of these is running is starved rather than stuck. Their own
+// timeouts stay fatal — they remain the liveness check while they run.
+const BLOCKING_REQUEST_TYPES = new Set<WorkerRequest['type']>(['export', 'contact-sheet']);
+
+// Cancellation is advisory: callers already ignore its failures. A late reply
+// must never take the worker down with every other job riding on it.
+const NON_FATAL_TIMEOUT_REQUEST_TYPES = new Set<WorkerRequest['type']>(['cancel-job']);
 
 function trimTileImageData(tile: ReadTileResult) {
   const { imageData, haloLeft, haloTop, haloRight, haloBottom } = tile;
@@ -229,6 +239,27 @@ export class WorkerRequestTimeoutError extends FatalImageWorkerError {
   }
 }
 
+/**
+ * A single request the worker never answered in time, dropped without taking
+ * the worker down. Not a `FatalImageWorkerError`: the worker is still alive and
+ * every other in-flight job keeps running.
+ */
+export class WorkerRequestDroppedError extends Error {
+  code: string;
+
+  requestType: WorkerRequest['type'];
+
+  timeoutMs: number;
+
+  constructor(requestType: WorkerRequest['type'], timeoutMs: number) {
+    super(`The image worker did not answer "${requestType}" within ${Math.round(timeoutMs / 1000)}s, so the request was dropped.`);
+    this.name = 'WorkerRequestDroppedError';
+    this.code = 'WORKER_REQUEST_DROPPED';
+    this.requestType = requestType;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 export class ImageWorkerClient {
   private worker: Worker | null = null;
 
@@ -266,6 +297,16 @@ export class ImageWorkerClient {
   private readonly onBackendDiagnosticsChange?: (diagnostics: RenderBackendDiagnostics) => void;
 
   private readonly onGPUDeviceLost?: (message: string) => void;
+
+  private readonly onExportStateChange?: (isExporting: boolean) => void;
+
+  // In-flight `export`/`contact-sheet` worker requests (the CPU path). Everything
+  // queued behind one of these is starved by design, not hung.
+  private blockingRequestDepth = 0;
+
+  // In-flight exports of any kind (GPU-tiled included), used to tell the app it
+  // should stop feeding preview work to the shared worker.
+  private exportDepth = 0;
 
   private gpuDeviceLostNotified = false;
 
@@ -333,6 +374,7 @@ export class ImageWorkerClient {
     this.gpuDisabledReason = this.gpuEnabled ? null : 'user';
     this.onBackendDiagnosticsChange = options.onBackendDiagnosticsChange;
     this.onGPUDeviceLost = options.onGPUDeviceLost;
+    this.onExportStateChange = options.onExportStateChange;
     this.worker = this.createWorker();
   }
 
@@ -424,9 +466,50 @@ export class ImageWorkerClient {
 
     const id = `${type}-${crypto.randomUUID()}`;
     const timeoutMs = WORKER_REQUEST_TIMEOUT_MS[type];
-    return new Promise<T>((resolve, reject) => {
-      const timeoutId = window.setTimeout(() => {
-        if (!this.pending.has(id)) {
+    const isBlockingRequest = BLOCKING_REQUEST_TYPES.has(type);
+    const promise = new Promise<T>((resolve, reject) => {
+      let deadlineExtended = false;
+
+      const handleTimeout = () => {
+        const entry = this.pending.get(id);
+        if (!entry) {
+          return;
+        }
+
+        // A request sitting behind a full-resolution export is queued, not
+        // hung: the worker cannot answer until the export finishes. Extending
+        // the deadline keeps the export (and every other job on this worker)
+        // alive; the blocking request's own fatal timeout still catches a
+        // genuinely dead worker.
+        if (!isBlockingRequest && this.blockingRequestDepth > 0) {
+          if (!deadlineExtended) {
+            deadlineExtended = true;
+            appendDiagnostic({
+              level: 'info',
+              code: 'WORKER_REQUEST_DEADLINE_EXTENDED',
+              message: type,
+              context: {
+                requestType: type,
+                timeoutMs,
+              },
+            });
+          }
+          entry.timeoutId = window.setTimeout(handleTimeout, timeoutMs);
+          return;
+        }
+
+        if (NON_FATAL_TIMEOUT_REQUEST_TYPES.has(type)) {
+          this.pending.delete(id);
+          appendDiagnostic({
+            level: 'info',
+            code: 'WORKER_REQUEST_DROPPED',
+            message: type,
+            context: {
+              requestType: type,
+              timeoutMs,
+            },
+          });
+          entry.reject(new WorkerRequestDroppedError(type, timeoutMs));
           return;
         }
 
@@ -435,7 +518,9 @@ export class ImageWorkerClient {
         // request type via the error message so the centralized handler
         // surfaces it.
         this.handleWorkerFailure(new WorkerRequestTimeoutError(type, timeoutMs));
-      }, timeoutMs);
+      };
+
+      const timeoutId = window.setTimeout(handleTimeout, timeoutMs);
 
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
@@ -455,6 +540,15 @@ export class ImageWorkerClient {
         this.pending.delete(id);
         reject(error);
       }
+    });
+
+    if (!isBlockingRequest) {
+      return promise;
+    }
+
+    this.blockingRequestDepth += 1;
+    return promise.finally(() => {
+      this.blockingRequestDepth = Math.max(0, this.blockingRequestDepth - 1);
     });
   }
 
@@ -740,7 +834,11 @@ export class ImageWorkerClient {
 
   private handleGPUFailure(error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    const lostInfo = this.gpuPipeline?.getLostInfo();
+    // A destroyed pipeline yields `undefined`, not `null`, from the optional
+    // call — without the coalesce every failure reported after the first reset
+    // (one GPU fault can fail an export and a preview at once) looked like a
+    // fresh device loss on an "unknown" adapter.
+    const lostInfo = this.gpuPipeline?.getLostInfo() ?? null;
     const isDeviceLost = lostInfo !== null || /device was lost/i.test(message);
     const reason = isDeviceLost ? 'device-lost' : 'initialization-failed';
     const detail = lostInfo?.message ?? message;
@@ -1629,15 +1727,37 @@ export class ImageWorkerClient {
     return result.detectedMarks;
   }
 
+  // Exports own the worker (and the GPU) for as long as they run. The app uses
+  // this to hold back preview renders instead of racing them against the export
+  // on a single worker thread.
+  private noteExportStateChange(delta: number) {
+    const wasExporting = this.exportDepth > 0;
+    this.exportDepth = Math.max(0, this.exportDepth + delta);
+    const isExporting = this.exportDepth > 0;
+    if (isExporting !== wasExporting) {
+      this.onExportStateChange?.(isExporting);
+    }
+  }
+
   async export(payload: ExportRequest) {
-    await this.ensureDocumentLoaded(payload.documentId);
-    const result = await this.exportInternal(payload, true);
-    return finalizeExportBlob(result, payload.options, payload.sourceExif);
+    this.noteExportStateChange(1);
+    try {
+      await this.ensureDocumentLoaded(payload.documentId);
+      const result = await this.exportInternal(payload, true);
+      return finalizeExportBlob(result, payload.options, payload.sourceExif);
+    } finally {
+      this.noteExportStateChange(-1);
+    }
   }
 
   async contactSheet(payload: ContactSheetRequest) {
-    const result = await this.request<ContactSheetResult>('contact-sheet', payload);
-    return finalizeExportBlob(result, payload.exportOptions);
+    this.noteExportStateChange(1);
+    try {
+      const result = await this.request<ContactSheetResult>('contact-sheet', payload);
+      return finalizeExportBlob(result, payload.exportOptions);
+    } finally {
+      this.noteExportStateChange(-1);
+    }
   }
 
   private async exportInternal(payload: ExportRequest, allowRecovery: boolean): Promise<ExportResult> {
