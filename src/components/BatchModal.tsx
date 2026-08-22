@@ -194,6 +194,9 @@ export function BatchModal({
         progress: existingEntry?.progress,
         histogram: tab.document.histogram,
         estimatedFlare: tab.document.estimatedFlare,
+        estimatedFilmBaseSample: tab.document.estimatedFilmBaseSample ?? null,
+        estimatedFilmBase: tab.document.estimatedFilmBase ?? null,
+        estimatedDensityBalance: tab.document.estimatedDensityBalance ?? null,
         geometry: {
           rotation: tab.document.settings.rotation,
           levelAngle: tab.document.settings.levelAngle,

@@ -8,11 +8,19 @@ const fileBridgeState = vi.hoisted(() => ({
   saveToDirectory: vi.fn(async () => 'saved' as const),
   isDesktopShell: vi.fn(() => false),
 }));
+const rawImportState = vi.hoisted(() => ({
+  decodeDesktopRawForWorker: vi.fn(),
+}));
 
 vi.mock('./fileBridge', () => ({
   saveExportBlob: fileBridgeState.saveExportBlob,
   saveToDirectory: fileBridgeState.saveToDirectory,
   isDesktopShell: fileBridgeState.isDesktopShell,
+}));
+
+vi.mock('./rawImport', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./rawImport')>(),
+  decodeDesktopRawForWorker: rawImportState.decodeDesktopRawForWorker,
 }));
 
 function createSourceMetadata(id: string) {
@@ -54,9 +62,10 @@ describe('runBatch auto-analysis', () => {
     fileBridgeState.saveExportBlob.mockClear();
     fileBridgeState.saveToDirectory.mockClear();
     fileBridgeState.isDesktopShell.mockReturnValue(false);
+    rawImportState.decodeDesktopRawForWorker.mockReset();
   });
 
-  it('keeps temperature and tint unchanged when batch auto-analysis finds no neutral candidates', async () => {
+  it('returns to profile white balance when batch auto-analysis finds no neutral candidates', async () => {
     const sharedSettings = createDefaultSettings({ temperature: 12, tint: 6 });
     const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
     const exportCalls: Array<{ settings: typeof sharedSettings }> = [];
@@ -105,12 +114,20 @@ describe('runBatch auto-analysis', () => {
     ));
 
     expect(workerClient.autoAnalyze).toHaveBeenCalledTimes(1);
+    expect(workerClient.autoAnalyze).toHaveBeenCalledWith(expect.objectContaining({
+      profileId: profile.id,
+      settings: expect.objectContaining({
+        exposure: 0,
+        temperature: 0,
+        tint: 0,
+      }),
+    }));
     expect(exportCalls[0]?.settings).toMatchObject({
       exposure: 4,
       blackPoint: 3,
       whitePoint: 240,
-      temperature: 12,
-      tint: 6,
+      temperature: profile.defaultSettings.temperature,
+      tint: profile.defaultSettings.tint,
     });
     expect(events.at(-1)).toEqual({ type: 'complete' });
   });
@@ -128,6 +145,7 @@ describe('runBatch auto-analysis', () => {
         whitePoint: 236,
         temperature: 18,
         tint: 4,
+        whiteBalanceGains: { red: 0.9, green: 1, blue: 1.1 },
       })),
       export: vi.fn(async (payload: { documentId: string; settings: typeof sharedSettings }) => {
         exportCalls.push(payload);
@@ -180,16 +198,185 @@ describe('runBatch auto-analysis', () => {
       exposure: 7,
       blackPoint: 5,
       whitePoint: 236,
-      temperature: 18,
-      tint: 4,
+      temperature: profile.defaultSettings.temperature,
+      tint: profile.defaultSettings.tint,
+      redBalance: profile.defaultSettings.redBalance * 0.9,
+      greenBalance: profile.defaultSettings.greenBalance,
+      blueBalance: profile.defaultSettings.blueBalance * 1.1,
     });
     expect(exportCalls[1]?.settings).toMatchObject({
       exposure: 7,
       blackPoint: 5,
       whitePoint: 236,
-      temperature: 18,
-      tint: 4,
+      temperature: profile.defaultSettings.temperature,
+      tint: profile.defaultSettings.tint,
+      redBalance: profile.defaultSettings.redBalance * 0.9,
+      greenBalance: profile.defaultSettings.greenBalance,
+      blueBalance: profile.defaultSettings.blueBalance * 1.1,
     });
+  });
+
+  it('passes the selected profile and captured density calibration through batch rendering and export', async () => {
+    const sharedSettings = createDefaultSettings();
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'kodak-gold-200')
+      ?? FILM_PROFILES.find((candidate) => candidate.id === 'generic-color')
+      ?? FILM_PROFILES[0];
+    const estimatedDensityBalance = {
+      scaleR: 1.08,
+      scaleG: 0.99,
+      scaleB: 0.93,
+      source: 'manual' as const,
+    };
+    const workerClient = {
+      detectFrame: vi.fn(async () => null),
+      computeFlare: vi.fn(async () => null),
+      render: vi.fn(async (payload: { documentId: string; revision: number }) => ({
+        documentId: payload.documentId,
+        revision: payload.revision,
+        width: 100,
+        height: 100,
+        previewLevelId: 'preview-1024',
+        imageData: new ImageData(1, 1),
+        histogram: createHistogramWithHighlightRatio(0.2),
+        highlightDensity: 0.2,
+      })),
+      export: vi.fn(async () => ({
+        blob: new Blob(['ok'], { type: 'image/jpeg' }),
+        filename: 'frame.jpg',
+      })),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+    } as const;
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'doc-1',
+        kind: 'open-tab',
+        documentId: 'doc-1',
+        sourceMetadata: createSourceMetadata('doc-1'),
+        filename: 'doc-1.tiff',
+        size: 1,
+        status: 'pending',
+        estimatedDensityBalance,
+      }],
+      sharedSettings,
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoCrop: false },
+    ));
+
+    expect(workerClient.render).toHaveBeenCalledWith(expect.objectContaining({
+      profileId: profile.id,
+      estimatedDensityBalance,
+    }));
+    expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
+      profileId: profile.id,
+      estimatedDensityBalance,
+    }));
+  });
+
+  it('pins an open RAW tab calibration when a dedicated batch worker reloads the file', async () => {
+    const sharedSettings = createDefaultSettings();
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    const estimatedFilmBaseSample = { r: 224, g: 142, b: 92 };
+    const estimatedFilmBase = {
+      sample: estimatedFilmBaseSample,
+      source: 'frame-rebate' as const,
+      confidence: 0.94,
+      rejectedCandidates: 1,
+      clamped: false,
+    };
+    const estimatedDensityBalance = {
+      scaleR: 1.04,
+      scaleG: 1,
+      scaleB: 0.96,
+      source: 'manual' as const,
+    };
+    rawImportState.decodeDesktopRawForWorker.mockResolvedValue({
+      rawResult: { width: 4, height: 3 },
+      decodeRequest: {
+        documentId: 'raw-doc',
+        buffer: new ArrayBuffer(4 * 3 * 4),
+        fileName: 'P1075820.RW2',
+        mime: 'image/x-raw-rgba',
+        size: 1,
+        rawDimensions: { width: 4, height: 3 },
+      },
+    });
+    const decode = vi.fn(async (request: {
+      precomputedFilmBase?: typeof estimatedFilmBase | null;
+      precomputedFilmBaseSample?: typeof estimatedFilmBaseSample | null;
+      precomputedDensityBalance?: typeof estimatedDensityBalance | null;
+    }) => ({
+      metadata: createSourceMetadata('raw-doc'),
+      estimatedFlare: [2, 3, 4] as [number, number, number],
+      estimatedFilmBaseSample: request.precomputedFilmBaseSample,
+      estimatedFilmBase: request.precomputedFilmBase,
+      estimatedDensityBalance: request.precomputedDensityBalance,
+    }));
+    const workerClient = {
+      decode,
+      detectFrame: vi.fn(async () => null),
+      render: vi.fn(async (payload: { documentId: string; revision: number }) => ({
+        documentId: payload.documentId,
+        revision: payload.revision,
+        width: 4,
+        height: 3,
+        previewLevelId: 'source',
+        imageData: new ImageData(1, 1),
+        histogram: createHistogramWithHighlightRatio(0.2),
+        highlightDensity: 0.2,
+      })),
+      export: vi.fn(async () => ({
+        blob: new Blob(['ok'], { type: 'image/jpeg' }),
+        filename: 'P1075820.jpg',
+      })),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+      disposeDocument: vi.fn(async () => ({ disposed: true })),
+    } as const;
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'raw-doc',
+        kind: 'file',
+        nativePath: '/film1/P1075820.RW2',
+        sourceMetadata: createSourceMetadata('raw-doc'),
+        filename: 'P1075820.RW2',
+        size: 1,
+        status: 'pending',
+        estimatedFlare: [8, 7, 6],
+        estimatedFilmBaseSample,
+        estimatedFilmBase,
+        estimatedDensityBalance,
+      }],
+      sharedSettings,
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoCrop: false },
+    ));
+
+    expect(decode).toHaveBeenCalledWith(expect.objectContaining({
+      precomputedFilmBase: estimatedFilmBase,
+      precomputedFilmBaseSample: estimatedFilmBaseSample,
+      precomputedDensityBalance: estimatedDensityBalance,
+    }));
+    expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
+      profileId: profile.id,
+      estimatedDensityBalance,
+      flareFloor: [8, 7, 6],
+    }));
   });
 
   it('forwards the shared light source bias into auto-analysis and export', async () => {

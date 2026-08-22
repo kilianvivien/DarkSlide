@@ -1,4 +1,4 @@
-import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, ExportOptions, FilmProfile, HistogramData, InputProfileSpec, LabStyleProfile, SourceMetadata } from '../types';
+import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, DensityBalance, ExportOptions, FilmBaseEstimate, FilmBaseSample, FilmProfile, HistogramData, InputProfileSpec, LabStyleProfile, SourceMetadata } from '../types';
 import { ImageWorkerClient, isImageExportCancelledError } from './imageWorkerClient';
 import { computeHighlightDensity, getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
 import { usesColorChannelPipeline } from './pipelineIntent';
@@ -6,6 +6,7 @@ import { decodeDesktopRawForWorker, isRawExtension } from './rawImport';
 import { isDesktopShell, openImageFileByPath, saveExportBlob, saveToDirectory } from './fileBridge';
 import type { AutoAnalyzeResult } from '../types';
 import { getAutoFrameCrop } from './frameDetection';
+import { createAutoAdjustmentPatch, createAutoAnalysisSettings } from './autoAnalysis';
 
 export interface BatchJobEntry {
   id: string;
@@ -30,6 +31,9 @@ export interface BatchJobEntry {
     confidence: number;
   } | null;
   estimatedFlare?: [number, number, number] | null;
+  estimatedFilmBaseSample?: FilmBaseSample | null;
+  estimatedFilmBase?: FilmBaseEstimate | null;
+  estimatedDensityBalance?: DensityBalance | null;
   geometry?: Pick<ConversionSettings, 'rotation' | 'levelAngle' | 'crop'>;
 }
 
@@ -88,7 +92,9 @@ async function analyzeBatchHighlightDensity(
     documentId: string;
     settings: ConversionSettings;
     isColor: boolean;
+    profileId: string;
     filmType: FilmProfile['filmType'];
+    estimatedDensityBalance: DensityBalance | null;
     inputProfileId: InputProfileSpec;
     outputProfileId: ColorProfileId;
     maskTuning: FilmProfile['maskTuning'];
@@ -120,7 +126,9 @@ async function analyzeBatchHighlightDensity(
       documentId: params.documentId,
       settings: params.settings,
       isColor: params.isColor,
+      profileId: params.profileId,
       filmType: params.filmType,
+      estimatedDensityBalance: params.estimatedDensityBalance,
       inputProfileId: params.inputProfileId,
       outputProfileId: params.outputProfileId,
       revision: pass + 1,
@@ -206,12 +214,32 @@ export async function* runBatch(
             path: entry.nativePath,
             size: entry.size,
           });
+          if (entry.estimatedFilmBase !== undefined) {
+            decodeRequest.precomputedFilmBase = entry.estimatedFilmBase
+              ? structuredClone(entry.estimatedFilmBase)
+              : null;
+          }
+          if (entry.estimatedFilmBaseSample !== undefined) {
+            decodeRequest.precomputedFilmBaseSample = entry.estimatedFilmBaseSample
+              ? structuredClone(entry.estimatedFilmBaseSample)
+              : null;
+          }
+          if (entry.estimatedDensityBalance !== undefined) {
+            decodeRequest.precomputedDensityBalance = entry.estimatedDensityBalance
+              ? structuredClone(entry.estimatedDensityBalance)
+              : null;
+          }
           yield { type: 'progress', entryId: entry.id, progress: 0.25 };
 
           const decoded = await workerClient.decode(decodeRequest);
           throwIfBatchCancelled(cancelToken);
           sourceMetadata = decoded.metadata;
-          entry.estimatedFlare = decoded.estimatedFlare;
+          if (entry.estimatedFlare === undefined) {
+            entry.estimatedFlare = decoded.estimatedFlare ?? null;
+          }
+          entry.estimatedFilmBaseSample = decoded.estimatedFilmBaseSample ?? null;
+          entry.estimatedFilmBase = decoded.estimatedFilmBase ?? null;
+          entry.estimatedDensityBalance = decoded.estimatedDensityBalance ?? null;
         } else {
           const sourceFile = entry.file ?? (entry.nativePath
             ? (await openImageFileByPath(entry.nativePath))?.file
@@ -232,7 +260,9 @@ export async function* runBatch(
           });
           throwIfBatchCancelled(cancelToken);
           sourceMetadata = decoded.metadata;
-          entry.estimatedFlare = decoded.estimatedFlare;
+          if (entry.estimatedFlare === undefined) {
+            entry.estimatedFlare = decoded.estimatedFlare ?? null;
+          }
         }
       } else {
         yield { type: 'progress', entryId: entry.id, progress: 0.35 };
@@ -245,7 +275,7 @@ export async function* runBatch(
       }
       throwIfBatchCancelled(cancelToken);
 
-      if (!entry.estimatedFlare) {
+      if (entry.estimatedFlare === undefined) {
         entry.estimatedFlare = typeof workerClient.computeFlare === 'function'
           ? await workerClient.computeFlare(documentId).catch(() => null)
           : null;
@@ -303,7 +333,9 @@ export async function* runBatch(
         documentId,
         settings: entrySettings,
         isColor: usesColorChannelPipeline(sharedProfile),
+        profileId: sharedProfile.id,
         filmType: sharedProfile.filmType,
+        estimatedDensityBalance: entry.estimatedDensityBalance ?? null,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
         maskTuning: sharedProfile.maskTuning,
@@ -328,8 +360,9 @@ export async function* runBatch(
           ? rollAutoAnalysis
           : await workerClient.autoAnalyze({
             documentId,
-            settings: entrySettings,
+            settings: createAutoAnalysisSettings(entrySettings, sharedProfile.defaultSettings),
             isColor: usesColorChannelPipeline(sharedProfile),
+            profileId: sharedProfile.id,
             filmType: sharedProfile.filmType,
             inputProfileId,
             outputProfileId: exportOptions.outputProfileId,
@@ -353,19 +386,15 @@ export async function* runBatch(
           rollAutoAnalysis = autoResult;
         }
 
-        entrySettings.exposure = autoResult.exposure;
-        entrySettings.blackPoint = autoResult.blackPoint;
-        entrySettings.whitePoint = autoResult.whitePoint;
-        if (autoResult.temperature !== null && autoResult.tint !== null) {
-          entrySettings.temperature = autoResult.temperature;
-          entrySettings.tint = autoResult.tint;
-        }
+        Object.assign(entrySettings, createAutoAdjustmentPatch(sharedProfile.defaultSettings, autoResult));
 
         const postAutoHighlightAnalysis = await analyzeBatchHighlightDensity(workerClient, {
           documentId,
           settings: entrySettings,
           isColor: usesColorChannelPipeline(sharedProfile),
+          profileId: sharedProfile.id,
           filmType: sharedProfile.filmType,
+          estimatedDensityBalance: entry.estimatedDensityBalance ?? null,
           inputProfileId,
           outputProfileId: exportOptions.outputProfileId,
           maskTuning: sharedProfile.maskTuning,
@@ -390,7 +419,9 @@ export async function* runBatch(
         documentId,
         settings: entrySettings,
         isColor: usesColorChannelPipeline(sharedProfile),
+        profileId: sharedProfile.id,
         filmType: sharedProfile.filmType,
+        estimatedDensityBalance: entry.estimatedDensityBalance ?? null,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
         options: exportOptions,
