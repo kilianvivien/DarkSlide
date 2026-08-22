@@ -30,6 +30,7 @@ export function useRenderQueue<T>({
 
   const queuedRef = useRef<T | null>(null);
   const inFlightRef = useRef(false);
+  const activeRef = useRef<T | null>(null);
   // Assigned during render, not in an effect: an enqueue between the pause
   // commit and an effect would otherwise slip through and drain.
   const pausedRef = useRef(paused);
@@ -58,12 +59,14 @@ export function useRenderQueue<T>({
       const next = queuedRef.current;
       queuedRef.current = null;
       inFlightRef.current = true;
+      activeRef.current = next;
       setIsRendering(true);
 
       try {
         await renderEvent(next);
       } finally {
         inFlightRef.current = false;
+        activeRef.current = null;
         setIsRendering(false);
       }
     }
@@ -92,7 +95,9 @@ export function useRenderQueue<T>({
 
     queuedRef.current = request;
     if (inFlightRef.current) {
-      cancelActiveEvent(request);
+      if (activeRef.current !== null) {
+        cancelActiveEvent(activeRef.current);
+      }
       return;
     }
 

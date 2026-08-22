@@ -31,6 +31,27 @@ function TestHarness({
   return null;
 }
 
+function CancellationHarness({
+  request,
+  onRender,
+  onCancel,
+}: {
+  request: string;
+  onRender: (request: string) => Promise<void>;
+  onCancel: (request: string) => void;
+}) {
+  const { enqueueRender } = useRenderQueue<string>({
+    render: onRender,
+    cancelActive: onCancel,
+  });
+
+  useEffect(() => {
+    enqueueRender(request, 'draft');
+  }, [enqueueRender, request]);
+
+  return null;
+}
+
 describe('useRenderQueue', () => {
   it('holds requests while paused and drains the newest one on resume', async () => {
     vi.useFakeTimers();
@@ -73,6 +94,34 @@ describe('useRenderQueue', () => {
     });
 
     expect(onRender).toHaveBeenCalledWith('only');
+    vi.useRealTimers();
+  });
+
+  it('cancels the request already in flight when a newer request arrives', async () => {
+    vi.useFakeTimers();
+    let releaseFirst: (() => void) | null = null;
+    const onRender = vi.fn((request: string) => (
+      request === 'first'
+        ? new Promise<void>((resolve) => { releaseFirst = resolve; })
+        : Promise.resolve()
+    ));
+    const onCancel = vi.fn();
+
+    const { rerender } = render(
+      <CancellationHarness request="first" onRender={onRender} onCancel={onCancel} />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    rerender(<CancellationHarness request="second" onRender={onRender} onCancel={onCancel} />);
+    expect(onCancel).toHaveBeenCalledWith('first');
+
+    await act(async () => {
+      releaseFirst?.();
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(onRender).toHaveBeenLastCalledWith('second');
     vi.useRealTimers();
   });
 });
