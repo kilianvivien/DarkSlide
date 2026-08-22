@@ -7,6 +7,7 @@ import { getColorProfileDescription, getInputProfileLabel } from '../utils/color
 import { isDesktopShell } from '../utils/fileBridge';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useModalA11y } from '../hooks/useModalA11y';
+import { SHORTCUTS } from '../utils/shortcutHelp';
 import { MAX_RESIDENT_DOC_OPTIONS, MaxResidentDocs } from '../utils/residentDocsStore';
 import { AUTO_APPLY_NONE_PRESET_ID } from '../utils/preferenceStore';
 
@@ -84,25 +85,6 @@ type DiagnosticCardItem = {
   mono: boolean;
   valueClass?: string;
 };
-
-const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
-const mod = isMac ? '⌘' : 'Ctrl';
-
-const SHORTCUTS = [
-  { action: 'Open Image', key: `${mod}O` },
-  { action: 'Close Image', key: `${mod}W` },
-  { action: 'Undo', key: `${mod}Z` },
-  { action: 'Redo', key: `${mod}⇧Z` },
-  { action: 'Export', key: `${mod}E` },
-{ action: 'Scanning Session', key: `${mod}⇧W` },
-  { action: 'Open in Editor', key: `${mod}⇧O` },
-  { action: 'Settings', key: `${mod},` },
-  { action: 'Zoom to Fit', key: `${mod}0` },
-  { action: 'Zoom 100%', key: `${mod}1` },
-  { action: 'Zoom In', key: `${mod}=` },
-  { action: 'Zoom Out', key: `${mod}−` },
-  { action: 'Pan (hold)', key: 'Space' },
-];
 
 const TABS = [
   { id: 'performance' as const, label: 'Performance', icon: Settings2, disabled: false },
@@ -1212,12 +1194,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {/* ── Shortcuts ── */}
                     {tab === 'shortcuts' && (
                       <div className="divide-y divide-zinc-900">
-                        {SHORTCUTS.map(({ action, key }) => (
+                        {SHORTCUTS.map(({ action, keys }) => (
                           <div key={action} className="flex items-center justify-between py-2.5">
                             <span className="text-[13px] text-zinc-400">{action}</span>
-                            <kbd className="px-2 py-0.5 bg-zinc-900 border border-zinc-700 rounded text-[11px] font-mono text-zinc-300 shadow-sm">
-                              {key}
-                            </kbd>
+                            <span className="flex items-center gap-1">
+                              {keys.map((key) => (
+                                <kbd key={key} className="rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 font-mono text-[11px] text-zinc-300 shadow-sm">
+                                  {key}
+                                </kbd>
+                              ))}
+                            </span>
                           </div>
                         ))}
                       </div>
