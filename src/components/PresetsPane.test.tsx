@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings } from '../constants';
 import { parseCubeLut } from '../utils/cubeLut';
@@ -22,6 +22,38 @@ vi.mock('../utils/fileBridge', () => ({
 import { PresetsPane } from './PresetsPane';
 
 describe('PresetsPane', () => {
+  it('previews a profile on hover without selecting it', () => {
+    vi.useFakeTimers();
+    const onStockChange = vi.fn();
+    const onStockPreview = vi.fn();
+    const onStockPreviewEnd = vi.fn();
+
+    render(
+      <PresetsPane
+        activeStockId="generic-color"
+        onStockChange={onStockChange}
+        onStockPreview={onStockPreview}
+        onStockPreviewEnd={onStockPreviewEnd}
+        customPresets={[]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+
+    const profile = screen.getByRole('button', { name: /Generic B&W/i });
+    fireEvent.mouseEnter(profile);
+    act(() => vi.advanceTimersByTime(120));
+
+    expect(onStockPreview).toHaveBeenCalledWith(expect.objectContaining({ id: 'generic-bw' }));
+    expect(onStockChange).not.toHaveBeenCalled();
+
+    fireEvent.mouseLeave(profile);
+    expect(onStockPreviewEnd).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it('switches to the custom tab when opening the save preset form', () => {
     render(
       <PresetsPane
