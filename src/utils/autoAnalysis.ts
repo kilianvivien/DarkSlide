@@ -1,4 +1,4 @@
-import type { AutoAnalyzeResult, HistogramData } from '../types';
+import type { AutoAnalyzeResult, ConversionSettings, Curves, HistogramData } from '../types';
 import { clamp } from './math';
 
 const WB_MARGIN_RATIO = 0.04;
@@ -8,7 +8,7 @@ const WB_LUMA_MIN = 72;
 const WB_LUMA_MAX = 196;
 const WB_CHANNEL_MIN = 12;
 const WB_CHANNEL_MAX = 243;
-const WB_MAX_CHROMA = 36;
+const WB_MAX_SATURATION = 0.35;
 const WB_MIN_SAMPLE_COUNT = 256;
 const WB_MIN_SAMPLE_RATIO = 0.0005;
 const WB_SAMPLE_STRIDE = 2;
@@ -17,8 +17,12 @@ const FLOOR_SPREAD_THRESHOLD = 15;
 const FLOOR_PERCENTILE = 0.01;
 const MIDTONE_COMPRESSION_THRESHOLD = 0.35;
 const MIDTONE_MAX_BOOST = 25;
-const WB_MAX_CHROMA_RELAXED = 56;
-const WB_WARM_NUDGE = 5;
+const AUTO_EXPOSURE_TARGET = 127.5;
+const AUTO_EXPOSURE_LIMIT = 30;
+const AUTO_BLACK_POINT_STRENGTH = 0.25;
+const AUTO_WHITE_POINT_STRENGTH = 0.5;
+const WB_MAX_SATURATION_RELAXED = 0.55;
+const WB_MINKOWSKI_POWER = 6;
 const MONO_MARGIN_RATIO = 0.05;
 const MONO_MARGIN_MIN = 8;
 const MONO_MARGIN_MAX = 64;
@@ -36,6 +40,90 @@ const MONO_HIGH_RESIDUAL_MIN = 0.5;
 const MONO_MEAN_RESIDUAL_MAX = 0.2;
 const MONO_LOW_RESIDUAL_RATIO_MIN = 0.82;
 const MONO_HIGH_RESIDUAL_RATIO_MAX = 0.08;
+
+function createIdentityCurves(): Curves {
+  return {
+    rgb: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+    blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+  };
+}
+
+/**
+ * Build a stable analysis pass from the source conversion rather than from the
+ * currently edited preview. Geometry and film-base calibration describe the
+ * source, so they are retained. All controls that Auto can influence are
+ * neutralized to prevent Auto-on-Auto feedback.
+ */
+export function createAutoAnalysisSettings(
+  current: ConversionSettings,
+  profileDefaults: ConversionSettings,
+): ConversionSettings {
+  return {
+    ...structuredClone(profileDefaults),
+    exposure: 0,
+    contrast: 0,
+    saturation: 100,
+    shadowRecovery: 0,
+    midtoneContrast: 0,
+    temperature: 0,
+    tint: 0,
+    blackPoint: 0,
+    whitePoint: 255,
+    highlightProtection: 0,
+    curves: createIdentityCurves(),
+    rotation: current.rotation,
+    levelAngle: current.levelAngle,
+    crop: structuredClone(current.crop),
+    filmBaseSample: current.filmBaseSample ? { ...current.filmBaseSample } : null,
+    filmBaseSampleSource: current.filmBaseSampleSource,
+    residualBaseCorrection: current.residualBaseCorrection,
+    blackAndWhite: {
+      ...structuredClone(profileDefaults.blackAndWhite),
+      enabled: current.blackAndWhite.enabled,
+    },
+    sharpen: { ...profileDefaults.sharpen, enabled: false },
+    noiseReduction: { ...profileDefaults.noiseReduction, enabled: false },
+    dustRemoval: profileDefaults.dustRemoval
+      ? { ...structuredClone(profileDefaults.dustRemoval), autoEnabled: false, marks: [] }
+      : undefined,
+  };
+}
+
+/**
+ * Auto owns these fields. Always derive them from the profile baseline and the
+ * latest analysis result instead of retaining values from a previous Auto run.
+ */
+export function createAutoAdjustmentPatch(
+  profileDefaults: ConversionSettings,
+  result: AutoAnalyzeResult,
+): Pick<ConversionSettings, 'exposure' | 'blackPoint' | 'whitePoint' | 'temperature' | 'tint' | 'contrast' | 'curves'> {
+  const curves = structuredClone(profileDefaults.curves);
+
+  if (result.midtoneBoostPoint) {
+    curves.rgb = [{ x: 0, y: 0 }, result.midtoneBoostPoint, { x: 255, y: 255 }];
+  }
+  if (result.suggestedCurves?.redFloor !== null && result.suggestedCurves?.redFloor !== undefined) {
+    curves.red = [{ x: 0, y: 0 }, { x: result.suggestedCurves.redFloor, y: 0 }, { x: 255, y: 255 }];
+  }
+  if (result.suggestedCurves?.greenFloor !== null && result.suggestedCurves?.greenFloor !== undefined) {
+    curves.green = [{ x: 0, y: 0 }, { x: result.suggestedCurves.greenFloor, y: 0 }, { x: 255, y: 255 }];
+  }
+  if (result.suggestedCurves?.blueFloor !== null && result.suggestedCurves?.blueFloor !== undefined) {
+    curves.blue = [{ x: 0, y: 0 }, { x: result.suggestedCurves.blueFloor, y: 0 }, { x: 255, y: 255 }];
+  }
+
+  return {
+    exposure: result.exposure,
+    blackPoint: result.blackPoint,
+    whitePoint: result.whitePoint,
+    temperature: result.temperature ?? profileDefaults.temperature,
+    tint: result.tint ?? profileDefaults.tint,
+    contrast: result.contrast ?? profileDefaults.contrast,
+    curves,
+  };
+}
 
 export type MonochromeSuggestionAnalysis = {
   isLikelyMonochrome: boolean;
@@ -73,13 +161,40 @@ function percentile(bins: number[], fraction: number) {
 export function analyzeExposure(histogram: HistogramData): Pick<AutoAnalyzeResult, 'exposure' | 'blackPoint' | 'whitePoint'> {
   const p1 = percentile(histogram.l, 0.01);
   const p99 = percentile(histogram.l, 0.99);
-  const midpoint = (p1 + p99) / 2;
-  const normalizedShift = 0.5 - midpoint / 255;
+  const midpoint = Math.max(1, (p1 + p99) / 2);
+
+  // The render pipeline applies Density as 2^(value / 50), so solve in stops
+  // instead of treating the control as a linear offset. Keep Auto within 0.6
+  // stop in either direction. Negative conversion has already established the
+  // broad density range, and a larger automatic move tends to erase high-key
+  // or low-key intent.
+  const exposure = clamp(
+    Math.round(50 * Math.log2(AUTO_EXPOSURE_TARGET / midpoint)),
+    -AUTO_EXPOSURE_LIMIT,
+    AUTO_EXPOSURE_LIMIT,
+  );
+  const exposureFactor = Math.pow(2, exposure / 50);
+  const adjustedP1 = p1 * exposureFactor;
+  const adjustedP99 = p99 * exposureFactor;
+
+  // Set the range against the already exposure-adjusted percentiles. This
+  // prevents Density and the range controls from correcting the same shift
+  // twice. Only use part of the available tail stretch to preserve headroom.
+  const blackPoint = clamp(
+    Math.round(adjustedP1 * AUTO_BLACK_POINT_STRENGTH),
+    0,
+    80,
+  );
+  const whitePoint = clamp(
+    Math.round(255 - (255 - adjustedP99) * AUTO_WHITE_POINT_STRENGTH),
+    180,
+    255,
+  );
 
   return {
-    exposure: clamp(Math.round(normalizedShift * 200), -100, 100),
-    blackPoint: clamp(Math.round((p1 / 255) * 80), 0, 80),
-    whitePoint: clamp(Math.round(p99), 180, 255),
+    exposure,
+    blackPoint,
+    whitePoint,
   };
 }
 
@@ -122,7 +237,6 @@ export function analyzeMidtoneContrast(histogram: HistogramData): {
   midtoneBoostPoint: { x: number; y: number } | null;
 } {
   const p25 = percentile(histogram.l, 0.25);
-  const p50 = percentile(histogram.l, 0.5);
   const p75 = percentile(histogram.l, 0.75);
   const p1 = percentile(histogram.l, 0.01);
   const p99 = percentile(histogram.l, 0.99);
@@ -136,21 +250,18 @@ export function analyzeMidtoneContrast(histogram: HistogramData): {
     contrast = boost > 0 ? boost : null;
   }
 
-  let midtoneBoostPoint: { x: number; y: number } | null = null;
-  if (p50 < 128) {
-    const liftAmount = clamp(Math.round((135 - p50) * 1.1), 15, 65);
-    const anchorX = clamp(Math.round((p50 * 0.35 + 128 * 0.65)), 95, 135);
-    midtoneBoostPoint = { x: anchorX, y: clamp(anchorX + liftAmount, anchorX, 255) };
-  }
-
-  return { contrast, midtoneBoostPoint };
+  // Density now handles the global midpoint in the same exponential space as
+  // rendering. Adding another RGB-curve lift here would brighten the same
+  // midtones twice. Preserve the profile curve and limit this pass to a small
+  // contrast correction for compressed histograms.
+  return { contrast, midtoneBoostPoint: null };
 }
 
 function sampleColorBalance(
   data: Uint8ClampedArray,
   width: number,
   height: number,
-  maxChroma: number,
+  maxSaturation: number,
 ): { temperature: number; tint: number; sampleCount: number } | null {
   const margin = clamp(
     Math.round(Math.min(width, height) * WB_MARGIN_RATIO),
@@ -162,10 +273,9 @@ function sampleColorBalance(
   const right = Math.max(left, width - margin);
   const bottom = Math.max(top, height - margin);
 
-  let weightedR = 0;
-  let weightedG = 0;
-  let weightedB = 0;
-  let weightSum = 0;
+  let poweredR = 0;
+  let poweredG = 0;
+  let poweredB = 0;
   let sampleCount = 0;
 
   for (let y = top; y < bottom; y += WB_SAMPLE_STRIDE) {
@@ -184,8 +294,8 @@ function sampleColorBalance(
 
       const maxChannel = Math.max(r, g, b);
       const minChannel = Math.min(r, g, b);
-      const chroma = maxChannel - minChannel;
-      if (chroma > maxChroma) {
+      const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
+      if (saturation > maxSaturation) {
         continue;
       }
 
@@ -194,17 +304,9 @@ function sampleColorBalance(
         continue;
       }
 
-      const neutralityWeight = 1 - chroma / maxChroma;
-      const midtoneWeight = 1 - Math.abs(luma - 127.5) / 127.5;
-      const weight = Math.max(0, neutralityWeight) * Math.max(0, neutralityWeight) * Math.max(0.05, midtoneWeight);
-      if (weight <= 0) {
-        continue;
-      }
-
-      weightedR += r * weight;
-      weightedG += g * weight;
-      weightedB += b * weight;
-      weightSum += weight;
+      poweredR += Math.pow(r / 255, WB_MINKOWSKI_POWER);
+      poweredG += Math.pow(g / 255, WB_MINKOWSKI_POWER);
+      poweredB += Math.pow(b / 255, WB_MINKOWSKI_POWER);
       sampleCount += 1;
     }
   }
@@ -213,40 +315,51 @@ function sampleColorBalance(
     WB_MIN_SAMPLE_COUNT,
     Math.round(((right - left) * (bottom - top) * WB_MIN_SAMPLE_RATIO) / (WB_SAMPLE_STRIDE * WB_SAMPLE_STRIDE)),
   );
-  if (sampleCount < minimumSamples || weightSum <= 0) {
+  if (sampleCount < minimumSamples) {
     return null;
   }
 
-  const meanR = weightedR / weightSum;
-  const meanG = weightedG / weightSum;
-  const meanB = weightedB / weightSum;
-  const rbAvg = (meanR + meanB) / 2;
+  // Shades of Gray estimates the illuminant from a per-channel Minkowski
+  // norm. L6 is the best-performing simple norm in Finlayson and Trezzi's
+  // calibrated evaluation and is less scene-color-biased than an arithmetic
+  // mean. Relative saturation filtering keeps strongly colored surfaces out
+  // without rejecting a neutral surface merely because it has a color cast.
+  const estimateR = Math.pow(poweredR / sampleCount, 1 / WB_MINKOWSKI_POWER) * 255;
+  const estimateG = Math.pow(poweredG / sampleCount, 1 / WB_MINKOWSKI_POWER) * 255;
+  const estimateB = Math.pow(poweredB / sampleCount, 1 / WB_MINKOWSKI_POWER) * 255;
+  const offsets = calculateWhiteBalanceOffsets(estimateR, estimateG, estimateB);
 
   return {
-    temperature: clamp(Math.round((meanB - meanR) * 0.4), -100, 100),
-    tint: clamp(Math.round((rbAvg - meanG) * 0.4), -100, 100),
+    ...offsets,
     sampleCount,
   };
 }
 
-export function analyzeColorBalance(imageData: ImageData, isColorNegative = false): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
+/**
+ * Solve DarkSlide's additive white-balance controls for a sampled neutral.
+ * Temperature adds to red and subtracts from blue; tint adds to green.
+ */
+export function calculateWhiteBalanceOffsets(
+  red: number,
+  green: number,
+  blue: number,
+): Pick<ConversionSettings, 'temperature' | 'tint'> {
+  const redBlueMidpoint = (red + blue) / 2;
+  return {
+    temperature: clamp(Math.round((blue - red) / 2), -100, 100),
+    tint: clamp(Math.round(redBlueMidpoint - green), -100, 100),
+  };
+}
+
+export function analyzeColorBalance(imageData: ImageData, _isColorNegative = false): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
   const { data, width, height } = imageData;
   if (width <= 0 || height <= 0) {
     return { temperature: null, tint: null };
   }
 
-  const firstPass = sampleColorBalance(data, width, height, WB_MAX_CHROMA);
-
-  if (firstPass && Math.abs(firstPass.temperature) <= 15) {
-    let temperature = firstPass.temperature;
-    if (isColorNegative && temperature < 8) {
-      temperature = clamp(temperature + WB_WARM_NUDGE, -100, 100);
-    }
-    return { temperature, tint: firstPass.tint };
-  }
-
-  const secondPass = firstPass === null || Math.abs(firstPass.temperature) > 15
-    ? sampleColorBalance(data, width, height, WB_MAX_CHROMA_RELAXED)
+  const firstPass = sampleColorBalance(data, width, height, WB_MAX_SATURATION);
+  const secondPass = firstPass === null
+    ? sampleColorBalance(data, width, height, WB_MAX_SATURATION_RELAXED)
     : null;
 
   const result = secondPass ?? firstPass;
@@ -254,11 +367,7 @@ export function analyzeColorBalance(imageData: ImageData, isColorNegative = fals
     return { temperature: null, tint: null };
   }
 
-  let temperature = result.temperature;
-  if (isColorNegative && temperature < 8) {
-    temperature = clamp(temperature + WB_WARM_NUDGE, -100, 100);
-  }
-  return { temperature, tint: result.tint };
+  return { temperature: result.temperature, tint: result.tint };
 }
 
 export function analyzeMonochromeSuggestion(imageData: ImageData): MonochromeSuggestionAnalysis {

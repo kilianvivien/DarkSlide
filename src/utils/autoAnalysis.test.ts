@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeColorBalance, analyzeExposure, analyzeMonochromeSuggestion, autoAnalyze } from './autoAnalysis';
+import {
+  analyzeColorBalance,
+  analyzeExposure,
+  analyzeMidtoneContrast,
+  analyzeMonochromeSuggestion,
+  autoAnalyze,
+  calculateWhiteBalanceOffsets,
+  createAutoAdjustmentPatch,
+  createAutoAnalysisSettings,
+} from './autoAnalysis';
 import type { HistogramData } from '../types';
+import { createDefaultSettings } from '../constants';
 
 function createHistogramData(): HistogramData {
   return {
@@ -31,18 +41,141 @@ function createImageData(
 }
 
 describe('autoAnalysis', () => {
+  it('builds the same neutral analysis pass regardless of existing adjustments', () => {
+    const profileDefaults = createDefaultSettings({
+      exposure: 8,
+      contrast: 24,
+      temperature: 6,
+      tint: -2,
+      redBalance: 1.14,
+      blueBalance: 0.88,
+    });
+    const current = createDefaultSettings({
+      exposure: -42,
+      contrast: 70,
+      temperature: 38,
+      tint: 19,
+      blackPoint: 34,
+      whitePoint: 211,
+      rotation: 90,
+      levelAngle: 1.4,
+      crop: { x: 0.1, y: 0.2, width: 0.7, height: 0.6, aspectRatio: null },
+      filmBaseSample: { r: 220, g: 156, b: 102 },
+      blackAndWhite: { enabled: true, redMix: 24, greenMix: -8, blueMix: 17, tone: 32 },
+    });
+
+    const first = createAutoAnalysisSettings(current, profileDefaults);
+    const afterAnotherAuto = createAutoAnalysisSettings({
+      ...current,
+      exposure: 27,
+      contrast: 5,
+      temperature: -31,
+      tint: -12,
+      blackPoint: 4,
+      whitePoint: 239,
+    }, profileDefaults);
+
+    expect(afterAnotherAuto).toEqual(first);
+    expect(first).toMatchObject({
+      exposure: 0,
+      contrast: 0,
+      saturation: 100,
+      temperature: 0,
+      tint: 0,
+      blackPoint: 0,
+      whitePoint: 255,
+      highlightProtection: 0,
+      redBalance: 1.14,
+      blueBalance: 0.88,
+      rotation: 90,
+      levelAngle: 1.4,
+      crop: current.crop,
+      filmBaseSample: current.filmBaseSample,
+      blackAndWhite: { ...profileDefaults.blackAndWhite, enabled: true },
+    });
+  });
+
+  it('resets Auto-owned fields to the profile baseline when no correction is suggested', () => {
+    const profileDefaults = createDefaultSettings({ contrast: 18, temperature: 4, tint: -2 });
+    const patch = createAutoAdjustmentPatch(profileDefaults, {
+      exposure: 3,
+      blackPoint: 5,
+      whitePoint: 244,
+      temperature: null,
+      tint: null,
+      contrast: null,
+      midtoneBoostPoint: null,
+      suggestedCurves: null,
+    });
+
+    expect(patch).toEqual({
+      exposure: 3,
+      blackPoint: 5,
+      whitePoint: 244,
+      temperature: 4,
+      tint: -2,
+      contrast: 18,
+      curves: profileDefaults.curves,
+    });
+  });
+
   it('raises exposure for a dark-biased histogram', () => {
     const histogram = createHistogramData();
     histogram.l[24] = 200;
     histogram.l[48] = 100;
 
-    expect(analyzeExposure(histogram).exposure).toBeGreaterThan(0);
+    expect(analyzeExposure(histogram).exposure).toBe(30);
+  });
+
+  it('coordinates density and tone range without a second midtone lift', () => {
+    const histogram = createHistogramData();
+    histogram.l[32] = 20;
+    histogram.l[96] = 960;
+    histogram.l[216] = 20;
+
+    const exposure = analyzeExposure(histogram);
+    const midtone = analyzeMidtoneContrast(histogram);
+
+    expect(exposure.exposure).toBe(2);
+    expect(exposure.blackPoint).toBe(8);
+    expect(exposure.whitePoint).toBe(239);
+    expect(midtone.contrast).toBeGreaterThan(0);
+    expect(midtone.midtoneBoostPoint).toBeNull();
+  });
+
+  it('leaves a balanced density range near the profile baseline', () => {
+    const histogram = createHistogramData();
+    histogram.l[20] = 20;
+    histogram.l[128] = 960;
+    histogram.l[235] = 20;
+
+    expect(analyzeExposure(histogram)).toEqual({
+      exposure: 0,
+      blackPoint: 5,
+      whitePoint: 245,
+    });
   });
 
   it('warms blue-biased neutral candidates', () => {
     const imageData = createImageData(80, 80, () => [118, 122, 148]);
 
     expect(analyzeColorBalance(imageData).temperature).toBeGreaterThan(0);
+  });
+
+  it('solves the additive temperature and tint controls for a neutral sample', () => {
+    expect(calculateWhiteBalanceOffsets(100, 90, 140)).toEqual({
+      temperature: 20,
+      tint: 30,
+    });
+  });
+
+  it('accepts a plausible neutral with a cast that the old absolute-chroma cutoff rejected', () => {
+    const imageData = createImageData(80, 80, () => [82, 110, 142]);
+
+    expect(analyzeColorBalance(imageData)).toEqual({
+      temperature: 30,
+      tint: 2,
+    });
   });
 
   it('does not let blue-dominant scene color drive the frame colder', () => {
