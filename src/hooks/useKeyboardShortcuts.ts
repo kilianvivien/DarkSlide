@@ -4,6 +4,7 @@ import { useEvent } from './useEvent';
 export type ShortcutDefinition = {
   key: string;
   meta?: boolean;
+  alt?: boolean;
   shift?: boolean;
   handler: () => void;
   when?: () => boolean;
@@ -13,6 +14,7 @@ export type ShortcutMap = Record<string, ShortcutDefinition>;
 
 type UseKeyboardShortcutsOptions = {
   shortcuts: ShortcutMap;
+  paused?: boolean;
   onMenuAction?: (action: string) => void;
   onMenuOpenRecent?: (path: string) => void;
   onOpenFiles?: (paths: string[]) => void;
@@ -32,6 +34,7 @@ function isEditableTarget(target: EventTarget | null) {
 
 export function useKeyboardShortcuts({
   shortcuts,
+  paused = false,
   onMenuAction,
   onMenuOpenRecent,
   onOpenFiles,
@@ -50,6 +53,7 @@ export function useKeyboardShortcuts({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (paused) return;
       const entries = Object.values(getShortcuts());
       const key = event.key.toLowerCase();
 
@@ -63,6 +67,10 @@ export function useKeyboardShortcuts({
         }
 
         if (Boolean(shortcut.shift) !== Boolean(event.shiftKey)) {
+          continue;
+        }
+
+        if (Boolean(shortcut.alt) !== Boolean(event.altKey)) {
           continue;
         }
 
@@ -84,7 +92,7 @@ export function useKeyboardShortcuts({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [getShortcuts]);
+  }, [getShortcuts, paused]);
 
   useEffect(() => {
     if (!enableMenuEvents) {
