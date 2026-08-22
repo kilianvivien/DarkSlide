@@ -5,9 +5,11 @@ import {
   Film,
   Image as ImageIcon,
   Monitor,
+  Move,
   RectangleHorizontal,
   RectangleVertical,
   RotateCw,
+  Ruler,
   ScanLine,
   Smartphone,
   Square,
@@ -32,6 +34,7 @@ type RatioGroup = {
 
 const CROP_TABS: CropTab[] = ['Film', 'Print', 'Social', 'Digital'];
 const FILM_GAUGES: Array<'35mm' | 'Medium Format'> = ['35mm', 'Medium Format'];
+const CROP_RATIO_MATCH_TOLERANCE = 0.035;
 
 function buildRatioGroups() {
   const groups: RatioGroup[] = [];
@@ -85,6 +88,8 @@ interface CropPaneProps {
   onRotate: (rotation: number, crop: CropSettings) => void;
   onLevelAngleChange: (levelAngle: number) => void;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
+  straightenActive?: boolean;
+  onStraightenActiveChange?: (active: boolean) => void;
   onRedetectFrame?: () => void;
   onDone: () => void;
   onResetCrop: () => void;
@@ -103,6 +108,8 @@ export const CropPane = memo(function CropPane({
   onRotate,
   onLevelAngleChange,
   onLevelInteractionChange,
+  straightenActive = false,
+  onStraightenActiveChange,
   onRedetectFrame,
   onDone,
   onResetCrop,
@@ -126,6 +133,35 @@ export const CropPane = memo(function CropPane({
 
     return grouped;
   }, []);
+
+  const currentCropAspect = useMemo(() => {
+    const cropWidth = crop.width * imageWidth;
+    const cropHeight = crop.height * imageHeight;
+    return cropHeight > 0 ? cropWidth / cropHeight : null;
+  }, [crop.height, crop.width, imageHeight, imageWidth]);
+
+  const selectedCurrentRatioGroup = useMemo(() => {
+    if (!cropSource || !currentCropAspect) return null;
+
+    let closest: { group: RatioGroup; orientation: Orientation; error: number } | null = null;
+    for (const group of ratioGroupsByTab[cropTab]) {
+      const candidates: Array<{ orientation: Orientation; value: number }> = group.square
+        ? [{ orientation: 'landscape', value: 1 }]
+        : [
+          { orientation: 'landscape', value: group.landscape },
+          { orientation: 'portrait', value: group.portrait },
+      ];
+
+      for (const candidate of candidates) {
+        const error = Math.abs(currentCropAspect - candidate.value) / candidate.value;
+        if (!closest || error < closest.error) {
+          closest = { group, orientation: candidate.orientation, error };
+        }
+      }
+    }
+
+    return closest && closest.error <= CROP_RATIO_MATCH_TOLERANCE ? closest : null;
+  }, [cropSource, cropTab, currentCropAspect, ratioGroupsByTab]);
 
   const handleRotate = () => {
     const nextRotation = (rotation + 90) % 360;
@@ -162,22 +198,23 @@ export const CropPane = memo(function CropPane({
     }
   };
 
-  const isAspectSelected = (preset: number | null) => {
-    if (preset === null) return crop.aspectRatio === null;
-    const currentAspect = crop.aspectRatio;
-    if (!currentAspect) return false;
-    return Math.abs(currentAspect - preset) < 0.0001;
-  };
+  const isAspectSelected = (preset: number) => (
+    crop.aspectRatio !== null && Math.abs(crop.aspectRatio - preset) < 0.0001
+  );
 
-  const isGroupSelected = (group: RatioGroup) => {
-    if (crop.aspectRatio === null) {
-      return false;
-    }
+  const isFreeSelected = crop.aspectRatio === null && selectedCurrentRatioGroup === null;
 
-    return isAspectSelected(group.landscape) || isAspectSelected(group.portrait);
-  };
+  const isGroupSelected = (group: RatioGroup) => (
+    crop.aspectRatio !== null
+      ? isAspectSelected(group.landscape) || isAspectSelected(group.portrait)
+      : selectedCurrentRatioGroup?.group.key === group.key
+  );
 
   const getGroupOrientation = (group: RatioGroup) => {
+    if (selectedCurrentRatioGroup?.group.key === group.key) {
+      return selectedCurrentRatioGroup.orientation;
+    }
+
     if (orientationMap[group.key]) {
       return orientationMap[group.key];
     }
@@ -267,7 +304,15 @@ export const CropPane = memo(function CropPane({
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      <div className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2.5 text-zinc-400">
+        <Move size={15} className="mt-0.5 shrink-0 text-zinc-500" />
+        <div>
+          <p className="text-[13px] font-medium text-zinc-300">Manual crop</p>
+          <p className="mt-1 text-xs leading-relaxed text-zinc-400">Drag the frame or a shaded area to move it. Use any edge or corner to resize. Hold Shift to preserve the current ratio.</p>
+        </div>
+      </div>
+
       <section>
         <h2 className="mb-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
           <RotateCw size={12} /> Orientation
@@ -282,14 +327,37 @@ export const CropPane = memo(function CropPane({
             {rotation}°
           </span>
         </button>
-        <div className="mt-4">
+        <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/35 p-3">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold text-zinc-300">Straighten & perspective</p>
+              <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+                Draw over a horizontal or vertical reference in the photo.
+              </p>
+            </div>
+            {onStraightenActiveChange && (
+              <button
+                type="button"
+                aria-pressed={straightenActive}
+                onClick={() => onStraightenActiveChange(!straightenActive)}
+                className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors ${
+                  straightenActive
+                    ? 'border-amber-300 bg-amber-300 text-zinc-950'
+                    : 'border-zinc-700 bg-zinc-950/70 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
+                }`}
+              >
+                <Ruler size={12} /> {straightenActive ? 'Drawing' : 'Draw line'}
+              </button>
+            )}
+          </div>
           <Slider
-            label="Level"
+            label="Fine angle"
             value={levelAngle}
             min={-10}
             max={10}
             step={0.1}
             valueLabel={`${levelAngle.toFixed(1)}°`}
+            showStepButtons
             onChange={onLevelAngleChange}
             onInteractionStart={() => onLevelInteractionChange?.(true)}
             onInteractionEnd={() => onLevelInteractionChange?.(false)}
@@ -300,7 +368,7 @@ export const CropPane = memo(function CropPane({
             disabled={Math.abs(levelAngle) < 0.05}
             className="mt-1 text-[10px] uppercase tracking-[0.2em] text-zinc-500 transition-colors hover:text-zinc-300 disabled:cursor-default disabled:text-zinc-700"
           >
-            Reset Level
+            Reset angle
           </button>
         </div>
       </section>
@@ -315,7 +383,7 @@ export const CropPane = memo(function CropPane({
             type="button"
             onClick={() => handleAspectChange(null)}
             className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-all ${
-              isAspectSelected(null)
+              isFreeSelected
                 ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
                 : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-200'
             }`}
@@ -323,7 +391,7 @@ export const CropPane = memo(function CropPane({
             <span className="opacity-60"><CropIcon size={14} /></span>
             <div className="flex flex-col items-start leading-tight">
               <span className="font-medium">Free</span>
-              <span className={`text-[9px] uppercase tracking-wider opacity-50 ${isAspectSelected(null) ? 'text-zinc-700' : 'text-zinc-500'}`}>
+              <span className={`text-[9px] uppercase tracking-wider opacity-50 ${isFreeSelected ? 'text-zinc-700' : 'text-zinc-500'}`}>
                 Unlocked
               </span>
             </div>
@@ -332,13 +400,17 @@ export const CropPane = memo(function CropPane({
             <button
               type="button"
               onClick={onRedetectFrame}
+              data-tip="Auto crop (Shift+C)"
               className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2.5 text-sm font-medium text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-200"
             >
               <ScanLine size={14} className="shrink-0 opacity-60" />
               <div className="flex flex-col items-start leading-tight">
                 <span className="font-medium">Auto Crop</span>
-                <span className="text-[9px] uppercase tracking-wider opacity-50 text-zinc-500">Detect</span>
+                <span className="text-[9px] uppercase tracking-wider opacity-50 text-zinc-500">
+                  {cropSource === 'auto' ? 'Remove' : 'Detect'}
+                </span>
               </div>
+              <kbd className="ml-auto font-mono text-[8px] text-zinc-600">⇧C</kbd>
             </button>
           )}
         </div>

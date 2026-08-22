@@ -6,7 +6,7 @@ const PREVIEW_LEVEL_HYSTERESIS = 0.1;
 const SOURCE_LEVEL_PROMOTION_RATIO = 0.92;
 const SOURCE_LEVEL_DEMOTION_RATIO = 0.84;
 
-export const CROP_OVERLAY_HANDLE_SAFE_PADDING = 56;
+export const CROP_OVERLAY_HANDLE_SAFE_PADDING = 20;
 
 export interface RenderTargetSelectionState {
   previewLevelId: string;
