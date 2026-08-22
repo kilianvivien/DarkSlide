@@ -7,6 +7,7 @@ import type {
   ContactSheetResult,
   ConversionAnalysisRequest,
   ConversionAnalysisResult,
+  ConversionSettings,
   DecodeRequest,
   DecodedImage,
   DetectedFrame,
@@ -15,6 +16,7 @@ import type {
   ExportRequest,
   ExportResult,
   FilmBaseSample,
+  LensDistortionEstimate,
   PreparePreviewBitmapRequest,
   PreparedPreviewBitmapResult,
   PrepareTileJobRequest,
@@ -42,9 +44,14 @@ export interface EvictPreviewsPayload {
 
 export interface DetectFramePayload {
   documentId: string;
+  settings: ConversionSettings;
 }
 
 export interface ComputeFlarePayload {
+  documentId: string;
+}
+
+export interface EstimateLensDistortionPayload {
   documentId: string;
 }
 
@@ -66,6 +73,7 @@ export type WorkerRequest =
   | { type: 'apply-film-base-estimate'; payload: ApplyFilmBaseEstimateRequest }
   | { type: 'conversion-analysis'; payload: ConversionAnalysisRequest }
   | { type: 'detect-frame'; payload: DetectFramePayload }
+  | { type: 'estimate-lens-distortion'; payload: EstimateLensDistortionPayload }
   | { type: 'compute-flare'; payload: ComputeFlarePayload }
   | { type: 'dust-detect'; payload: DustDetectRequest }
   | { type: 'export'; payload: ExportRequest }
@@ -89,6 +97,7 @@ export type WorkerSuccessPayload =
   | FilmBaseSample
   | ReestimateFilmBaseResult
   | DetectedFrame
+  | LensDistortionEstimate
   | [number, number, number]
   | WorkerMemoryDiagnostics
   | null

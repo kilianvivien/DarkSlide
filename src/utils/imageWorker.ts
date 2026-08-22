@@ -44,6 +44,7 @@ import {
 } from '../types';
 import {
   applyCrushGuard,
+  applyColorMatrix,
   applyInversionStage,
   assertSupportedDimensions,
   buildEmptyHistogram,
@@ -70,7 +71,7 @@ import { decodeTiffRaster, TiffDecodeError } from './tiff';
 import { convertImageDataColorProfile, getColorProfileIdFromName, parseInputIccProfile } from './colorProfiles';
 import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata';
 import { detectDustMarks } from './dustDetection';
-import { detectFrame } from './frameDetection';
+import { createDetectedFrameAnalysisSettings, detectFrame } from './frameDetection';
 import { estimateFlare } from './flareEstimation';
 import { applyDustRemoval } from './dustRemoval';
 import { projectDustMarkFromTransformedSpace } from './dustGeometry';
@@ -81,6 +82,7 @@ import { sampleCubeLut } from './cubeLut';
 import { clamp } from './math';
 import { computeBrightPercentileSample, estimateFilmBase, mirrorFromExifOrientation } from './rawImport';
 import { usesColorChannelPipeline } from './pipelineIntent';
+import { correctLensDistortionImageData, estimateLensDistortion, mapLensCorrectedPoint, normalizeLensDistortion } from './lensCorrection';
 import { encodeExportRaster } from './exportEncoder';
 import {
   WorkerError,
@@ -232,28 +234,30 @@ async function decodeRasterBlob(buffer: ArrayBuffer, mime: string) {
   return canvas;
 }
 
-function estimateCanvasFilmBase(canvas: OffscreenCanvas): FilmBaseEstimate | null {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) {
-    return null;
-  }
-
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  return estimateFilmBase(imageData.data, canvas.width, canvas.height, 4);
+function readDecodeAnalysisPreview(previews: StoredPreview[]) {
+  if (previews.length === 0) return null;
+  const smallest = previews.reduce(
+    (current, preview) => (
+      preview.level.maxDimension < current.level.maxDimension ? preview : current
+    ),
+    previews[0],
+  );
+  const context = smallest.canvas.getContext('2d', { willReadFrequently: true });
+  return context?.getImageData(0, 0, smallest.canvas.width, smallest.canvas.height) ?? null;
 }
 
-function estimateCanvasDensityBalance(canvas: OffscreenCanvas, filmBaseSample: FilmBaseSample | null) {
-  if (!filmBaseSample) {
-    return null;
-  }
-
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) {
-    return null;
-  }
-
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  return computeDensityBalance(imageData, filmBaseSample);
+function estimateDecodeCalibration(
+  previews: StoredPreview[],
+  precomputedEstimate: FilmBaseEstimate | null = null,
+) {
+  const imageData = readDecodeAnalysisPreview(previews);
+  const estimate = precomputedEstimate ?? (imageData
+    ? normalizeFilmBaseEstimate(estimateFilmBase(imageData.data, imageData.width, imageData.height, 3))
+    : null);
+  const densityBalance = estimate?.sample && imageData
+    ? computeDensityBalance(imageData, estimate.sample)
+    : null;
+  return { estimate, densityBalance };
 }
 
 // Catastrophic-base guard (diagnosis §"Clamp catastrophic base choices"). Run
@@ -313,11 +317,29 @@ function buildPreviewCanvas(source: OffscreenCanvas, maxDimension: number) {
 
 function buildPreviewLevels(sourceCanvas: OffscreenCanvas, displayScaleFactor = 1): StoredPreview[] {
   const shouldInclude4096 = displayScaleFactor > 1 || Math.max(sourceCanvas.width, sourceCanvas.height) > 4096;
-  const previews = PREVIEW_LEVELS
+  const sourceMax = Math.max(sourceCanvas.width, sourceCanvas.height);
+  const targetDimensions = PREVIEW_LEVELS
     .filter((maxDimension) => maxDimension < 4096 || shouldInclude4096)
-    .map((maxDimension) => {
-      const canvas = buildPreviewCanvas(sourceCanvas, maxDimension);
-      return {
+    .sort((left, right) => right - left);
+  const previews: StoredPreview[] = [];
+  let previousCanvas = sourceCanvas;
+
+  for (const maxDimension of targetDimensions) {
+    const canvas = maxDimension >= sourceMax
+      ? sourceCanvas
+      : buildPreviewCanvas(previousCanvas, maxDimension);
+    const duplicate = previews.find((preview) => (
+      preview.canvas.width === canvas.width && preview.canvas.height === canvas.height
+    ));
+    if (duplicate) {
+      duplicate.level = {
+        id: `preview-${maxDimension}`,
+        width: canvas.width,
+        height: canvas.height,
+        maxDimension,
+      };
+    } else {
+      previews.push({
         level: {
           id: `preview-${maxDimension}`,
           width: canvas.width,
@@ -325,11 +347,11 @@ function buildPreviewLevels(sourceCanvas: OffscreenCanvas, displayScaleFactor = 
           maxDimension,
         },
         canvas,
-      };
-    })
-    .filter((preview, index, items) => index === items.findIndex((candidate) => candidate.canvas.width === preview.canvas.width && candidate.canvas.height === preview.canvas.height));
+      });
+    }
+    previousCanvas = canvas;
+  }
 
-  const sourceMax = Math.max(sourceCanvas.width, sourceCanvas.height);
   if (!previews.some((preview) => preview.level.maxDimension >= sourceMax)) {
     previews.push({
       level: {
@@ -342,7 +364,7 @@ function buildPreviewLevels(sourceCanvas: OffscreenCanvas, displayScaleFactor = 
     });
   }
 
-  return previews;
+  return previews.sort((left, right) => left.level.maxDimension - right.level.maxDimension);
 }
 
 function getOrCreatePreviewByMaxDimension(document: StoredDocument, maxDimension: number) {
@@ -368,6 +390,7 @@ function getOrCreatePreviewByMaxDimension(document: StoredDocument, maxDimension
 }
 
 function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
+  const correctedSource = correctLensDistortionCanvas(sourceCanvas, settings.lensDistortion);
   const rotation = settings.rotation + settings.levelAngle;
   const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
     sourceCanvas.width,
@@ -384,8 +407,9 @@ function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
   rotateCtx.clearRect(0, 0, rotatedWidth, rotatedHeight);
   rotateCtx.translate(rotatedWidth / 2, rotatedHeight / 2);
   rotateCtx.rotate((rotation * Math.PI) / 180);
-  rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
+  rotateCtx.drawImage(correctedSource, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
   rotateCtx.setTransform(1, 0, 0, 1, 0, 0);
+  if (correctedSource !== sourceCanvas) releaseCanvas(correctedSource);
 
   outputCanvas = ensureCanvas(outputCanvas, cropBounds.width, cropBounds.height);
   const outputCtx = outputCanvas.getContext('2d', { willReadFrequently: true });
@@ -408,6 +432,20 @@ function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
     width: cropBounds.width,
     height: cropBounds.height,
   };
+}
+
+function correctLensDistortionCanvas(sourceCanvas: OffscreenCanvas, amount: number | null | undefined) {
+  if (Math.abs(normalizeLensDistortion(amount)) < 1e-6) return sourceCanvas;
+  const context = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('Could not read the source for lens correction.');
+  const corrected = new OffscreenCanvas(sourceCanvas.width, sourceCanvas.height);
+  const correctedContext = corrected.getContext('2d', { willReadFrequently: true });
+  if (!correctedContext) throw new Error('Could not create the lens-correction canvas.');
+  correctedContext.putImageData(correctLensDistortionImageData(
+    context.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height),
+    amount ?? 0,
+  ), 0, 0);
+  return corrected;
 }
 
 function rememberAnalysisResult<T>(cache: Map<string, T>, key: string, value: T) {
@@ -667,12 +705,19 @@ function transformHighDepthRawSource(source: HighDepthRawSource, settings: Conve
     for (let x = 0; x < cropBounds.width; x += 1) {
       const rotatedX = cropBounds.x + x + 0.5 - rotatedWidth / 2;
       const rotatedY = cropBounds.y + y + 0.5 - rotatedHeight / 2;
-      const sourceX = cosine * rotatedX + sine * rotatedY + source.width / 2 - 0.5;
-      const sourceY = -sine * rotatedX + cosine * rotatedY + source.height / 2 - 0.5;
+      const uncorrectedX = cosine * rotatedX + sine * rotatedY + source.width / 2 - 0.5;
+      const uncorrectedY = -sine * rotatedX + cosine * rotatedY + source.height / 2 - 0.5;
+      const correctedSource = mapLensCorrectedPoint(
+        uncorrectedX,
+        uncorrectedY,
+        source.width,
+        source.height,
+        settings.lensDistortion ?? 0,
+      );
       const targetIndex = (y * cropBounds.width + x) * 3;
-      data[targetIndex] = sampleHighDepthRaw(source, sourceX, sourceY, 0);
-      data[targetIndex + 1] = sampleHighDepthRaw(source, sourceX, sourceY, 1);
-      data[targetIndex + 2] = sampleHighDepthRaw(source, sourceX, sourceY, 2);
+      data[targetIndex] = sampleHighDepthRaw(source, correctedSource.x, correctedSource.y, 0);
+      data[targetIndex + 1] = sampleHighDepthRaw(source, correctedSource.x, correctedSource.y, 1);
+      data[targetIndex + 2] = sampleHighDepthRaw(source, correctedSource.x, correctedSource.y, 2);
     }
   }
 
@@ -685,6 +730,7 @@ function transformHighDepthRawSource(source: HighDepthRawSource, settings: Conve
 }
 
 function renderRotatedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
+  const correctedSource = correctLensDistortionCanvas(sourceCanvas, settings.lensDistortion);
   const rotation = settings.rotation + settings.levelAngle;
   const { width: rotatedWidth, height: rotatedHeight } = getTransformedDimensions(
     sourceCanvas.width,
@@ -700,8 +746,9 @@ function renderRotatedCanvasForJob(sourceCanvas: OffscreenCanvas, settings: Conv
   rotateCtx.clearRect(0, 0, rotatedWidth, rotatedHeight);
   rotateCtx.translate(rotatedWidth / 2, rotatedHeight / 2);
   rotateCtx.rotate((rotation * Math.PI) / 180);
-  rotateCtx.drawImage(sourceCanvas, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
+  rotateCtx.drawImage(correctedSource, -sourceCanvas.width / 2, -sourceCanvas.height / 2, sourceCanvas.width, sourceCanvas.height);
   rotateCtx.setTransform(1, 0, 0, 1, 0, 0);
+  if (correctedSource !== sourceCanvas) releaseCanvas(correctedSource);
 
   return localRotateCanvas;
 }
@@ -984,13 +1031,18 @@ function readAnalysisPreview(documentId: string) {
   return context.getImageData(0, 0, preview.canvas.width, preview.canvas.height);
 }
 
-function handleDetectFrame(documentId: string) {
+function handleDetectFrame(documentId: string, settings: ConversionSettings) {
   const start = performance.now();
   const preview = readAnalysisPreview(documentId);
-  const detected = detectFrame(preview.data, preview.width, preview.height);
+  const corrected = correctLensDistortionImageData(preview, settings.lensDistortion ?? 0);
+  const detected = detectFrame(corrected.data, corrected.width, corrected.height);
   const durationMs = performance.now() - start;
   void durationMs;
   return detected;
+}
+
+function handleEstimateLensDistortion(documentId: string) {
+  return estimateLensDistortion(readAnalysisPreview(documentId));
 }
 
 function handleComputeFlare(documentId: string) {
@@ -1071,8 +1123,10 @@ interface AnalysisInversionOptions {
   profileId?: string | null;
   filmType?: FilmProfileType;
   cubeLut?: CubeLut | null;
+  colorMatrix?: RenderRequest['colorMatrix'];
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
+  includeWhiteBalance?: boolean;
 }
 
 // Shared front-half of the conversion pipeline for analysis passes (auto
@@ -1132,9 +1186,21 @@ function applyAnalysisInversionStage(
         residualBaseOffset,
       );
 
+    if (options.colorMatrix) {
+      [r, g, b] = applyColorMatrix(r, g, b, options.colorMatrix);
+    }
+
     r *= options.settings.redBalance;
     g *= options.settings.greenBalance;
     b *= options.settings.blueBalance;
+
+    if (options.includeWhiteBalance) {
+      const temperatureShift = clamp(options.settings.temperature / 255, -1, 1);
+      const tintShift = clamp(options.settings.tint / 255, -1, 1);
+      r += temperatureShift;
+      b -= temperatureShift;
+      g += tintShift;
+    }
 
     data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
     data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
@@ -1222,10 +1288,10 @@ async function handleDecode(payload: DecodeRequest) {
     assertSupportedDimensions(canvas.width, canvas.height);
 
     const previewStore = buildPreviewLevels(canvas, payload.displayScaleFactor);
-    const rawEstimate = payload.precomputedFilmBase
-      ?? normalizeFilmBaseEstimate(payload.precomputedFilmBaseSample ?? estimateCanvasFilmBase(canvas));
-    const priorDensityBalance = estimateCanvasDensityBalance(canvas, rawEstimate?.sample ?? null);
-    const guarded = guardFilmBaseAgainstCrush(rawEstimate, previewStore, priorDensityBalance);
+    const precomputedEstimate = payload.precomputedFilmBase
+      ?? normalizeFilmBaseEstimate(payload.precomputedFilmBaseSample ?? null);
+    const calibration = estimateDecodeCalibration(previewStore, precomputedEstimate);
+    const guarded = guardFilmBaseAgainstCrush(calibration.estimate, previewStore, calibration.densityBalance);
     const estimatedFilmBase = guarded.estimate;
     const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
     const estimatedDensityBalance = guarded.densityBalance;
@@ -1235,10 +1301,14 @@ async function handleDecode(payload: DecodeRequest) {
       mime: payload.mime,
       extension: getFileExtension(payload.fileName),
       size: payload.size,
-      width: canvas.width,
-      height: canvas.height,
+      width: payload.sourceDimensions?.width ?? canvas.width,
+      height: payload.sourceDimensions?.height ?? canvas.height,
     };
 
+    // Re-decoding a path-backed RAW temporarily swaps a lightweight editor
+    // preview for the full source. Release every canvas owned by the previous
+    // document before replacing the map entry.
+    handleDispose(payload.documentId);
     documents.set(payload.documentId, {
       metadata,
       sourceCanvas: canvas,
@@ -1320,9 +1390,12 @@ async function handleDecode(payload: DecodeRequest) {
   assertSupportedDimensions(decodedCanvas.width, decodedCanvas.height);
 
   const previewStore = buildPreviewLevels(decodedCanvas, payload.displayScaleFactor);
-  const rasterEstimate = normalizeFilmBaseEstimate(estimateCanvasFilmBase(decodedCanvas));
-  const rasterPriorDensityBalance = estimateCanvasDensityBalance(decodedCanvas, rasterEstimate?.sample ?? null);
-  const rasterGuarded = guardFilmBaseAgainstCrush(rasterEstimate, previewStore, rasterPriorDensityBalance);
+  const rasterCalibration = estimateDecodeCalibration(previewStore);
+  const rasterGuarded = guardFilmBaseAgainstCrush(
+    rasterCalibration.estimate,
+    previewStore,
+    rasterCalibration.densityBalance,
+  );
   const estimatedFilmBase = rasterGuarded.estimate;
   const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
   const estimatedDensityBalance = rasterGuarded.densityBalance;
@@ -1347,6 +1420,7 @@ async function handleDecode(payload: DecodeRequest) {
     ...((unsupportedColorProfileName ?? declaredUnsupportedColorProfileName) ? { unsupportedColorProfileName: unsupportedColorProfileName ?? declaredUnsupportedColorProfileName } : {}),
   };
 
+  handleDispose(payload.documentId);
   documents.set(payload.documentId, {
     metadata,
     sourceCanvas: decodedCanvas,
@@ -1503,35 +1577,32 @@ function handleCancelJob(payload: CancelTileJobRequest) {
   return { cancelled: true } as const;
 }
 
-function sampleRegionFromTransformedCanvas(
-  transformed: { canvas: OffscreenCanvas; width: number; height: number },
+function sampleRegionFromImageData(
+  imageData: ImageData,
   payload: SampleRequest,
 ) {
-  const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) throw new Error('Could not sample image region.');
-  const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
-  ctx.putImageData(imageData, 0, 0);
-
-  const sampleX = clamp(Math.round(payload.x * (transformed.width - 1)), 0, Math.max(transformed.width - 1, 0));
-  const sampleY = clamp(Math.round(payload.y * (transformed.height - 1)), 0, Math.max(transformed.height - 1, 0));
-  const radius = clamp(Math.round(Math.min(transformed.width, transformed.height) / 512), 1, 4);
-  const left = clamp(sampleX - radius, 0, Math.max(transformed.width - 1, 0));
-  const top = clamp(sampleY - radius, 0, Math.max(transformed.height - 1, 0));
-  const right = clamp(sampleX + radius, 0, Math.max(transformed.width - 1, 0));
-  const bottom = clamp(sampleY + radius, 0, Math.max(transformed.height - 1, 0));
-  const area = ctx.getImageData(left, top, right - left + 1, bottom - top + 1).data;
+  const { data, width, height } = imageData;
+  const sampleX = clamp(Math.round(payload.x * (width - 1)), 0, Math.max(width - 1, 0));
+  const sampleY = clamp(Math.round(payload.y * (height - 1)), 0, Math.max(height - 1, 0));
+  const radius = clamp(Math.round(Math.min(width, height) / 512), 1, 4);
+  const left = clamp(sampleX - radius, 0, Math.max(width - 1, 0));
+  const top = clamp(sampleY - radius, 0, Math.max(height - 1, 0));
+  const right = clamp(sampleX + radius, 0, Math.max(width - 1, 0));
+  const bottom = clamp(sampleY + radius, 0, Math.max(height - 1, 0));
 
   let totalR = 0;
   let totalG = 0;
   let totalB = 0;
   let count = 0;
 
-  for (let index = 0; index < area.length; index += 4) {
-    totalR += area[index];
-    totalG += area[index + 1];
-    totalB += area[index + 2];
-    count += 1;
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      const index = (y * width + x) * 4;
+      totalR += data[index];
+      totalG += data[index + 1];
+      totalB += data[index + 2];
+      count += 1;
+    }
   }
 
   return {
@@ -1546,14 +1617,32 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   const analysisTargetDimension = Math.min(payload.targetMaxDimension, 1024);
   const level = selectPreviewLevel(document.previews.map((preview) => preview.level), analysisTargetDimension);
   const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
-  const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
+  // Negative scans often include a holder, backlight, sprocket holes, or clear
+  // rebate. Detect the image gate for this analysis pass only. Film-base data
+  // remains the separately pinned source/rebate estimate on the document, and
+  // the user's visible crop is never changed.
+  const detectedFrame = (payload.filmType ?? 'negative') === 'negative'
+    ? handleDetectFrame(payload.documentId, payload.settings)
+    : null;
+  const analysisSettings = detectedFrame
+    ? createDetectedFrameAnalysisSettings(
+      payload.settings,
+      detectedFrame,
+      document.sourceCanvas.width,
+      document.sourceCanvas.height,
+    )
+    : payload.settings;
+  const analysisPayload = analysisSettings === payload.settings
+    ? payload
+    : { ...payload, settings: analysisSettings };
+  const transformed = renderTransformedCanvas(preview.canvas, analysisSettings);
   const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not analyze auto adjustments.');
 
   const toneImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   const residualBaseOffset = getPinnedResidualBaseOffset(
     document,
-    payload.settings,
+    analysisSettings,
     payload.isColor,
     payload.filmType ?? 'negative',
     payload.inputProfileId ?? 'srgb',
@@ -1564,7 +1653,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   );
   const toneHistogram = processImageData(
     toneImageData,
-    payload.settings,
+    analysisSettings,
     payload.isColor,
     'processed',
     payload.maskTuning,
@@ -1591,7 +1680,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   const whiteBalanceImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   applyAnalysisInversionStage(
     whiteBalanceImageData,
-    payload,
+    analysisPayload,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     document,
@@ -1630,7 +1719,8 @@ function handleRender(payload: RenderRequest) {
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
   const usesProcessedPipeline = !payload.skipProcessing && payload.comparisonMode === 'processed';
-  const residualBaseOffset = usesProcessedPipeline
+  const usesProvisionalAnalysis = usesProcessedPipeline && payload.previewMode === 'draft';
+  const residualBaseOffset = usesProcessedPipeline && !usesProvisionalAnalysis
     ? getPinnedResidualBaseOffset(
       document,
       payload.settings,
@@ -1644,7 +1734,9 @@ function handleRender(payload: RenderRequest) {
     )
     : null;
   const pinnedHighlightDensity = usesProcessedPipeline
-    ? getPinnedHighlightDensity(document, payload, residualBaseOffset)
+    ? (usesProvisionalAnalysis
+      ? (payload.highlightDensityEstimate ?? 0)
+      : getPinnedHighlightDensity(document, payload, residualBaseOffset))
     : 0;
   const histogram = payload.skipProcessing
     ? buildEmptyHistogram()
@@ -1710,10 +1802,47 @@ function handleRender(payload: RenderRequest) {
 
 function handleSampleFilmBase(payload: SampleRequest) {
   const document = getStoredDocument(payload.documentId);
+  if (payload.sampleSpace === 'white-balance') {
+    const preview = getOrCreatePreviewByMaxDimension(document, payload.targetMaxDimension);
+    const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
+    const context = transformed.canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('Could not sample white balance.');
+    const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
+    const inputProfileId = payload.inputProfileId ?? 'srgb';
+    const outputProfileId = payload.outputProfileId ?? 'srgb';
+    const isColor = payload.isColor ?? true;
+    const filmType = payload.filmType ?? 'negative';
+    const lightSourceBias = payload.lightSourceBias ?? [1, 1, 1];
+    const residualBaseOffset = getPinnedResidualBaseOffset(
+      document,
+      payload.settings,
+      isColor,
+      filmType,
+      inputProfileId,
+      outputProfileId,
+      lightSourceBias,
+      payload.flareFloor ?? null,
+      payload.profileId ?? null,
+    );
+    applyAnalysisInversionStage(
+      imageData,
+      { ...payload, isColor, includeWhiteBalance: true },
+      inputProfileId,
+      outputProfileId,
+      document,
+      residualBaseOffset,
+    );
+    return sampleRegionFromImageData(imageData, payload);
+  }
+
   // Sample from the source-resolution canvas: preview levels are resampled
   // (anti-aliased), which biases the picked base value (audit 2.8).
   const transformed = renderTransformedCanvas(document.sourceCanvas, payload.settings);
-  return sampleRegionFromTransformedCanvas(transformed, payload);
+  const context = transformed.canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('Could not sample film base.');
+  const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
+  convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
+  return sampleRegionFromImageData(imageData, payload);
 }
 
 // Crop-guided film-base re-analysis: preserve the original rotated frame and
@@ -2131,7 +2260,10 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         reply(request, handleConversionAnalysis(request.payload));
         return;
       case 'detect-frame':
-        reply(request, handleDetectFrame(request.payload.documentId));
+        reply(request, handleDetectFrame(request.payload.documentId, request.payload.settings));
+        return;
+      case 'estimate-lens-distortion':
+        reply(request, handleEstimateLensDistortion(request.payload.documentId));
         return;
       case 'compute-flare':
         reply(request, handleComputeFlare(request.payload.documentId));

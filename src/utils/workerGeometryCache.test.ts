@@ -61,6 +61,27 @@ describe('prepareGeometryCacheEntry', () => {
     expect(first.cropJob.transformedCanvas).not.toBe(second.cropJob.transformedCanvas);
   });
 
+  it('invalidates geometry when lens correction changes', () => {
+    const rotationCache = new Map<string, { id: string }>();
+    const cropCache = new Map<string, { transformedCanvas: { id: string } }>();
+    let rotationCreates = 0;
+    const createEntry = (lensDistortion: number) => prepareGeometryCacheEntry({
+      rotationCache,
+      cropCache,
+      sourceKind: 'preview',
+      previewLevelId: 'preview-1024',
+      settings: createDefaultSettings({ lensDistortion }),
+      createRotation: () => ({ id: `rotation-${++rotationCreates}` }),
+      createCrop: (rotationCanvas) => ({ transformedCanvas: rotationCanvas }),
+    });
+
+    createEntry(0);
+    const corrected = createEntry(25);
+
+    expect(rotationCreates).toBe(2);
+    expect(corrected.rotationCacheHit).toBe(false);
+  });
+
   it('evicts cache entries beyond current plus previous per source kind', () => {
     const rotationCache = new Map<string, { id: string }>();
     const cropCache = new Map<string, { transformedCanvas: { id: string } }>();

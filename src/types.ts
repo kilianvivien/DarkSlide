@@ -100,6 +100,13 @@ export interface DetectedFrame {
   confidence: number;
 }
 
+export interface LensDistortionEstimate {
+  amount: number;
+  confidence: number;
+  lineCount: number;
+  scoreImprovement: number;
+}
+
 export interface ExifMetadata {
   orientation?: number;
   dateTimeOriginal?: string;
@@ -244,6 +251,7 @@ export interface ConversionSettings {
   curves: Curves;
   rotation: number;
   levelAngle: number;
+  lensDistortion?: number;
   crop: CropSettings;
   filmBaseSample: FilmBaseSample | null;
   // Provenance of `filmBaseSample`. Missing ⇒ 'manual' (backward compatible
@@ -890,8 +898,16 @@ export interface AutoAnalyzeResult {
 export interface SampleRequest {
   documentId: string;
   settings: ConversionSettings;
+  sampleSpace?: 'source' | 'white-balance';
+  isColor?: boolean;
+  profileId?: string | null;
+  filmType?: FilmProfileType;
   inputProfileId?: InputProfileSpec;
   outputProfileId?: ColorProfileId;
+  colorMatrix?: ColorMatrix;
+  cubeLut?: CubeLut | null;
+  flareFloor?: [number, number, number] | null;
+  lightSourceBias?: [number, number, number];
   targetMaxDimension: number;
   x: number;
   y: number;

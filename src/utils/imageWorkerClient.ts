@@ -24,6 +24,7 @@ import {
   HistogramMode,
   InputProfileSpec,
   InteractionQuality,
+  LensDistortionEstimate,
   PreparedPreviewBitmapResult,
   PrepareTileJobRequest,
   PreparedTileJobResult,
@@ -80,8 +81,41 @@ type DocumentCalibration = {
   estimatedDensityBalance: DensityBalance | null;
 };
 
+type DecodeOptions = {
+  retainRecoveryCache?: boolean;
+};
+
+export type DocumentReloaders = {
+  preview: () => Promise<DecodeRequest>;
+  full: () => Promise<DecodeRequest>;
+};
+
+type DocumentDecodeInfo = {
+  mime: string;
+  hasHighDepthRawSource: boolean;
+};
+
+type ThumbnailRenderWaiter = {
+  resolve: (result: RenderResult) => void;
+  reject: (reason?: unknown) => void;
+};
+
+type QueuedThumbnailRender = {
+  payload: RenderRequest;
+  waiters: ThumbnailRenderWaiter[];
+};
+
+export type CachedThumbnailPreview = {
+  imageData: ImageData;
+  settings: ConversionSettings;
+  comparisonMode: 'processed' | 'original';
+  labStyleToneCurve?: RenderRequest['labStyleToneCurve'];
+  labStyleChannelCurves?: RenderRequest['labStyleChannelCurves'];
+};
+
 const MISSING_DOCUMENT_MESSAGE = 'The image document is no longer available.';
 const DECODE_CACHE_TTL_MS = 60_000;
+const CPU_INTERACTIVE_PREVIEW_MAX_DIMENSION = 512;
 const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   decode: 15_000,
   render: 10_000,
@@ -95,6 +129,7 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
   'apply-film-base-estimate': 10_000,
   'conversion-analysis': 10_000,
   'detect-frame': 10_000,
+  'estimate-lens-distortion': 15_000,
   'compute-flare': 10_000,
   'dust-detect': 10_000,
   export: 30_000,
@@ -260,6 +295,18 @@ export class WorkerRequestDroppedError extends Error {
   }
 }
 
+export class ImageExportCancelledError extends Error {
+  constructor() {
+    super('The image export was cancelled.');
+    this.name = 'ImageExportCancelledError';
+  }
+}
+
+export function isImageExportCancelledError(error: unknown): error is ImageExportCancelledError {
+  return error instanceof ImageExportCancelledError
+    || (error instanceof Error && error.name === 'ImageExportCancelledError');
+}
+
 export class ImageWorkerClient {
   private worker: Worker | null = null;
 
@@ -271,6 +318,14 @@ export class ImageWorkerClient {
   // the document's full lifetime so evicting the potentially huge source
   // buffer after DECODE_CACHE_TTL_MS cannot silently change GPU conversion.
   private documentCalibration = new Map<string, DocumentCalibration>();
+
+  private documentReloaders = new Map<string, DocumentReloaders>();
+
+  private documentDecodeInfo = new Map<string, DocumentDecodeInfo>();
+
+  private documentWorkerEpoch = new Map<string, number>();
+
+  private documentLastAccessedAt = new Map<string, number>();
 
   private documentRecovery = new Map<string, Promise<void>>();
 
@@ -351,6 +406,20 @@ export class ImageWorkerClient {
   private lastExportJob: RenderJobDiagnosticsSnapshot | null = null;
 
   private activePreviewJobIds = new Map<string, string>();
+
+  private activeExports = new Map<string, { cancelled: boolean; workerPending: boolean }>();
+
+  private foregroundRenderDepth = 0;
+
+  private thumbnailRenderQueue = new Map<string, QueuedThumbnailRender>();
+
+  private thumbnailPreviewCache = new Map<string, CachedThumbnailPreview>();
+
+  private disposedDocumentIds = new Set<string>();
+
+  private thumbnailRenderInFlight = false;
+
+  private thumbnailDrainTimer: number | null = null;
 
   private lastConversionAnalysis = new Map<string, ConversionAnalysisResult>();
 
@@ -580,6 +649,7 @@ export class ImageWorkerClient {
       // and 16-bit export will gracefully fall back until the file is reopened.
       highDepthRawBuffer: undefined,
       rawDimensions: payload.rawDimensions ? { ...payload.rawDimensions } : undefined,
+      sourceDimensions: payload.sourceDimensions ? { ...payload.sourceDimensions } : undefined,
       precomputedFilmBaseSample: payload.precomputedFilmBaseSample ? { ...payload.precomputedFilmBaseSample } : payload.precomputedFilmBaseSample,
       precomputedFilmBase: payload.precomputedFilmBase
         ? { ...payload.precomputedFilmBase, sample: { ...payload.precomputedFilmBase.sample } }
@@ -594,7 +664,8 @@ export class ImageWorkerClient {
 
   private async recoverDocument(documentId: string) {
     const cached = this.decodeCache.get(documentId);
-    if (!cached) {
+    const reloader = this.documentReloaders.get(documentId);
+    if (!cached && !reloader) {
       throw new Error(MISSING_DOCUMENT_MESSAGE);
     }
 
@@ -604,18 +675,21 @@ export class ImageWorkerClient {
       return;
     }
 
-    const recovery = this.request<DecodedImage>('decode', this.cloneDecodeRequest(cached.payload))
-      .then(() => {
-        this.decodeCache.set(documentId, {
-          payload: cached.payload,
-          estimatedFilmBaseSample: cached.estimatedFilmBaseSample,
-          estimatedFilmBase: cached.estimatedFilmBase,
-          estimatedDensityBalance: cached.estimatedDensityBalance,
-          workerEpoch: this.workerEpoch,
-          evictionTimeout: null,
-        });
-        this.scheduleDecodeCacheEviction(documentId);
-      })
+    const recovery = (reloader
+      ? reloader.preview().then((payload) => this.decode(payload, { retainRecoveryCache: false })).then(() => undefined)
+      : this.request<DecodedImage>('decode', this.cloneDecodeRequest(cached!.payload))
+        .then(() => {
+          this.documentWorkerEpoch.set(documentId, this.workerEpoch);
+          this.decodeCache.set(documentId, {
+            payload: cached!.payload,
+            estimatedFilmBaseSample: cached!.estimatedFilmBaseSample,
+            estimatedFilmBase: cached!.estimatedFilmBase,
+            estimatedDensityBalance: cached!.estimatedDensityBalance,
+            workerEpoch: this.workerEpoch,
+            evictionTimeout: null,
+          });
+          this.scheduleDecodeCacheEviction(documentId);
+        }))
       .finally(() => {
         this.documentRecovery.delete(documentId);
       });
@@ -625,8 +699,11 @@ export class ImageWorkerClient {
   }
 
   private async ensureDocumentLoaded(documentId: string) {
+    if (this.documentWorkerEpoch.get(documentId) === this.workerEpoch) {
+      return;
+    }
     const cached = this.decodeCache.get(documentId);
-    if (!cached || cached.workerEpoch === this.workerEpoch) {
+    if ((!cached && !this.documentReloaders.has(documentId)) || cached?.workerEpoch === this.workerEpoch) {
       return;
     }
 
@@ -1253,30 +1330,150 @@ export class ImageWorkerClient {
     return diagnostics;
   }
 
-  async decode(payload: DecodeRequest) {
-    const cachedPayload = this.cloneDecodeRequest(payload);
+  registerDocumentReloaders(documentId: string, reloaders: DocumentReloaders) {
+    this.documentReloaders.set(documentId, reloaders);
+  }
+
+  inheritPreviewAnalysis(sourceDocumentId: string, targetDocumentId: string) {
+    const calibration = this.documentCalibration.get(sourceDocumentId);
+    if (calibration) {
+      this.documentCalibration.set(targetDocumentId, structuredClone(calibration));
+    }
+    const analysis = this.lastConversionAnalysis.get(sourceDocumentId);
+    if (analysis) {
+      this.lastConversionAnalysis.set(targetDocumentId, structuredClone(analysis));
+    }
+  }
+
+  async decode(payload: DecodeRequest, options: DecodeOptions = {}) {
+    this.disposedDocumentIds.delete(payload.documentId);
+    const retainRecoveryCache = options.retainRecoveryCache ?? true;
+    const cachedPayload = retainRecoveryCache ? this.cloneDecodeRequest(payload) : null;
     const transfer = payload.highDepthRawBuffer ? [payload.buffer, payload.highDepthRawBuffer] : [payload.buffer];
     const decoded = await this.request<DecodedImage>('decode', payload, transfer);
-    this.decodeCache.set(payload.documentId, {
-      payload: cachedPayload,
-      estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
-      estimatedFilmBase: decoded.estimatedFilmBase ?? null,
-      estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
-      workerEpoch: this.workerEpoch,
-      evictionTimeout: null,
+    this.documentLastAccessedAt.set(payload.documentId, Date.now());
+    this.documentWorkerEpoch.set(payload.documentId, this.workerEpoch);
+    this.documentDecodeInfo.set(payload.documentId, {
+      mime: payload.mime,
+      hasHighDepthRawSource: Boolean(payload.highDepthRawBuffer),
     });
+    if (cachedPayload) {
+      this.decodeCache.set(payload.documentId, {
+        payload: cachedPayload,
+        estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
+        estimatedFilmBase: decoded.estimatedFilmBase ?? null,
+        estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
+        workerEpoch: this.workerEpoch,
+        evictionTimeout: null,
+      });
+      this.scheduleDecodeCacheEviction(payload.documentId);
+    } else {
+      const cached = this.decodeCache.get(payload.documentId);
+      if (cached?.evictionTimeout !== null && cached?.evictionTimeout !== undefined) {
+        window.clearTimeout(cached.evictionTimeout);
+      }
+      this.decodeCache.delete(payload.documentId);
+    }
     this.documentCalibration.set(payload.documentId, {
       estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
       estimatedFilmBase: decoded.estimatedFilmBase ?? null,
       estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
     });
-    this.scheduleDecodeCacheEviction(payload.documentId);
     return decoded;
   }
 
   async render(payload: RenderRequest) {
-    await this.ensureDocumentLoaded(payload.documentId);
-    return this.renderInternal(payload, true);
+    this.documentLastAccessedAt.set(payload.documentId, Date.now());
+    this.foregroundRenderDepth += 1;
+    try {
+      await this.ensureDocumentLoaded(payload.documentId);
+      return await this.renderInternal(payload, true);
+    } finally {
+      this.foregroundRenderDepth = Math.max(0, this.foregroundRenderDepth - 1);
+      this.scheduleThumbnailDrain();
+    }
+  }
+
+  renderThumbnail(payload: RenderRequest): Promise<RenderResult> {
+    return new Promise((resolve, reject) => {
+      const existing = this.thumbnailRenderQueue.get(payload.documentId);
+      if (existing) {
+        existing.payload = payload;
+        existing.waiters.push({ resolve, reject });
+      } else {
+        this.thumbnailRenderQueue.set(payload.documentId, {
+          payload,
+          waiters: [{ resolve, reject }],
+        });
+      }
+      this.scheduleThumbnailDrain();
+    });
+  }
+
+  getCachedThumbnailPreview(documentId: string) {
+    return this.thumbnailPreviewCache.get(documentId) ?? null;
+  }
+
+  private scheduleThumbnailDrain() {
+    if (
+      this.isTerminated
+      || this.thumbnailDrainTimer !== null
+      || this.thumbnailRenderInFlight
+      || this.foregroundRenderDepth > 0
+      || this.exportDepth > 0
+      || this.thumbnailRenderQueue.size === 0
+    ) {
+      return;
+    }
+
+    this.thumbnailDrainTimer = window.setTimeout(() => {
+      this.thumbnailDrainTimer = null;
+      void this.drainThumbnailQueue();
+    }, 24);
+  }
+
+  private async drainThumbnailQueue() {
+    if (
+      this.isTerminated
+      || this.thumbnailRenderInFlight
+      || this.foregroundRenderDepth > 0
+      || this.exportDepth > 0
+    ) {
+      this.scheduleThumbnailDrain();
+      return;
+    }
+
+    const next = this.thumbnailRenderQueue.entries().next();
+    if (next.done) {
+      return;
+    }
+
+    const [documentId, queued] = next.value;
+    this.thumbnailRenderQueue.delete(documentId);
+    this.thumbnailRenderInFlight = true;
+    try {
+      await this.ensureDocumentLoaded(queued.payload.documentId);
+      const result = await this.renderInternal(queued.payload, true);
+      if (!this.disposedDocumentIds.has(documentId)) {
+        this.thumbnailPreviewCache.set(documentId, {
+          imageData: result.imageData,
+          settings: structuredClone(queued.payload.settings),
+          comparisonMode: queued.payload.comparisonMode,
+          labStyleToneCurve: queued.payload.labStyleToneCurve
+            ? structuredClone(queued.payload.labStyleToneCurve)
+            : undefined,
+          labStyleChannelCurves: queued.payload.labStyleChannelCurves
+            ? structuredClone(queued.payload.labStyleChannelCurves)
+            : undefined,
+        });
+      }
+      queued.waiters.forEach((waiter) => waiter.resolve(result));
+    } catch (error) {
+      queued.waiters.forEach((waiter) => waiter.reject(error));
+    } finally {
+      this.thumbnailRenderInFlight = false;
+      this.scheduleThumbnailDrain();
+    }
   }
 
   async preparePreviewBitmap(
@@ -1299,9 +1496,15 @@ export class ImageWorkerClient {
     fallbackReason: string | null,
   ) {
     const startedAt = performance.now();
+    const workerPayload = payload.previewMode === 'draft' && payload.interactionQuality !== null
+      ? {
+        ...payload,
+        targetMaxDimension: Math.min(payload.targetMaxDimension, CPU_INTERACTIVE_PREVIEW_MAX_DIMENSION),
+      }
+      : payload;
     const result = await this.requestWithDocumentRecovery(
       payload.documentId,
-      () => this.request<RenderResult>('render', payload),
+      () => this.request<RenderResult>('render', workerPayload),
       allowRecovery,
     );
     const phaseTimings = createEmptyPhaseTimings();
@@ -1457,12 +1660,15 @@ export class ImageWorkerClient {
     try {
       // Draft (interactive) frames reuse the last pinned analysis to keep
       // slider drags responsive; settled frames always fetch fresh values.
-      const canReuseAnalysis = payload.previewMode === 'draft'
+      const isDraftPreview = payload.previewMode === 'draft';
+      const canReuseAnalysis = isDraftPreview
         && this.lastConversionAnalysis.has(payload.documentId);
       const analysis = payload.comparisonMode === 'processed'
         ? (canReuseAnalysis
           ? this.lastConversionAnalysis.get(payload.documentId)!
-          : await this.fetchConversionAnalysis(this.buildConversionAnalysisRequest(payload)))
+          : (isDraftPreview
+            ? null
+            : await this.fetchConversionAnalysis(this.buildConversionAnalysisRequest(payload))))
         : null;
       const residualBaseOffset = analysis?.residualBaseOffset ?? null;
       const prepareStartedAt = performance.now();
@@ -1684,11 +1890,20 @@ export class ImageWorkerClient {
     );
   }
 
-  async detectFrame(documentId: string) {
+  async detectFrame(documentId: string, settings: ConversionSettings) {
     await this.ensureDocumentLoaded(documentId);
     return this.requestWithDocumentRecovery<DetectedFrame | null>(
       documentId,
-      () => this.request<DetectedFrame | null>('detect-frame', { documentId }),
+      () => this.request<DetectedFrame | null>('detect-frame', { documentId, settings }),
+      true,
+    );
+  }
+
+  async estimateLensDistortion(documentId: string) {
+    await this.ensureDocumentLoaded(documentId);
+    return this.requestWithDocumentRecovery<LensDistortionEstimate | null>(
+      documentId,
+      () => this.request<LensDistortionEstimate | null>('estimate-lens-distortion', { documentId }),
       true,
     );
   }
@@ -1736,18 +1951,84 @@ export class ImageWorkerClient {
     const isExporting = this.exportDepth > 0;
     if (isExporting !== wasExporting) {
       this.onExportStateChange?.(isExporting);
+      if (!isExporting) this.scheduleThumbnailDrain();
     }
   }
 
   async export(payload: ExportRequest) {
+    const cancellation = { cancelled: false, workerPending: true };
+    this.activeExports.set(payload.documentId, cancellation);
     this.noteExportStateChange(1);
+    const reloaders = this.documentReloaders.get(payload.documentId);
     try {
-      await this.ensureDocumentLoaded(payload.documentId);
+      if (reloaders) {
+        const fullRequest = await reloaders.full();
+        await this.decode(fullRequest, { retainRecoveryCache: false });
+      } else {
+        await this.ensureDocumentLoaded(payload.documentId);
+      }
+      if (cancellation.cancelled) throw new ImageExportCancelledError();
       const result = await this.exportInternal(payload, true);
-      return finalizeExportBlob(result, payload.options, payload.sourceExif);
+      if (cancellation.cancelled) throw new ImageExportCancelledError();
+      cancellation.workerPending = false;
+      const finalized = await finalizeExportBlob(result, payload.options, payload.sourceExif);
+      if (cancellation.cancelled) throw new ImageExportCancelledError();
+      return finalized;
+    } catch (error) {
+      if (cancellation.cancelled && !isImageExportCancelledError(error)) {
+        throw new ImageExportCancelledError();
+      }
+      throw error;
     } finally {
+      if (reloaders && this.documentReloaders.get(payload.documentId) === reloaders) {
+        try {
+          const previewRequest = await reloaders.preview();
+          await this.decode(previewRequest, { retainRecoveryCache: false });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const diagnostic = appendDiagnostic({
+            level: 'error',
+            code: 'RAW_PREVIEW_RESTORE_FAILED',
+            message,
+            context: { documentId: payload.documentId },
+          });
+          pushToast({
+            level: 'error',
+            title: 'Could not restore the RAW preview',
+            message: 'Reopen the image to continue editing it.',
+            diagnosticId: diagnostic?.id,
+          });
+        }
+      }
+      if (this.activeExports.get(payload.documentId) === cancellation) {
+        this.activeExports.delete(payload.documentId);
+      }
       this.noteExportStateChange(-1);
     }
+  }
+
+  cancelActiveExport(documentId?: string) {
+    const cancellations = documentId
+      ? [this.activeExports.get(documentId)].filter((value): value is { cancelled: boolean; workerPending: boolean } => Boolean(value))
+      : Array.from(this.activeExports.values());
+    const activeCancellations = cancellations.filter((cancellation) => !cancellation.cancelled);
+    if (activeCancellations.length === 0) return false;
+
+    activeCancellations.forEach((cancellation) => {
+      cancellation.cancelled = true;
+    });
+    const activeWorker = activeCancellations.some((cancellation) => cancellation.workerPending)
+      ? this.worker
+      : null;
+    if (activeWorker) {
+      this.worker = null;
+      activeWorker.terminate();
+      this.rejectPending(new ImageExportCancelledError());
+      if (!this.isTerminated) {
+        this.worker = this.createWorker();
+      }
+    }
+    return true;
   }
 
   async contactSheet(payload: ContactSheetRequest) {
@@ -1761,13 +2042,14 @@ export class ImageWorkerClient {
   }
 
   private async exportInternal(payload: ExportRequest, allowRecovery: boolean): Promise<ExportResult> {
-    const cachedDecode = this.decodeCache.get(payload.documentId);
+    const decodeInfo = this.documentDecodeInfo.get(payload.documentId);
     const calibration = this.documentCalibration.get(payload.documentId);
     // Prefer the confidence-carrying estimate so GPU-tiled export resolves the
     // same base as the worker analysis (matches the preview render path).
     const estimatedFilmBaseSample = calibration?.estimatedFilmBase ?? calibration?.estimatedFilmBaseSample ?? null;
     const estimatedDensityBalance = payload.estimatedDensityBalance ?? calibration?.estimatedDensityBalance ?? null;
-    const wantsHighDepthRawExport = cachedDecode?.payload.mime === 'image/x-raw-rgba'
+    const wantsHighDepthRawExport = decodeInfo?.mime === 'image/x-raw-rgba'
+      && decodeInfo.hasHighDepthRawSource
       && payload.options.bitDepth === 16
       && (payload.options.format === 'image/tiff' || payload.options.format === 'image/png');
     if (wantsHighDepthRawExport) {
@@ -1968,12 +2250,26 @@ export class ImageWorkerClient {
   }
 
   disposeDocument(documentId: string) {
+    this.disposedDocumentIds.add(documentId);
+    const queuedThumbnail = this.thumbnailRenderQueue.get(documentId);
+    if (queuedThumbnail) {
+      const disposedError = new Error(MISSING_DOCUMENT_MESSAGE);
+      queuedThumbnail.waiters.forEach((waiter) => waiter.reject(disposedError));
+      this.thumbnailRenderQueue.delete(documentId);
+    }
     const cached = this.decodeCache.get(documentId);
     if (cached?.evictionTimeout != null) {
       window.clearTimeout(cached.evictionTimeout);
     }
     this.decodeCache.delete(documentId);
+    this.thumbnailPreviewCache.delete(documentId);
     this.documentCalibration.delete(documentId);
+    this.lastConversionAnalysis.delete(documentId);
+    this.lastConversionDebugJson.delete(documentId);
+    this.documentReloaders.delete(documentId);
+    this.documentDecodeInfo.delete(documentId);
+    this.documentWorkerEpoch.delete(documentId);
+    this.documentLastAccessedAt.delete(documentId);
     this.documentRecovery.delete(documentId);
     this.activePreviewJobIds.delete(documentId);
     return this.request<{ disposed: true }>('dispose', { documentId });
@@ -1983,7 +2279,34 @@ export class ImageWorkerClient {
     return this.request<{ evicted: true }>('evict-previews', { documentId });
   }
 
-  trimResidentDocuments(maxResidentDocuments: number | null, preserveDocumentId?: string | null) {
+  async trimResidentDocuments(maxResidentDocuments: number | null, preserveDocumentId?: string | null) {
+    if (maxResidentDocuments !== null) {
+      const keepLimit = Math.max(1, maxResidentDocuments);
+      const reloadableDocuments = Array.from(this.documentReloaders.keys())
+        .sort((left, right) => (
+          (this.documentLastAccessedAt.get(right) ?? 0)
+          - (this.documentLastAccessedAt.get(left) ?? 0)
+        ));
+      const keepIds = new Set<string>();
+      if (preserveDocumentId && this.documentReloaders.has(preserveDocumentId)) {
+        keepIds.add(preserveDocumentId);
+      }
+      for (const documentId of reloadableDocuments) {
+        if (keepIds.size >= keepLimit) break;
+        keepIds.add(documentId);
+      }
+
+      const unloadIds = reloadableDocuments.filter((documentId) => (
+        !keepIds.has(documentId)
+        && this.documentWorkerEpoch.get(documentId) === this.workerEpoch
+      ));
+      await Promise.all(unloadIds.map(async (documentId) => {
+        await this.request<{ disposed: true }>('dispose', { documentId });
+        this.documentWorkerEpoch.delete(documentId);
+        this.documentDecodeInfo.delete(documentId);
+      }));
+    }
+
     return this.request<{ evicted: true }>('evict-previews', {
       maxResidentDocuments,
       preserveDocumentId: preserveDocumentId ?? null,
@@ -1992,6 +2315,17 @@ export class ImageWorkerClient {
 
   terminate() {
     this.isTerminated = true;
+    if (this.thumbnailDrainTimer !== null) {
+      window.clearTimeout(this.thumbnailDrainTimer);
+      this.thumbnailDrainTimer = null;
+    }
+    const terminationError = new Error('Image worker terminated.');
+    this.thumbnailRenderQueue.forEach((queued) => {
+      queued.waiters.forEach((waiter) => waiter.reject(terminationError));
+    });
+    this.thumbnailRenderQueue.clear();
+    this.thumbnailPreviewCache.clear();
+    this.disposedDocumentIds.clear();
     this.rejectPending(new Error('Image worker terminated.'));
     this.gpuPipeline?.destroy();
     this.gpuPipeline = null;

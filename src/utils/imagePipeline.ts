@@ -217,7 +217,7 @@ function applyWhiteBlackPoint(value: number, blackPoint: number, whitePoint: num
   return (value - blackPoint) / range;
 }
 
-function applyColorMatrix(
+export function applyColorMatrix(
   r: number,
   g: number,
   b: number,

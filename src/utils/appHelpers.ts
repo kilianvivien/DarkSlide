@@ -88,7 +88,8 @@ export function getErrorCode(error: unknown) {
 
 export function isIgnorableRenderError(error: unknown) {
   if (error instanceof Error) {
-    return error.message.startsWith('JOB_CANCELLED')
+    return error.name === 'ImageExportCancelledError'
+      || error.message.startsWith('JOB_CANCELLED')
       || error.message.startsWith('JOB_MISSING')
       || error.message.includes('The tile job was cancelled.')
       || error.message.includes('The requested tile job is no longer available.')
@@ -96,7 +97,8 @@ export function isIgnorableRenderError(error: unknown) {
   }
 
   if (typeof error === 'string') {
-    return error.startsWith('JOB_CANCELLED')
+    return error.includes('The image export was cancelled.')
+      || error.startsWith('JOB_CANCELLED')
       || error.startsWith('JOB_MISSING')
       || error.includes('The tile job was cancelled.')
       || error.includes('The requested tile job is no longer available.')

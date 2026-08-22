@@ -12,8 +12,9 @@ export function createRotationCacheKey(
   previewLevelId: string | null,
   rotation: number,
   levelAngle: number,
+  lensDistortion = 0,
 ) {
-  return `${sourceKind}|${previewLevelId ?? ''}|${rotation}|${levelAngle}`;
+  return `${sourceKind}|${previewLevelId ?? ''}|${rotation}|${levelAngle}|${lensDistortion}`;
 }
 
 export function createCropCacheKey(
@@ -22,7 +23,7 @@ export function createCropCacheKey(
   settings: ConversionSettings,
 ) {
   const crop = normalizeCrop(settings);
-  return `${createRotationCacheKey(sourceKind, previewLevelId, settings.rotation, settings.levelAngle)}|${crop.x},${crop.y},${crop.width},${crop.height}`;
+  return `${createRotationCacheKey(sourceKind, previewLevelId, settings.rotation, settings.levelAngle, settings.lensDistortion ?? 0)}|${crop.x},${crop.y},${crop.width},${crop.height}`;
 }
 
 export function setBoundedCacheEntry<T>(
@@ -83,6 +84,7 @@ export function prepareGeometryCacheEntry<TRotationCanvas, TCropJob>(options: {
     previewLevelId,
     settings.rotation,
     settings.levelAngle,
+    settings.lensDistortion ?? 0,
   );
   let rotationCanvas = rotationCache.get(rotationKey);
   let rotationCacheHit = true;

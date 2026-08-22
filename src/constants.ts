@@ -202,6 +202,7 @@ export function createDefaultSettings(overrides: Partial<ConversionSettings> = {
     curves: structuredClone(DEFAULT_CURVES),
     rotation: 0,
     levelAngle: 0,
+    lensDistortion: 0,
     crop: structuredClone(DEFAULT_CROP),
     filmBaseSample: null,
     residualBaseCorrection: true,

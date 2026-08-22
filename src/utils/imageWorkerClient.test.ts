@@ -273,6 +273,48 @@ describe('ImageWorkerClient', () => {
     expect(MockWorker.instances).toHaveLength(2);
   });
 
+  it('caps CPU draft renders at 512 pixels during control interaction', async () => {
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const pending = client.render({
+      ...createRenderPayload(),
+      targetMaxDimension: 2048,
+      previewMode: 'draft',
+      interactionQuality: 'balanced',
+    });
+
+    await flushAsyncWork();
+    const renderRequest = worker.postedMessages[0];
+    expect(renderRequest).toMatchObject({
+      type: 'render',
+      payload: { targetMaxDimension: 512 },
+    });
+
+    worker.onmessage?.({
+      data: {
+        id: renderRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 1,
+          width: 512,
+          height: 384,
+          previewLevelId: 'preview-512',
+          imageData: new ImageData(new Uint8ClampedArray(512 * 384 * 4), 512, 384),
+          histogram: { r: [], g: [], b: [], l: [] },
+          highlightDensity: 0,
+        },
+      },
+    } as MessageEvent);
+
+    await expect(pending).resolves.toMatchObject({
+      width: 512,
+      height: 384,
+      previewLevelId: 'preview-512',
+    });
+  });
+
   it('extends the deadline of requests queued behind an export instead of restarting the worker', async () => {
     vi.useFakeTimers();
     const { ImageWorkerClient } = await import('./imageWorkerClient');
@@ -336,6 +378,27 @@ describe('ImageWorkerClient', () => {
     await expect(exported).resolves.toMatchObject({ filename: 'scan.tiff' });
   });
 
+  it('cancels an active export and restarts the worker without reporting a crash', async () => {
+    const { ImageExportCancelledError, ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const exported = client.export({
+      ...createRenderPayload(),
+      options: createExportOptions(),
+    } as never);
+
+    await flushAsyncWork();
+    expect(worker.postedMessages[0]?.type).toBe('export');
+    expect(client.cancelActiveExport()).toBe(true);
+
+    await expect(exported).rejects.toBeInstanceOf(ImageExportCancelledError);
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+    expect(MockWorker.instances).toHaveLength(2);
+    expect(diagnosticsState.appendDiagnostic).not.toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'WORKER_FATAL' }),
+    );
+  });
+
   it('still restarts the worker when the export itself times out', async () => {
     vi.useFakeTimers();
     const { ImageWorkerClient, WorkerRequestTimeoutError } = await import('./imageWorkerClient');
@@ -356,6 +419,181 @@ describe('ImageWorkerClient', () => {
     await rejection;
     expect(worker.terminate).toHaveBeenCalledTimes(1);
     expect(MockWorker.instances).toHaveLength(2);
+  });
+
+  it('loads a full RAW only for export and restores the editor preview afterward', async () => {
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const full = vi.fn(async () => ({
+      documentId: 'doc-1',
+      buffer: new ArrayBuffer(16),
+      highDepthRawBuffer: new ArrayBuffer(24),
+      highDepthRawBitDepth: 16 as const,
+      highDepthRawTransfer: 'srgb' as const,
+      rawDimensions: { width: 2, height: 2 },
+      sourceDimensions: { width: 2, height: 2 },
+      fileName: 'scan.rw2',
+      mime: 'image/x-raw-rgba',
+      size: 100,
+    }));
+    const preview = vi.fn(async () => ({
+      documentId: 'doc-1',
+      buffer: new ArrayBuffer(4),
+      rawDimensions: { width: 1, height: 1 },
+      sourceDimensions: { width: 2, height: 2 },
+      fileName: 'scan.rw2',
+      mime: 'image/x-raw-rgba',
+      size: 100,
+    }));
+    client.registerDocumentReloaders('doc-1', { full, preview });
+
+    const exported = client.export({
+      ...createRenderPayload(),
+      options: createExportOptions(),
+    } as never);
+    await flushAsyncWork();
+
+    const fullDecodeRequest = worker.postedMessages[0];
+    expect(fullDecodeRequest?.type).toBe('decode');
+    worker.onmessage?.({
+      data: {
+        id: fullDecodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'doc-1',
+            name: 'scan.rw2',
+            mime: 'image/x-raw-rgba',
+            extension: '.rw2',
+            size: 100,
+            width: 2,
+            height: 2,
+          },
+          previewLevels: [],
+        },
+      },
+    } as MessageEvent);
+    await flushAsyncWork();
+
+    const exportRequest = worker.postedMessages[1];
+    expect(exportRequest?.type).toBe('export');
+    worker.onmessage?.({
+      data: {
+        id: exportRequest?.id,
+        ok: true,
+        payload: {
+          blob: new Blob(['tiff'], { type: 'image/tiff' }),
+          filename: 'scan.tiff',
+          bitDepthDowngraded: false,
+        },
+      },
+    } as MessageEvent);
+    await flushAsyncWork();
+
+    const previewDecodeRequest = worker.postedMessages[2];
+    expect(previewDecodeRequest?.type).toBe('decode');
+    worker.onmessage?.({
+      data: {
+        id: previewDecodeRequest?.id,
+        ok: true,
+        payload: {
+          metadata: {
+            id: 'doc-1',
+            name: 'scan.rw2',
+            mime: 'image/x-raw-rgba',
+            extension: '.rw2',
+            size: 100,
+            width: 2,
+            height: 2,
+          },
+          previewLevels: [],
+        },
+      },
+    } as MessageEvent);
+
+    await expect(exported).resolves.toMatchObject({ filename: 'scan.tiff' });
+    expect(full).toHaveBeenCalledTimes(1);
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(worker.postedMessages.map((message) => message.type)).toEqual(['decode', 'export', 'decode']);
+  });
+
+  it('unloads path-backed RAWs outside the resident working set', async () => {
+    vi.useFakeTimers();
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    for (let index = 1; index <= 4; index += 1) {
+      const documentId = `doc-${index}`;
+      vi.setSystemTime(index * 1_000);
+      client.registerDocumentReloaders(documentId, {
+        preview: async () => ({
+          documentId,
+          buffer: new ArrayBuffer(4),
+          rawDimensions: { width: 1, height: 1 },
+          fileName: `${documentId}.rw2`,
+          mime: 'image/x-raw-rgba',
+          size: 100,
+        }),
+        full: async () => ({
+          documentId,
+          buffer: new ArrayBuffer(4),
+          rawDimensions: { width: 1, height: 1 },
+          fileName: `${documentId}.rw2`,
+          mime: 'image/x-raw-rgba',
+          size: 100,
+        }),
+      });
+      const pendingDecode = client.decode({
+        documentId,
+        buffer: new ArrayBuffer(4),
+        rawDimensions: { width: 1, height: 1 },
+        fileName: `${documentId}.rw2`,
+        mime: 'image/x-raw-rgba',
+        size: 100,
+      }, { retainRecoveryCache: false });
+      const decodeRequest = worker.postedMessages.at(-1);
+      worker.onmessage?.({
+        data: {
+          id: decodeRequest?.id,
+          ok: true,
+          payload: {
+            metadata: {
+              id: documentId,
+              name: `${documentId}.rw2`,
+              mime: 'image/x-raw-rgba',
+              extension: '.rw2',
+              size: 100,
+              width: 1,
+              height: 1,
+            },
+            previewLevels: [],
+          },
+        },
+      } as MessageEvent);
+      await pendingDecode;
+    }
+
+    const trimming = client.trimResidentDocuments(2, 'doc-4');
+    await flushAsyncWork();
+    const disposeRequests = worker.postedMessages.slice(4, 6);
+    expect(disposeRequests.map((message) => message.type)).toEqual(['dispose', 'dispose']);
+    expect(disposeRequests.map((message) => (message.payload as { documentId: string }).documentId).sort()).toEqual(['doc-1', 'doc-2']);
+    disposeRequests.forEach((request) => {
+      worker.onmessage?.({
+        data: { id: request.id, ok: true, payload: { disposed: true } },
+      } as MessageEvent);
+    });
+    await flushAsyncWork();
+
+    const evictRequest = worker.postedMessages[6];
+    expect(evictRequest?.type).toBe('evict-previews');
+    worker.onmessage?.({
+      data: { id: evictRequest?.id, ok: true, payload: { evicted: true } },
+    } as MessageEvent);
+
+    await expect(trimming).resolves.toEqual({ evicted: true });
   });
 
   it('drops a timed-out cancel-job without taking the worker down', async () => {
@@ -429,6 +667,100 @@ describe('ImageWorkerClient', () => {
       expect.objectContaining({ code: 'WORKER_REQUEST_DROPPED' }),
     );
     await expect(pending).resolves.toMatchObject({ documentId: 'doc-1' });
+  });
+
+  it('defers and serializes thumbnail work behind foreground renders', async () => {
+    vi.useFakeTimers();
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+
+    const foreground = client.render(createRenderPayload());
+    await flushAsyncWork();
+    expect(worker.postedMessages).toHaveLength(1);
+    expect(worker.postedMessages[0]?.type).toBe('render');
+
+    const thumbnail = client.renderThumbnail({
+      ...createRenderPayload(),
+      documentId: 'doc-2',
+      revision: 2,
+      targetMaxDimension: 224,
+      previewMode: 'draft',
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(worker.postedMessages).toHaveLength(1);
+
+    const foregroundRequest = worker.postedMessages[0];
+    worker.onmessage?.({
+      data: {
+        id: foregroundRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-1',
+          revision: 1,
+          width: 8,
+          height: 8,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray(256), 8, 8),
+          histogram: { r: [], g: [], b: [], l: [] },
+        },
+      },
+    } as MessageEvent);
+    await expect(foreground).resolves.toMatchObject({ documentId: 'doc-1' });
+
+    await vi.advanceTimersByTimeAsync(24);
+    await flushAsyncWork();
+    const thumbnailRequest = worker.postedMessages[1];
+    expect(thumbnailRequest?.type).toBe('render');
+    expect(thumbnailRequest?.payload).toMatchObject({ documentId: 'doc-2', targetMaxDimension: 224 });
+
+    worker.onmessage?.({
+      data: {
+        id: thumbnailRequest?.id,
+        ok: true,
+        payload: {
+          documentId: 'doc-2',
+          revision: 2,
+          width: 4,
+          height: 4,
+          previewLevelId: 'preview-1024',
+          imageData: new ImageData(new Uint8ClampedArray(64), 4, 4),
+          histogram: { r: [], g: [], b: [], l: [] },
+        },
+      },
+    } as MessageEvent);
+    await expect(thumbnail).resolves.toMatchObject({ documentId: 'doc-2' });
+    expect(client.getCachedThumbnailPreview('doc-2')).toMatchObject({
+      comparisonMode: 'processed',
+      imageData: { width: 4, height: 4 },
+    });
+  });
+
+  it('starts a first GPU draft without waiting for conversion analysis', async () => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {},
+    });
+    gpuState.create.mockResolvedValue(gpuState.instance);
+
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const pending = client.render({
+      ...createRenderPayload(),
+      previewMode: 'draft',
+      interactionQuality: 'balanced',
+      histogramMode: 'throttled',
+    });
+    const rejected = pending.catch((error) => error);
+
+    await flushAsyncWork();
+
+    expect(worker.analysisMessages).toHaveLength(0);
+    expect(worker.postedMessages[0]?.type).toBe('prepare-tile-job');
+
+    client.terminate();
+    await rejected;
   });
 
   it('re-decodes cached documents after a worker restart before rendering again', async () => {
