@@ -1,8 +1,17 @@
 import { useCallback, useRef, useState } from 'react';
 import type { ZoomLevel } from '../types';
 
-function clampZoom(z: number): number {
-  return Math.min(8, Math.max(0.1, z));
+function clampZoom(z: number, minimum = 0.1): number {
+  return Math.min(8, Math.max(minimum, z));
+}
+
+const BUTTON_ZOOM_STEP = 1.15;
+const WHEEL_ZOOM_RATE = 0.0007;
+const MAX_WHEEL_DELTA = 240;
+
+export function computeWheelZoom(currentZoom: number, deltaY: number, minimumZoom = 0.1) {
+  const boundedDelta = Math.min(MAX_WHEEL_DELTA, Math.max(-MAX_WHEEL_DELTA, deltaY));
+  return clampZoom(currentZoom * Math.exp(-boundedDelta * WHEEL_ZOOM_RATE), minimumZoom);
 }
 
 export interface PanGeometry {
@@ -87,13 +96,19 @@ export function useViewportZoom() {
   }, [setCommittedZoom]);
 
   const zoomIn = useCallback(() => {
-    const current = liveZoomRef.current === 'fit' ? 1 : liveZoomRef.current;
-    setCommittedZoom(clampZoom(current * 1.25));
+    const fitScale = panGeometryRef.current?.fitScale ?? 1;
+    const current = liveZoomRef.current === 'fit'
+      ? fitScale
+      : liveZoomRef.current;
+    setCommittedZoom(clampZoom(current * BUTTON_ZOOM_STEP, Math.min(0.1, fitScale)));
   }, [setCommittedZoom]);
 
   const zoomOut = useCallback(() => {
-    const current = liveZoomRef.current === 'fit' ? 1 : liveZoomRef.current;
-    setCommittedZoom(clampZoom(current * 0.8));
+    const fitScale = panGeometryRef.current?.fitScale ?? 1;
+    const current = liveZoomRef.current === 'fit'
+      ? fitScale
+      : liveZoomRef.current;
+    setCommittedZoom(clampZoom(current / BUTTON_ZOOM_STEP, Math.min(0.1, fitScale)));
   }, [setCommittedZoom]);
 
   const setZoomLevel = useCallback((level: ZoomLevel) => {
@@ -109,14 +124,20 @@ export function useViewportZoom() {
     cursorNormX: number,
     cursorNormY: number,
   ) => {
-    const current = liveZoomRef.current === 'fit' ? 1 : liveZoomRef.current;
-    const factor = deltaY < 0 ? 1.1 : 0.9;
-    const nextZoom = clampZoom(current * factor);
+    if (!Number.isFinite(deltaY) || deltaY === 0) return;
+    const current = liveZoomRef.current === 'fit'
+      ? (panGeometryRef.current?.fitScale ?? 1)
+      : liveZoomRef.current;
+    const minimumZoom = Math.min(0.1, panGeometryRef.current?.fitScale ?? 0.1);
+    const nextZoom = computeWheelZoom(current, deltaY, minimumZoom);
     const currentPan = livePanRef.current;
-    const blend = 0.1;
+    const relativeZoomChange = Math.abs(nextZoom - current) / Math.max(current, 0.1);
+    const blend = Math.min(0.08, relativeZoomChange);
+    const anchorX = Math.min(1, Math.max(0, cursorNormX));
+    const anchorY = Math.min(1, Math.max(0, cursorNormY));
     const nextPan = {
-      x: currentPan.x + (cursorNormX - currentPan.x) * blend,
-      y: currentPan.y + (cursorNormY - currentPan.y) * blend,
+      x: currentPan.x + (anchorX - currentPan.x) * blend,
+      y: currentPan.y + (anchorY - currentPan.y) * blend,
     };
     applyViewportTransform(nextPan, nextZoom);
   }, [applyViewportTransform]);
