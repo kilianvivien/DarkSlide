@@ -1,10 +1,11 @@
 import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, ExportOptions, FilmProfile, HistogramData, InputProfileSpec, LabStyleProfile, SourceMetadata } from '../types';
-import { ImageWorkerClient } from './imageWorkerClient';
+import { ImageWorkerClient, isImageExportCancelledError } from './imageWorkerClient';
 import { computeHighlightDensity, getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
 import { usesColorChannelPipeline } from './pipelineIntent';
 import { decodeDesktopRawForWorker, isRawExtension } from './rawImport';
-import { isDesktopShell, saveExportBlob, saveToDirectory } from './fileBridge';
+import { isDesktopShell, openImageFileByPath, saveExportBlob, saveToDirectory } from './fileBridge';
 import type { AutoAnalyzeResult } from '../types';
+import { getAutoFrameCrop } from './frameDetection';
 
 export interface BatchJobEntry {
   id: string;
@@ -12,6 +13,7 @@ export interface BatchJobEntry {
   file?: File;
   nativePath?: string;
   documentId?: string;
+  sequence?: number;
   sourceMetadata?: SourceMetadata;
   filename: string;
   size: number;
@@ -28,6 +30,7 @@ export interface BatchJobEntry {
     confidence: number;
   } | null;
   estimatedFlare?: [number, number, number] | null;
+  geometry?: Pick<ConversionSettings, 'rotation' | 'levelAngle' | 'crop'>;
 }
 
 export interface BatchRunOptions {
@@ -39,6 +42,17 @@ export interface BatchRunOptions {
 
 const ANALYSIS_TARGET_DIMENSION = 1024;
 const HIGHLIGHT_DENSITY_FOLLOW_UP_THRESHOLD = 0.01;
+
+class BatchCancelledError extends Error {
+  constructor() {
+    super('The batch export was cancelled.');
+    this.name = 'BatchCancelledError';
+  }
+}
+
+function throwIfBatchCancelled(cancelToken: { cancelled: boolean }) {
+  if (cancelToken.cancelled) throw new BatchCancelledError();
+}
 
 function applyNamingTemplate(filename: string, template: string, sequence: number, format: ExportOptions['format']) {
   const originalBase = filename.replace(/\.[^.]+$/, '');
@@ -195,23 +209,28 @@ export async function* runBatch(
           yield { type: 'progress', entryId: entry.id, progress: 0.25 };
 
           const decoded = await workerClient.decode(decodeRequest);
+          throwIfBatchCancelled(cancelToken);
           sourceMetadata = decoded.metadata;
           entry.estimatedFlare = decoded.estimatedFlare;
         } else {
-          if (!entry.file) {
+          const sourceFile = entry.file ?? (entry.nativePath
+            ? (await openImageFileByPath(entry.nativePath))?.file
+            : undefined);
+          if (!sourceFile) {
             throw new Error(`Missing file for batch entry "${entry.filename}".`);
           }
 
-          const buffer = await entry.file.arrayBuffer();
+          const buffer = await sourceFile.arrayBuffer();
           yield { type: 'progress', entryId: entry.id, progress: 0.25 };
 
           const decoded = await workerClient.decode({
             documentId,
             buffer,
             fileName: entry.filename,
-            mime: entry.file.type || 'application/octet-stream',
-            size: entry.file.size,
+            mime: sourceFile.type || 'application/octet-stream',
+            size: sourceFile.size,
           });
+          throwIfBatchCancelled(cancelToken);
           sourceMetadata = decoded.metadata;
           entry.estimatedFlare = decoded.estimatedFlare;
         }
@@ -221,19 +240,26 @@ export async function* runBatch(
 
       if (options.autoCrop !== false) {
         entry.detectedFrame = typeof workerClient.detectFrame === 'function'
-          ? await workerClient.detectFrame(documentId).catch(() => null)
+          ? await workerClient.detectFrame(documentId, sharedSettings).catch(() => null)
           : null;
       }
+      throwIfBatchCancelled(cancelToken);
 
       if (!entry.estimatedFlare) {
         entry.estimatedFlare = typeof workerClient.computeFlare === 'function'
           ? await workerClient.computeFlare(documentId).catch(() => null)
           : null;
       }
+      throwIfBatchCancelled(cancelToken);
 
       yield { type: 'progress', entryId: entry.id, progress: 0.55 };
 
       const entrySettings = structuredClone(sharedSettings);
+      if (entry.geometry) {
+        entrySettings.rotation = entry.geometry.rotation;
+        entrySettings.levelAngle = entry.geometry.levelAngle;
+        entrySettings.crop = structuredClone(entry.geometry.crop);
+      }
       if (entrySettings.dustRemoval) {
         entrySettings.dustRemoval = {
           ...entrySettings.dustRemoval,
@@ -242,14 +268,7 @@ export async function* runBatch(
         };
       }
       if (entry.detectedFrame && options.autoCrop !== false) {
-        entrySettings.crop = {
-          x: entry.detectedFrame.left,
-          y: entry.detectedFrame.top,
-          width: entry.detectedFrame.right - entry.detectedFrame.left,
-          height: entry.detectedFrame.bottom - entry.detectedFrame.top,
-          aspectRatio: null,
-        };
-        entrySettings.levelAngle = entry.detectedFrame.angle;
+        entrySettings.crop = getAutoFrameCrop(entry.detectedFrame, entrySettings.rotation);
       }
 
       if ((options.autoDustRemoval ?? entrySettings.dustRemoval?.autoEnabled) && entrySettings.dustRemoval?.autoEnabled) {
@@ -270,6 +289,7 @@ export async function* runBatch(
           marks: autoDustMarks,
         };
       }
+      throwIfBatchCancelled(cancelToken);
 
       const flareFloor: [number, number, number] | null = options.flareMode === 'first-frame'
         ? (rollFlare ?? entry.estimatedFlare ?? null)
@@ -299,6 +319,7 @@ export async function* runBatch(
         lightSourceBias: sharedLightSourceBias ?? [1, 1, 1],
         initialEstimate: entry.histogram ? computeHighlightDensity(entry.histogram) : undefined,
       });
+      throwIfBatchCancelled(cancelToken);
       entry.histogram = baseHighlightAnalysis.histogram ?? entry.histogram ?? null;
       let highlightDensityEstimate = baseHighlightAnalysis.highlightDensityEstimate;
 
@@ -326,6 +347,7 @@ export async function* runBatch(
             flareFloor,
             lightSourceBias: sharedLightSourceBias ?? [1, 1, 1],
           });
+        throwIfBatchCancelled(cancelToken);
 
         if (options.autoMode === 'first-frame' && !rollAutoAnalysis) {
           rollAutoAnalysis = autoResult;
@@ -359,6 +381,7 @@ export async function* runBatch(
           lightSourceBias: sharedLightSourceBias ?? [1, 1, 1],
           initialEstimate: highlightDensityEstimate,
         });
+        throwIfBatchCancelled(cancelToken);
         entry.histogram = postAutoHighlightAnalysis.histogram ?? entry.histogram ?? null;
         highlightDensityEstimate = postAutoHighlightAnalysis.highlightDensityEstimate;
       }
@@ -384,15 +407,25 @@ export async function* runBatch(
         highlightDensityEstimate,
         lightSourceBias: sharedLightSourceBias ?? [1, 1, 1],
       });
+      throwIfBatchCancelled(cancelToken);
       yield { type: 'progress', entryId: entry.id, progress: 0.85 };
 
-      const outputFilename = applyNamingTemplate(entry.filename, exportOptions.filenameBase, index + 1, exportOptions.format);
+      const outputFilename = applyNamingTemplate(
+        entry.filename,
+        exportOptions.filenameBase,
+        entry.sequence ?? index + 1,
+        exportOptions.format,
+      );
+      throwIfBatchCancelled(cancelToken);
       await saveBatchExport(result.blob, outputFilename, exportOptions.format, outputPath);
       await workerClient.evictPreviews(documentId).catch(() => {
         // Ignore cache eviction failures after a successful export.
       });
       yield { type: 'done', entryId: entry.id };
     } catch (error) {
+      if (cancelToken.cancelled && (error instanceof BatchCancelledError || isImageExportCancelledError(error))) {
+        break;
+      }
       yield {
         type: 'error',
         entryId: entry.id,
@@ -409,5 +442,94 @@ export async function* runBatch(
     }
   }
 
+  yield { type: 'complete' };
+}
+
+async function* mergeBatchStreams(streams: AsyncGenerator<BatchProgressEvent>[]) {
+  const iterators = streams.map((stream) => stream[Symbol.asyncIterator]());
+  const pending = new Map<number, Promise<{ index: number; result: IteratorResult<BatchProgressEvent> }>>();
+  const schedule = (index: number) => {
+    pending.set(index, iterators[index].next().then((result) => ({ index, result })));
+  };
+
+  iterators.forEach((_, index) => schedule(index));
+  while (pending.size > 0) {
+    const { index, result } = await Promise.race(pending.values());
+    if (result.done) {
+      pending.delete(index);
+      continue;
+    }
+
+    if (result.value.type !== 'complete') {
+      yield result.value;
+    }
+    schedule(index);
+  }
+}
+
+/**
+ * Runs independent entries across dedicated clients. Modes that copy analysis
+ * from the first frame stay serial because later entries depend on that result.
+ */
+export async function* runBatchConcurrent(
+  workerClients: ImageWorkerClient[],
+  entries: BatchJobEntry[],
+  sharedSettings: ConversionSettings,
+  sharedProfile: FilmProfile,
+  sharedLabStyle: LabStyleProfile | null,
+  sharedColorManagement: ColorManagementSettings,
+  sharedLightSourceBias: [number, number, number] | null,
+  exportOptions: ExportOptions,
+  outputPath: string | null,
+  cancelToken: { cancelled: boolean },
+  options: BatchRunOptions = {},
+): AsyncGenerator<BatchProgressEvent> {
+  const requiresFirstFrame = options.flareMode === 'first-frame' || options.autoMode === 'first-frame';
+  const clients = requiresFirstFrame ? workerClients.slice(0, 1) : workerClients;
+  if (clients.length === 0) {
+    throw new Error('Batch export needs at least one image worker.');
+  }
+  if (clients.length === 1) {
+    yield* runBatch(
+      clients[0],
+      entries,
+      sharedSettings,
+      sharedProfile,
+      sharedLabStyle,
+      sharedColorManagement,
+      sharedLightSourceBias,
+      exportOptions,
+      outputPath,
+      cancelToken,
+      options,
+    );
+    return;
+  }
+
+  let nextEntryIndex = 0;
+  const createWorkerStream = async function* (workerClient: ImageWorkerClient) {
+    while (!cancelToken.cancelled) {
+      const entryIndex = nextEntryIndex;
+      nextEntryIndex += 1;
+      if (entryIndex >= entries.length) break;
+      const entry = entries[entryIndex];
+      entry.sequence = entryIndex + 1;
+      yield* runBatch(
+        workerClient,
+        [entry],
+        sharedSettings,
+        sharedProfile,
+        sharedLabStyle,
+        sharedColorManagement,
+        sharedLightSourceBias,
+        exportOptions,
+        outputPath,
+        cancelToken,
+        options,
+      );
+    }
+  };
+
+  yield* mergeBatchStreams(clients.map((client) => createWorkerStream(client)));
   yield { type: 'complete' };
 }

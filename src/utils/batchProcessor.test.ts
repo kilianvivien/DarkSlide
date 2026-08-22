@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES } from '../constants';
 import type { BatchProgressEvent } from '../types';
-import { runBatch, type BatchJobEntry } from './batchProcessor';
+import { runBatch, runBatchConcurrent, type BatchJobEntry } from './batchProcessor';
 
 const fileBridgeState = vi.hoisted(() => ({
   saveExportBlob: vi.fn(async () => 'saved' as const),
@@ -420,6 +420,171 @@ describe('runBatch auto-analysis', () => {
     expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({ isColor: true }));
     expect(workerClient.render).toHaveBeenCalledWith(expect.objectContaining({ isColor: true }));
     expect(workerClient.autoAnalyze).toHaveBeenCalledWith(expect.objectContaining({ isColor: true }));
+  });
+
+  it('preserves each open tab rotation, level, and crop during batch export', async () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    const workerClient = {
+      computeFlare: vi.fn(async () => null),
+      render: vi.fn(async () => ({
+        documentId: 'rotated',
+        revision: 1,
+        width: 100,
+        height: 100,
+        previewLevelId: 'preview-1024',
+        imageData: new ImageData(1, 1),
+        histogram: createHistogramWithHighlightRatio(0.2),
+        highlightDensity: 0.2,
+      })),
+      export: vi.fn(async () => ({
+        blob: new Blob(['ok'], { type: 'image/jpeg' }),
+        filename: 'rotated.jpg',
+      })),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+    } as const;
+    const crop = { x: 0.1, y: 0.2, width: 0.7, height: 0.6, aspectRatio: null };
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'rotated',
+        kind: 'open-tab',
+        documentId: 'rotated',
+        sourceMetadata: createSourceMetadata('rotated'),
+        filename: 'rotated.tiff',
+        size: 1,
+        status: 'pending',
+        geometry: { rotation: 90, levelAngle: 1.5, crop },
+      }],
+      createDefaultSettings(),
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoCrop: false },
+    ));
+
+    expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({
+        rotation: 90,
+        levelAngle: 1.5,
+        crop,
+      }),
+    }));
+  });
+
+  it('runs independent entries on three workers and emits one completion event', async () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    let activeExports = 0;
+    let maximumActiveExports = 0;
+    let releaseExports: (() => void) | undefined;
+    const exportGate = new Promise<void>((resolve) => {
+      releaseExports = resolve;
+    });
+    const createWorker = () => ({
+      computeFlare: vi.fn(async () => null),
+      render: vi.fn(async (payload: { documentId: string }) => ({
+        documentId: payload.documentId,
+        revision: 1,
+        width: 100,
+        height: 100,
+        previewLevelId: 'preview-1024',
+        imageData: new ImageData(1, 1),
+        histogram: createHistogramWithHighlightRatio(0.2),
+        highlightDensity: 0.2,
+      })),
+      export: vi.fn(async () => {
+        activeExports += 1;
+        maximumActiveExports = Math.max(maximumActiveExports, activeExports);
+        if (activeExports === 3) releaseExports?.();
+        await exportGate;
+        activeExports -= 1;
+        return { blob: new Blob(['ok'], { type: 'image/jpeg' }), filename: 'frame.jpg' };
+      }),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+    });
+    const entries: BatchJobEntry[] = Array.from({ length: 6 }, (_, index) => ({
+      id: `doc-${index}`,
+      kind: 'open-tab',
+      documentId: `doc-${index}`,
+      sourceMetadata: createSourceMetadata(`doc-${index}`),
+      filename: `doc-${index}.tiff`,
+      size: 1,
+      status: 'pending',
+    }));
+
+    const events = await collectEvents(runBatchConcurrent(
+      [createWorker(), createWorker(), createWorker()] as never,
+      entries,
+      createDefaultSettings(),
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoCrop: false },
+    ));
+
+    expect(maximumActiveExports).toBe(3);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(6);
+    expect(events.filter((event) => event.type === 'complete')).toHaveLength(1);
+  });
+
+  it('stops a cancelled active export without saving or marking the entry as failed', async () => {
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    const cancelToken = { cancelled: false };
+    const workerClient = {
+      computeFlare: vi.fn(async () => null),
+      render: vi.fn(async (payload: { documentId: string }) => ({
+        documentId: payload.documentId,
+        revision: 1,
+        width: 100,
+        height: 100,
+        previewLevelId: 'preview-1024',
+        imageData: new ImageData(1, 1),
+        histogram: createHistogramWithHighlightRatio(0.2),
+        highlightDensity: 0.2,
+      })),
+      export: vi.fn(async () => {
+        cancelToken.cancelled = true;
+        const error = new Error('The image export was cancelled.');
+        error.name = 'ImageExportCancelledError';
+        throw error;
+      }),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+    };
+
+    const events = await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'doc-cancelled',
+        kind: 'open-tab',
+        documentId: 'doc-cancelled',
+        sourceMetadata: createSourceMetadata('doc-cancelled'),
+        filename: 'doc-cancelled.tiff',
+        size: 1,
+        status: 'pending',
+      }],
+      createDefaultSettings(),
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      cancelToken,
+      { autoCrop: false },
+    ));
+
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
+    expect(events.at(-1)).toEqual({ type: 'complete' });
+    expect(fileBridgeState.saveExportBlob).not.toHaveBeenCalled();
   });
 
 });

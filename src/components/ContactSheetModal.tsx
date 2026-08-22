@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Download, X } from 'lucide-react';
-import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from '../constants';
+import { DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES, RAW_EDITOR_PREVIEW_MAX_DIMENSION } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, FilmProfile, LabStyleProfile, NotificationSettings } from '../types';
 import { isDesktopShell, saveExportBlob, saveToDirectory } from '../utils/fileBridge';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
@@ -139,6 +139,8 @@ export function ContactSheetModal({
                 fileName: entry.filename,
                 path: entry.nativePath,
                 size: entry.size,
+                maxDimension: RAW_EDITOR_PREVIEW_MAX_DIMENSION,
+                includeHighDepth: false,
               });
               if (token.cancelled) break;
               await workerClient.decode(decodeRequest);
@@ -274,6 +276,8 @@ export function ContactSheetModal({
             fileName: entry.filename,
             path: entry.nativePath,
             size: entry.size,
+            maxDimension: RAW_EDITOR_PREVIEW_MAX_DIMENSION,
+            includeHighDepth: false,
           });
           await workerClient.decode(decodeRequest);
         } else {

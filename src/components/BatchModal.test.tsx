@@ -16,6 +16,7 @@ const fileBridgeState = vi.hoisted(() => ({
 
 const runBatchState = vi.hoisted(() => ({
   runBatch: vi.fn(),
+  runBatchConcurrent: vi.fn(),
 }));
 
 const exportNotificationState = vi.hoisted(() => ({
@@ -50,6 +51,7 @@ vi.mock('../utils/fileBridge', () => ({
 
 vi.mock('../utils/batchProcessor', () => ({
   runBatch: runBatchState.runBatch,
+  runBatchConcurrent: runBatchState.runBatchConcurrent,
 }));
 
 vi.mock('../utils/exportNotifications', () => ({
@@ -57,7 +59,10 @@ vi.mock('../utils/exportNotifications', () => ({
   primeExportNotificationsPermission: exportNotificationState.primeExportNotificationsPermission,
 }));
 
-function createOpenTab(profile: FilmProfile): DocumentTab {
+function createOpenTab(
+  profile: FilmProfile,
+  settings: WorkspaceDocument['settings'] = createDefaultSettings(),
+): DocumentTab {
   const document: WorkspaceDocument = {
     id: 'tab-1',
     source: {
@@ -70,7 +75,7 @@ function createOpenTab(profile: FilmProfile): DocumentTab {
       height: 3000,
     },
     previewLevels: [],
-    settings: createDefaultSettings(),
+    settings,
     colorManagement: DEFAULT_COLOR_MANAGEMENT,
     profileId: profile.id,
     labStyleId: null,
@@ -101,12 +106,16 @@ function renderModal({
   currentLightSourceBias = null,
   notificationSettings = DEFAULT_NOTIFICATION_SETTINGS,
   onOpenContactSheet = vi.fn(),
+  openTabSettings,
+  workerClient: providedWorkerClient,
 }: {
   customProfiles: FilmProfile[];
   currentSettings?: WorkspaceDocument['settings'] | null;
   currentProfile?: FilmProfile | null;
   currentLightSourceBias?: [number, number, number] | null;
   notificationSettings?: typeof DEFAULT_NOTIFICATION_SETTINGS;
+  openTabSettings?: WorkspaceDocument['settings'];
+  workerClient?: ImageWorkerClient;
   onOpenContactSheet?: (payload: {
     entries: Array<{ id: string }>;
     sharedSettings: WorkspaceDocument['settings'];
@@ -117,13 +126,14 @@ function renderModal({
   }) => void;
 }) {
   const profile = FILM_PROFILES.find((item) => item.id === 'generic-color') ?? FILM_PROFILES[0];
+  const batchWorkerClient = providedWorkerClient ?? ({ cancelActiveExport: vi.fn(() => false) } as unknown as ImageWorkerClient);
 
   render(
     <BatchModal
       isOpen
       onClose={vi.fn()}
       onOpenContactSheet={onOpenContactSheet}
-      workerClient={{} as ImageWorkerClient}
+      workerClient={batchWorkerClient}
       currentSettings={currentSettings}
       currentProfile={currentProfile}
       currentLabStyle={null}
@@ -132,11 +142,11 @@ function renderModal({
       lightSourceProfiles={LIGHT_SOURCE_PROFILES}
       notificationSettings={notificationSettings}
       customProfiles={customProfiles}
-      openTabs={[createOpenTab(profile)]}
+      openTabs={[createOpenTab(profile, openTabSettings)]}
     />,
   );
 
-  return { onOpenContactSheet };
+  return { onOpenContactSheet, workerClient: batchWorkerClient };
 }
 
 describe('BatchModal', () => {
@@ -147,12 +157,16 @@ describe('BatchModal', () => {
     fileBridgeState.openImageFolder.mockReset();
     fileBridgeState.openMultipleImageFiles.mockReset();
     runBatchState.runBatch.mockReset();
+    runBatchState.runBatchConcurrent.mockReset();
     exportNotificationState.notifyExportFinished.mockReset();
     exportNotificationState.primeExportNotificationsPermission.mockReset();
     fileBridgeState.isDesktopShell.mockReturnValue(false);
     exportNotificationState.notifyExportFinished.mockResolvedValue(undefined);
     exportNotificationState.primeExportNotificationsPermission.mockResolvedValue(undefined);
     runBatchState.runBatch.mockImplementation(async function* () {
+      yield { type: 'complete' as const };
+    });
+    runBatchState.runBatchConcurrent.mockImplementation(async function* () {
       yield { type: 'complete' as const };
     });
   });
@@ -257,6 +271,23 @@ describe('BatchModal', () => {
       height: 1,
       aspectRatio: null,
     });
+  });
+
+  it('passes each open tab geometry to the batch processor', async () => {
+    const crop = { x: 0.12, y: 0.18, width: 0.72, height: 0.64, aspectRatio: null };
+    renderModal({
+      customProfiles: [],
+      openTabSettings: createDefaultSettings({ rotation: 270, levelAngle: -1.25, crop }),
+    });
+
+    await screen.findByText('open-scan.tiff');
+    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+
+    await waitFor(() => {
+      expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
+    });
+    const entries = runBatchState.runBatch.mock.calls[0]?.[1] as Array<{ geometry?: unknown }>;
+    expect(entries[0]?.geometry).toEqual({ rotation: 270, levelAngle: -1.25, crop });
   });
 
   it('passes the same neutralized settings into contact sheet generation', async () => {
@@ -527,6 +558,37 @@ describe('BatchModal', () => {
         failureCount: 1,
         cancelled: false,
       });
+    });
+  });
+
+  it('cancels exports that are currently rendering', async () => {
+    let releaseBatch: (() => void) | undefined;
+    const batchGate = new Promise<void>((resolve) => {
+      releaseBatch = resolve;
+    });
+    runBatchState.runBatch.mockImplementation(async function* () {
+      yield { type: 'start' as const, entryId: 'tab-1' };
+      await batchGate;
+      yield { type: 'complete' as const };
+    });
+    const cancelActiveExport = vi.fn(() => true);
+    const workerClient = { cancelActiveExport } as unknown as ImageWorkerClient;
+
+    renderModal({ customProfiles: [], workerClient });
+    await screen.findByText('open-scan.tiff');
+    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+
+    await waitFor(() => {
+      expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Batch' }));
+
+    expect(cancelActiveExport).toHaveBeenCalledWith();
+    expect(runBatchState.runBatch.mock.calls[0]?.[9]).toEqual({ cancelled: true });
+
+    releaseBatch?.();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
     });
   });
 });

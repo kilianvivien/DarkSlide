@@ -4,8 +4,9 @@ import { Check, ChevronDown, Download, FolderOpen, LayoutGrid, Plus, Trash2, X }
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings } from '../types';
 import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFolder, openMultipleImageFiles } from '../utils/fileBridge';
-import { BatchJobEntry, runBatch } from '../utils/batchProcessor';
+import { BatchJobEntry, runBatch, runBatchConcurrent } from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
+import { BatchConcurrencySetting, resolveBatchConcurrency } from '../utils/batchConcurrency';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { customProfileHasEmbeddedCropOrRotation, getBatchEffectiveSettings } from '../utils/batchSettings';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
@@ -120,6 +121,7 @@ export function BatchModal({
   const [batchAutoDustRemoval, setBatchAutoDustRemoval] = useState(currentSettings?.dustRemoval?.autoEnabled ?? false);
   const [batchFlareMode, setBatchFlareMode] = useState<'per-image' | 'first-frame'>('per-image');
   const [batchAutoMode, setBatchAutoMode] = useState<'off' | 'per-image' | 'first-frame'>('off');
+  const [batchConcurrency, setBatchConcurrency] = useState<BatchConcurrencySetting>('auto');
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
     ...DEFAULT_EXPORT_OPTIONS,
     filenameBase: '{original}_darkslide',
@@ -127,11 +129,13 @@ export function BatchModal({
   const [colorManagement, setColorManagement] = useState<ColorManagementSettings>(currentColorManagement ?? DEFAULT_COLOR_MANAGEMENT);
   const [outputPath, setOutputPath] = useState<string | null>(defaultOutputPath ?? null);
   const [isRunning, setIsRunning] = useState(false);
+  const [advancedOptionsOpen, setAdvancedOptionsOpen] = useState(false);
   const [colorMgmtExpanded, setColorMgmtExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const cancelTokenRef = useRef({ cancelled: false });
+  const activeWorkerClientsRef = useRef<ImageWorkerClient[]>([]);
   const desktopShell = isDesktopShell();
 
   useFocusTrap(modalRef, isOpen);
@@ -157,6 +161,8 @@ export function BatchModal({
     setBatchAutoDustRemoval(currentSettings?.dustRemoval?.autoEnabled ?? false);
     setBatchFlareMode('per-image');
     setBatchAutoMode('off');
+    setAdvancedOptionsOpen(false);
+    setColorMgmtExpanded(false);
   }, [currentColorManagement, currentProfile, currentSettings, isOpen]);
 
   useEffect(() => {
@@ -179,6 +185,7 @@ export function BatchModal({
         id: tab.id,
         kind: 'open-tab' as const,
         documentId: tab.id,
+        nativePath: tab.document.source.nativePath ?? undefined,
         sourceMetadata: tab.document.source,
         filename: tab.document.source.name,
         size: tab.document.source.size,
@@ -187,6 +194,11 @@ export function BatchModal({
         progress: existingEntry?.progress,
         histogram: tab.document.histogram,
         estimatedFlare: tab.document.estimatedFlare,
+        geometry: {
+          rotation: tab.document.settings.rotation,
+          levelAngle: tab.document.settings.levelAngle,
+          crop: structuredClone(tab.document.settings.crop),
+        },
         };
       });
 
@@ -302,6 +314,10 @@ export function BatchModal({
   const selectedCustomProfileHasEmbeddedTransforms = settingsSource === 'custom'
     && customProfileHasEmbeddedCropOrRotation(selectedCustomProfile);
   const canOpenContactSheet = entries.length > 0 && Boolean(sharedSettings && sharedProfile);
+  const requestedConcurrency = resolveBatchConcurrency(batchConcurrency);
+  const usesFirstFrameAnalysis = batchFlareMode === 'first-frame' || batchAutoMode === 'first-frame';
+  const activeExportCount = entries.filter((entry) => entry.status === 'processing').length;
+  const effectiveConcurrency = usesFirstFrameAnalysis || !desktopShell ? 1 : requestedConcurrency;
 
   const handleStart = async () => {
     if (!workerClient || !sharedSettings || !sharedProfile) {
@@ -338,6 +354,10 @@ export function BatchModal({
     if (notificationSettings.enabled && notificationSettings.batchComplete) {
       await primeExportNotificationsPermission();
     }
+    if (cancelTokenRef.current.cancelled) {
+      setIsRunning(false);
+      return;
+    }
     setEntries((current) => current.map((entry) => ({
       ...entry,
       status: entry.errorMessage ? 'error' : 'pending',
@@ -349,61 +369,113 @@ export function BatchModal({
       let failureCount = 0;
       const shouldClearEntriesAfterSuccess = runnableEntries.length === entries.length;
 
-      for await (const event of runBatch(
-        workerClient,
-        runnableEntries,
-        structuredClone(sharedSettings),
-        sharedProfile,
-        sharedLabStyle,
-        {
-          ...colorManagement,
-          outputProfileId: exportOptions.outputProfileId,
-          embedOutputProfile: exportOptions.embedOutputProfile,
-        },
-        sharedLightSourceBias,
-        exportOptions,
-        resolvedOutputPath,
-        cancelTokenRef.current,
-        {
-          autoCrop: batchAutoCrop,
-          autoDustRemoval: batchAutoDustRemoval,
-          flareMode: batchFlareMode,
-          autoMode: batchAutoMode,
-        },
-      )) {
-        if (event.type === 'done') {
-          successCount += 1;
-        } else if (event.type === 'error') {
-          failureCount += 1;
-        } else if (event.type === 'complete') {
-          if (notificationSettings.enabled && notificationSettings.batchComplete) {
-            await notifyExportFinished({
-              kind: 'batch',
-              successCount,
-              failureCount,
-              cancelled: cancelTokenRef.current.cancelled,
-            });
-          }
-        }
+      const canReloadInDedicatedWorkers = desktopShell && runnableEntries.every((entry) => (
+        entry.kind === 'file' || Boolean(entry.nativePath ?? entry.sourceMetadata?.nativePath)
+      ));
+      const shouldUseWorkerPool = effectiveConcurrency > 1 && canReloadInDedicatedWorkers;
+      const dedicatedWorkers = shouldUseWorkerPool
+        ? Array.from({ length: Math.min(effectiveConcurrency, runnableEntries.length) }, () => (
+          new ImageWorkerClient({ gpuEnabled: false })
+        ))
+        : [];
+      activeWorkerClientsRef.current = shouldUseWorkerPool ? dedicatedWorkers : [workerClient];
+      const batchEntries = shouldUseWorkerPool
+        ? runnableEntries.map((entry, index) => ({
+          ...entry,
+          sequence: index + 1,
+          kind: 'file' as const,
+          nativePath: entry.nativePath ?? entry.sourceMetadata?.nativePath ?? undefined,
+        }))
+        : runnableEntries;
+      const batchOptions = {
+        autoCrop: batchAutoCrop,
+        autoDustRemoval: batchAutoDustRemoval,
+        flareMode: batchFlareMode,
+        autoMode: batchAutoMode,
+      } as const;
+      const eventStream = shouldUseWorkerPool
+        ? runBatchConcurrent(
+          dedicatedWorkers,
+          batchEntries,
+          structuredClone(sharedSettings),
+          sharedProfile,
+          sharedLabStyle,
+          {
+            ...colorManagement,
+            outputProfileId: exportOptions.outputProfileId,
+            embedOutputProfile: exportOptions.embedOutputProfile,
+          },
+          sharedLightSourceBias,
+          exportOptions,
+          resolvedOutputPath,
+          cancelTokenRef.current,
+          batchOptions,
+        )
+        : runBatch(
+          workerClient,
+          batchEntries,
+          structuredClone(sharedSettings),
+          sharedProfile,
+          sharedLabStyle,
+          {
+            ...colorManagement,
+            outputProfileId: exportOptions.outputProfileId,
+            embedOutputProfile: exportOptions.embedOutputProfile,
+          },
+          sharedLightSourceBias,
+          exportOptions,
+          resolvedOutputPath,
+          cancelTokenRef.current,
+          batchOptions,
+        );
 
-        setEntries((current) => current.map((entry) => {
-          if ('entryId' in event && entry.id !== event.entryId) {
-            return entry;
+      try {
+        for await (const event of eventStream) {
+          if (event.type === 'done') {
+            successCount += 1;
+          } else if (event.type === 'error') {
+            failureCount += 1;
+          } else if (event.type === 'complete') {
+            if (notificationSettings.enabled && notificationSettings.batchComplete) {
+              await notifyExportFinished({
+                kind: 'batch',
+                successCount,
+                failureCount,
+                cancelled: cancelTokenRef.current.cancelled,
+              });
+            }
           }
 
-          switch (event.type) {
-            case 'start':
-              return { ...entry, status: 'processing', progress: 0.05, errorMessage: undefined };
-            case 'progress':
-              return { ...entry, progress: event.progress };
-            case 'done':
-              return { ...entry, status: 'done', progress: 1 };
-            case 'error':
-              return { ...entry, status: 'error', errorMessage: event.message };
-            default:
+          setEntries((current) => current.map((entry) => {
+            if ('entryId' in event && entry.id !== event.entryId) {
               return entry;
-          }
-        }));
+            }
+
+            switch (event.type) {
+              case 'start':
+                return { ...entry, status: 'processing', progress: 0.05, errorMessage: undefined };
+              case 'progress':
+                return { ...entry, progress: event.progress };
+              case 'done':
+                return { ...entry, status: 'done', progress: 1 };
+              case 'error':
+                return { ...entry, status: 'error', errorMessage: event.message };
+              default:
+                return entry;
+            }
+          }));
+        }
+      } finally {
+        activeWorkerClientsRef.current = [];
+        dedicatedWorkers.forEach((client) => client.terminate());
+      }
+
+      if (cancelTokenRef.current.cancelled) {
+        setEntries((current) => current.map((entry) => (
+          entry.status === 'processing'
+            ? { ...entry, status: 'pending', progress: 0 }
+            : entry
+        )));
       }
 
       if (
@@ -466,7 +538,7 @@ export function BatchModal({
               <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-4">
                 <div>
                   <h2 id={titleId} className="text-base font-semibold text-zinc-100">Batch Export</h2>
-                  <p className="mt-0.5 text-xs text-zinc-500">Process multiple scans sequentially with one shared export recipe. RAW files supported on desktop.</p>
+                  <p className="mt-0.5 text-xs text-zinc-500">Export several scans at once with one shared recipe. RAW files are supported on desktop.</p>
                 </div>
                 <button type="button" onClick={onClose} aria-label="Close batch export" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
                   <X size={16} />
@@ -478,7 +550,14 @@ export function BatchModal({
                 {/* Left: file list */}
                 <div className="flex min-h-0 flex-col border-r border-zinc-800/80">
                   <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-3">
-                    <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Files</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Files</h3>
+                      {isRunning && (
+                        <span className="text-[11px] tabular-nums text-amber-400/80">
+                          {activeExportCount} processing
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-2">
                       {desktopShell && (
                         <button
@@ -653,9 +732,6 @@ export function BatchModal({
                         <CheckOption checked={batchAutoCrop} disabled={isRunning} onChange={setBatchAutoCrop}>
                           Auto-crop each scan after decode
                         </CheckOption>
-                        <CheckOption checked={batchAutoDustRemoval} disabled={isRunning} onChange={setBatchAutoDustRemoval}>
-                          Auto dust / scratch / hair removal
-                        </CheckOption>
                       </div>
                     </section>
 
@@ -720,6 +796,47 @@ export function BatchModal({
                           </div>
                         </div>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => setAdvancedOptionsOpen((current) => !current)}
+                        className="flex w-full items-center justify-between rounded-xl border border-zinc-800/70 bg-zinc-900/30 px-3.5 py-2.5 text-[10px] font-semibold uppercase tracking-widest text-zinc-500 transition-colors hover:border-zinc-700 hover:text-zinc-300"
+                        aria-expanded={advancedOptionsOpen}
+                      >
+                        <span>Advanced options</span>
+                        <ChevronDown size={12} className={`transition-transform ${advancedOptionsOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                      {advancedOptionsOpen && <div className="space-y-4 rounded-xl border border-zinc-800/60 bg-zinc-900/20 p-4">
+                        <div>
+                          <div className="mb-2 flex items-center justify-between">
+                            <p className="text-xs text-zinc-400">Parallel exports</p>
+                            <span className="text-[11px] tabular-nums text-zinc-600">
+                              {usesFirstFrameAnalysis ? '1, first-frame analysis' : `${effectiveConcurrency} active`}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-6 gap-1 rounded-lg bg-zinc-950 p-1">
+                            {(['auto', 1, 2, 3, 4, 5] as const).map((value) => (
+                              <button
+                                key={value}
+                                type="button"
+                                disabled={isRunning}
+                                onClick={() => setBatchConcurrency(value)}
+                                className={`rounded-md px-1.5 py-1.5 text-xs font-semibold transition-colors ${
+                                  batchConcurrency === value
+                                    ? 'bg-zinc-100 text-zinc-950'
+                                    : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                              >
+                                {value === 'auto' ? 'Auto' : value}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="mt-2 text-[11px] leading-5 text-zinc-600">
+                            Auto uses CPU and memory limits. First-frame flare or auto settings run in order.
+                          </p>
+                        </div>
+                      <CheckOption checked={batchAutoDustRemoval} disabled={isRunning} onChange={setBatchAutoDustRemoval}>
+                        Auto dust / scratch / hair removal
+                      </CheckOption>
                       <div>
                         <p className="mb-1.5 text-xs text-zinc-400">Output naming</p>
                         <input
@@ -812,6 +929,7 @@ export function BatchModal({
                           </div>
                         )}
                       </div>
+                      </div>}
                     </section>
 
                     <div className="border-t border-zinc-800/80" />
@@ -892,13 +1010,16 @@ export function BatchModal({
                     onClick={() => {
                       if (isRunning) {
                         cancelTokenRef.current.cancelled = true;
+                        activeWorkerClientsRef.current.forEach((client) => {
+                          client.cancelActiveExport();
+                        });
                       } else {
                         onClose();
                       }
                     }}
                     className="rounded-lg border border-zinc-800 px-4 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
                   >
-                    {isRunning ? 'Cancel After Current File' : 'Close'}
+                    {isRunning ? 'Cancel Batch' : 'Close'}
                   </button>
                   <button
                     type="button"
