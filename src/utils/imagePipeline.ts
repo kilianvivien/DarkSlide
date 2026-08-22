@@ -199,8 +199,8 @@ export function rotateCropClockwise(crop: CropSettings): CropSettings {
   const y = clamp(crop.y, 0, 1 - height);
 
   return {
-    x: y,
-    y: 1 - x - width,
+    x: 1 - y - height,
+    y: x,
     width: height,
     height: width,
     aspectRatio: crop.aspectRatio ? 1 / crop.aspectRatio : null,
