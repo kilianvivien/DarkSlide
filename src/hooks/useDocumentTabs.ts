@@ -31,7 +31,9 @@ export function useDocumentTabs() {
   const [tabs, setTabs] = useState<DocumentTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const tabsRef = useRef<DocumentTab[]>([]);
+  const activeTabIdRef = useRef<string | null>(null);
   tabsRef.current = tabs;
+  activeTabIdRef.current = activeTabId;
 
   const interactionSnapshotRef = useRef<DocumentHistoryEntry | null>(null);
 
@@ -178,15 +180,16 @@ export function useDocumentTabs() {
       return {
         removedTab: null,
         remainingTabs: currentTabs,
-        nextActiveTabId: activeTabId,
+        nextActiveTabId: activeTabIdRef.current,
       };
     }
 
     const removedTab = currentTabs[tabIndex];
     const remainingTabs = currentTabs.filter((tab) => tab.id !== documentId);
-    const nextActiveTab = activeTabId === documentId
+    const currentActiveTabId = activeTabIdRef.current;
+    const nextActiveTab = currentActiveTabId === documentId
       ? (remainingTabs[tabIndex] ?? remainingTabs[tabIndex - 1] ?? null)
-      : remainingTabs.find((tab) => tab.id === activeTabId) ?? null;
+      : remainingTabs.find((tab) => tab.id === currentActiveTabId) ?? null;
 
     setTabs(remainingTabs);
     setActiveTabId(nextActiveTab?.id ?? null);
@@ -196,7 +199,7 @@ export function useDocumentTabs() {
       remainingTabs,
       nextActiveTabId: nextActiveTab?.id ?? null,
     };
-  }, [activeTabId]);
+  }, []);
 
   const evictOldestCleanTab = useCallback((maxTabs: number) => {
     const currentTabs = tabsRef.current;

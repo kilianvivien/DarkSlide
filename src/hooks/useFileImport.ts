@@ -15,6 +15,7 @@ import {
   DEFAULT_EXPORT_OPTIONS,
   FILM_PROFILES,
   MAX_FILE_SIZE_BYTES,
+  RAW_EDITOR_PREVIEW_MAX_DIMENSION,
   resolveLightSourceIdForProfile,
 } from '../constants';
 import { appendDiagnostic } from '../utils/diagnostics';
@@ -32,6 +33,7 @@ import {
 import { shouldUseDirectRawFilmBase } from '../utils/pipelineIntent';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getSidecarCandidatePaths, parseSidecar } from '../utils/sidecarSettings';
+import { waitForNextPaint } from '../utils/appHelpers';
 
 type BlockingOverlayState = {
   title: string;
@@ -48,6 +50,7 @@ type TabsApi = {
   replaceDocument: (documentId: string, document: WorkspaceDocument) => void;
   activateDocument: (documentId: string) => void;
   findDocumentBySourcePath: (nativePath: string) => DocumentTab | null;
+  hasDocument: (documentId: string) => boolean;
   removeDocument: (documentId: string) => {
     removedTab: DocumentTab | null;
     remainingTabs: DocumentTab[];
@@ -79,6 +82,20 @@ type UseFileImportOptions = {
   setTransientNotice: (notice: TransientNoticeState) => void;
   resolveRollId?: (nativePath: string | null | undefined, fileName: string) => string | null;
   getRollById?: (rollId: string | null) => Roll | null;
+};
+
+export type FileImportSource = {
+  file: File;
+  nativePath?: string | null;
+  nativeFileSize?: number;
+};
+
+export type FileImportSourceLoader = () => Promise<FileImportSource | null>;
+
+type ImportFileOptions = {
+  activate?: boolean;
+  background?: boolean;
+  importSession?: number;
 };
 
 const RAW_GENERIC_PROFILE_ID = 'generic-color';
@@ -148,29 +165,45 @@ export function useFileImport({
   getRollById,
 }: UseFileImportOptions) {
   const importSessionRef = useRef(0);
+  const backgroundQueueRef = useRef<Promise<void>>(Promise.resolve());
   const ignoredSidecarsRef = useRef(new Set<string>());
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
 
-  const importFile = useCallback(async (file: File, nativePath?: string | null, nativeFileSize?: number) => {
+  const importFile = useCallback(async (
+    file: File,
+    nativePath?: string | null,
+    nativeFileSize?: number,
+    options: ImportFileOptions = {},
+  ) => {
     const worker = workerClientRef.current;
     if (!worker) return null;
+    const activate = options.activate ?? true;
+    const background = options.background ?? false;
+    const reportError = (message: string, notifyBackground = true) => {
+      if (background) {
+        if (notifyBackground) {
+          pushToast({ level: 'error', title: `Couldn't import ${file.name}`, message });
+        }
+        return;
+      }
+      setError(message);
+      setImportError(message);
+    };
     const sourceFileSize = nativeFileSize ?? file.size;
     const rawImport = isRawFile(file);
 
     if (rawImport) {
       if (!isDesktopShell()) {
         const message = 'RAW files (.dng, .cr3, .nef, .arw, .raf, .rw2) require the DarkSlide desktop app. Convert to TIFF for browser use, or download DarkSlide for desktop.';
-        setError(message);
-        setImportError(message);
+        reportError(message);
         appendDiagnostic({ level: 'error', code: 'RAW_UNSUPPORTED', message: file.name, context: { extension: getFileExtension(file.name) } });
         return null;
       }
 
       if (!nativePath) {
         const message = 'RAW import requires a file path. Please use File > Open.';
-        setError(message);
-        setImportError(message);
+        reportError(message);
         appendDiagnostic({ level: 'error', code: 'RAW_PATH_REQUIRED', message: file.name, context: { extension: getFileExtension(file.name) } });
         return null;
       }
@@ -178,16 +211,14 @@ export function useFileImport({
 
     if (!isSupportedFile(file) && !rawImport) {
       const message = 'Unsupported file type. Import TIFF, JPEG, PNG, or WebP for now.';
-      setError(message);
-      setImportError(message);
+      reportError(message);
       appendDiagnostic({ level: 'error', code: 'UNSUPPORTED_FILE', message: file.name });
       return null;
     }
 
     if (!rawImport && sourceFileSize > MAX_FILE_SIZE_BYTES) {
       const message = `File is too large (${Math.round(sourceFileSize / 1024 / 1024)} MB). Maximum supported size is ${Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB.`;
-      setError(message);
-      setImportError(message);
+      reportError(message);
       appendDiagnostic({
         level: 'error',
         code: 'FILE_TOO_LARGE',
@@ -201,15 +232,24 @@ export function useFileImport({
     }
 
     setIsImporting(true);
-    setError(null);
-    setImportError(null);
-    resetUiForImport();
+    if (!background) {
+      setError(null);
+      setImportError(null);
+    }
+    if (activate) {
+      resetUiForImport();
+    }
 
     if (nativePath) {
       const existingTab = tabsApi.findDocumentBySourcePath(nativePath);
       if (existingTab) {
-        tabsApi.activateDocument(existingTab.id);
-        setBlockingOverlay(null);
+        if (activate) {
+          tabsApi.activateDocument(existingTab.id);
+        }
+        if (!background) {
+          setBlockingOverlay(null);
+        }
+        setIsImporting(false);
         return existingTab.id;
       }
     }
@@ -217,8 +257,7 @@ export function useFileImport({
     const evictedTab = tabsApi.evictOldestCleanTab(maxTabs);
     if (evictedTab === 'all-dirty') {
       const message = `You already have ${maxTabs} tabs open. Close a dirty tab before importing another image.`;
-      setError(message);
-      setImportError(message);
+      reportError(message);
       setIsImporting(false);
       return null;
     }
@@ -227,8 +266,13 @@ export function useFileImport({
       void disposeDocument(evictedTab.id);
     }
 
-    const importSession = importSessionRef.current + 1;
-    importSessionRef.current = importSession;
+    const importSession = options.importSession ?? (importSessionRef.current + 1);
+    if (options.importSession === undefined) {
+      importSessionRef.current = importSession;
+    } else if (importSession !== importSessionRef.current) {
+      setIsImporting(false);
+      return null;
+    }
 
     const documentId = crypto.randomUUID();
     const rollId = resolveRollId?.(nativePath, file.name) ?? null;
@@ -250,7 +294,30 @@ export function useFileImport({
     const activeImportProfile = rawImport
       ? (preferredImportProfile ?? rawStartupProfile)
       : (preferredImportProfile ?? fallbackProfile);
-    activeDocumentIdRef.current = documentId;
+    if (activate) {
+      activeDocumentIdRef.current = documentId;
+    }
+
+    const importIsStale = () => (
+      importSession !== importSessionRef.current
+      || !tabsApi.hasDocument(documentId)
+      || (activate && activeDocumentIdRef.current !== documentId)
+    );
+
+    const discardStaleImport = async (stage: string) => {
+      await disposeDocument(documentId);
+      tabsApi.removeDocument(documentId);
+      appendDiagnostic({
+        level: 'info',
+        code: 'IMPORT_STALE_IGNORED',
+        message: file.name,
+        context: {
+          documentId,
+          importSession,
+          stage,
+        },
+      });
+    };
 
     appendDiagnostic({
       level: 'info',
@@ -305,14 +372,16 @@ export function useFileImport({
     };
 
     flushSync(() => {
-      setBlockingOverlay(rawImport ? {
-        title: 'RAW import underway',
-        detail: 'Decoding the RAW file and preparing the first preview.',
-      } : {
-        title: 'Import underway',
-        detail: 'Loading the image and preparing preview levels.',
-      });
-      tabsApi.openDocument(loadingDocument, { activate: true });
+      if (!background) {
+        setBlockingOverlay(rawImport ? {
+          title: 'RAW import underway',
+          detail: 'Decoding the RAW file and preparing the first preview.',
+        } : {
+          title: 'Import underway',
+          detail: 'Loading the image and preparing preview levels.',
+        });
+      }
+      tabsApi.openDocument(loadingDocument, { activate });
     });
 
     try {
@@ -332,6 +401,8 @@ export function useFileImport({
             fileName: file.name,
             path: nativePath!,
             size: sourceFileSize,
+            maxDimension: RAW_EDITOR_PREVIEW_MAX_DIMENSION,
+            includeHighDepth: false,
           });
           const estimatedFilmBaseEstimate = decodeRequest.precomputedFilmBase ?? null;
           const estimatedFilmBase = estimatedFilmBaseEstimate?.sample
@@ -386,21 +457,55 @@ export function useFileImport({
           appendDiagnostic({
             level: 'info',
             code: 'RAW_DECODED',
-            message: `RAW decoded via Tauri: ${file.name} (${rawResult.width}×${rawResult.height}, ${rawResult.color_space})`,
+            message: `RAW preview ready: ${file.name} (${rawResult.width}×${rawResult.height}, ${rawResult.color_space})`,
             context: {
               colorSpace: rawResult.color_space,
               documentId,
               fileName: file.name,
               height: rawResult.height,
+              previewHeight: rawResult.height,
+              previewWidth: rawResult.width,
+              sourceHeight: rawResult.sourceHeight ?? rawResult.height,
+              sourceWidth: rawResult.sourceWidth ?? rawResult.width,
               orientation: rawResult.orientation ?? null,
               width: rawResult.width,
+              cacheHit: rawResult.cacheHit ?? false,
+              cacheReadMs: rawResult.cacheReadMs ?? 0,
+              decodeMs: rawResult.decodeMs ?? 0,
+              queueWaitMs: rawResult.queueWaitMs ?? 0,
             },
           });
 
+          worker.registerDocumentReloaders(documentId, {
+            preview: async () => {
+              const result = await decodeDesktopRawForWorker({
+                documentId,
+                fileName: file.name,
+                path: nativePath!,
+                size: sourceFileSize,
+                maxDimension: RAW_EDITOR_PREVIEW_MAX_DIMENSION,
+                includeHighDepth: false,
+              });
+              return { ...result.decodeRequest, displayScaleFactor };
+            },
+            full: async () => {
+              const result = await decodeDesktopRawForWorker({
+                documentId,
+                fileName: file.name,
+                path: nativePath!,
+                size: sourceFileSize,
+                includeHighDepth: true,
+              });
+              return { ...result.decodeRequest, displayScaleFactor };
+            },
+          });
           decoded = await worker.decode({
             ...decodeRequest,
             displayScaleFactor,
-          });
+          }, { retainRecoveryCache: false });
+          if (rawResult.orientation) {
+            decoded.metadata.exif = { orientation: rawResult.orientation };
+          }
         } catch (rawError) {
           const message = formatError(rawError);
           appendDiagnostic({
@@ -417,17 +522,8 @@ export function useFileImport({
         }
       } else {
         const buffer = await file.arrayBuffer();
-        if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
-          appendDiagnostic({
-            level: 'info',
-            code: 'IMPORT_STALE_IGNORED',
-            message: file.name,
-            context: {
-              documentId,
-              importSession,
-              stage: 'array-buffer',
-            },
-          });
+        if (importIsStale()) {
+          await discardStaleImport('array-buffer');
           return null;
         }
 
@@ -449,18 +545,8 @@ export function useFileImport({
         }
       }
 
-      if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
-        await disposeDocument(documentId);
-        appendDiagnostic({
-          level: 'info',
-          code: 'IMPORT_STALE_IGNORED',
-          message: file.name,
-          context: {
-            documentId,
-            importSession,
-            stage: 'decode',
-          },
-        });
+      if (importIsStale()) {
+        await discardStaleImport('decode');
         return null;
       }
 
@@ -505,6 +591,11 @@ export function useFileImport({
 
       if (restoredSidecar && !shouldRestoreSidecar && nativePath) {
         ignoredSidecarsRef.current.add(nativePath);
+      }
+
+      if (importIsStale()) {
+        await discardStaleImport('sidecar');
+        return null;
       }
 
       const nextDocument: WorkspaceDocument = {
@@ -560,9 +651,12 @@ export function useFileImport({
       tabsApi.replaceDocument(documentId, nextDocument);
 
       if (decoded.metadata.unsupportedColorProfileName) {
-        setTransientNotice({
-          message: `Unsupported source profile "${decoded.metadata.unsupportedColorProfileName}". DarkSlide is using sRGB until you override it.`,
-        });
+        const message = `Unsupported source profile "${decoded.metadata.unsupportedColorProfileName}". DarkSlide is using sRGB until you override it.`;
+        if (background) {
+          pushToast({ level: 'warning', title: file.name, message });
+        } else {
+          setTransientNotice({ message });
+        }
       }
 
       addRecentFile({
@@ -584,16 +678,21 @@ export function useFileImport({
         },
       });
 
-      setBlockingOverlay(null);
+      if (!background) {
+        setBlockingOverlay(null);
+      }
       return documentId;
     } catch (importErr) {
-      if (importSession !== importSessionRef.current || activeDocumentIdRef.current !== documentId) {
+      if (importIsStale()) {
+        await discardStaleImport('error');
         return null;
       }
 
       const message = formatError(importErr);
       const errorCode = getErrorCode(importErr);
-      activeDocumentIdRef.current = null;
+      if (activate) {
+        activeDocumentIdRef.current = null;
+      }
       const diagnostic = appendDiagnostic({
         level: 'error',
         code: 'IMPORT_FAILED',
@@ -605,16 +704,18 @@ export function useFileImport({
         },
       });
       const nextError = errorCode === 'OUT_OF_MEMORY' ? message : `Import failed. ${message}`;
-      setError(nextError);
-      setImportError(nextError);
+      reportError(nextError, false);
       pushToast({
         level: 'error',
         title: 'Couldn’t import file',
         message: `${file.name}: ${message}`,
         diagnosticId: diagnostic?.id,
       });
+      await disposeDocument(documentId);
       tabsApi.removeDocument(documentId);
-      setBlockingOverlay(null);
+      if (!background) {
+        setBlockingOverlay(null);
+      }
       return null;
     } finally {
       setIsImporting(false);
@@ -641,8 +742,95 @@ export function useFileImport({
     resolveRollId,
   ]);
 
+  const importFiles = useCallback(async (sources: Array<FileImportSource | FileImportSourceLoader>) => {
+    if (sources.length === 0) return null;
+
+    const importSession = importSessionRef.current + 1;
+    importSessionRef.current = importSession;
+    let foregroundDocumentId: string | null = null;
+    let nextSourceIndex = 0;
+    const loadSource = async (
+      source: FileImportSource | FileImportSourceLoader,
+      background: boolean,
+    ) => {
+      try {
+        return typeof source === 'function' ? await source() : source;
+      } catch (sourceError) {
+        const message = formatError(sourceError);
+        const diagnostic = appendDiagnostic({
+          level: 'error',
+          code: 'IMPORT_SOURCE_LOAD_FAILED',
+          message,
+        });
+        if (background) {
+          pushToast({
+            level: 'error',
+            title: "Couldn't open file",
+            message,
+            diagnosticId: diagnostic?.id,
+          });
+        } else {
+          setError(`Could not open file. ${message}`);
+          setImportError(`Could not open file. ${message}`);
+        }
+        return null;
+      }
+    };
+
+    while (nextSourceIndex < sources.length && !foregroundDocumentId) {
+      const source = await loadSource(sources[nextSourceIndex], false);
+      nextSourceIndex += 1;
+      if (!source) continue;
+      foregroundDocumentId = await importFile(
+        source.file,
+        source.nativePath,
+        source.nativeFileSize,
+        { activate: true, importSession },
+      );
+      if (importSession !== importSessionRef.current) {
+        return null;
+      }
+    }
+
+    if (!foregroundDocumentId || nextSourceIndex >= sources.length) {
+      return foregroundDocumentId;
+    }
+
+    const backgroundSources = sources.slice(nextSourceIndex);
+    await waitForNextPaint();
+
+    backgroundQueueRef.current = backgroundQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        for (const source of backgroundSources) {
+          if (importSession !== importSessionRef.current) {
+            break;
+          }
+          const loadedSource = await loadSource(source, true);
+          if (!loadedSource) continue;
+          await importFile(
+            loadedSource.file,
+            loadedSource.nativePath,
+            loadedSource.nativeFileSize,
+            { activate: false, background: true, importSession },
+          );
+        }
+      })
+      .catch((backgroundError) => {
+        appendDiagnostic({
+          level: 'error',
+          code: 'BACKGROUND_IMPORT_FAILED',
+          message: formatError(backgroundError),
+        });
+      });
+
+    void backgroundQueueRef.current;
+    return foregroundDocumentId;
+  }, [formatError, importFile, setError]);
+
   return {
     importFile,
+    importFiles,
     isImporting,
     importError,
     importSessionRef,

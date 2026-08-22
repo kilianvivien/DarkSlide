@@ -9,11 +9,13 @@ type UseAppShortcutsOptions = {
   activeTabId: string | null;
   setActiveTabId: (value: string | null) => void;
   documentStatePresent: boolean;
+  showShortcutHelp: boolean;
   isCropOverlayVisible: boolean;
   dustBrushActive: boolean;
   usesNativeFileDialogs: boolean;
   setShowBatchModal: Dispatch<SetStateAction<boolean>>;
   setShowSettingsModal: Dispatch<SetStateAction<boolean>>;
+  setShowShortcutHelp: Dispatch<SetStateAction<boolean>>;
   setIsSpaceHeld: Dispatch<SetStateAction<boolean>>;
   onUndo: () => void;
   onRedo: () => void;
@@ -29,6 +31,16 @@ type UseAppShortcutsOptions = {
   onCopyDebugInfo: () => Promise<void>;
   onToggleComparison: () => void;
   onAutoAdjust: () => void;
+  onCopySettings: () => void;
+  onPasteSettings: () => void;
+  onRotateClockwise: () => void;
+  onRotateCounterclockwise: () => void;
+  onDecreaseExposure: () => void;
+  onIncreaseExposure: () => void;
+  onDecreaseContrast: () => void;
+  onIncreaseContrast: () => void;
+  onDecreaseSaturation: () => void;
+  onIncreaseSaturation: () => void;
   onToggleCropOverlay: () => void;
   onToggleDustBrush: () => void;
   onDecreaseDustBrushRadius: () => void;
@@ -36,8 +48,8 @@ type UseAppShortcutsOptions = {
   onRemoveLastDustMark: () => void;
   onDeactivateDustBrush: () => void;
   onToggleLeftPane: () => void;
-  onToggleRightPane: () => void;
-onToggleScanningSession: () => void;
+  onToggleProfilesPane: () => void;
+  onToggleScanningSession: () => void;
   onCheckForUpdates: () => void;
   zoomToFit: () => void;
   zoomTo100: () => void;
@@ -50,11 +62,13 @@ export function useAppShortcuts({
   activeTabId,
   setActiveTabId,
   documentStatePresent,
+  showShortcutHelp,
   isCropOverlayVisible,
   dustBrushActive,
   usesNativeFileDialogs,
   setShowBatchModal,
   setShowSettingsModal,
+  setShowShortcutHelp,
   setIsSpaceHeld,
   onUndo,
   onRedo,
@@ -70,6 +84,16 @@ export function useAppShortcuts({
   onCopyDebugInfo,
   onToggleComparison,
   onAutoAdjust,
+  onCopySettings,
+  onPasteSettings,
+  onRotateClockwise,
+  onRotateCounterclockwise,
+  onDecreaseExposure,
+  onIncreaseExposure,
+  onDecreaseContrast,
+  onIncreaseContrast,
+  onDecreaseSaturation,
+  onIncreaseSaturation,
   onToggleCropOverlay,
   onToggleDustBrush,
   onDecreaseDustBrushRadius,
@@ -77,8 +101,8 @@ export function useAppShortcuts({
   onRemoveLastDustMark,
   onDeactivateDustBrush,
   onToggleLeftPane,
-  onToggleRightPane,
-onToggleScanningSession,
+  onToggleProfilesPane,
+  onToggleScanningSession,
   onCheckForUpdates,
   zoomToFit,
   zoomTo100,
@@ -86,6 +110,7 @@ onToggleScanningSession,
   zoomOut,
 }: UseAppShortcutsOptions) {
   useKeyboardShortcuts({
+    paused: showShortcutHelp,
     shortcuts: {
       undo: { key: 'z', meta: true, handler: onUndo },
       redo: { key: 'z', meta: true, shift: true, handler: onRedo },
@@ -103,6 +128,47 @@ onToggleScanningSession,
       quickExport3: { key: '3', meta: true, shift: true, when: () => Boolean(documentStatePresent && quickExportPresets[2]), handler: () => { void onQuickExport(quickExportPresets[2]!); } },
       quickExport4: { key: '4', meta: true, shift: true, when: () => Boolean(documentStatePresent && quickExportPresets[3]), handler: () => { void onQuickExport(quickExportPresets[3]!); } },
       autoAdjust: { key: 'a', meta: true, shift: true, when: () => documentStatePresent, handler: onAutoAdjust },
+      autoAdjustDirect: { key: 'a', when: () => documentStatePresent, handler: onAutoAdjust },
+      copySettings: { key: 'c', meta: true, when: () => documentStatePresent, handler: onCopySettings },
+      pasteSettings: { key: 'v', meta: true, when: () => documentStatePresent, handler: onPasteSettings },
+      toggleCropDirect: { key: 'c', when: () => documentStatePresent, handler: onToggleCropOverlay },
+      toggleComparisonDirect: { key: '\\', when: () => documentStatePresent, handler: onToggleComparison },
+      rotateClockwise: { key: 'r', when: () => documentStatePresent, handler: onRotateClockwise },
+      rotateCounterclockwise: { key: 'r', shift: true, when: () => documentStatePresent, handler: onRotateCounterclockwise },
+      decreaseExposure: { key: 'arrowdown', when: () => documentStatePresent, handler: onDecreaseExposure },
+      increaseExposure: { key: 'arrowup', when: () => documentStatePresent, handler: onIncreaseExposure },
+      decreaseContrast: { key: 'arrowdown', alt: true, when: () => documentStatePresent, handler: onDecreaseContrast },
+      increaseContrast: { key: 'arrowup', alt: true, when: () => documentStatePresent, handler: onIncreaseContrast },
+      decreaseSaturation: { key: 'arrowdown', meta: true, when: () => documentStatePresent, handler: onDecreaseSaturation },
+      increaseSaturation: { key: 'arrowup', meta: true, when: () => documentStatePresent, handler: onIncreaseSaturation },
+      showShortcuts: { key: '?', shift: true, handler: () => setShowShortcutHelp((current) => !current) },
+      previousImage: {
+        key: 'arrowleft',
+        when: () => tabs.length > 1,
+        handler: () => {
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+          const nextIndex = currentIndex <= 0 ? tabs.length - 1 : currentIndex - 1;
+          setActiveTabId(tabs[nextIndex]?.id ?? activeTabId);
+        },
+      },
+      nextImage: {
+        key: 'arrowright',
+        when: () => tabs.length > 1,
+        handler: () => {
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+          const nextIndex = currentIndex >= tabs.length - 1 ? 0 : currentIndex + 1;
+          setActiveTabId(tabs[nextIndex]?.id ?? activeTabId);
+        },
+      },
+      nextImageEnter: {
+        key: 'enter',
+        when: () => tabs.length > 1,
+        handler: () => {
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+          const nextIndex = currentIndex >= tabs.length - 1 ? 0 : currentIndex + 1;
+          setActiveTabId(tabs[nextIndex]?.id ?? activeTabId);
+        },
+      },
       toggleDustBrush: { key: 'd', when: () => documentStatePresent && !isCropOverlayVisible, handler: onToggleDustBrush },
       decreaseDustBrush: { key: '[', when: () => dustBrushActive, handler: onDecreaseDustBrushRadius },
       increaseDustBrush: { key: ']', when: () => dustBrushActive, handler: onIncreaseDustBrushRadius },
@@ -110,7 +176,7 @@ onToggleScanningSession,
       deactivateDustBrush: { key: 'escape', when: () => dustBrushActive, handler: onDeactivateDustBrush },
       batchExport: { key: 'e', meta: true, shift: true, handler: () => setShowBatchModal(true) },
       toggleScanningSession: { key: 'w', meta: true, shift: true, when: () => usesNativeFileDialogs, handler: onToggleScanningSession },
-previousTab: {
+      previousTab: {
         key: '[',
         meta: true,
         shift: true,
@@ -168,7 +234,7 @@ previousTab: {
           onToggleLeftPane();
           break;
         case 'toggle-profiles-pane':
-          onToggleRightPane();
+          onToggleProfilesPane();
           break;
         case 'zoom-fit':
           zoomToFit();
@@ -188,7 +254,7 @@ previousTab: {
         case 'scan-session-toggle':
           onToggleScanningSession();
           break;
-case 'check-for-updates':
+        case 'check-for-updates':
           onCheckForUpdates();
           break;
         case 'clear-recent-files':
@@ -213,6 +279,18 @@ case 'check-for-updates':
     },
     enableMenuEvents: usesNativeFileDialogs,
   });
+
+  useEffect(() => {
+    if (!showShortcutHelp) return;
+    const handleShortcutHelpKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' || event.key === '?') {
+        event.preventDefault();
+        setShowShortcutHelp(false);
+      }
+    };
+    window.addEventListener('keydown', handleShortcutHelpKey);
+    return () => window.removeEventListener('keydown', handleShortcutHelpKey);
+  }, [setShowShortcutHelp, showShortcutHelp]);
 
   useEffect(() => {
     const handleKeyUp = (event: KeyboardEvent) => {

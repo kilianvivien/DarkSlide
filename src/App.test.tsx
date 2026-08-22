@@ -25,9 +25,14 @@ class MockImageBitmap {
 
 const workerState = vi.hoisted(() => ({
   decode: vi.fn(),
+  inheritPreviewAnalysis: vi.fn(),
+  registerDocumentReloaders: vi.fn(),
   detectDust: vi.fn(),
   detectFrame: vi.fn(),
+  estimateLensDistortion: vi.fn(),
   render: vi.fn(),
+  renderThumbnail: vi.fn(),
+  getCachedThumbnailPreview: vi.fn(),
   autoAnalyze: vi.fn(),
   export: vi.fn(),
   contactSheet: vi.fn(),
@@ -38,6 +43,7 @@ const workerState = vi.hoisted(() => ({
   evictPreviews: vi.fn(async () => ({ evicted: true })),
   trimResidentDocuments: vi.fn(async () => ({ evicted: true })),
   cancelActivePreviewRender: vi.fn(async () => undefined),
+  cancelActiveExport: vi.fn(() => false),
   noteCoalescedPreviewRequest: vi.fn(),
   preparePreviewBitmap: vi.fn(),
   recordPreviewPresentationTimings: vi.fn(),
@@ -171,6 +177,7 @@ vi.mock('@tauri-apps/api/webview', () => ({
 vi.mock('./components/Sidebar', () => ({
   Sidebar: ({
     exportOptions,
+    settings,
     lightSourceId,
     onInteractionStart,
     onInteractionEnd,
@@ -180,12 +187,24 @@ vi.mock('./components/Sidebar', () => ({
     onLightSourceChange,
     onAutoAdjust,
     onAutoWhiteBalance,
+    onRedetectFrame,
+    onAutoLensDistortion,
+    cropSource,
     onExportOptionsChange,
     onExport,
+    onCancelExport,
+    isExporting,
+    activeTab,
     onTogglePicker,
     onReanalyzeFilmBase,
+    onSetPointPicker,
   }: {
     exportOptions: { filenameBase: string };
+    settings: {
+      lensDistortion?: number;
+      rotation?: number;
+      crop?: { x: number; y: number; width: number; height: number };
+    };
     lightSourceId?: string | null;
     onInteractionStart?: () => void;
     onInteractionEnd?: () => void;
@@ -195,10 +214,17 @@ vi.mock('./components/Sidebar', () => ({
     onLightSourceChange?: (lightSourceId: string | null) => void;
     onAutoAdjust?: () => void;
     onAutoWhiteBalance?: () => void;
+    onRedetectFrame?: () => void;
+    onAutoLensDistortion?: () => void;
+    cropSource?: string | null;
     onExportOptionsChange: (options: { filenameBase?: string }) => void;
     onExport: () => void;
+    onCancelExport?: () => void;
+    isExporting: boolean;
+    activeTab: string;
     onTogglePicker: () => void;
     onReanalyzeFilmBase?: () => void;
+    onSetPointPicker?: (mode: 'black' | 'grey' | 'white' | null) => void;
   }) => {
     const [, setExposure] = React.useState(0);
     const [, setBlackAndWhiteEnabled] = React.useState(false);
@@ -210,8 +236,9 @@ vi.mock('./components/Sidebar', () => ({
           value={exportOptions.filenameBase}
           onChange={(event) => onExportOptionsChange({ filenameBase: event.target.value })}
         />
-        <button type="button" onClick={onExport}>
-          Sidebar Export
+        {activeTab === 'export' && <section aria-label="Export summary">JPEG export settings</section>}
+        <button type="button" onClick={isExporting ? onCancelExport : onExport}>
+          {isExporting ? 'Cancel export' : 'Sidebar Export'}
         </button>
         <button type="button" onClick={onOpenSettings}>
           Open Settings
@@ -221,6 +248,9 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={onReanalyzeFilmBase}>
           Re-analyze Film Base
+        </button>
+        <button type="button" onClick={() => onSetPointPicker?.('grey')}>
+          Set Grey Point
         </button>
         <div>Current Light Source: {lightSourceId ?? 'auto'}</div>
         <button type="button" onClick={() => onLightSourceChange?.(null)}>
@@ -234,6 +264,16 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={onAutoWhiteBalance}>
           Auto WB
+        </button>
+        <div>Crop Source: {cropSource ?? 'none'}</div>
+        <div>Current Rotation: {settings.rotation ?? 0}</div>
+        <div>Current Crop: {settings.crop ? `${settings.crop.x},${settings.crop.y},${settings.crop.width},${settings.crop.height}` : 'none'}</div>
+        <button type="button" onClick={onRedetectFrame}>
+          Redetect Frame
+        </button>
+        <div>Current Lens: {settings.lensDistortion ?? 0}</div>
+        <button type="button" onClick={onAutoLensDistortion}>
+          Auto Lens Correction
         </button>
         <button
           type="button"
@@ -286,6 +326,19 @@ vi.mock('./components/Sidebar', () => ({
         <button
           type="button"
           onClick={() => onSettingsChange({
+            curves: {
+              rgb: [{ x: 0, y: 0 }, { x: 128, y: 180 }, { x: 255, y: 255 }],
+              red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+              green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+              blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+            },
+          })}
+        >
+          Nudge RGB Curve
+        </button>
+        <button
+          type="button"
+          onClick={() => onSettingsChange({
             crop: {
               x: 0.1,
               y: 0.15,
@@ -316,6 +369,12 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={() => onSettingsChange({ rotation: 180, levelAngle: -3 })}>
           Apply Half Rotation
+        </button>
+        <button type="button" onClick={() => onSettingsChange({ rotation: 270, levelAngle: 0 })}>
+          Apply Three-Quarter Rotation
+        </button>
+        <button type="button" onClick={() => onSettingsChange({ lensDistortion: 31 })}>
+          Apply Lens Correction
         </button>
         <button type="button" onClick={onInteractionEnd}>
           End Drag
@@ -366,10 +425,14 @@ vi.mock('./components/TabBar', () => ({
     tabs = [],
     activeTabId,
     onSelectTab,
+    selectedIds = new Set<string>(),
+    onSelectionChange,
   }: {
     tabs?: Array<{ id: string; document: { source: { name: string } } }>;
     activeTabId?: string | null;
     onSelectTab?: (tabId: string) => void;
+    selectedIds?: Set<string>;
+    onSelectionChange?: React.Dispatch<React.SetStateAction<Set<string>>>;
   }) => (
     <div data-testid="tab-bar">
       {tabs.map((tab) => (
@@ -377,7 +440,13 @@ vi.mock('./components/TabBar', () => ({
           key={tab.id}
           type="button"
           aria-pressed={tab.id === activeTabId}
-          onClick={() => onSelectTab?.(tab.id)}
+          data-selected={selectedIds.has(tab.id)}
+          onClick={(event) => {
+            if (event.metaKey || event.ctrlKey) {
+              onSelectionChange?.((current) => new Set([...current, tab.id]));
+            }
+            onSelectTab?.(tab.id);
+          }}
         >
           {tab.document.source.name}
         </button>
@@ -449,6 +518,9 @@ vi.mock('./hooks/useCustomPresets', async () => {
 });
 
 vi.mock('./utils/imageWorkerClient', () => ({
+  isImageExportCancelledError: (error: unknown) => (
+    error instanceof Error && error.name === 'ImageExportCancelledError'
+  ),
   ImageWorkerClient: class MockImageWorkerClient {
     constructor(options: Record<string, unknown> = {}) {
       workerState.constructorOptions.push(options);
@@ -456,6 +528,14 @@ vi.mock('./utils/imageWorkerClient', () => ({
 
     decode(...args: Parameters<typeof workerState.decode>) {
       return workerState.decode(...args);
+    }
+
+    inheritPreviewAnalysis(...args: Parameters<typeof workerState.inheritPreviewAnalysis>) {
+      return workerState.inheritPreviewAnalysis(...args);
+    }
+
+    registerDocumentReloaders(...args: Parameters<typeof workerState.registerDocumentReloaders>) {
+      return workerState.registerDocumentReloaders(...args);
     }
 
     detectDust(...args: Parameters<typeof workerState.detectDust>) {
@@ -466,8 +546,20 @@ vi.mock('./utils/imageWorkerClient', () => ({
       return workerState.detectFrame(...args);
     }
 
+    estimateLensDistortion(...args: Parameters<typeof workerState.estimateLensDistortion>) {
+      return workerState.estimateLensDistortion(...args);
+    }
+
     render(...args: Parameters<typeof workerState.render>) {
       return workerState.render(...args);
+    }
+
+    renderThumbnail(...args: Parameters<typeof workerState.renderThumbnail>) {
+      return workerState.renderThumbnail(...args);
+    }
+
+    getCachedThumbnailPreview(...args: Parameters<typeof workerState.getCachedThumbnailPreview>) {
+      return workerState.getCachedThumbnailPreview(...args);
     }
 
     autoAnalyze(...args: Parameters<typeof workerState.autoAnalyze>) {
@@ -528,6 +620,10 @@ vi.mock('./utils/imageWorkerClient', () => ({
 
     cancelActivePreviewRender(...args: Parameters<typeof workerState.cancelActivePreviewRender>) {
       return workerState.cancelActivePreviewRender(...args);
+    }
+
+    cancelActiveExport(...args: Parameters<typeof workerState.cancelActiveExport>) {
+      return workerState.cancelActiveExport(...args);
     }
 
     terminate(...args: Parameters<typeof workerState.terminate>) {
@@ -687,9 +783,18 @@ describe('App import and preview pipeline', () => {
       return webviewState.unlisten;
     });
     workerState.decode.mockReset();
+    workerState.inheritPreviewAnalysis.mockReset();
+    workerState.registerDocumentReloaders.mockReset();
     workerState.detectDust.mockReset();
     workerState.detectFrame.mockReset();
+    workerState.estimateLensDistortion.mockReset();
     workerState.render.mockReset();
+    workerState.renderThumbnail.mockReset();
+    workerState.renderThumbnail.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 112, 62)
+    ));
+    workerState.getCachedThumbnailPreview.mockReset();
+    workerState.getCachedThumbnailPreview.mockReturnValue(null);
     workerState.autoAnalyze.mockReset();
     workerState.export.mockReset();
     workerState.contactSheet.mockReset();
@@ -700,6 +805,8 @@ describe('App import and preview pipeline', () => {
     workerState.evictPreviews.mockClear();
     workerState.trimResidentDocuments.mockClear();
     workerState.cancelActivePreviewRender.mockReset();
+    workerState.cancelActiveExport.mockReset();
+    workerState.cancelActiveExport.mockReturnValue(false);
     workerState.noteCoalescedPreviewRequest.mockClear();
     workerState.preparePreviewBitmap.mockReset();
     workerState.recordPreviewPresentationTimings.mockClear();
@@ -772,6 +879,46 @@ describe('App import and preview pipeline', () => {
     localStorage.clear();
   });
 
+  it('keeps the empty workspace focused and opens the command palette', async () => {
+    render(<App />);
+
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    });
+
+    expect(screen.getByRole('dialog', { name: 'Commands' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Search commands')).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Show profiles' })).not.toBeInTheDocument();
+  });
+
+  it('opens profile selection from the profile tool', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('scan.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(screen.queryByTestId('presets')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Film profiles' }));
+    expect(screen.getByTestId('presets')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Film profiles' }));
+    expect(screen.queryByTestId('presets')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'p' });
+    expect(screen.getByTestId('presets')).toBeInTheDocument();
+  });
+
   it('does not render while loading and only renders once after import settles', async () => {
     const decodeRequest = deferred<ReturnType<typeof createDecodedImage>>();
     workerState.decode.mockReturnValueOnce(decodeRequest.promise);
@@ -803,6 +950,46 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the first selected picture while the remaining pictures import in the background', async () => {
+    const secondDecode = deferred<ReturnType<typeof createDecodedImage>>();
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(1200, 800))
+      .mockReturnValueOnce(secondDecode.promise);
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 120, 80)
+    ));
+
+    render(<App />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, {
+        target: {
+          files: [
+            createFile('first-frame.tiff', 'image/tiff'),
+            createFile('second-frame.tiff', 'image/tiff'),
+          ],
+        },
+      });
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.decode).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText('Filename')).toHaveValue('first-frame');
+    expect(screen.queryByText('Import underway')).not.toBeInTheDocument();
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Nudge Exposure' }));
+    secondDecode.resolve(createDecodedImage(1600, 900));
+    await flushMicrotasks();
+
+    expect(screen.getByLabelText('Filename')).toHaveValue('first-frame');
+    expect(screen.getAllByTestId('tab-bar')[0].querySelectorAll('button')).toHaveLength(2);
   });
 
   it('keeps single-image imports full-frame and does not auto-run frame detection', async () => {
@@ -843,6 +1030,171 @@ describe('App import and preview pipeline', () => {
     }));
     expect(screen.queryByText(/Auto-crop skipped/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Frame detected and crop applied/i)).not.toBeInTheDocument();
+  });
+
+  it('runs auto crop from Shift+C', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.detectFrame.mockResolvedValue({
+      left: 0.1,
+      top: 0.1,
+      right: 0.9,
+      bottom: 0.9,
+      angle: 1.2,
+      confidence: 4,
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 60)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('shortcut-crop.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+
+    fireEvent.keyDown(window, { key: 'C', shiftKey: true });
+    await flushMicrotasks();
+
+    expect(workerState.detectFrame).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Crop Source: auto')).toBeInTheDocument();
+  });
+
+  it('maps an asymmetric auto crop to the correct edges at 270 degrees', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.detectFrame.mockResolvedValue({
+      left: 0.1,
+      top: 0.2,
+      right: 0.85,
+      bottom: 0.9,
+      angle: 0,
+      confidence: 7,
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 60)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('rotated-crop.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Three-Quarter Rotation' }));
+    fireEvent.keyDown(window, { key: 'C', shiftKey: true });
+    await flushMicrotasks();
+
+    const values = screen.getByText(/^Current Crop:/).textContent
+      ?.replace('Current Crop: ', '')
+      .split(',')
+      .map(Number) ?? [];
+    expect(values[0]).toBeCloseTo(0.2);
+    expect(values[1]).toBeCloseTo(0.15);
+    expect(values[2]).toBeCloseTo(0.7);
+    expect(values[3]).toBeCloseTo(0.75);
+  });
+
+  it('measures and applies lens distortion from the source image', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.estimateLensDistortion.mockResolvedValue({
+      amount: -34,
+      confidence: 0.82,
+      lineCount: 9,
+      scoreImprovement: 0.12,
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 60)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('lens-auto.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto Lens Correction' }));
+    await flushMicrotasks();
+
+    expect(workerState.estimateLensDistortion).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Current Lens: -34')).toBeInTheDocument();
+    expect(screen.getByText(/Applied lens correction -34 \(82% confidence\)/i)).toBeInTheDocument();
+  });
+
+  it('applies auto crop to every selected frame', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.detectFrame.mockResolvedValue({
+      left: 0.1,
+      top: 0.1,
+      right: 0.9,
+      bottom: 0.9,
+      angle: 0.8,
+      confidence: 4,
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 60)
+    ));
+
+    render(<App />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, {
+        target: { files: [
+          createFile('crop-a.tiff', 'image/tiff'),
+          createFile('crop-b.tiff', 'image/tiff'),
+        ] },
+      });
+    });
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+
+    const [, secondFrame] = screen.getAllByRole('button', { name: 'scan-300x200.tiff' });
+    fireEvent.click(secondFrame, { metaKey: true });
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto crop' }));
+    await flushMicrotasks();
+
+    expect(workerState.detectFrame).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Auto crop applied to 2 images.')).toBeInTheDocument();
+  });
+
+  it('applies a late auto-crop result to the picture that requested it', async () => {
+    const detection = deferred<{
+      left: number;
+      top: number;
+      right: number;
+      bottom: number;
+      angle: number;
+      confidence: number;
+    }>();
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.detectFrame.mockReturnValue(detection.promise);
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 60)
+    ));
+
+    render(<App />);
+    await uploadFile(createFile('crop-one.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    await uploadFile(createFile('crop-two.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+
+    const [firstCropTab, secondCropTab] = screen.getAllByRole('button', { name: 'scan-300x200.tiff' });
+    fireEvent.click(firstCropTab);
+    fireEvent.click(screen.getByRole('button', { name: 'Redetect Frame' }));
+    expect(workerState.detectFrame).toHaveBeenCalledTimes(1);
+    fireEvent.click(secondCropTab);
+
+    detection.resolve({ left: 0.1, top: 0.1, right: 0.9, bottom: 0.9, angle: 1.2, confidence: 4 });
+    await flushMicrotasks();
+    expect(screen.getByText('Crop Source: none')).toBeInTheDocument();
+
+    fireEvent.click(firstCropTab);
+    expect(screen.getByText('Crop Source: auto')).toBeInTheDocument();
   });
 
   it('shows the desktop-only RAW error in the browser build', async () => {
@@ -906,19 +1258,24 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(coreState.invoke).toHaveBeenCalledWith('decode_raw', { path: '/Users/tester/Desktop/scan.dng' });
-    expect(workerState.decode).toHaveBeenCalledWith(expect.objectContaining({
-      fileName: 'scan.dng',
-      mime: 'image/x-raw-rgba',
-      rawDimensions: { width: 2, height: 1 },
-      highDepthRawBitDepth: 16,
-      highDepthRawTransfer: 'srgb',
-      size: 12_345_678,
-    }));
+    expect(coreState.invoke).toHaveBeenCalledWith('decode_raw_binary', {
+      path: '/Users/tester/Desktop/scan.dng',
+      maxDimension: 2048,
+    });
+    expect(workerState.decode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileName: 'scan.dng',
+        mime: 'image/x-raw-rgba',
+        rawDimensions: { width: 2, height: 1 },
+        highDepthRawBuffer: undefined,
+        size: 12_345_678,
+      }),
+      { retainRecoveryCache: false },
+    );
 
-    const rawDecodeRequest = workerState.decode.mock.calls[0]?.[0] as { buffer: ArrayBuffer; highDepthRawBuffer: ArrayBuffer };
+    const rawDecodeRequest = workerState.decode.mock.calls[0]?.[0] as { buffer: ArrayBuffer; highDepthRawBuffer?: ArrayBuffer };
     expect(Array.from(new Uint8Array(rawDecodeRequest.buffer))).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
-    expect(Array.from(new Uint16Array(rawDecodeRequest.highDepthRawBuffer))).toEqual([2570, 5140, 7710, 10280, 12850, 15420]);
+    expect(rawDecodeRequest.highDepthRawBuffer).toBeUndefined();
     expect(screen.getByText(/2 × 1 px/)).toBeInTheDocument();
 
     const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;
@@ -952,8 +1309,10 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
+    fireEvent.click(screen.getByRole('button', { name: 'More filmstrip actions' }));
+    await flushMicrotasks();
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Open in External Editor"]') as Element);
+      fireEvent.click(screen.getByRole('button', { name: /^Open in external editor/ }));
     });
     await flushMicrotasks();
 
@@ -1125,7 +1484,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+      fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
     });
     await flushMicrotasks();
     await act(async () => {
@@ -1511,7 +1870,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reset adjustments to current preset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset current adjustments' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -1991,7 +2350,7 @@ describe('App import and preview pipeline', () => {
     expect(saved?.tags).toContain('lut');
   });
 
-  it('keeps the current crop and rotation when applying a custom preset saved without framing', async () => {
+  it('keeps crop, rotation, and lens correction when applying a profile saved with framing', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: {
       documentId: string;
@@ -2028,18 +2387,19 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset With Crop' }));
     await flushMicrotasks();
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply Square Crop' }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply Half Rotation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Lens Correction' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Custom Preset' }));
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Crop Preset' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2057,6 +2417,7 @@ describe('App import and preview pipeline', () => {
         };
         rotation: number;
         levelAngle: number;
+        lensDistortion?: number;
       };
     };
     expect(latestRenderCall.settings.crop).toEqual({
@@ -2068,6 +2429,7 @@ describe('App import and preview pipeline', () => {
     });
     expect(latestRenderCall.settings.rotation).toBe(180);
     expect(latestRenderCall.settings.levelAngle).toBe(-3);
+    expect(latestRenderCall.settings.lensDistortion).toBe(31);
   });
 
   it('switches CS-LITE to the white mode when black-and-white conversion is enabled', async () => {
@@ -2405,7 +2767,9 @@ describe('App import and preview pipeline', () => {
 
     render(<App />);
     await uploadFile(createFile('old.tiff', 'image/tiff'));
+    await flushMicrotasks();
     await uploadFile(createFile('new.tiff', 'image/tiff'));
+    await flushMicrotasks();
 
     secondDecode.resolve(createDecodedImage(20, 20));
     await flushMicrotasks();
@@ -2534,6 +2898,46 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.redBalance).toBe(1.12);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
     expect(latestRenderCall.settings.blueBalance).toBe(0.9);
+  });
+
+  it('samples the converted positive and exactly neutralizes the grey point', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.sampleFilmBase.mockResolvedValue({ r: 100, g: 90, b: 140 });
+
+    render(<App />);
+    await uploadFile(createFile('grey-point.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set Grey Point' }));
+
+    const canvas = document.querySelector('canvas');
+    expect(canvas).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(canvas as HTMLCanvasElement, { clientX: 100, clientY: 50 });
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.sampleFilmBase).toHaveBeenCalledWith(expect.objectContaining({
+      sampleSpace: 'white-balance',
+      x: 0.5,
+      y: 0.5,
+    }));
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: ConversionSettings;
+    };
+    expect(latestRenderCall.settings.temperature).toBe(20);
+    expect(latestRenderCall.settings.tint).toBe(30);
   });
 
   it('uses film-base sampling to rerun standard RAW color-negative conversion with the sampled base', async () => {
@@ -2823,9 +3227,23 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(workerState.autoAnalyze).toHaveBeenCalledTimes(1);
-    expect(
-      (workerState.autoAnalyze.mock.calls[0]?.[0] as { targetMaxDimension: number }).targetMaxDimension,
-    ).toBeLessThanOrEqual(1024);
+    const autoRequest = workerState.autoAnalyze.mock.calls[0]?.[0] as {
+      targetMaxDimension: number;
+      highlightDensityEstimate: number;
+      settings: ConversionSettings;
+    };
+    expect(autoRequest.targetMaxDimension).toBeLessThanOrEqual(1024);
+    expect(autoRequest.highlightDensityEstimate).toBe(0);
+    expect(autoRequest.settings).toMatchObject({
+      exposure: 0,
+      contrast: 0,
+      saturation: 100,
+      temperature: 0,
+      tint: 0,
+      blackPoint: 0,
+      whitePoint: 255,
+      highlightProtection: 0,
+    });
 
     const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
       settings: {
@@ -2989,6 +3407,7 @@ describe('App import and preview pipeline', () => {
   });
 
   it('schedules slider drag preview at most once per animation frame in balanced mode', async () => {
+    const createImageBitmapMock = vi.mocked(globalThis.createImageBitmap);
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: {
       documentId: string;
@@ -3011,6 +3430,7 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
+    expect(createImageBitmapMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       fireEvent.click(screen.getByText('Start Drag'));
@@ -3024,6 +3444,7 @@ describe('App import and preview pipeline', () => {
     });
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('canvas')?.style.filter).toContain('brightness(1.0140)');
 
     await act(async () => {
       vi.advanceTimersByTime(16);
@@ -3036,16 +3457,18 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render.mock.calls[1]?.[0]).toMatchObject({
       previewMode: 'draft',
       interactionQuality: 'balanced',
-      histogramMode: 'full',
+      histogramMode: 'throttled',
       targetMaxDimension: 512,
     });
+    expect(createImageBitmapMock).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('canvas')?.style.filter).not.toContain('brightness');
 
     await act(async () => {
       fireEvent.click(screen.getByText('End Drag'));
     });
     await flushMicrotasks();
     await act(async () => {
-      vi.advanceTimersByTime(140);
+      vi.advanceTimersByTime(60);
       vi.runOnlyPendingTimers();
     });
     await flushMicrotasks();
@@ -3062,6 +3485,31 @@ describe('App import and preview pipeline', () => {
     });
   });
 
+  it('shows a curve edit before its worker draft starts', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: {
+      documentId: string;
+      revision: number;
+      targetMaxDimension: number;
+    }) => createRenderResult(payload.documentId, payload.revision, payload.targetMaxDimension, payload.targetMaxDimension));
+
+    render(<App />);
+    await uploadFile(createFile('curve-preview.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('Start Drag'));
+    fireEvent.click(screen.getByText('Nudge RGB Curve'));
+
+    expect(workerState.render).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('canvas')?.style.filter).toContain('url("#darkslide-instant-curve-preview")');
+    expect(document.querySelector('feFuncR')?.getAttribute('tableValues')?.split(' ')).toHaveLength(256);
+  });
+
   it('persists ultra smooth drag and uses the 512px preview tier during drag', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: {
@@ -3072,8 +3520,9 @@ describe('App import and preview pipeline', () => {
 
     render(<App />);
 
+    await flushMicrotasks();
     await act(async () => {
-      fireEvent.click(screen.getByText('Open Settings'));
+      fireEvent.click(screen.getByRole('button', { name: /^Settings/ }));
     });
 
     await act(async () => {
@@ -3282,6 +3731,108 @@ describe('App import and preview pipeline', () => {
     expect((workerState.render.mock.calls[1]?.[0]?.targetMaxDimension as number)).toBeGreaterThan(initialTargetDimension);
   });
 
+  it('loads an idle RAW zoom region and presents it as a WebGL overlay', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({
+      file: createFile('zoom-region.dng', 'application/octet-stream'),
+      path: '/Users/tester/Desktop/zoom-region.dng',
+      size: 12_345,
+    });
+    coreState.invoke.mockImplementation(async (command: string) => {
+      if (command === 'decode_raw_region_binary') {
+        return {
+          width: 40,
+          height: 20,
+          sourceWidth: 6000,
+          sourceHeight: 4000,
+          data: Array.from({ length: 40 * 20 * 3 }, (_, index) => (index % 256) * 257),
+          color_space: 'sRGB',
+          bitDepth: 16,
+          transfer: 'srgb',
+          orientation: 1,
+        };
+      }
+      return {
+        width: 20,
+        height: 10,
+        sourceWidth: 6000,
+        sourceHeight: 4000,
+        data: Array.from({ length: 20 * 10 * 3 }, (_, index) => (index % 256) * 257),
+        color_space: 'sRGB',
+        bitDepth: 16,
+        transfer: 'srgb',
+        orientation: 1,
+      };
+    });
+    workerState.decode.mockResolvedValue(createDecodedImage(6000, 4000, {
+      extension: '.dng',
+      mime: 'image/x-raw-rgba',
+    }));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      payload.documentId.includes(':zoom-region:')
+        ? createRenderResult(payload.documentId, payload.revision, 40, 20)
+        : createRenderResult(payload.documentId, payload.revision, 20, 10)
+    ));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: -300,
+      y: 0,
+      left: -300,
+      top: 0,
+      right: 900,
+      bottom: 400,
+      width: 1200,
+      height: 400,
+      toJSON: () => ({}),
+    } as DOMRect);
+    vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 600,
+      bottom: 400,
+      width: 600,
+      height: 400,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    render(<App />);
+    await act(async () => {
+      fireEvent.click(screen.getByText('Select Files'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    await act(async () => {
+      fireEvent.wheel(canvas, { deltaY: -100, clientX: 300, clientY: 200 });
+      vi.advanceTimersByTime(250);
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(coreState.invoke).toHaveBeenCalledWith('decode_raw_region_binary', expect.objectContaining({
+      path: '/Users/tester/Desktop/zoom-region.dng',
+      maxDimension: expect.any(Number),
+    }));
+    expect(workerState.inheritPreviewAnalysis).toHaveBeenCalled();
+    expect(screen.getByTestId('webgl-zoom-region')).toBeInTheDocument();
+  });
+
   it('shows a rendering indicator for heavier settled preview renders', async () => {
     const settledRender = deferred<ReturnType<typeof createRenderResult>>();
     workerState.decode.mockResolvedValue(createDecodedImage(5000, 3000));
@@ -3448,6 +3999,98 @@ describe('App import and preview pipeline', () => {
     expect(context.putImageData).toHaveBeenCalled();
   });
 
+  it('restores the incoming picture preview immediately when switching tabs', async () => {
+    const putImageData = vi.fn();
+    const context = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      putImageData,
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => context);
+
+    const switchRender = deferred<ReturnType<typeof createRenderResult>>();
+    let renderCount = 0;
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation((payload: { documentId: string; revision: number }) => {
+      renderCount += 1;
+      if (renderCount === 1) return Promise.resolve(createRenderResult(payload.documentId, payload.revision, 80, 60));
+      if (renderCount === 2) return Promise.resolve(createRenderResult(payload.documentId, payload.revision, 96, 72));
+      if (renderCount === 3) return switchRender.promise;
+      return Promise.resolve(createRenderResult(payload.documentId, payload.revision, 80, 60));
+    });
+
+    render(<App />);
+    await uploadFile(createFile('preview-one.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    await uploadFile(createFile('preview-two.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+
+    const drawsBeforeSwitch = putImageData.mock.calls.length;
+    const [firstPreviewTab] = screen.getAllByRole('button', { name: 'scan-300x200.tiff' });
+    fireEvent.click(firstPreviewTab);
+
+    expect(putImageData).toHaveBeenCalledTimes(drawsBeforeSwitch + 1);
+    expect((putImageData.mock.calls.at(-1)?.[0] as ImageData).width).toBe(80);
+    expect((putImageData.mock.calls.at(-1)?.[0] as ImageData).height).toBe(60);
+
+  });
+
+  it('uses the filmstrip preview when an incoming tab has no full preview cache', async () => {
+    const putImageData = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      putImageData,
+    }) as unknown as CanvasRenderingContext2D);
+
+    const switchRender = deferred<ReturnType<typeof createRenderResult>>();
+    let renderCount = 0;
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation((payload: { documentId: string; revision: number }) => {
+      renderCount += 1;
+      if (renderCount === 1) {
+        const oversized = createRenderResult(payload.documentId, payload.revision, 80, 60);
+        oversized.width = 4000;
+        oversized.height = 4000;
+        Object.defineProperties(oversized.imageData, {
+          width: { value: 4000 },
+          height: { value: 4000 },
+        });
+        return Promise.resolve(oversized);
+      }
+      if (renderCount === 2) return Promise.resolve(createRenderResult(payload.documentId, payload.revision, 96, 72));
+      if (renderCount === 3) return switchRender.promise;
+      return Promise.resolve(createRenderResult(payload.documentId, payload.revision, 96, 72));
+    });
+
+    render(<App />);
+    await uploadFile(createFile('thumbnail-fallback-one.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    await uploadFile(createFile('thumbnail-fallback-two.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+
+    const thumbnail = new ImageData(new Uint8ClampedArray(12 * 8 * 4), 12, 8);
+    workerState.getCachedThumbnailPreview.mockReturnValue({
+      imageData: thumbnail,
+      settings: createDefaultSettings(),
+      comparisonMode: 'processed',
+    });
+
+    const [firstPreviewTab] = screen.getAllByRole('button', { name: 'scan-300x200.tiff' });
+    fireEvent.click(firstPreviewTab);
+    await flushMicrotasks();
+
+    expect(putImageData.mock.calls.at(-1)?.[0]).toBe(thumbnail);
+  });
+
   it('does not redraw a closed document when an in-flight render finishes late', async () => {
     const drawImage = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
@@ -3470,8 +4113,10 @@ describe('App import and preview pipeline', () => {
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
+    fireEvent.click(screen.getByRole('button', { name: 'More filmstrip actions' }));
+    await flushMicrotasks();
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Close Image"]') as Element);
+      fireEvent.click(screen.getByRole('button', { name: 'Close current image' }));
     });
 
     const [payload] = workerState.render.mock.calls[0];
@@ -3516,8 +4161,10 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
     expect(workerState.preparePreviewBitmap).toHaveBeenCalledTimes(1);
 
+    fireEvent.click(screen.getByRole('button', { name: 'More filmstrip actions' }));
+    await flushMicrotasks();
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Close Image"]') as Element);
+      fireEvent.click(screen.getByRole('button', { name: 'Close current image' }));
     });
     preparePreviewBitmapRequest.resolve(preparedBitmap);
     await flushMicrotasks();
@@ -3762,7 +4409,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.decode).toHaveBeenCalledTimes(1);
   });
 
-  it('imports files opened from the macOS app icon', async () => {
+  it('imports files opened from the macOS app icon without moving focus from the first file', async () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
     coreState.invoke.mockImplementation(async (command: string) => (
       command === 'drain_opened_files' ? [] : null
@@ -3798,7 +4445,7 @@ describe('App import and preview pipeline', () => {
     expect(fileBridgeState.openImageFileByPath).toHaveBeenNthCalledWith(1, '/Users/tester/dock-one.tiff');
     expect(fileBridgeState.openImageFileByPath).toHaveBeenNthCalledWith(2, '/Users/tester/dock-two.jpg');
     expect(workerState.decode).toHaveBeenCalledTimes(2);
-    expect(screen.getByLabelText('Filename')).toHaveValue('dock-two');
+    expect(screen.getByLabelText('Filename')).toHaveValue('dock-one');
   });
 
   it('returns to ready when a native export is cancelled', async () => {
@@ -3828,6 +4475,14 @@ describe('App import and preview pipeline', () => {
     await act(async () => {
       fireEvent.click(screen.getByText('Export'));
     });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Export current image' }));
+    });
+    expect(workerState.export).not.toHaveBeenCalled();
+    expect(screen.getByRole('region', { name: 'Export summary' })).toHaveTextContent('JPEG');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Sidebar Export' }));
+    });
     await flushMicrotasks();
 
     expect(workerState.export).toHaveBeenCalledTimes(1);
@@ -3838,6 +4493,43 @@ describe('App import and preview pipeline', () => {
     );
     expect(exportNotificationState.notifyExportFinished).not.toHaveBeenCalled();
     expect(screen.getByText('Export')).toBeInTheDocument();
+    expect(screen.queryByText(/Export failed/i)).not.toBeInTheDocument();
+  });
+
+  it('cancels an export that is still rendering', async () => {
+    const exportWork = deferred<{ blob: Blob; filename: string }>();
+    workerState.decode.mockResolvedValue(createDecodedImage(512, 512));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 80, 80)
+    ));
+    workerState.export.mockReturnValue(exportWork.promise);
+    workerState.cancelActiveExport.mockImplementation(() => {
+      const error = new Error('The image export was cancelled.');
+      error.name = 'ImageExportCancelledError';
+      exportWork.reject(error);
+      return true;
+    });
+
+    render(<App />);
+    await uploadFile(createFile('long-export.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByText('Export'));
+    fireEvent.click(screen.getByRole('button', { name: 'Export current image' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sidebar Export' }));
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Cancel export' })[0]);
+    await flushMicrotasks();
+
+    expect(workerState.cancelActiveExport).toHaveBeenCalledTimes(1);
+    expect(fileBridgeState.saveExportBlob).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Sidebar Export' })).toBeInTheDocument();
+    expect(screen.getByText('Export cancelled')).toBeInTheDocument();
     expect(screen.queryByText(/Export failed/i)).not.toBeInTheDocument();
   });
 
@@ -3866,6 +4558,13 @@ describe('App import and preview pipeline', () => {
 
     await act(async () => {
       fireEvent.click(screen.getByText('Export'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Export current image' }));
+    });
+    expect(workerState.export).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Sidebar Export' }));
     });
     await flushMicrotasks();
 

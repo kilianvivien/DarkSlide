@@ -11,7 +11,7 @@ export interface UserPreferences {
   autoApplyPresetId: string | null;
   exportOptions: ExportOptions;
   notificationSettings: NotificationSettings;
-  sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
+  sidebarTab: 'adjust' | 'profiles' | 'curves' | 'crop' | 'dust' | 'export';
   cropTab?: CropTab;
   isLeftPaneOpen: boolean;
   isRightPaneOpen: boolean;

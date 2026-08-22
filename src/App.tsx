@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Analytics } from '@vercel/analytics/react';
 import { DEFAULT_DUST_REMOVAL, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES, resolveDustRemovalSettings } from './constants';
 import { AppShell } from './components/AppShell';
@@ -10,7 +10,7 @@ import { useCustomPresets } from './hooks/useCustomPresets';
 import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
 import { useRenderQueue } from './hooks/useRenderQueue';
-import { useWorkspaceCommands } from './hooks/useWorkspaceCommands';
+import { buildProfileSettingsForDocument, preserveCurrentFraming, useWorkspaceCommands } from './hooks/useWorkspaceCommands';
 import { useCustomLightSources } from './hooks/useCustomLightSources';
 import { useViewportZoom } from './hooks/useViewportZoom';
 import { useRolls } from './hooks/useRolls';
@@ -21,8 +21,8 @@ import { confirmDeleteRoll, confirmFilmBaseReanalysis, confirmOverwriteAutoAdjus
 import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { cubeLutSignature } from './utils/cubeLut';
-import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
-import { analyzeMonochromeSuggestion } from './utils/autoAnalysis';
+import { computeHighlightDensity, getTransformedDimensions, rotateCropClockwise } from './utils/imagePipeline';
+import { analyzeMonochromeSuggestion, createAutoAdjustmentPatch, createAutoAnalysisSettings } from './utils/autoAnalysis';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
@@ -32,6 +32,13 @@ import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore'
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
 import { usesColorChannelPipeline } from './utils/pipelineIntent';
 import { normalizeExportOptions } from './utils/exportOptions';
+import { getAutoFrameCrop, stabilizeRollFrames } from './utils/frameDetection';
+import { decodeDesktopRawRegionForWorker, isRawExtension } from './utils/rawImport';
+import { createRegionSettings, getVisiblePreviewRect, planRawZoomRegion } from './utils/zoomRegionPreview';
+import { captureInstantPreviewBaseline, createInstantCurvePreviewTables, createInstantPreviewFilter, InstantPreviewBaseline } from './utils/instantPreviewFilter';
+import type { ZoomRegionPreview } from './components/WebGLZoomRegion';
+
+const INSTANT_CURVE_FILTER_ID = 'darkslide-instant-curve-preview';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
   return {
@@ -48,7 +55,7 @@ export default function App() {
   const SETTLED_RENDER_DEBOUNCE_MS = {
     zoom: 320,
     pan: 240,
-    control: 140,
+    control: 60,
     crop: 180,
     other: 0,
   } as const;
@@ -82,9 +89,9 @@ export default function App() {
   } = useDocumentTabs();
   const [error, setError] = useState<string | null>(null);
   const [isLeftPaneOpen, setIsLeftPaneOpen] = useState(true);
-  const [isRightPaneOpen, setIsRightPaneOpen] = useState(true);
   const [isPickingFilmBase, setIsPickingFilmBase] = useState(false);
   const [isReanalyzingFilmBase, setIsReanalyzingFilmBase] = useState(false);
+  const [isEstimatingLensDistortion, setIsEstimatingLensDistortion] = useState(false);
   const [activePointPicker, setActivePointPicker] = useState<PointPickerMode | null>(null);
   const [comparisonMode, setComparisonMode] = useState<'processed' | 'original'>('processed');
   const [isDragActive, setIsDragActive] = useState(false);
@@ -93,12 +100,14 @@ export default function App() {
   const [isInteractingWithPreviewControls, setIsInteractingWithPreviewControls] = useState(false);
   const [isZooming, setIsZooming] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [zoomRegionPreview, setZoomRegionPreview] = useState<ZoomRegionPreview | null>(null);
   const [targetMaxDimension, setTargetMaxDimension] = useState(1024);
   const [hasVisiblePreview, setHasVisiblePreview] = useState(false);
   const [renderedPreviewAngle, setRenderedPreviewAngle] = useState(0);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanDragging, setIsPanDragging] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'dust' | 'export'>('adjust');
+  const [sidebarTab, setSidebarTab] = useState<'adjust' | 'profiles' | 'curves' | 'crop' | 'dust' | 'export'>('adjust');
+  const [hoveredProfileId, setHoveredProfileId] = useState<string | null>(null);
   const [dustBrushActive, setDustBrushActive] = useState(false);
   const [selectedDustMarkId, setSelectedDustMarkId] = useState<string | null>(null);
   const [isDetectingDust, setIsDetectingDust] = useState(false);
@@ -106,6 +115,8 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [showContactSheetModal, setShowContactSheetModal] = useState(false);
+  const [showShortcutHelp, setShowShortcutHelp] = useState(false);
+  const [hasCopiedSettings, setHasCopiedSettings] = useState(false);
   const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
   const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
   const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
@@ -189,24 +200,40 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
   const workerClientRef = useRef<ImageWorkerClient | null>(null);
   const activeDocumentIdRef = useRef<string | null>(null);
   const activeRenderRequestRef = useRef<{ documentId: string; revision: number } | null>(null);
+  const previewRevisionRef = useRef(new Map<string, number>());
   const hasVisiblePreviewRef = useRef(false);
   const pendingPreviewRef = useRef<{
     documentId: string;
     revision: number;
     angle: number;
+    instantPreviewBaseline: InstantPreviewBaseline;
     imageData: ImageData;
     imageBitmap: ImageBitmap | null;
   } | null>(null);
   const currentPreviewImageDataRef = useRef<ImageData | null>(null);
+  const currentDisplaySettingsRef = useRef<ConversionSettings | null>(null);
+  const currentLabStyleRef = useRef<LabStyleProfile | null>(null);
+  const comparisonModeRef = useRef<'processed' | 'original'>('processed');
+  const instantPreviewBaselineRef = useRef<InstantPreviewBaseline | null>(null);
+  const instantCurveRedRef = useRef<SVGFEFuncRElement>(null);
+  const instantCurveGreenRef = useRef<SVGFEFuncGElement>(null);
+  const instantCurveBlueRef = useRef<SVGFEFuncBElement>(null);
+  const documentPreviewCacheRef = useRef(new Map<string, {
+    imageData: ImageData;
+    angle: number;
+    instantPreviewBaseline: InstantPreviewBaseline;
+  }>());
   const previewRetryFrameRef = useRef<number | null>(null);
   const interactivePreviewFrameRef = useRef<number | null>(null);
   const pendingInteractivePreviewRef = useRef<QueuedPreviewRender | null>(null);
   const interactionJustEndedRef = useRef(false);
   const lastInteractionTypeRef = useRef<'zoom' | 'pan' | 'control' | 'crop' | null>(null);
   const zoomIdleTimeoutRef = useRef<number | null>(null);
+  const zoomRegionRequestRef = useRef(0);
   const renderIndicatorTimeoutRef = useRef<number | null>(null);
   const renderIndicatorRequestRef = useRef<{ documentId: string; revision: number } | null>(null);
   const lastCompletedSettledRenderKeyRef = useRef<string | null>(null);
@@ -230,6 +257,13 @@ export default function App() {
     startDragging: () => Promise<void>;
     scaleFactor: () => Promise<number>;
     onScaleChanged: (handler: ({ payload }: { payload: { scaleFactor: number } }) => void) => Promise<() => void>;
+  } | null>(null);
+  const settingsClipboardRef = useRef<{
+    settings: ConversionSettings;
+    profileId: string;
+    labStyleId: string | null;
+    lightSourceId: string | null;
+    colorManagement: ColorManagementSettings;
   } | null>(null);
 
   const showTransientNotice = useCallback((message: string, tone: TransientNoticeState['tone'] = 'warning') => {
@@ -458,7 +492,7 @@ export default function App() {
     sidebarTab: 'adjust',
     cropTab: initialPreferences?.cropTab ?? 'Film',
     isLeftPaneOpen: true,
-    isRightPaneOpen: true,
+    isRightPaneOpen: false,
     gpuRendering: initialPreferences?.gpuRendering ?? true,
     ultraSmoothDrag: initialPreferences?.ultraSmoothDrag ?? false,
     externalEditorPath: initialPreferences?.externalEditorPath ?? null,
@@ -481,7 +515,7 @@ export default function App() {
     sidebarTab,
     cropTab,
     isLeftPaneOpen,
-    isRightPaneOpen,
+    isRightPaneOpen: false,
     gpuRendering: gpuRenderingEnabled,
     ultraSmoothDrag: ultraSmoothDragEnabled,
     externalEditorPath,
@@ -540,6 +574,14 @@ export default function App() {
   const activeProfile = documentState
     ? profilesById.get(documentState.profileId) ?? fallbackProfile
     : fallbackProfile;
+  const hoveredProfile = hoveredProfileId
+    ? profilesById.get(hoveredProfileId) ?? null
+    : null;
+  const renderProfile = hoveredProfile ?? activeProfile;
+  const activeProfileCubeLutKey = useMemo(
+    () => activeProfile.lut ? cubeLutSignature(activeProfile.lut) : null,
+    [activeProfile.lut],
+  );
   const activeLabStyle = useMemo(
     () => (documentState?.labStyleId ? LAB_STYLE_PROFILES_MAP[documentState.labStyleId] ?? null : null),
     [documentState?.labStyleId],
@@ -575,6 +617,28 @@ export default function App() {
       },
     };
   }, [documentState, isCropOverlayVisible]);
+  const hoveredProfileSettings = useMemo(() => {
+    if (!documentState || !hoveredProfile) return null;
+    const settings = buildProfileSettingsForDocument(hoveredProfile, documentState);
+    return preserveCurrentFraming(settings, documentState.settings);
+  }, [documentState, hoveredProfile]);
+  const renderSettings = useMemo(() => {
+    if (!hoveredProfileSettings) return displaySettings;
+    if (!isCropOverlayVisible) return hoveredProfileSettings;
+    return {
+      ...hoveredProfileSettings,
+      crop: {
+        ...hoveredProfileSettings.crop,
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+      },
+    };
+  }, [displaySettings, hoveredProfileSettings, isCropOverlayVisible]);
+  currentDisplaySettingsRef.current = displaySettings;
+  currentLabStyleRef.current = activeLabStyle;
+  comparisonModeRef.current = comparisonMode;
   const displayAngle = displaySettings ? displaySettings.rotation + displaySettings.levelAngle : 0;
   const {
     zoom, pan,
@@ -804,9 +868,10 @@ export default function App() {
     cancelScheduledInteractivePreview();
     setIsInteractingWithPreviewControls(false);
     if (documentState) {
-      commitInteraction(createDocumentHistoryEntry(documentState));
+      const latestDocument = tabsRef.current.find((tab) => tab.id === documentState.id)?.document ?? documentState;
+      commitInteraction(createDocumentHistoryEntry(latestDocument));
     }
-  }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
+  }, [cancelScheduledInteractivePreview, commitInteraction, documentState, tabsRef]);
 
   const handleCropInteractionStart = useCallback(() => {
     if (isInteractingRef.current) {
@@ -831,9 +896,10 @@ export default function App() {
     cancelScheduledInteractivePreview();
     setIsAdjustingCrop(false);
     if (documentState) {
-      commitInteraction(createDocumentHistoryEntry(documentState));
+      const latestDocument = tabsRef.current.find((tab) => tab.id === documentState.id)?.document ?? documentState;
+      commitInteraction(createDocumentHistoryEntry(latestDocument));
     }
-  }, [cancelScheduledInteractivePreview, commitInteraction, documentState]);
+  }, [cancelScheduledInteractivePreview, commitInteraction, documentState, tabsRef]);
 
   const handleDustBrushInteractionStart = useCallback(() => {
     clearRenderIndicator();
@@ -914,12 +980,11 @@ export default function App() {
   useEffect(() => {
     const prefs = initialPreferences;
     if (!prefs) return;
-    if (['adjust', 'curves', 'crop', 'dust', 'export'].includes(prefs.sidebarTab)) {
+    if (['adjust', 'profiles', 'curves', 'crop', 'dust', 'export'].includes(prefs.sidebarTab)) {
       setSidebarTab(prefs.sidebarTab);
     }
     setCropTab(prefs.cropTab ?? 'Film');
     setIsLeftPaneOpen(prefs.isLeftPaneOpen);
-    setIsRightPaneOpen(prefs.isRightPaneOpen);
     setGPURenderingEnabled(prefs.gpuRendering);
     setUltraSmoothDragEnabled(prefs.ultraSmoothDrag);
   }, [initialPreferences]);
@@ -950,7 +1015,11 @@ export default function App() {
     for (const documentId of settledAdaptiveStateRef.current.keys()) {
       if (!activeIds.has(documentId)) {
         settledAdaptiveStateRef.current.delete(documentId);
+        previewRevisionRef.current.delete(documentId);
       }
+    }
+    for (const documentId of documentPreviewCacheRef.current.keys()) {
+      if (!activeIds.has(documentId)) documentPreviewCacheRef.current.delete(documentId);
     }
   }, [tabs]);
 
@@ -1057,6 +1126,40 @@ export default function App() {
     setHasVisiblePreview(next);
   }, []);
 
+  const applyInstantPreviewFilter = useCallback(() => {
+    const canvas = displayCanvasRef.current;
+    if (!canvas) return;
+
+    const scalarFilter = createInstantPreviewFilter(
+      instantPreviewBaselineRef.current,
+      currentDisplaySettingsRef.current,
+      comparisonModeRef.current,
+    );
+    const labStyle = currentLabStyleRef.current;
+    const curveTables = createInstantCurvePreviewTables(
+      instantPreviewBaselineRef.current,
+      currentDisplaySettingsRef.current,
+      comparisonModeRef.current,
+      labStyle?.toneCurve,
+      labStyle?.channelCurves,
+    );
+    if (curveTables) {
+      instantCurveRedRef.current?.setAttribute('tableValues', curveTables.red);
+      instantCurveGreenRef.current?.setAttribute('tableValues', curveTables.green);
+      instantCurveBlueRef.current?.setAttribute('tableValues', curveTables.blue);
+    }
+    const filter = [
+      scalarFilter === 'none' ? null : scalarFilter,
+      curveTables ? `url("#${INSTANT_CURVE_FILTER_ID}")` : null,
+    ].filter(Boolean).join(' ') || 'none';
+    canvas.style.filter = filter;
+    canvas.style.willChange = filter === 'none' ? '' : 'filter';
+  }, []);
+
+  useLayoutEffect(() => {
+    applyInstantPreviewFilter();
+  }, [applyInstantPreviewFilter, comparisonMode, displaySettings]);
+
   useEffect(() => {
     if (!hasVisiblePreview) {
       return;
@@ -1070,8 +1173,8 @@ export default function App() {
     if (!canvas) return null;
 
     const startedAt = performance.now();
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
+    if (canvas.width !== imageData.width) canvas.width = imageData.width;
+    if (canvas.height !== imageData.height) canvas.height = imageData.height;
     const ctx = getCanvas2dContext(canvas);
     if (!ctx) return null;
     ctx.imageSmoothingQuality = 'high';
@@ -1083,9 +1186,70 @@ export default function App() {
       ctx.putImageData(imageData, 0, 0);
     }
     currentPreviewImageDataRef.current = imageData;
-    setCanvasSize({ width: imageData.width, height: imageData.height });
+    setCanvasSize((current) => (
+      current.width === imageData.width && current.height === imageData.height
+        ? current
+        : { width: imageData.width, height: imageData.height }
+    ));
     return Math.max(0, Math.round(performance.now() - startedAt));
   }, []);
+
+  const cacheDocumentPreview = useCallback((
+    documentId: string,
+    imageData: ImageData,
+    angle: number,
+    instantPreviewBaseline: InstantPreviewBaseline,
+  ) => {
+    const cache = documentPreviewCacheRef.current;
+    const maxCachedPixels = 12_000_000;
+    cache.delete(documentId);
+    if (imageData.width * imageData.height > maxCachedPixels) return;
+    cache.set(documentId, { imageData, angle, instantPreviewBaseline });
+
+    let cachedPixels = Array.from(cache.values()).reduce(
+      (total, preview) => total + preview.imageData.width * preview.imageData.height,
+      0,
+    );
+    while (cachedPixels > maxCachedPixels && cache.size > 1) {
+      const oldestDocumentId = cache.keys().next().value as string | undefined;
+      if (!oldestDocumentId) break;
+      const oldest = cache.get(oldestDocumentId);
+      cache.delete(oldestDocumentId);
+      if (oldest) cachedPixels -= oldest.imageData.width * oldest.imageData.height;
+    }
+  }, []);
+
+  const restoreDocumentPreview = useCallback((documentId: string) => {
+    const cache = documentPreviewCacheRef.current;
+    const cached = cache.get(documentId);
+    if (!cached) {
+      const thumbnail = workerClientRef.current?.getCachedThumbnailPreview?.(documentId) ?? null;
+      if (thumbnail) {
+        drawPreview(thumbnail.imageData, null);
+        instantPreviewBaselineRef.current = captureInstantPreviewBaseline(
+          thumbnail.settings,
+          thumbnail.comparisonMode,
+          thumbnail.labStyleToneCurve,
+          thumbnail.labStyleChannelCurves,
+        );
+        applyInstantPreviewFilter();
+        setRenderedPreviewAngle(thumbnail.settings.rotation + thumbnail.settings.levelAngle);
+        return true;
+      }
+      currentPreviewImageDataRef.current = null;
+      instantPreviewBaselineRef.current = null;
+      applyInstantPreviewFilter();
+      return false;
+    }
+
+    cache.delete(documentId);
+    cache.set(documentId, cached);
+    drawPreview(cached.imageData, null);
+    instantPreviewBaselineRef.current = cached.instantPreviewBaseline;
+    applyInstantPreviewFilter();
+    setRenderedPreviewAngle(cached.angle);
+    return true;
+  }, [applyInstantPreviewFilter, drawPreview]);
 
   const cancelPendingPreviewRetry = useCallback(() => {
     if (previewRetryFrameRef.current !== null) {
@@ -1111,6 +1275,14 @@ export default function App() {
     const canvasDrawMs = drawPreview(pendingPreview.imageData, pendingPreview.imageBitmap);
     if (canvasDrawMs !== null) {
       pendingPreviewRef.current = null;
+      instantPreviewBaselineRef.current = pendingPreview.instantPreviewBaseline;
+      applyInstantPreviewFilter();
+      cacheDocumentPreview(
+        pendingPreview.documentId,
+        pendingPreview.imageData,
+        pendingPreview.angle,
+        pendingPreview.instantPreviewBaseline,
+      );
       setRenderedPreviewAngle(pendingPreview.angle);
       setPreviewVisibility(true);
       workerClientRef.current?.recordPreviewPresentationTimings(
@@ -1140,7 +1312,7 @@ export default function App() {
     previewRetryFrameRef.current = window.requestAnimationFrame(() => {
       attemptPreviewDraw(attempt + 1);
     });
-  }, [drawPreview, setPreviewVisibility]);
+  }, [applyInstantPreviewFilter, cacheDocumentPreview, drawPreview, setPreviewVisibility]);
 
   useEffect(() => {
     if (!displayCanvasRef.current) {
@@ -1224,8 +1396,13 @@ export default function App() {
       lightSourceBias,
     } = request;
     const activeTabDocument = tabsRef.current.find((tab) => tab.id === documentId)?.document ?? null;
-    const revision = (activeTabDocument?.renderRevision ?? 0) + 1;
+    const revision = Math.max(
+      activeTabDocument?.renderRevision ?? 0,
+      previewRevisionRef.current.get(documentId) ?? 0,
+    ) + 1;
+    previewRevisionRef.current.set(documentId, revision);
     const shouldTrackHeavyRenderIndicator = previewMode === 'settled' && interactionQuality === null;
+    const shouldCommitRenderState = shouldTrackHeavyRenderIndicator;
     const adaptiveState = getSettledAdaptiveState(documentId);
     const resolvedHighlightDensityEstimate = shouldTrackHeavyRenderIndicator && nextComparisonMode === 'processed'
       ? (highlightDensityEstimate ?? adaptiveState.committedHighlightDensity)
@@ -1273,7 +1450,9 @@ export default function App() {
       });
     }
 
-    setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'processing', renderRevision: revision } : current);
+    if (shouldCommitRenderState) {
+      setDocumentState((current) => current && current.id === documentId ? { ...current, status: 'processing', renderRevision: revision } : current);
+    }
     if (shouldTrackHeavyRenderIndicator) {
       scheduleRenderIndicator(documentId, revision);
     } else {
@@ -1348,7 +1527,7 @@ export default function App() {
         }
       }
 
-      if (!imageBitmap) {
+      if (!imageBitmap && previewMode !== 'draft') {
         const createImageBitmapStartedAt = performance.now();
         imageBitmap = typeof createImageBitmap === 'function'
           ? await createImageBitmap(normalizedImageData).catch(() => null)
@@ -1374,6 +1553,12 @@ export default function App() {
         documentId: result.documentId,
         revision: result.revision,
         angle: settings.rotation + settings.levelAngle,
+        instantPreviewBaseline: captureInstantPreviewBaseline(
+          settings,
+          nextComparisonMode,
+          labStyleToneCurve,
+          labStyleChannelCurves,
+        ),
         imageData: normalizedImageData,
         imageBitmap,
       };
@@ -1394,15 +1579,17 @@ export default function App() {
           },
         });
       }
-      setDocumentState((current) => {
-        if (!current || current.id !== documentId) return current;
-        return {
-          ...current,
-          histogram: result.histogram,
-          renderRevision: result.revision,
-          status: 'ready',
-        };
-      });
+      if (shouldCommitRenderState) {
+        setDocumentState((current) => {
+          if (!current || current.id !== documentId) return current;
+          return {
+            ...current,
+            histogram: result.histogram,
+            renderRevision: result.revision,
+            status: 'ready',
+          };
+        });
+      }
       maybeSuggestBlackAndWhiteConversion(result.documentId, normalizedImageData, {
         comparisonMode: nextComparisonMode,
         previewMode,
@@ -1434,6 +1621,16 @@ export default function App() {
       if (!isLatestRequest) return;
 
       if (isIgnorableRenderError(renderError)) {
+        return;
+      }
+
+      if (!shouldCommitRenderState) {
+        appendDiagnostic({
+          level: 'info',
+          code: 'DRAFT_RENDER_FAILED',
+          message: formatError(renderError),
+          context: { documentId, revision },
+        });
         return;
       }
 
@@ -1509,16 +1706,16 @@ export default function App() {
   }, [endPan]);
 
   useEffect(() => {
-    if (!documentState || !displaySettings || documentState.previewLevels.length === 0) return;
+    if (!documentState || !renderSettings || documentState.previewLevels.length === 0) return;
 
     const documentId = documentState.id;
-    const settings = displaySettings;
-    const isColor = usesColorChannelPipeline({ type: activeProfile.type });
-    const profileMaskTuning = activeProfile.maskTuning;
-    const profileColorMatrix = activeProfile.colorMatrix;
-    const profileCubeLut = activeProfile.lut ?? null;
-    const profileTonalCharacter = activeProfile.tonalCharacter;
-    const profileFilmType = activeProfile.filmType ?? 'negative';
+    const settings = renderSettings;
+    const isColor = usesColorChannelPipeline({ type: renderProfile.type });
+    const profileMaskTuning = renderProfile.maskTuning;
+    const profileColorMatrix = renderProfile.colorMatrix;
+    const profileCubeLut = renderProfile.lut ?? null;
+    const profileTonalCharacter = renderProfile.tonalCharacter;
+    const profileFilmType = renderProfile.filmType ?? 'negative';
     const highlightDensityEstimate = getSettledAdaptiveState(documentId).committedHighlightDensity;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const flareFloor = documentState.estimatedFlare;
@@ -1536,14 +1733,14 @@ export default function App() {
           )
       )
       : null;
-    const histogramMode: HistogramMode = interactionQuality === 'ultra-smooth' && previewMode === 'draft'
+    const histogramMode: HistogramMode = interactionQuality !== null && previewMode === 'draft'
       ? 'throttled'
       : 'full';
     const queuedPreview = {
       documentId,
       settings,
       isColor,
-      profileId: activeProfile.id,
+      profileId: renderProfile.id,
       filmType: profileFilmType,
       estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
       comparisonMode,
@@ -1571,7 +1768,7 @@ export default function App() {
         documentId,
         settings,
         isColor,
-        profileId: activeProfile.id,
+        profileId: renderProfile.id,
         filmType: profileFilmType,
         comparisonMode,
         targetMaxDimension: renderTargetDimension,
@@ -1598,13 +1795,13 @@ export default function App() {
       tabSwitchDraftRef.current = null;
       cancelScheduledInteractivePreview();
 
-      const switchDraftTargetDimension = Math.min(fullRenderTargetDimension, ultraSmoothDragEnabled ? 768 : 1280);
+      const switchDraftTargetDimension = Math.min(fullRenderTargetDimension, 768);
 
       void executePreviewRender({
         documentId,
         settings,
         isColor,
-        profileId: activeProfile.id,
+        profileId: renderProfile.id,
         filmType: profileFilmType,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
         comparisonMode,
@@ -1696,17 +1893,9 @@ export default function App() {
 
     return () => window.clearTimeout(timer);
   }, [
-    activeProfile.colorMatrix,
-    activeProfile.filmType,
-    activeProfile.id,
-    activeProfile.lut,
-    activeProfile.maskTuning,
-    activeProfile.tonalCharacter,
-    activeProfile.type,
     activeLabStyle,
     cancelScheduledInteractivePreview,
     comparisonMode,
-    displaySettings,
     documentState,
     enqueuePreviewRender,
     executePreviewRender,
@@ -1720,6 +1909,8 @@ export default function App() {
     isInteractingWithPreviewControls,
     isPanDragging,
     isZooming,
+    renderProfile,
+    renderSettings,
     lightSourceProfilesById,
     renderTargetDimension,
     SETTLED_RENDER_DEBOUNCE_MS.control,
@@ -1730,8 +1921,224 @@ export default function App() {
     ultraSmoothDragEnabled,
   ]);
 
+  const zoomRegionContentKey = useMemo(() => {
+    if (
+      zoom === 'fit'
+      || !usesNativeFileDialogs
+      || !documentState?.source.nativePath
+      || !isRawExtension(documentState.source.extension)
+      || !displaySettings
+    ) {
+      return null;
+    }
+    return JSON.stringify({
+      documentId: documentState.id,
+      settings: displaySettings,
+      comparisonMode,
+      profileId: activeProfile.id,
+      profileType: activeProfile.type,
+      filmType: activeProfile.filmType ?? 'negative',
+      maskTuning: activeProfile.maskTuning,
+      colorMatrix: activeProfile.colorMatrix,
+      tonalCharacter: activeProfile.tonalCharacter,
+      cubeLutKey: activeProfileCubeLutKey,
+      labStyle: activeLabStyle,
+      inputProfileId: getResolvedInputProfileId(documentState.source, documentState.colorManagement),
+      outputProfileId: documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId,
+      estimatedFilmBase: documentState.estimatedFilmBase ?? null,
+      estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
+      flareFloor: documentState.estimatedFlare ?? null,
+      lightSourceId: documentState.lightSourceId ?? 'auto',
+    });
+  }, [activeLabStyle, activeProfile, activeProfileCubeLutKey, comparisonMode, displaySettings, documentState, usesNativeFileDialogs, zoom]);
+
+  useEffect(() => {
+    zoomRegionRequestRef.current += 1;
+    setZoomRegionPreview(null);
+  }, [zoomRegionContentKey]);
+
+  useEffect(() => {
+    if (zoom === 'fit') {
+      setZoomRegionPreview(null);
+      return;
+    }
+    if (
+      !usesNativeFileDialogs
+      || !documentState
+      || !displaySettings
+      || !zoomRegionContentKey
+      || !documentState.source.nativePath
+      || !isRawExtension(documentState.source.extension)
+      || documentState.status !== 'ready'
+      || isZooming
+      || isPanDragging
+      || isInteractingWithPreviewControls
+      || isAdjustingCrop
+      || isAdjustingLevel
+      || isExportInFlight
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const canvas = displayCanvasRef.current;
+      const previewContainer = previewContainerRef.current;
+      const worker = workerClientRef.current;
+      if (!canvas || !previewContainer || !worker) return;
+      const canvasRect = canvas.getBoundingClientRect();
+      const displayRect = getVisiblePreviewRect(canvasRect, previewContainer.getBoundingClientRect());
+      if (!displayRect) return;
+
+      const desiredWidth = Math.ceil(canvasRect.width * displayRect.width * displayScaleFactor);
+      const desiredHeight = Math.ceil(canvasRect.height * displayRect.height * displayScaleFactor);
+      const currentWidth = canvas.width * displayRect.width;
+      const currentHeight = canvas.height * displayRect.height;
+      if (currentWidth >= desiredWidth * 0.9 && currentHeight >= desiredHeight * 0.9) {
+        return;
+      }
+
+      const plan = planRawZoomRegion({
+        sourceWidth: documentState.source.width,
+        sourceHeight: documentState.source.height,
+        settings: displaySettings,
+        displayRect,
+        maxOutputDimension: 4096,
+      });
+      const requestKey = JSON.stringify({
+        content: zoomRegionContentKey,
+        region: plan.sourceRegion,
+        displayRect: plan.displayRect,
+        maxDimension: plan.maxDimension,
+      });
+      if (zoomRegionPreview?.requestKey === requestKey) return;
+
+      const requestId = zoomRegionRequestRef.current + 1;
+      zoomRegionRequestRef.current = requestId;
+      const regionDocumentId = `${documentState.id}:zoom-region:${requestId}`;
+      const renderRegion = async () => {
+        const startedAt = performance.now();
+        try {
+          const { rawResult, decodeRequest } = await decodeDesktopRawRegionForWorker({
+            documentId: regionDocumentId,
+            fileName: documentState.source.name,
+            path: documentState.source.nativePath!,
+            size: documentState.source.size,
+            sourceWidth: documentState.source.width,
+            orientation: documentState.source.exif?.orientation,
+            region: plan.sourceRegion,
+            maxDimension: plan.maxDimension,
+            precomputedFilmBase: documentState.estimatedFilmBase ?? null,
+          });
+          if (cancelled || zoomRegionRequestRef.current !== requestId) return;
+          decodeRequest.precomputedFilmBaseSample = documentState.estimatedFilmBaseSample ?? null;
+          await worker.decode({ ...decodeRequest, displayScaleFactor }, { retainRecoveryCache: false });
+          if (cancelled || zoomRegionRequestRef.current !== requestId) return;
+          worker.inheritPreviewAnalysis(documentState.id, regionDocumentId);
+
+          const regionSettings = createRegionSettings(
+            displaySettings,
+            documentState.source.width,
+            documentState.source.height,
+            plan,
+          );
+          const isColor = usesColorChannelPipeline({ type: activeProfile.type });
+          const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
+          const outputProfileId = documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
+          const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+          const result = await worker.render({
+            documentId: regionDocumentId,
+            settings: regionSettings,
+            isColor,
+            profileId: activeProfile.id,
+            filmType: activeProfile.filmType ?? 'negative',
+            estimatedFilmBaseSample: documentState.estimatedFilmBaseSample ?? null,
+            estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
+            inputProfileId,
+            outputProfileId,
+            revision: 1,
+            targetMaxDimension: Math.max(rawResult.width, rawResult.height),
+            comparisonMode,
+            previewMode: 'draft',
+            interactionQuality: null,
+            histogramMode: 'throttled',
+            maskTuning: activeProfile.maskTuning,
+            colorMatrix: activeProfile.colorMatrix,
+            tonalCharacter: activeProfile.tonalCharacter,
+            cubeLut: activeProfile.lut ?? null,
+            labStyleToneCurve: activeLabStyle?.toneCurve,
+            labStyleChannelCurves: activeLabStyle?.channelCurves,
+            labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
+            labSaturationBias: activeLabStyle?.saturationBias ?? 0,
+            labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+            highlightDensityEstimate: getSettledAdaptiveState(documentState.id).committedHighlightDensity,
+            flareFloor: documentState.estimatedFlare ?? null,
+            lightSourceBias,
+          });
+          if (cancelled || zoomRegionRequestRef.current !== requestId) return;
+          setZoomRegionPreview({
+            requestKey,
+            rect: plan.displayRect,
+            imageData: normalizePreviewImageData(result.imageData, result.width, result.height),
+          });
+          appendDiagnostic({
+            level: 'info',
+            code: 'RAW_ZOOM_REGION_READY',
+            message: documentState.id,
+            context: {
+              cacheHit: rawResult.cacheHit ?? false,
+              decodeMs: rawResult.decodeMs ?? 0,
+              durationMs: Math.round(performance.now() - startedAt),
+              height: result.height,
+              sourceRegion: JSON.stringify(plan.sourceRegion),
+              width: result.width,
+            },
+          });
+        } catch (regionError) {
+          if (!cancelled && zoomRegionRequestRef.current === requestId) {
+            appendDiagnostic({
+              level: 'info',
+              code: 'RAW_ZOOM_REGION_FAILED',
+              message: formatError(regionError),
+              context: { documentId: documentState.id, sourceRegion: JSON.stringify(plan.sourceRegion) },
+            });
+          }
+        } finally {
+          await worker.disposeDocument(regionDocumentId).catch(() => undefined);
+        }
+      };
+      void renderRegion();
+    }, 650);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeLabStyle,
+    activeProfile,
+    comparisonMode,
+    displayScaleFactor,
+    displaySettings,
+    documentState,
+    getSettledAdaptiveState,
+    isAdjustingCrop,
+    isAdjustingLevel,
+    isExportInFlight,
+    isInteractingWithPreviewControls,
+    isPanDragging,
+    isZooming,
+    lightSourceProfilesById,
+    pan,
+    usesNativeFileDialogs,
+    zoom,
+    zoomRegionContentKey,
+    zoomRegionPreview?.requestKey,
+  ]);
+
   const {
     importFile,
+    importFiles,
     handleSettingsChange,
     handleLabStyleChange,
     handleSidebarTabChange,
@@ -1761,6 +2168,7 @@ export default function App() {
     handleReset,
     handleDownload,
     handleExportClick,
+    handleCancelExport,
     handleOpenInEditor,
     handleQuickExport,
     handleChooseExternalEditor,
@@ -1823,6 +2231,7 @@ export default function App() {
     replaceDocument,
     removeDocument,
     reorderTabs,
+    updateTabById,
     evictOldestCleanTab,
     setActiveSidebarScrollTop,
     setDocumentState,
@@ -1870,6 +2279,7 @@ export default function App() {
     setShowTabSwitchOverlay,
     setTabSwitchOverlayKey,
     setPreviewVisibility,
+    restoreDocumentPreview,
     setCanvasSize,
     cancelPendingPreviewRetry,
     cancelScheduledInteractivePreview,
@@ -1907,25 +2317,25 @@ export default function App() {
         }
 
         setIsDragActive(false);
-        void (async () => {
-          for (const path of payload.paths) {
-            try {
-              const result = await openImageFileByPath(path);
-              if (result) {
-                await importFile(result.file, result.path, result.size);
-              }
-            } catch (dropError) {
-              const message = formatError(dropError, { preservePrefix: true });
-              appendDiagnostic({
-                level: 'error',
-                code: 'DROP_IMPORT_FAILED',
-                message,
-                context: { path },
-              });
-              setError(`Could not import dropped file. ${message}`);
-            }
+        void importFiles(payload.paths.map((path) => async () => {
+          try {
+            const result = await openImageFileByPath(path);
+            return result ? {
+              file: result.file,
+              nativePath: result.path,
+              nativeFileSize: result.size,
+            } : null;
+          } catch (dropError) {
+            const message = formatError(dropError, { preservePrefix: true });
+            appendDiagnostic({
+              level: 'error',
+              code: 'DROP_IMPORT_FAILED',
+              message,
+              context: { path },
+            });
+            throw dropError;
           }
-        })();
+        }));
       }))
       .then((stopListening) => {
         if (disposed) {
@@ -1946,7 +2356,7 @@ export default function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [importFile, usesNativeFileDialogs]);
+  }, [importFiles, usesNativeFileDialogs]);
 
   useEffect(() => {
     convertToBlackAndWhiteActionRef.current = (documentId: string) => {
@@ -2076,6 +2486,45 @@ export default function App() {
     setComparisonMode((current) => current === 'processed' ? 'original' : 'processed');
   }, []);
 
+  const handleAutoLensDistortion = useCallback(async () => {
+    const worker = workerClientRef.current;
+    const current = documentState;
+    if (!worker || !current || isEstimatingLensDistortion) return;
+
+    setIsEstimatingLensDistortion(true);
+    try {
+      const estimate = await worker.estimateLensDistortion(current.id);
+      if (activeDocumentIdRef.current !== current.id) return;
+      if (!estimate) {
+        showTransientNotice('Could not find enough straight lines to measure lens distortion. Use Fine tune for this image.');
+        return;
+      }
+
+      updateTabById(current.id, (tab) => ({
+        ...tab,
+        document: {
+          ...tab.document,
+          settings: {
+            ...tab.document.settings,
+            lensDistortion: estimate.amount,
+          },
+          dirty: true,
+        },
+      }));
+
+      if (estimate.amount === 0) {
+        showTransientNotice(`No measurable lens distortion found (${Math.round(estimate.confidence * 100)}% confidence).`, 'success');
+      } else {
+        const signedAmount = `${estimate.amount > 0 ? '+' : ''}${estimate.amount}`;
+        showTransientNotice(`Applied lens correction ${signedAmount} (${Math.round(estimate.confidence * 100)}% confidence).`, 'success');
+      }
+    } catch (estimateError) {
+      setError(formatError(estimateError));
+    } finally {
+      setIsEstimatingLensDistortion(false);
+    }
+  }, [documentState, isEstimatingLensDistortion, setError, showTransientNotice, updateTabById]);
+
   const handleToggleCropOverlay = useCallback(() => {
     setDustBrushActive(false);
     setIsCropOverlayVisible((current) => !current);
@@ -2101,11 +2550,24 @@ export default function App() {
   }, [documentState?.settings.dustRemoval, handleSettingsChange, selectedDustMarkId]);
 
   const handlePresetSelection = useCallback((profile: FilmProfile) => {
+    setHoveredProfileId(null);
     if (documentState) {
       setSuggestionNotice((current) => current?.documentId === documentState.id ? null : current);
     }
     handleProfileChange(profile);
   }, [documentState, handleProfileChange]);
+
+  const handleProfilePreview = useCallback((profile: FilmProfile) => {
+    setHoveredProfileId(profile.id === documentState?.profileId ? null : profile.id);
+  }, [documentState?.profileId]);
+
+  const handleProfilePreviewEnd = useCallback(() => {
+    setHoveredProfileId(null);
+  }, []);
+
+  useEffect(() => {
+    setHoveredProfileId(null);
+  }, [activeTabId, sidebarTab]);
 
   const handleDustBrushActiveChange = useCallback((active: boolean) => {
     setDustBrushActive(active);
@@ -2405,22 +2867,32 @@ export default function App() {
   const handleToggleLeftPane = useCallback(() => {
     setIsLeftPaneOpen((current) => {
       const next = !current;
-      savePreferences({ ...prefsSnapshotRef.current, isLeftPaneOpen: next });
+      savePreferences({
+        ...prefsSnapshotRef.current,
+        isLeftPaneOpen: next,
+      });
       return next;
     });
   }, []);
 
-  const handleToggleRightPane = useCallback(() => {
-    setIsRightPaneOpen((current) => {
-      const next = !current;
-      savePreferences({ ...prefsSnapshotRef.current, isRightPaneOpen: next });
-      return next;
-    });
-  }, []);
+  const handleShowExportSettings = useCallback(() => {
+    void handleDownload();
+    if (!isLeftPaneOpen) handleToggleLeftPane();
+  }, [handleDownload, handleToggleLeftPane, isLeftPaneOpen]);
+
+  const handleToggleProfilesPane = useCallback(() => {
+    if (sidebarTab === 'profiles' && isLeftPaneOpen) {
+      handleToggleLeftPane();
+      return;
+    }
+
+    handleSidebarTabChange('profiles');
+    if (!isLeftPaneOpen) handleToggleLeftPane();
+  }, [handleSidebarTabChange, handleToggleLeftPane, isLeftPaneOpen, sidebarTab]);
 
   const runAutoAnalysis = useCallback(async (mode: 'full' | 'whiteBalance') => {
     const worker = workerClientRef.current;
-    if (!worker || !documentState || !displaySettings) {
+    if (!worker || !documentState) {
       return;
     }
 
@@ -2440,12 +2912,13 @@ export default function App() {
 
     const requestDocumentId = documentState.id;
     const requestRevision = documentState.renderRevision;
+    const analysisSettings = createAutoAnalysisSettings(documentState.settings, defaults);
     const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
     const outputProfileId = documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const result = await worker.autoAnalyze({
       documentId: requestDocumentId,
-      settings: displaySettings,
+      settings: analysisSettings,
       isColor: usesColorChannelPipeline({ type: activeProfile.type }),
       profileId: activeProfile.id,
       filmType: activeProfile.filmType,
@@ -2461,7 +2934,7 @@ export default function App() {
       labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
       labSaturationBias: activeLabStyle?.saturationBias ?? 0,
       labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
-      highlightDensityEstimate: documentState.histogram ? computeHighlightDensity(documentState.histogram) : 0,
+      highlightDensityEstimate: 0,
       flareFloor: documentState.estimatedFlare,
       lightSourceBias,
     }).catch((error) => {
@@ -2492,43 +2965,9 @@ export default function App() {
       return;
     }
 
-    const nextSettings: Partial<ConversionSettings> = {
-      exposure: result.exposure,
-      blackPoint: result.blackPoint,
-      whitePoint: result.whitePoint,
-    };
-
-    if (result.temperature !== null && result.tint !== null) {
-      nextSettings.temperature = result.temperature;
-      nextSettings.tint = result.tint;
-    }
-
-    if (result.contrast !== null) {
-      nextSettings.contrast = result.contrast;
-    }
-
-    if (result.suggestedCurves || result.midtoneBoostPoint) {
-      const currentCurves = latestDocument.settings.curves;
-      nextSettings.curves = {
-        ...currentCurves,
-        rgb: result.midtoneBoostPoint
-          ? [{ x: 0, y: 0 }, result.midtoneBoostPoint, { x: 255, y: 255 }]
-          : currentCurves.rgb,
-        red: result.suggestedCurves?.redFloor !== null && result.suggestedCurves?.redFloor !== undefined
-          ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.redFloor, y: 0 }, { x: 255, y: 255 }]
-          : currentCurves.red,
-        green: result.suggestedCurves?.greenFloor !== null && result.suggestedCurves?.greenFloor !== undefined
-          ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.greenFloor, y: 0 }, { x: 255, y: 255 }]
-          : currentCurves.green,
-        blue: result.suggestedCurves?.blueFloor !== null && result.suggestedCurves?.blueFloor !== undefined
-          ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.blueFloor, y: 0 }, { x: 255, y: 255 }]
-          : currentCurves.blue,
-      };
-    }
-
-    handleSettingsChange(nextSettings);
+    handleSettingsChange(createAutoAdjustmentPatch(defaults, result));
     if (result.temperature === null || result.tint === null) {
-      showTransientNotice('Auto adjusted tone, but left white balance unchanged.');
+      showTransientNotice('Auto adjusted tone and kept the profile white balance.');
     }
   }, [
     activeLabStyle?.channelCurves,
@@ -2537,7 +2976,6 @@ export default function App() {
     activeLabStyle?.toneCurve,
     activeLabStyle?.tonalCharacterOverride,
     activeProfile,
-    displaySettings,
     documentState,
     handleSettingsChange,
     lightSourceProfilesById,
@@ -2630,7 +3068,7 @@ export default function App() {
     setActiveRollInfoId(null);
   }, [assignToRoll, deleteRoll, getDocumentsInRoll, rolls]);
 
-const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
+  const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     const worker = workerClientRef.current;
     const tab = tabsRef.current.find((candidate) => candidate.id === documentId) ?? null;
     if (!worker || !tab) {
@@ -2641,9 +3079,10 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     const labStyle = tab.document.labStyleId ? LAB_STYLE_PROFILES_MAP[tab.document.labStyleId] ?? null : null;
     const outputProfileId = tab.document.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     const lightSourceBias = lightSourceProfilesById.get(tab.document.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const analysisSettings = createAutoAnalysisSettings(tab.document.settings, profile.defaultSettings);
     const result = await worker.autoAnalyze({
       documentId,
-      settings: tab.document.settings,
+      settings: analysisSettings,
       isColor: usesColorChannelPipeline(profile),
       profileId: profile.id,
       filmType: profile.filmType,
@@ -2659,44 +3098,20 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       labTonalCharacterOverride: labStyle?.tonalCharacterOverride,
       labSaturationBias: labStyle?.saturationBias ?? 0,
       labTemperatureBias: labStyle?.temperatureBias ?? 0,
-      highlightDensityEstimate: tab.document.histogram ? computeHighlightDensity(tab.document.histogram) : 0,
+      highlightDensityEstimate: 0,
       flareFloor: tab.document.estimatedFlare,
       lightSourceBias,
     });
 
     updateTabById(documentId, (currentTab) => {
-      const curveOverrides: Partial<ConversionSettings> = {};
-      if (result.suggestedCurves || result.midtoneBoostPoint) {
-        const currentCurves = currentTab.document.settings.curves;
-        curveOverrides.curves = {
-          ...currentCurves,
-          rgb: result.midtoneBoostPoint
-            ? [{ x: 0, y: 0 }, result.midtoneBoostPoint, { x: 255, y: 255 }]
-            : currentCurves.rgb,
-          red: result.suggestedCurves?.redFloor !== null && result.suggestedCurves?.redFloor !== undefined
-            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.redFloor, y: 0 }, { x: 255, y: 255 }]
-            : currentCurves.red,
-          green: result.suggestedCurves?.greenFloor !== null && result.suggestedCurves?.greenFloor !== undefined
-            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.greenFloor, y: 0 }, { x: 255, y: 255 }]
-            : currentCurves.green,
-          blue: result.suggestedCurves?.blueFloor !== null && result.suggestedCurves?.blueFloor !== undefined
-            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.blueFloor, y: 0 }, { x: 255, y: 255 }]
-            : currentCurves.blue,
-        };
-      }
+      const autoPatch = createAutoAdjustmentPatch(profile.defaultSettings, result);
       return {
         ...currentTab,
         document: {
           ...currentTab.document,
           settings: {
             ...currentTab.document.settings,
-            exposure: result.exposure,
-            blackPoint: result.blackPoint,
-            whitePoint: result.whitePoint,
-            temperature: result.temperature ?? currentTab.document.settings.temperature,
-            tint: result.tint ?? currentTab.document.settings.tint,
-            ...(result.contrast !== null ? { contrast: result.contrast } : {}),
-            ...curveOverrides,
+            ...autoPatch,
           },
           dirty: true,
         },
@@ -2706,35 +3121,63 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
 
   const runAutoCropForDocument = useCallback(async (documentId: string) => {
     const worker = workerClientRef.current;
-    if (!worker) {
-      return;
-    }
-
-    const detected = await worker.detectFrame(documentId);
-    if (!detected) {
-      return;
-    }
-
+    const tab = tabsRef.current.find((candidate) => candidate.id === documentId);
+    if (!worker || !tab) return false;
+    const detected = await worker.detectFrame(documentId, tab.document.settings);
+    if (!detected) return false;
     updateTabById(documentId, (currentTab) => ({
       ...currentTab,
       document: {
         ...currentTab.document,
         settings: {
           ...currentTab.document.settings,
-          crop: {
-            x: detected.left,
-            y: detected.top,
-            width: detected.right - detected.left,
-            height: detected.bottom - detected.top,
-            aspectRatio: null,
-          },
-          levelAngle: detected.angle,
+          crop: getAutoFrameCrop(detected, currentTab.document.settings.rotation),
         },
         cropSource: 'auto',
         dirty: true,
       },
     }));
-  }, [updateTabById]);
+    return true;
+  }, [tabsRef, updateTabById, workerClientRef]);
+
+  const handleAutoCropSelected = useCallback(async (tabIds: string[]) => {
+    const worker = workerClientRef.current;
+    if (!worker) return;
+    const pendingIds = Array.from(new Set(tabIds)).filter((tabId) => (
+      tabsRef.current.some((tab) => tab.id === tabId)
+    ));
+    if (pendingIds.length === 0) return;
+    const detected = await Promise.all(pendingIds.map(async (documentId) => {
+      const tab = tabsRef.current.find((candidate) => candidate.id === documentId);
+      if (!tab) return null;
+      const frame = await worker.detectFrame(documentId, tab.document.settings).catch(() => null);
+      return frame ? { documentId, frame } : null;
+    }));
+    const successful = detected.filter((result): result is NonNullable<typeof result> => result !== null);
+    const stabilized = stabilizeRollFrames(successful.map((result) => result.frame));
+    successful.forEach((result, index) => {
+      updateTabById(result.documentId, (currentTab) => ({
+        ...currentTab,
+        document: {
+          ...currentTab.document,
+          settings: {
+            ...currentTab.document.settings,
+            crop: getAutoFrameCrop(stabilized[index], currentTab.document.settings.rotation),
+          },
+          cropSource: 'auto',
+          dirty: true,
+        },
+      }));
+    });
+    const appliedCount = successful.length;
+
+    setTransientNotice({
+      message: appliedCount === pendingIds.length
+        ? `Auto crop applied to ${appliedCount} images.`
+        : `Auto crop applied to ${appliedCount} of ${pendingIds.length} images.`,
+      tone: appliedCount > 0 ? 'success' : 'warning',
+    });
+  }, [tabsRef, updateTabById, workerClientRef]);
 
   const exportDocumentToDirectory = useCallback(async (documentId: string, outputPath: string) => {
     const worker = workerClientRef.current;
@@ -2861,12 +3304,14 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
   }, []);
 
   const handleOpenFilesByPath = useCallback(async (paths: string[]) => {
-    for (const path of paths) {
+    await importFiles(paths.map((path) => async () => {
       try {
         const result = await openImageFileByPath(path);
-        if (result) {
-          await importFile(result.file, result.path, result.size);
-        }
+        return result ? {
+          file: result.file,
+          nativePath: result.path,
+          nativeFileSize: result.size,
+        } : null;
       } catch (openError) {
         const message = formatError(openError);
         appendDiagnostic({
@@ -2875,21 +3320,108 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
           message,
           context: { path },
         });
-        setError(`Could not open file. ${message}`);
+        throw openError;
       }
+    }));
+  }, [importFiles]);
+
+  const handleCopyImageSettings = useCallback(() => {
+    if (!documentState) return;
+    settingsClipboardRef.current = {
+      settings: structuredClone(documentState.settings),
+      profileId: documentState.profileId,
+      labStyleId: documentState.labStyleId,
+      lightSourceId: documentState.lightSourceId ?? null,
+      colorManagement: structuredClone(documentState.colorManagement),
+    };
+    setHasCopiedSettings(true);
+    showTransientNotice(`Copied settings from ${documentState.source.name}.`, 'success');
+  }, [documentState, showTransientNotice]);
+
+  const handlePasteImageSettings = useCallback((targetIds?: string[]) => {
+    const copied = settingsClipboardRef.current;
+    const resolvedTargetIds = targetIds?.length
+      ? targetIds
+      : activeTabId ? [activeTabId] : [];
+    if (!copied || resolvedTargetIds.length === 0) return;
+
+    const targetSet = new Set(resolvedTargetIds);
+    for (const tabId of targetSet) {
+      updateTabById(tabId, (tab) => {
+        const nextSettings = structuredClone(copied.settings);
+        // Framing, film-base samples, and dust marks belong to the target scan.
+        nextSettings.crop = structuredClone(tab.document.settings.crop);
+        nextSettings.rotation = tab.document.settings.rotation;
+        nextSettings.levelAngle = tab.document.settings.levelAngle;
+        nextSettings.filmBaseSample = structuredClone(tab.document.settings.filmBaseSample);
+        nextSettings.filmBaseSampleSource = tab.document.settings.filmBaseSampleSource;
+        nextSettings.dustRemoval = structuredClone(tab.document.settings.dustRemoval);
+
+        return {
+          ...tab,
+          document: {
+            ...tab.document,
+            settings: nextSettings,
+            profileId: copied.profileId,
+            labStyleId: copied.labStyleId,
+            lightSourceId: copied.lightSourceId,
+            colorManagement: structuredClone(copied.colorManagement),
+            dirty: true,
+          },
+        };
+      });
     }
-  }, [importFile]);
+    showTransientNotice(`Pasted settings to ${targetSet.size} frame${targetSet.size === 1 ? '' : 's'}.`, 'success');
+  }, [activeTabId, showTransientNotice, updateTabById]);
+
+  const handleRotateImage = useCallback((direction: 'clockwise' | 'counterclockwise') => {
+    if (!documentState) return;
+    const turns = direction === 'clockwise' ? 1 : 3;
+    let crop = documentState.settings.crop;
+    for (let turn = 0; turn < turns; turn += 1) crop = rotateCropClockwise(crop);
+    const rotationDelta = direction === 'clockwise' ? 90 : 270;
+    handleSettingsChange({
+      rotation: (documentState.settings.rotation + rotationDelta) % 360,
+      crop,
+    });
+  }, [documentState, handleSettingsChange]);
+
+  const handleNudgeSetting = useCallback((
+    key: 'exposure' | 'contrast' | 'saturation',
+    delta: number,
+    min: number,
+    max: number,
+  ) => {
+    if (!activeTabId) return;
+    const currentDocument = tabsRef.current.find((tab) => tab.id === activeTabId)?.document;
+    if (!currentDocument) return;
+
+    const currentValue = currentDocument.settings[key];
+    const nextValue = Math.min(max, Math.max(min, currentValue + delta));
+    if (nextValue === currentValue) return;
+
+    beginInteraction();
+    handleSettingsChange({ [key]: nextValue });
+    window.setTimeout(() => {
+      const latestDocument = tabsRef.current.find((tab) => tab.id === activeTabId)?.document;
+      if (latestDocument) {
+        commitInteraction(createDocumentHistoryEntry(latestDocument));
+      }
+    }, 0);
+  }, [activeTabId, beginInteraction, commitInteraction, handleSettingsChange, tabsRef]);
 
   useAppShortcuts({
     tabs,
     activeTabId,
     setActiveTabId,
     documentStatePresent: Boolean(documentState),
+    showShortcutHelp,
     isCropOverlayVisible,
     dustBrushActive,
     usesNativeFileDialogs,
     setShowBatchModal,
     setShowSettingsModal,
+    setShowShortcutHelp,
     setIsSpaceHeld,
     onUndo: handleUndo,
     onRedo: handleRedo,
@@ -2898,13 +3430,23 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onOpenFilesByPath: handleOpenFilesByPath,
     onOpenInEditor: async () => { await handleOpenInEditor(); },
     onCloseImage: async () => { await handleCloseImage(); },
-    onDownload: async () => { await handleDownload(); },
+    onDownload: async () => { handleShowExportSettings(); },
     quickExportPresets,
     onQuickExport: async (preset) => { await handleQuickExport(preset); },
     onReset: handleReset,
     onCopyDebugInfo: handleCopyDebugInfo,
     onToggleComparison: handleToggleComparison,
     onAutoAdjust: () => { void handleAutoAdjust(); },
+    onCopySettings: handleCopyImageSettings,
+    onPasteSettings: () => handlePasteImageSettings(),
+    onRotateClockwise: () => handleRotateImage('clockwise'),
+    onRotateCounterclockwise: () => handleRotateImage('counterclockwise'),
+    onDecreaseExposure: () => handleNudgeSetting('exposure', -1, -100, 100),
+    onIncreaseExposure: () => handleNudgeSetting('exposure', 1, -100, 100),
+    onDecreaseContrast: () => handleNudgeSetting('contrast', -1, -100, 100),
+    onIncreaseContrast: () => handleNudgeSetting('contrast', 1, -100, 100),
+    onDecreaseSaturation: () => handleNudgeSetting('saturation', -1, 0, 200),
+    onIncreaseSaturation: () => handleNudgeSetting('saturation', 1, 0, 200),
     onToggleCropOverlay: handleToggleCropOverlay,
     onToggleDustBrush: handleToggleDustBrush,
     onDecreaseDustBrushRadius: () => handleAdjustDustBrushRadius(-2),
@@ -2912,8 +3454,8 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onRemoveLastDustMark: handleRemoveLastDustMark,
     onDeactivateDustBrush: () => handleDustBrushActiveChange(false),
     onToggleLeftPane: handleToggleLeftPane,
-    onToggleRightPane: handleToggleRightPane,
-onToggleScanningSession: toggleScanningWindow,
+    onToggleProfilesPane: handleToggleProfilesPane,
+    onToggleScanningSession: toggleScanningWindow,
     onCheckForUpdates: () => { void checkForUpdatesNow(); },
     zoomToFit: zoomToFitWithDraft,
     zoomTo100: zoomTo100WithDraft,
@@ -2927,11 +3469,24 @@ onToggleScanningSession: toggleScanningWindow,
 
   return (
     <>
+      <svg
+        aria-hidden="true"
+        className="pointer-events-none absolute h-0 w-0 overflow-hidden"
+      >
+        <filter id={INSTANT_CURVE_FILTER_ID} colorInterpolationFilters="sRGB">
+          <feComponentTransfer>
+            <feFuncR ref={instantCurveRedRef} type="table" tableValues="0 1" />
+            <feFuncG ref={instantCurveGreenRef} type="table" tableValues="0 1" />
+            <feFuncB ref={instantCurveBlueRef} type="table" tableValues="0 1" />
+          </feComponentTransfer>
+        </filter>
+      </svg>
       <AppShell
       usesNativeFileDialogs={usesNativeFileDialogs}
       fileInputRef={fileInputRef}
       displayCanvasRef={displayCanvasRef}
       viewportRef={viewportRef}
+      previewContainerRef={previewContainerRef}
       panTransformRef={panTransformRef}
       panGeometryRef={panGeometryRef}
       workerClient={workerClientRef.current}
@@ -2957,7 +3512,6 @@ onToggleScanningSession: toggleScanningWindow,
       cropTab={cropTab}
       comparisonMode={comparisonMode}
       isLeftPaneOpen={isLeftPaneOpen}
-      isRightPaneOpen={isRightPaneOpen}
       isPickingFilmBase={isPickingFilmBase}
       isReanalyzingFilmBase={isReanalyzingFilmBase}
       activePointPicker={activePointPicker}
@@ -2969,6 +3523,7 @@ onToggleScanningSession: toggleScanningWindow,
       showSettingsModal={showSettingsModal}
       showBatchModal={showBatchModal}
       showContactSheetModal={showContactSheetModal}
+      showShortcutHelp={showShortcutHelp}
       showTabSwitchOverlay={showTabSwitchOverlay}
       tabSwitchOverlayKey={tabSwitchOverlayKey}
       showMagnifier={showMagnifier}
@@ -3017,6 +3572,7 @@ onToggleScanningSession: toggleScanningWindow,
       pan={pan}
       previewTransformAngle={previewTransformAngle}
       logicalPreviewSize={logicalPreviewSize}
+      zoomRegionPreview={zoomRegionPreview}
       cropImageSize={cropImageSize}
       contactSheetEntries={contactSheetEntries}
       contactSheetSharedSettings={contactSheetSharedSettings}
@@ -3031,6 +3587,7 @@ onToggleScanningSession: toggleScanningWindow,
       onSetShowSettingsModal={setShowSettingsModal}
       onSetShowBatchModal={setShowBatchModal}
       onSetShowContactSheetModal={setShowContactSheetModal}
+      onSetShowShortcutHelp={setShowShortcutHelp}
       onSetSuggestionNotice={setSuggestionNotice}
       onSetTransientNotice={setTransientNotice}
       onSetError={setError}
@@ -3039,10 +3596,10 @@ onToggleScanningSession: toggleScanningWindow,
       onUndo={handleUndo}
       onRedo={handleRedo}
       onToggleLeftPane={handleToggleLeftPane}
-      onToggleRightPane={handleToggleRightPane}
       onReset={handleReset}
       onOpenInEditor={() => { void handleOpenInEditor(); }}
-      onDownload={() => { void handleDownload(); }}
+      onDownload={handleShowExportSettings}
+      onCancelExport={handleCancelExport}
       onFileChange={handleFileChange}
       onRecentImport={importFile}
       onSelectTab={handleSelectTab}
@@ -3053,6 +3610,9 @@ onToggleScanningSession: toggleScanningWindow,
       onOpenRollInfo={handleOpenRollInfo}
       onDeleteRoll={handleDeleteRoll}
       onCreateRollFromTabs={handleCreateRollFromTabs}
+      onCopySettings={handleCopyImageSettings}
+      onPasteSettings={handlePasteImageSettings}
+      canPasteSettings={hasCopiedSettings}
       onToggleScanningSession={toggleScanningWindow}
       onOpenContactSheet={handleOpenContactSheet}
       onSettingsChange={handleSettingsChange}
@@ -3074,6 +3634,9 @@ onToggleScanningSession: toggleScanningWindow,
       onSidebarTabChange={handleSidebarTabChange}
       onCropTabChange={handleCropTabChange}
       onRedetectFrame={handleRedetectFrame}
+      onAutoLensDistortion={() => { void handleAutoLensDistortion(); }}
+      isEstimatingLensDistortion={isEstimatingLensDistortion}
+      onAutoCropSelected={handleAutoCropSelected}
       onCropDone={handleCropDone}
       onResetCrop={handleResetCrop}
       onDetectDust={() => { void handleDetectDust(); }}
@@ -3088,6 +3651,8 @@ onToggleScanningSession: toggleScanningWindow,
       onAutoAdjust={() => { void handleAutoAdjust(); }}
       onAutoWhiteBalance={() => { void handleAutoWhiteBalance(); }}
       onProfileChange={handlePresetSelection}
+      onProfilePreview={handleProfilePreview}
+      onProfilePreviewEnd={handleProfilePreviewEnd}
       onSavePreset={handleSavePreset}
       onImportPreset={handleImportPreset}
       onDeletePreset={handleDeletePreset}

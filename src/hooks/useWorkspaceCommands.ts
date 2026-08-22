@@ -10,6 +10,7 @@ import {
   isDesktopShell,
   openDirectory,
   openImageFile,
+  openMultipleImageFiles,
   openInExternalEditor,
   saveExportBlob,
   saveExportBlobDetailed,
@@ -27,7 +28,7 @@ import { isRawWorkspaceDocument, rendersMonochrome, shouldUseDirectRawFilmBase, 
 import {
   BatchJobEntry,
 } from '../utils/batchProcessor';
-import { ImageWorkerClient } from '../utils/imageWorkerClient';
+import { ImageWorkerClient, isImageExportCancelledError } from '../utils/imageWorkerClient';
 import {
   ColorManagementSettings,
   ConversionSettings,
@@ -49,6 +50,8 @@ import {
 import { buildSidecarFile, getSidecarPathForExport, serializeSidecar } from '../utils/sidecarSettings';
 import { sanitizeFilenameBase } from '../utils/imagePipeline';
 import { normalizeExportOptions } from '../utils/exportOptions';
+import { getAutoFrameCrop } from '../utils/frameDetection';
+import { calculateWhiteBalanceOffsets } from '../utils/autoAnalysis';
 
 function createHistoryEntry(
   settings: ConversionSettings,
@@ -80,7 +83,7 @@ const DEFAULT_PRESET_CROP: ConversionSettings['crop'] = {
   aspectRatio: null,
 };
 
-function preserveCurrentFraming(
+export function preserveCurrentFraming(
   nextSettings: ConversionSettings,
   currentSettings: ConversionSettings | null | undefined,
 ) {
@@ -91,10 +94,11 @@ function preserveCurrentFraming(
   nextSettings.crop = structuredClone(currentSettings.crop);
   nextSettings.rotation = currentSettings.rotation;
   nextSettings.levelAngle = currentSettings.levelAngle;
+  nextSettings.lensDistortion = currentSettings.lensDistortion;
   return nextSettings;
 }
 
-function buildProfileSettingsForDocument(
+export function buildProfileSettingsForDocument(
   profile: FilmProfile,
   currentDocument: WorkspaceDocument | null,
 ) {
@@ -161,7 +165,7 @@ type UseWorkspaceCommandsOptions = {
   savePresetTags: string[];
   notificationSettings: NotificationSettings;
   renderBackendDiagnostics: RenderBackendDiagnostics;
-  setSidebarTab: SetState<'adjust' | 'curves' | 'crop' | 'dust' | 'export'>;
+  setSidebarTab: SetState<'adjust' | 'profiles' | 'curves' | 'crop' | 'dust' | 'export'>;
   setCropTab: SetState<CropTab>;
   isPickingFilmBase: boolean;
   activePointPicker: PointPickerMode | null;
@@ -195,6 +199,7 @@ type UseWorkspaceCommandsOptions = {
     nextActiveTabId: string | null;
   };
   reorderTabs: (sourceId: string, targetId: string) => void;
+  updateTabById: (tabId: string, updater: (tab: DocumentTab) => DocumentTab) => void;
   evictOldestCleanTab: (maxTabs: number) => DocumentTab | null | 'all-dirty';
   setActiveSidebarScrollTop: (scrollTop: number) => void;
   setDocumentState: (nextState: WorkspaceDocument | null | ((current: WorkspaceDocument | null) => WorkspaceDocument | null)) => void;
@@ -242,6 +247,7 @@ type UseWorkspaceCommandsOptions = {
   setShowTabSwitchOverlay: SetState<boolean>;
   setTabSwitchOverlayKey: SetState<number>;
   setPreviewVisibility: (next: boolean) => void;
+  restoreDocumentPreview: (documentId: string) => boolean;
   setCanvasSize: SetState<{ width: number; height: number }>;
   cancelPendingPreviewRetry: () => void;
   cancelScheduledInteractivePreview: () => void;
@@ -296,6 +302,7 @@ export function useWorkspaceCommands({
   replaceDocument,
   removeDocument,
   reorderTabs,
+  updateTabById,
   evictOldestCleanTab,
   setActiveSidebarScrollTop,
   setDocumentState,
@@ -343,6 +350,7 @@ export function useWorkspaceCommands({
   setShowTabSwitchOverlay,
   setTabSwitchOverlayKey,
   setPreviewVisibility,
+  restoreDocumentPreview,
   setCanvasSize,
   setSidebarTab,
   setCropTab,
@@ -429,7 +437,7 @@ export function useWorkspaceCommands({
     setRenderedPreviewAngle,
   ]);
 
-  const { importFile, importSessionRef } = useFileImport({
+  const { importFile, importFiles, importSessionRef } = useFileImport({
     workerClientRef,
     activeDocumentIdRef,
     persistedProfilesRef,
@@ -442,6 +450,7 @@ export function useWorkspaceCommands({
       findDocumentBySourcePath: (nativePath) => (
         tabsRef.current.find((tab) => tab.document.source.nativePath === nativePath) ?? null
       ),
+      hasDocument: (documentId) => tabsRef.current.some((tab) => tab.id === documentId),
       removeDocument,
       evictOldestCleanTab,
     },
@@ -489,15 +498,10 @@ export function useWorkspaceCommands({
     }));
   }, [updateDocument]);
 
-  const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => {
+  const handleSidebarTabChange = useCallback((tab: 'adjust' | 'profiles' | 'curves' | 'crop' | 'dust' | 'export') => {
     setSidebarTab(tab);
-    setIsCropOverlayVisible((current) => {
-      if (tab !== 'crop' && current) {
-        setIsAdjustingCrop(false);
-        return false;
-      }
-      return current;
-    });
+    setIsCropOverlayVisible(tab === 'crop');
+    if (tab !== 'crop') setIsAdjustingCrop(false);
     savePreferences({ ...prefsSnapshotRef.current, sidebarTab: tab });
   }, [prefsSnapshotRef, setIsAdjustingCrop, setIsCropOverlayVisible, setSidebarTab]);
 
@@ -675,6 +679,12 @@ export function useWorkspaceCommands({
     tabSwitchDraftRef.current = previousTabId && activeTabId && incomingTab.document.status === 'ready'
       ? incomingTab.id
       : null;
+    const restoredPreview = restoreDocumentPreview(incomingTab.id);
+    setPreviewVisibility(restoredPreview);
+    if (!restoredPreview) {
+      setRenderedPreviewAngle(0);
+      clearCanvas();
+    }
     setZoomLevel(incomingTab.zoom);
     setPan(incomingTab.pan);
   }, [
@@ -687,6 +697,7 @@ export function useWorkspaceCommands({
     interactionJustEndedRef,
     pendingPreviewRef,
     previousActiveTabIdRef,
+    restoreDocumentPreview,
     tabSwitchDraftRef,
     setActivePointPicker,
     setIsAdjustingCrop,
@@ -720,7 +731,6 @@ export function useWorkspaceCommands({
       return;
     }
 
-    importSessionRef.current += 1;
     activeRenderRequestRef.current = null;
     pendingPreviewRef.current?.imageBitmap?.close();
     pendingPreviewRef.current = null;
@@ -762,7 +772,6 @@ export function useWorkspaceCommands({
     clearCanvas,
     disposeDocument,
     fileInputRef,
-    importSessionRef,
     interactionJustEndedRef,
     pendingPreviewRef,
     removeDocument,
@@ -782,11 +791,13 @@ export function useWorkspaceCommands({
   ]);
 
   const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files ?? []);
     event.target.value = '';
-    if (!file) return;
-    await importFile(file, getNativePathFromFile(file));
-  }, [importFile]);
+    await importFiles(files.map((file) => ({
+      file,
+      nativePath: getNativePathFromFile(file),
+    })));
+  }, [importFiles]);
 
   const handleOpenImage = useCallback(async () => {
     if (!usesNativeFileDialogs) {
@@ -803,20 +814,32 @@ export function useWorkspaceCommands({
       });
       await waitForNextPaint();
 
-      const result = await openImageFile();
-      if (!result) {
+      // Older desktop bridges and test harnesses may only expose the original
+      // single-file command. Keep that path working while preferring the
+      // multi-select dialog in current builds.
+      const multipleResults = typeof openMultipleImageFiles === 'function'
+        ? await openMultipleImageFiles()
+        : null;
+      const results = Array.isArray(multipleResults)
+        ? multipleResults
+        : await openImageFile().then((result) => result ? [result] : []);
+      if (results.length === 0) {
         setBlockingOverlay(null);
         return;
       }
 
-      await importFile(result.file, result.path, result.size);
+      await importFiles(results.map((result) => ({
+        file: result.file,
+        nativePath: result.path,
+        nativeFileSize: result.size,
+      })));
     } catch (openError) {
       setBlockingOverlay(null);
       const message = formatError(openError);
       appendDiagnostic({ level: 'error', code: 'OPEN_DIALOG_FAILED', message });
       setError(`Could not open file. ${message}`);
     }
-  }, [fileInputRef, formatError, importFile, setBlockingOverlay, setError, usesNativeFileDialogs]);
+  }, [fileInputRef, formatError, importFiles, setBlockingOverlay, setError, usesNativeFileDialogs]);
 
   const handleOpenBatchExport = useCallback(() => {
     setShowBatchModal(true);
@@ -879,9 +902,7 @@ export function useWorkspaceCommands({
       : undefined;
 
     const nextSettings = buildProfileSettingsForDocument(profile, documentState);
-    if (profile.includesFraming === false) {
-      preserveCurrentFraming(nextSettings, documentState?.settings);
-    }
+    preserveCurrentFraming(nextSettings, documentState?.settings);
 
     updateDocument((current) => ({
       ...current,
@@ -910,6 +931,7 @@ export function useWorkspaceCommands({
       presetSettings.crop = structuredClone(DEFAULT_PRESET_CROP);
       presetSettings.rotation = 0;
       presetSettings.levelAngle = 0;
+      presetSettings.lensDistortion = 0;
     }
 
     const newPreset = savePreset({
@@ -1090,6 +1112,18 @@ export function useWorkspaceCommands({
       void refreshRenderBackendDiagnostics();
       return saved;
     } catch (exportError) {
+      if (isImageExportCancelledError(exportError)) {
+        appendDiagnostic({
+          level: 'info',
+          code: 'EXPORT_CANCELLED',
+          message: documentState.source.name,
+          context: { format: exportOptions.format },
+        });
+        setDocumentState((current) => current ? { ...current, status: 'ready' } : current);
+        showTransientNotice('Export cancelled');
+        void refreshRenderBackendDiagnostics();
+        return { status: 'cancelled' as const, path: null };
+      }
       const message = formatError(exportError);
       const diagnostic = appendDiagnostic({ level: 'error', code: 'EXPORT_FAILED', message });
       setError(`Export failed. ${message}`);
@@ -1111,12 +1145,17 @@ export function useWorkspaceCommands({
   }, [activeLabStyle, activeProfile.colorMatrix, activeProfile.filmType, activeProfile.lut, activeProfile.id, activeProfile.maskTuning, activeProfile.name, activeProfile.tonalCharacter, activeProfile.type, documentState, formatError, getLightSourceProfile, getRollById, notificationSettings.enabled, notificationSettings.exportComplete, refreshRenderBackendDiagnostics, setDocumentState, setError, showTransientNotice, workerClientRef]);
 
   const handleDownload = useCallback(async () => {
-    await runExport();
-  }, [runExport]);
+    setSidebarTab('export');
+  }, [setSidebarTab]);
 
   const handleExportClick = useCallback(() => {
-    void handleDownload();
-  }, [handleDownload]);
+    void runExport();
+  }, [runExport]);
+
+  const handleCancelExport = useCallback(() => {
+    if (!documentState) return;
+    workerClientRef.current?.cancelActiveExport(documentState.id);
+  }, [documentState, workerClientRef]);
 
   const handleQuickExport = useCallback(async (preset: QuickExportPreset) => {
     if (!documentState) {
@@ -1239,9 +1278,25 @@ export function useWorkspaceCommands({
 
   const handleRedetectFrame = useCallback(async () => {
     const worker = workerClientRef.current;
-    if (!worker || !documentState) {
+    if (!documentState) {
       return;
     }
+
+    if (documentState.cropSource === 'auto') {
+      updateDocument((current) => ({
+        ...current,
+        settings: {
+          ...current.settings,
+          crop: { x: 0, y: 0, width: 1, height: 1, aspectRatio: null },
+        },
+        cropSource: null,
+        dirty: true,
+      }));
+      showTransientNotice('Auto crop removed.', 'success');
+      return;
+    }
+
+    if (!worker) return;
 
     try {
       if (typeof worker.detectFrame !== 'function') {
@@ -1249,33 +1304,37 @@ export function useWorkspaceCommands({
         return;
       }
 
-      const detected = await worker.detectFrame(documentState.id);
+      const documentId = documentState.id;
+      const detected = await worker.detectFrame(documentId, documentState.settings);
       if (!detected) {
-        showTransientNotice('No frame detected. Adjust crop manually.');
+        if (activeDocumentIdRef.current === documentId) {
+          showTransientNotice('No frame detected. Adjust crop manually.');
+        }
         return;
       }
 
-      updateDocument((current) => ({
-        ...current,
-        settings: {
-          ...current.settings,
-          crop: {
-            x: detected.left,
-            y: detected.top,
-            width: detected.right - detected.left,
-            height: detected.bottom - detected.top,
-            aspectRatio: null,
+      updateTabById(documentId, (currentTab) => ({
+        ...currentTab,
+        document: {
+          ...currentTab.document,
+          settings: {
+            ...currentTab.document.settings,
+            crop: getAutoFrameCrop(
+              detected,
+              currentTab.document.settings.rotation,
+            ),
           },
-          levelAngle: detected.angle,
+          cropSource: 'auto',
+          dirty: true,
         },
-        cropSource: 'auto',
-        dirty: true,
       }));
-      showTransientNotice('Frame detected and crop applied.', 'success');
+      if (activeDocumentIdRef.current === documentId) {
+        showTransientNotice('Frame detected and crop applied.', 'success');
+      }
     } catch (error) {
       setError(formatError(error));
     }
-  }, [documentState, formatError, setError, showTransientNotice, updateDocument, workerClientRef]);
+  }, [activeDocumentIdRef, documentState, formatError, setError, showTransientNotice, updateDocument, updateTabById, workerClientRef]);
 
   const handleChooseExternalEditor = useCallback(async () => {
     const result = await chooseApplicationPath();
@@ -1417,8 +1476,16 @@ export function useWorkspaceCommands({
         const sample = await workerClientRef.current.sampleFilmBase({
           documentId: documentState.id,
           settings: displaySettings,
+          sampleSpace: activePointPicker === 'grey' ? 'white-balance' : 'source',
+          isColor: usesColorChannelPipeline({ type: activeProfile.type }),
+          profileId: activeProfile.id,
+          filmType: activeProfile.filmType,
           inputProfileId,
           outputProfileId: documentState.colorManagement.outputProfileId,
+          colorMatrix: activeProfile.colorMatrix,
+          cubeLut: activeProfile.lut ?? null,
+          flareFloor: documentState.estimatedFlare,
+          lightSourceBias: getLightSourceProfile(documentState.lightSourceId ?? null).spectralBias,
           targetMaxDimension,
           x,
           y,
@@ -1431,12 +1498,11 @@ export function useWorkspaceCommands({
           const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
           handleSettingsChange({ whitePoint: clamp(luminance, 180, 255) });
         } else if (activePointPicker === 'grey') {
-          const safeR = Math.max(sample.r, 1);
-          const safeG = Math.max(sample.g, 1);
-          const safeB = Math.max(sample.b, 1);
-          const rbAvg = (safeR + safeB) / 2;
-          const temperatureOffset = clamp(Math.round((safeB - safeR) * 0.4), -100, 100);
-          const tintOffset = clamp(Math.round((rbAvg - safeG) * 0.4), -100, 100);
+          const { temperature: temperatureOffset, tint: tintOffset } = calculateWhiteBalanceOffsets(
+            sample.r,
+            sample.g,
+            sample.b,
+          );
           handleSettingsChange({
             temperature: clamp(documentState.settings.temperature + temperatureOffset, -100, 100),
             tint: clamp(documentState.settings.tint + tintOffset, -100, 100),
@@ -1463,6 +1529,7 @@ export function useWorkspaceCommands({
     documentState,
     formatError,
     handleSettingsChange,
+    getLightSourceProfile,
     isPickingFilmBase,
     activeProfile,
     setActivePointPicker,
@@ -1543,10 +1610,11 @@ export function useWorkspaceCommands({
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const files = Array.from(event.dataTransfer.files ?? []);
-    for (const file of files) {
-      await importFile(file, getNativePathFromFile(file));
-    }
-  }, [importFile]);
+    await importFiles(files.map((file) => ({
+      file,
+      nativePath: getNativePathFromFile(file),
+    })));
+  }, [importFiles]);
 
   const handleSelectTab = useCallback((tabId: string) => {
     setActiveTabId(tabId);
@@ -1570,6 +1638,7 @@ export function useWorkspaceCommands({
 
   return {
     importFile,
+    importFiles,
     handleSettingsChange,
     handleLabStyleChange,
     handleSidebarTabChange,
@@ -1599,6 +1668,7 @@ export function useWorkspaceCommands({
     handleReset,
     handleDownload,
     handleExportClick,
+    handleCancelExport,
     handleOpenInEditor,
     handleQuickExport,
     handleChooseExternalEditor,
