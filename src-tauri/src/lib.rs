@@ -1,9 +1,12 @@
 mod watcher;
 
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rawler::analyze::{analyze_metadata, AnalyzerData};
 use rawler::imgop::develop::{ProcessingStep, RawDevelop};
@@ -16,17 +19,97 @@ use tauri::RunEvent;
 use tauri_plugin_updater::UpdaterExt;
 
 const GITHUB_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
+const RAW_PREVIEW_CACHE_VERSION: u16 = 1;
+const RAW_PREVIEW_CACHE_MAGIC: &[u8; 8] = b"DSRAW001";
+const RAW_IPC_MAGIC: &[u8; 8] = b"DSRIPC01";
+const RAW_IPC_VERSION: u16 = 1;
+const RAW_PREVIEW_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+// Two decoders keep the batch pipeline fed without letting several full-size
+// RAW buffers compete for memory at once. Image processing has its own pool.
+const RAW_DECODE_CONCURRENCY: usize = 2;
+const RAW_REGION_MAX_DIMENSION: u32 = 4096;
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct RawRegionBounds {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
 
 #[derive(Serialize)]
 struct RawDecodeResult {
     width: u32,
     height: u32,
+    #[serde(rename = "sourceWidth")]
+    source_width: u32,
+    #[serde(rename = "sourceHeight")]
+    source_height: u32,
     data: Vec<u16>,
     color_space: String,
     #[serde(rename = "bitDepth")]
     bit_depth: u8,
     transfer: String,
     orientation: Option<u16>,
+    #[serde(rename = "cacheHit")]
+    cache_hit: bool,
+    #[serde(rename = "queueWaitMs")]
+    queue_wait_ms: u64,
+    #[serde(rename = "decodeMs")]
+    decode_ms: u64,
+    #[serde(rename = "cacheReadMs")]
+    cache_read_ms: u64,
+}
+
+#[derive(Clone)]
+struct RawDecodeScheduler {
+    limiter: Arc<DecodeLimiter>,
+}
+
+impl Default for RawDecodeScheduler {
+    fn default() -> Self {
+        Self {
+            limiter: Arc::new(DecodeLimiter::new(RAW_DECODE_CONCURRENCY)),
+        }
+    }
+}
+
+struct DecodeLimiter {
+    available: Mutex<usize>,
+    ready: Condvar,
+    capacity: usize,
+}
+
+impl DecodeLimiter {
+    fn new(capacity: usize) -> Self {
+        Self {
+            available: Mutex::new(capacity.max(1)),
+            ready: Condvar::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    fn acquire(&self) -> Result<DecodePermit<'_>, String> {
+        let mut available = self.available.lock().map_err(|error| error.to_string())?;
+        while *available == 0 {
+            available = self.ready.wait(available).map_err(|error| error.to_string())?;
+        }
+        *available -= 1;
+        Ok(DecodePermit { limiter: self })
+    }
+}
+
+struct DecodePermit<'a> {
+    limiter: &'a DecodeLimiter,
+}
+
+impl Drop for DecodePermit<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut available) = self.limiter.available.lock() {
+            *available = (*available + 1).min(self.limiter.capacity);
+            self.limiter.ready.notify_one();
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -94,8 +177,232 @@ fn updater_endpoint(channel: &str) -> Result<String, String> {
     }
 }
 
-#[tauri::command]
-fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
+fn bounded_dimensions(width: u32, height: u32, max_dimension: Option<u32>) -> (u32, u32) {
+    let Some(max_dimension) = max_dimension.filter(|value| *value > 0) else {
+        return (width, height);
+    };
+    let source_max = width.max(height);
+    if source_max <= max_dimension {
+        return (width, height);
+    }
+
+    let scale = max_dimension as f64 / source_max as f64;
+    (
+        ((width as f64 * scale).round() as u32).max(1),
+        ((height as f64 * scale).round() as u32).max(1),
+    )
+}
+
+fn elapsed_millis(started_at: Instant) -> u64 {
+    started_at.elapsed().as_millis().min(u64::MAX as u128) as u64
+}
+
+fn raw_preview_cache_key(path: &Path, max_dimension: u32) -> Result<String, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Failed to inspect RAW file {}: {error}", path.display()))?;
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+
+    let mut hasher = DefaultHasher::new();
+    RAW_PREVIEW_CACHE_VERSION.hash(&mut hasher);
+    canonical_path.hash(&mut hasher);
+    metadata.len().hash(&mut hasher);
+    modified.hash(&mut hasher);
+    max_dimension.hash(&mut hasher);
+    Ok(format!("{:016x}.dsraw", hasher.finish()))
+}
+
+fn raw_preview_cache_path(cache_directory: &Path, path: &Path, max_dimension: u32) -> Result<PathBuf, String> {
+    Ok(cache_directory.join(raw_preview_cache_key(path, max_dimension)?))
+}
+
+fn raw_region_cache_path(
+    cache_directory: &Path,
+    path: &Path,
+    region: RawRegionBounds,
+    max_dimension: u32,
+) -> Result<PathBuf, String> {
+    let mut hasher = DefaultHasher::new();
+    raw_preview_cache_key(path, max_dimension)?.hash(&mut hasher);
+    region.hash(&mut hasher);
+    Ok(cache_directory.join(format!("region-{:016x}.dsraw", hasher.finish())))
+}
+
+fn read_u16(reader: &mut impl Read) -> Result<u16, String> {
+    let mut bytes = [0_u8; 2];
+    reader.read_exact(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_u32(reader: &mut impl Read) -> Result<u32, String> {
+    let mut bytes = [0_u8; 4];
+    reader.read_exact(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_u64(reader: &mut impl Read) -> Result<u64, String> {
+    let mut bytes = [0_u8; 8];
+    reader.read_exact(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn read_raw_preview_cache(path: &Path) -> Result<RawDecodeResult, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut magic = [0_u8; 8];
+    reader.read_exact(&mut magic).map_err(|error| error.to_string())?;
+    if &magic != RAW_PREVIEW_CACHE_MAGIC {
+        return Err("RAW preview cache has an invalid header.".to_string());
+    }
+
+    let version = read_u16(&mut reader)?;
+    if version != RAW_PREVIEW_CACHE_VERSION {
+        return Err("RAW preview cache version does not match this build.".to_string());
+    }
+
+    let width = read_u32(&mut reader)?;
+    let height = read_u32(&mut reader)?;
+    let source_width = read_u32(&mut reader)?;
+    let source_height = read_u32(&mut reader)?;
+    let stored_orientation = read_u16(&mut reader)?;
+    let sample_count = read_u64(&mut reader)?;
+    let expected_samples = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|value| value.checked_mul(3))
+        .ok_or_else(|| "RAW preview cache dimensions overflowed.".to_string())?;
+    if width == 0 || height == 0 || sample_count != expected_samples {
+        return Err("RAW preview cache dimensions are invalid.".to_string());
+    }
+    let byte_count = sample_count
+        .checked_mul(2)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| "RAW preview cache is too large to read.".to_string())?;
+    let mut bytes = vec![0_u8; byte_count];
+    reader.read_exact(&mut bytes).map_err(|error| error.to_string())?;
+    let data = bytes
+        .chunks_exact(2)
+        .map(|sample| u16::from_le_bytes([sample[0], sample[1]]))
+        .collect();
+
+    Ok(RawDecodeResult {
+        width,
+        height,
+        source_width,
+        source_height,
+        data,
+        color_space: "sRGB".to_string(),
+        bit_depth: 16,
+        transfer: "srgb".to_string(),
+        orientation: (stored_orientation != 0).then_some(stored_orientation),
+        cache_hit: true,
+        queue_wait_ms: 0,
+        decode_ms: 0,
+        cache_read_ms: 0,
+    })
+}
+
+fn write_raw_preview_cache(path: &Path, result: &RawDecodeResult) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "RAW preview cache path has no parent directory.".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temporary_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    let file = fs::File::create(&temporary_path).map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(file);
+
+    writer.write_all(RAW_PREVIEW_CACHE_MAGIC).map_err(|error| error.to_string())?;
+    writer
+        .write_all(&RAW_PREVIEW_CACHE_VERSION.to_le_bytes())
+        .and_then(|_| writer.write_all(&result.width.to_le_bytes()))
+        .and_then(|_| writer.write_all(&result.height.to_le_bytes()))
+        .and_then(|_| writer.write_all(&result.source_width.to_le_bytes()))
+        .and_then(|_| writer.write_all(&result.source_height.to_le_bytes()))
+        .and_then(|_| writer.write_all(&result.orientation.unwrap_or(0).to_le_bytes()))
+        .and_then(|_| writer.write_all(&(result.data.len() as u64).to_le_bytes()))
+        .map_err(|error| error.to_string())?;
+
+    for samples in result.data.chunks(4096) {
+        let mut bytes = Vec::with_capacity(samples.len() * 2);
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        writer.write_all(&bytes).map_err(|error| error.to_string())?;
+    }
+    writer.flush().map_err(|error| error.to_string())?;
+    drop(writer);
+    fs::rename(&temporary_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temporary_path);
+        error.to_string()
+    })?;
+    Ok(())
+}
+
+fn prune_raw_preview_cache(cache_directory: &Path) {
+    let Ok(entries) = fs::read_dir(cache_directory) else {
+        return;
+    };
+    let mut cache_files = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("dsraw") {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((path, metadata.len(), modified))
+        })
+        .collect::<Vec<_>>();
+    let mut total_bytes = cache_files.iter().map(|(_, size, _)| *size).sum::<u64>();
+    if total_bytes <= RAW_PREVIEW_CACHE_MAX_BYTES {
+        return;
+    }
+
+    cache_files.sort_by_key(|(_, _, modified)| *modified);
+    for (path, size, _) in cache_files {
+        if total_bytes <= RAW_PREVIEW_CACHE_MAX_BYTES {
+            break;
+        }
+        if fs::remove_file(path).is_ok() {
+            total_bytes = total_bytes.saturating_sub(size);
+        }
+    }
+}
+
+fn clamp_raw_region(
+    source_width: u32,
+    source_height: u32,
+    requested: RawRegionBounds,
+) -> Result<RawRegionBounds, String> {
+    if source_width == 0 || source_height == 0 || requested.width == 0 || requested.height == 0 {
+        return Err("RAW zoom region dimensions must be greater than zero.".to_string());
+    }
+    if requested.x >= source_width || requested.y >= source_height {
+        return Err("RAW zoom region falls outside the source image.".to_string());
+    }
+
+    let x = requested.x;
+    let y = requested.y;
+    let right = requested.x.saturating_add(requested.width).min(source_width);
+    let bottom = requested.y.saturating_add(requested.height).min(source_height);
+    if right <= x || bottom <= y {
+        return Err("RAW zoom region falls outside the source image.".to_string());
+    }
+
+    Ok(RawRegionBounds {
+        x,
+        y,
+        width: right - x,
+        height: bottom - y,
+    })
+}
+
+fn decode_raw_uncached(path: &str, max_dimension: Option<u32>) -> Result<RawDecodeResult, String> {
     let raw_image = rawler::decode_file(&path).map_err(|error| error.to_string())?;
     let developed = RawDevelop {
         // Camera white balance is tuned for the photographed scene, not for an
@@ -118,6 +425,14 @@ fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
         })
         .map_err(|error| error.to_string())?;
     let rgb = developed.to_rgb16();
+    let source_width = rgb.width();
+    let source_height = rgb.height();
+    let (width, height) = bounded_dimensions(source_width, source_height, max_dimension);
+    let rgb = if (width, height) == (source_width, source_height) {
+        rgb
+    } else {
+        image::imageops::resize(&rgb, width, height, image::imageops::FilterType::Triangle)
+    };
 
     let orientation = analyze_metadata(&path)
         .ok()
@@ -129,12 +444,241 @@ fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
     Ok(RawDecodeResult {
         width: rgb.width(),
         height: rgb.height(),
+        source_width,
+        source_height,
         data: rgb.into_raw(),
         color_space: "sRGB".to_string(),
         bit_depth: 16,
         transfer: "srgb".to_string(),
         orientation,
+        cache_hit: false,
+        queue_wait_ms: 0,
+        decode_ms: 0,
+        cache_read_ms: 0,
     })
+}
+
+fn decode_raw_region_uncached(
+    path: &str,
+    requested_region: RawRegionBounds,
+    max_dimension: u32,
+) -> Result<RawDecodeResult, String> {
+    let raw_image = rawler::decode_file(&path).map_err(|error| error.to_string())?;
+    let developed = RawDevelop {
+        steps: vec![
+            ProcessingStep::Rescale,
+            ProcessingStep::Demosaic,
+            ProcessingStep::CropActiveArea,
+            ProcessingStep::Calibrate,
+            ProcessingStep::CropDefault,
+            ProcessingStep::SRgb,
+        ],
+    }
+        .develop_intermediate(&raw_image)
+        .and_then(|intermediate| {
+            intermediate
+                .to_dynamic_image()
+                .ok_or_else(|| rawler::RawlerError::DecoderFailed("Failed to convert developed RAW image to a dynamic image".to_string()))
+        })
+        .map_err(|error| error.to_string())?;
+    let rgb = developed.to_rgb16();
+    let source_width = rgb.width();
+    let source_height = rgb.height();
+    let region = clamp_raw_region(source_width, source_height, requested_region)?;
+    let cropped = image::imageops::crop_imm(
+        &rgb,
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+    )
+    .to_image();
+    let bounded_max = max_dimension.clamp(256, RAW_REGION_MAX_DIMENSION);
+    let (width, height) = bounded_dimensions(cropped.width(), cropped.height(), Some(bounded_max));
+    let cropped = if (width, height) == (cropped.width(), cropped.height()) {
+        cropped
+    } else {
+        image::imageops::resize(&cropped, width, height, image::imageops::FilterType::Triangle)
+    };
+    let orientation = analyze_metadata(&path)
+        .ok()
+        .and_then(|analysis| match analysis.data {
+            Some(AnalyzerData::Metadata(metadata)) => metadata.raw_metadata.exif.orientation,
+            _ => None,
+        });
+
+    Ok(RawDecodeResult {
+        width: cropped.width(),
+        height: cropped.height(),
+        source_width,
+        source_height,
+        data: cropped.into_raw(),
+        color_space: "sRGB".to_string(),
+        bit_depth: 16,
+        transfer: "srgb".to_string(),
+        orientation,
+        cache_hit: false,
+        queue_wait_ms: 0,
+        decode_ms: 0,
+        cache_read_ms: 0,
+    })
+}
+
+fn decode_raw_scheduled(
+    scheduler: &RawDecodeScheduler,
+    cache_directory: &Path,
+    path: String,
+    max_dimension: Option<u32>,
+    queued_at: Instant,
+) -> Result<RawDecodeResult, String> {
+    let _permit = scheduler.limiter.acquire()?;
+    let queue_wait_ms = elapsed_millis(queued_at);
+    let cache_path = max_dimension
+        .filter(|value| *value > 0)
+        .and_then(|value| raw_preview_cache_path(cache_directory, Path::new(&path), value).ok());
+
+    if let Some(cache_path) = cache_path.as_deref() {
+        let cache_started_at = Instant::now();
+        match read_raw_preview_cache(cache_path) {
+            Ok(mut result) => {
+                result.queue_wait_ms = queue_wait_ms;
+                result.cache_read_ms = elapsed_millis(cache_started_at);
+                return Ok(result);
+            }
+            Err(_) => {
+                let _ = fs::remove_file(cache_path);
+            }
+        }
+    }
+
+    let decode_started_at = Instant::now();
+    let mut result = decode_raw_uncached(&path, max_dimension)?;
+    result.queue_wait_ms = queue_wait_ms;
+    result.decode_ms = elapsed_millis(decode_started_at);
+
+    if let Some(cache_path) = cache_path.as_deref() {
+        if write_raw_preview_cache(cache_path, &result).is_ok() {
+            prune_raw_preview_cache(cache_directory);
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+async fn decode_raw(
+    app: tauri::AppHandle,
+    scheduler: tauri::State<'_, RawDecodeScheduler>,
+    path: String,
+    max_dimension: Option<u32>,
+) -> Result<RawDecodeResult, String> {
+    let cache_directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?
+        .join("raw-previews-v1");
+    let scheduler = scheduler.inner().clone();
+    let queued_at = Instant::now();
+    tauri::async_runtime::spawn_blocking(move || {
+        decode_raw_scheduled(&scheduler, &cache_directory, path, max_dimension, queued_at)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn encode_raw_ipc_response(result: RawDecodeResult) -> Vec<u8> {
+    let mut response = Vec::with_capacity(62 + result.data.len() * 2);
+    response.extend_from_slice(RAW_IPC_MAGIC);
+    response.extend_from_slice(&RAW_IPC_VERSION.to_le_bytes());
+    response.extend_from_slice(&result.width.to_le_bytes());
+    response.extend_from_slice(&result.height.to_le_bytes());
+    response.extend_from_slice(&result.source_width.to_le_bytes());
+    response.extend_from_slice(&result.source_height.to_le_bytes());
+    response.extend_from_slice(&result.orientation.unwrap_or(0).to_le_bytes());
+    response.push(result.bit_depth);
+    response.push(u8::from(result.cache_hit));
+    response.extend_from_slice(&result.queue_wait_ms.to_le_bytes());
+    response.extend_from_slice(&result.decode_ms.to_le_bytes());
+    response.extend_from_slice(&result.cache_read_ms.to_le_bytes());
+    response.extend_from_slice(&(result.data.len() as u64).to_le_bytes());
+    for sample in result.data {
+        response.extend_from_slice(&sample.to_le_bytes());
+    }
+    response
+}
+
+#[tauri::command]
+async fn decode_raw_binary(
+    app: tauri::AppHandle,
+    scheduler: tauri::State<'_, RawDecodeScheduler>,
+    path: String,
+    max_dimension: Option<u32>,
+) -> Result<tauri::ipc::Response, String> {
+    let cache_directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?
+        .join("raw-previews-v1");
+    let scheduler = scheduler.inner().clone();
+    let queued_at = Instant::now();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<RawDecodeResult, String> {
+        decode_raw_scheduled(&scheduler, &cache_directory, path, max_dimension, queued_at)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(tauri::ipc::Response::new(encode_raw_ipc_response(result)))
+}
+
+#[tauri::command]
+async fn decode_raw_region_binary(
+    app: tauri::AppHandle,
+    scheduler: tauri::State<'_, RawDecodeScheduler>,
+    path: String,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    max_dimension: Option<u32>,
+) -> Result<tauri::ipc::Response, String> {
+    let cache_directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?
+        .join("raw-previews-v1");
+    let scheduler = scheduler.inner().clone();
+    let queued_at = Instant::now();
+    let requested_region = RawRegionBounds { x, y, width, height };
+    let max_dimension = max_dimension
+        .unwrap_or(RAW_REGION_MAX_DIMENSION)
+        .clamp(256, RAW_REGION_MAX_DIMENSION);
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<RawDecodeResult, String> {
+        let _permit = scheduler.limiter.acquire()?;
+        let queue_wait_ms = elapsed_millis(queued_at);
+        let cache_path = raw_region_cache_path(
+            &cache_directory,
+            Path::new(&path),
+            requested_region,
+            max_dimension,
+        )?;
+        let cache_started_at = Instant::now();
+        if let Ok(mut cached) = read_raw_preview_cache(&cache_path) {
+            cached.queue_wait_ms = queue_wait_ms;
+            cached.cache_read_ms = elapsed_millis(cache_started_at);
+            return Ok(cached);
+        }
+        let _ = fs::remove_file(&cache_path);
+
+        let decode_started_at = Instant::now();
+        let mut decoded = decode_raw_region_uncached(&path, requested_region, max_dimension)?;
+        decoded.queue_wait_ms = queue_wait_ms;
+        decoded.decode_ms = elapsed_millis(decode_started_at);
+        if write_raw_preview_cache(&cache_path, &decoded).is_ok() {
+            prune_raw_preview_cache(&cache_directory);
+        }
+        Ok(decoded)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(tauri::ipc::Response::new(encode_raw_ipc_response(result)))
 }
 
 fn split_filename(filename: &str) -> (String, String) {
@@ -542,8 +1086,11 @@ pub fn run() {
         // RunEvent::Opened handler queries unmanaged state it panics across the
         // FFI boundary and aborts the process.
         .manage(PendingOpenedFiles::default())
+        .manage(RawDecodeScheduler::default())
         .invoke_handler(tauri::generate_handler![
             decode_raw,
+            decode_raw_binary,
+            decode_raw_region_binary,
             save_blob_to_directory,
             open_saved_file_in_editor,
             read_file_by_path,
@@ -769,7 +1316,10 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
 #[cfg(test)]
 mod tests {
     use super::{
-        candidate_filename, next_available_file_path, save_blob_to_directory_inner,
+        bounded_dimensions, candidate_filename, clamp_raw_region, encode_raw_ipc_response,
+        next_available_file_path, raw_preview_cache_key, read_raw_preview_cache,
+        save_blob_to_directory_inner, write_raw_preview_cache, RawDecodeResult, RawRegionBounds,
+        RAW_IPC_MAGIC,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -788,6 +1338,112 @@ mod tests {
         assert_eq!(candidate_filename("scan.jpg", 0), "scan.jpg");
         assert_eq!(candidate_filename("scan.jpg", 1), "scan-2.jpg");
         assert_eq!(candidate_filename("scan", 2), "scan-3");
+    }
+
+    #[test]
+    fn raw_preview_dimensions_preserve_aspect_ratio_and_never_upscale() {
+        assert_eq!(bounded_dimensions(8192, 5464, Some(2048)), (2048, 1366));
+        assert_eq!(bounded_dimensions(3000, 4000, Some(2000)), (1500, 2000));
+        assert_eq!(bounded_dimensions(1600, 1200, Some(2048)), (1600, 1200));
+        assert_eq!(bounded_dimensions(1600, 1200, None), (1600, 1200));
+    }
+
+    #[test]
+    fn raw_zoom_region_is_clamped_to_the_source() {
+        assert_eq!(
+            clamp_raw_region(
+                6000,
+                4000,
+                RawRegionBounds { x: 5500, y: 3500, width: 1000, height: 1000 },
+            ),
+            Ok(RawRegionBounds { x: 5500, y: 3500, width: 500, height: 500 }),
+        );
+        assert!(clamp_raw_region(
+            6000,
+            4000,
+            RawRegionBounds { x: 6000, y: 0, width: 10, height: 10 },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn raw_preview_cache_round_trips_pixels_and_metadata() {
+        let directory = unique_test_directory("raw-preview-cache");
+        fs::create_dir_all(&directory).expect("temp directory should be created");
+        let cache_path = directory.join("preview.dsraw");
+        let result = RawDecodeResult {
+            width: 2,
+            height: 1,
+            source_width: 8000,
+            source_height: 4000,
+            data: vec![0, 257, 65_535, 1_024, 32_768, 50_000],
+            color_space: "sRGB".to_string(),
+            bit_depth: 16,
+            transfer: "srgb".to_string(),
+            orientation: Some(6),
+            cache_hit: false,
+            queue_wait_ms: 0,
+            decode_ms: 42,
+            cache_read_ms: 0,
+        };
+
+        write_raw_preview_cache(&cache_path, &result).expect("preview should be cached");
+        let cached = read_raw_preview_cache(&cache_path).expect("preview cache should be read");
+
+        assert_eq!(cached.width, 2);
+        assert_eq!(cached.height, 1);
+        assert_eq!(cached.source_width, 8000);
+        assert_eq!(cached.source_height, 4000);
+        assert_eq!(cached.orientation, Some(6));
+        assert_eq!(cached.data, result.data);
+        assert!(cached.cache_hit);
+
+        fs::remove_dir_all(&directory).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn raw_ipc_response_packs_metadata_and_pixels_without_json() {
+        let result = RawDecodeResult {
+            width: 1,
+            height: 1,
+            source_width: 6000,
+            source_height: 4000,
+            data: vec![257, 32_768, 65_535],
+            color_space: "sRGB".to_string(),
+            bit_depth: 16,
+            transfer: "srgb".to_string(),
+            orientation: Some(6),
+            cache_hit: true,
+            queue_wait_ms: 3,
+            decode_ms: 0,
+            cache_read_ms: 7,
+        };
+
+        let response = encode_raw_ipc_response(result);
+
+        assert_eq!(&response[..8], RAW_IPC_MAGIC);
+        assert_eq!(response.len(), 62 + 6);
+        assert_eq!(&response[62..], &[1, 1, 0, 128, 255, 255]);
+    }
+
+    #[test]
+    fn raw_preview_cache_key_changes_when_source_changes() {
+        let directory = unique_test_directory("raw-preview-key");
+        fs::create_dir_all(&directory).expect("temp directory should be created");
+        let source_path = directory.join("scan.rw2");
+        fs::write(&source_path, [1_u8, 2, 3]).expect("source file should be written");
+        let first_key = raw_preview_cache_key(&source_path, 2048).expect("cache key should build");
+
+        fs::write(&source_path, [1_u8, 2, 3, 4]).expect("source file should change");
+        let changed_source_key =
+            raw_preview_cache_key(&source_path, 2048).expect("changed cache key should build");
+        let changed_size_key =
+            raw_preview_cache_key(&source_path, 1024).expect("resized cache key should build");
+
+        assert_ne!(first_key, changed_source_key);
+        assert_ne!(changed_source_key, changed_size_key);
+
+        fs::remove_dir_all(&directory).expect("temp directory should be removed");
     }
 
     #[test]

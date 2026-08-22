@@ -1,15 +1,38 @@
 import { FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
 import { ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
+import type { RawSourceRegion } from './zoomRegionPreview';
 import { getColorProfileIdFromName } from './colorProfiles';
 import { clamp } from './math';
 
 export const RAW_IMPORT_PROFILE_ID = 'raw-import-result';
+const RAW_IPC_HEADER_BYTES = 62;
+const RAW_IPC_MAGIC = [68, 83, 82, 73, 80, 67, 48, 49] as const;
+const RAW_IPC_VERSION = 1;
 
 export interface DesktopRawDecodeForWorkerOptions {
   documentId: string;
   fileName: string;
   path: string;
   size: number;
+  maxDimension?: number | null;
+  includeHighDepth?: boolean;
+}
+
+interface CreateWorkerDecodeRequestOptions {
+  includeHighDepth?: boolean;
+  precomputedFilmBase?: FilmBaseEstimate | null;
+}
+
+export interface DesktopRawRegionDecodeOptions {
+  documentId: string;
+  fileName: string;
+  path: string;
+  size: number;
+  sourceWidth: number;
+  orientation?: number | null;
+  region: RawSourceRegion;
+  maxDimension: number;
+  precomputedFilmBase?: FilmBaseEstimate | null;
 }
 
 export function isRawExtension(extension: string) {
@@ -90,18 +113,23 @@ export function createWorkerDecodeRequestFromRaw(
   fileName: string,
   size: number,
   rawResult: RawDecodeResult,
+  options: CreateWorkerDecodeRequestOptions = {},
 ): DecodeRequest {
   const previewRgba = (rawResult.bitDepth ?? 8) === 16
     ? rgb16ToRgba8(rawResult.data, rawResult.width, rawResult.height).buffer
     : rgbToRgba(rawResult.data, rawResult.width, rawResult.height).buffer;
-  const highDepthRawBuffer = normalizeRawHighDepthBuffer(rawResult);
+  const highDepthRawBuffer = options.includeHighDepth === false
+    ? undefined
+    : normalizeRawHighDepthBuffer(rawResult);
   // Estimate the clear base from the highest-fidelity data available: the
   // full-resolution 16-bit RGB buffer when present (independent of whether it
   // survived the high-depth size cap), otherwise the 8-bit RGB. The 8-bit
   // preview is a display artifact and never the source of truth here.
-  const precomputedFilmBase = (rawResult.bitDepth ?? 8) === 16
-    ? estimateFilmBase16(rawResult.data, rawResult.width, rawResult.height)
-    : estimateFilmBase(rawResult.data, rawResult.width, rawResult.height, 3);
+  const precomputedFilmBase = options.precomputedFilmBase !== undefined
+    ? options.precomputedFilmBase
+    : ((rawResult.bitDepth ?? 8) === 16
+      ? estimateFilmBase16(rawResult.data, rawResult.width, rawResult.height)
+      : estimateFilmBase(rawResult.data, rawResult.width, rawResult.height, 3));
 
   return {
     documentId,
@@ -112,6 +140,10 @@ export function createWorkerDecodeRequestFromRaw(
     rawDimensions: {
       width: rawResult.width,
       height: rawResult.height,
+    },
+    sourceDimensions: {
+      width: rawResult.sourceWidth ?? rawResult.width,
+      height: rawResult.sourceHeight ?? rawResult.height,
     },
     highDepthRawBuffer,
     highDepthRawBitDepth: highDepthRawBuffer ? 16 : undefined,
@@ -124,9 +156,79 @@ export function createWorkerDecodeRequestFromRaw(
   };
 }
 
+function isRawDecodeResult(value: unknown): value is RawDecodeResult {
+  return typeof value === 'object'
+    && value !== null
+    && 'width' in value
+    && 'height' in value
+    && 'data' in value;
+}
+
+export function parseRawDecodeIpcResponse(payload: ArrayBuffer | Uint8Array): RawDecodeResult {
+  const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+  if (bytes.byteLength < RAW_IPC_HEADER_BYTES) {
+    throw new Error('Native RAW response is incomplete.');
+  }
+  if (RAW_IPC_MAGIC.some((value, index) => bytes[index] !== value)) {
+    throw new Error('Native RAW response has an invalid header.');
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const version = view.getUint16(8, true);
+  if (version !== RAW_IPC_VERSION) {
+    throw new Error(`Native RAW response version ${version} is not supported.`);
+  }
+
+  const width = view.getUint32(10, true);
+  const height = view.getUint32(14, true);
+  const sourceWidth = view.getUint32(18, true);
+  const sourceHeight = view.getUint32(22, true);
+  const orientation = view.getUint16(26, true);
+  const bitDepth = view.getUint8(28);
+  const flags = view.getUint8(29);
+  const queueWaitMs = Number(view.getBigUint64(30, true));
+  const decodeMs = Number(view.getBigUint64(38, true));
+  const cacheReadMs = Number(view.getBigUint64(46, true));
+  const sampleCount = Number(view.getBigUint64(54, true));
+  const expectedSamples = width * height * 3;
+  if (!Number.isSafeInteger(sampleCount) || sampleCount !== expectedSamples) {
+    throw new Error('Native RAW response has invalid dimensions.');
+  }
+  if (RAW_IPC_HEADER_BYTES + sampleCount * 2 !== bytes.byteLength) {
+    throw new Error('Native RAW response pixel data is incomplete.');
+  }
+
+  const sampleOffset = bytes.byteOffset + RAW_IPC_HEADER_BYTES;
+  const data = new Uint16Array(bytes.buffer, sampleOffset, sampleCount);
+  return {
+    width,
+    height,
+    sourceWidth,
+    sourceHeight,
+    data,
+    color_space: 'sRGB',
+    bitDepth: bitDepth === 16 ? 16 : 8,
+    transfer: 'srgb',
+    orientation: orientation === 0 ? null : orientation,
+    cacheHit: (flags & 1) === 1,
+    queueWaitMs,
+    decodeMs,
+    cacheReadMs,
+  };
+}
+
 export async function decodeDesktopRawForWorker(options: DesktopRawDecodeForWorkerOptions) {
   const { invoke } = await import('@tauri-apps/api/core');
-  const rawResult = await invoke<RawDecodeResult>('decode_raw', { path: options.path });
+  const response = await invoke<ArrayBuffer | Uint8Array | RawDecodeResult>('decode_raw_binary', {
+    path: options.path,
+    ...(options.maxDimension == null ? {} : { maxDimension: options.maxDimension }),
+  });
+  // Object responses keep browser mocks and older development shells useful.
+  // Desktop builds return the packed binary path to avoid JSON-serializing
+  // millions of 16-bit samples.
+  const rawResult = isRawDecodeResult(response)
+    ? response
+    : parseRawDecodeIpcResponse(response);
 
   return {
     rawResult,
@@ -135,8 +237,42 @@ export async function decodeDesktopRawForWorker(options: DesktopRawDecodeForWork
       options.fileName,
       options.size,
       rawResult,
+      { includeHighDepth: options.includeHighDepth },
     ),
   };
+}
+
+export async function decodeDesktopRawRegionForWorker(options: DesktopRawRegionDecodeOptions) {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const nativeX = mirrorFromExifOrientation(options.orientation)
+    ? options.sourceWidth - options.region.x - options.region.width
+    : options.region.x;
+  const response = await invoke<ArrayBuffer | Uint8Array | RawDecodeResult>('decode_raw_region_binary', {
+    path: options.path,
+    x: Math.max(0, Math.round(nativeX)),
+    y: Math.max(0, Math.round(options.region.y)),
+    width: Math.max(1, Math.round(options.region.width)),
+    height: Math.max(1, Math.round(options.region.height)),
+    maxDimension: options.maxDimension,
+  });
+  const rawResult = isRawDecodeResult(response)
+    ? response
+    : parseRawDecodeIpcResponse(response);
+  const decodeRequest = createWorkerDecodeRequestFromRaw(
+    options.documentId,
+    options.fileName,
+    options.size,
+    rawResult,
+    {
+      includeHighDepth: true,
+      precomputedFilmBase: options.precomputedFilmBase,
+    },
+  );
+  decodeRequest.sourceDimensions = {
+    width: rawResult.width,
+    height: rawResult.height,
+  };
+  return { rawResult, decodeRequest };
 }
 
 const ANALYSIS_GRID_TARGET = 200;      // max cells per axis

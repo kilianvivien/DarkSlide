@@ -445,11 +445,17 @@ export interface DecodedImage {
 export interface RawDecodeResult {
   width: number;
   height: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
   data: ArrayLike<number>;
   color_space: string;
   bitDepth?: ExportBitDepth;
   transfer?: 'srgb';
   orientation?: number | null;
+  cacheHit?: boolean;
+  queueWaitMs?: number;
+  decodeMs?: number;
+  cacheReadMs?: number;
 }
 
 export interface WorkspaceDocument {
@@ -500,6 +506,7 @@ export interface DecodeRequest {
   size: number;
   displayScaleFactor?: number;
   rawDimensions?: { width: number; height: number };
+  sourceDimensions?: { width: number; height: number };
   highDepthRawBuffer?: ArrayBuffer;
   highDepthRawBitDepth?: ExportBitDepth;
   highDepthRawTransfer?: 'srgb';

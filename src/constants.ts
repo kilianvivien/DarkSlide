@@ -221,7 +221,13 @@ export const MAX_IMAGE_PIXELS = 120_000_000;
 export const MAX_IMAGE_DIMENSION = 18_000;
 export const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024;
 export const MAX_HIGH_DEPTH_RAW_PIXELS = 60_000_000;
-export const MAX_OPEN_TABS = 8;
+// Editing uses a Lightroom-style working preview. The original RAW is decoded
+// only for export, keeping a multi-frame roll responsive and memory-bounded.
+export const RAW_EDITOR_PREVIEW_MAX_DIMENSION = 2048;
+// A film roll regularly contains 24 or 36 frames. Preview memory is managed
+// separately, so the workspace should not evict frames just because a full
+// roll was imported.
+export const MAX_OPEN_TABS = 100;
 export const PREVIEW_LEVELS = [512, 1024, 2048, 4096];
 export const DIAGNOSTICS_LIMIT = 100;
 export const DARKSLIDE_PRESET_FILE_VERSION = '1.0.0';

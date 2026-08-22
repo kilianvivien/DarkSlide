@@ -1,7 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings, FILM_BASE_CONFIDENCE } from '../constants';
 import { processImageData } from './imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, decodeDesktopRawRegionForWorker, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, parseRawDecodeIpcResponse, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+
+const coreState = vi.hoisted(() => ({ invoke: vi.fn() }));
+
+vi.mock('@tauri-apps/api/core', () => ({ invoke: coreState.invoke }));
+
+beforeEach(() => {
+  coreState.invoke.mockReset();
+});
 
 // Build an RGB Uint8Array by evaluating a per-pixel function. Pixel coordinates
 // are passed so fixtures can paint edge bands, rebate strips, etc.
@@ -96,6 +104,84 @@ function meanInnerChannels(imageData: ImageData, margin = 8) {
 }
 
 describe('rawImport', () => {
+  it('parses packed native RAW responses without JSON pixel arrays', () => {
+    const response = new Uint8Array(62 + 6);
+    response.set([68, 83, 82, 73, 80, 67, 48, 49]);
+    const view = new DataView(response.buffer);
+    view.setUint16(8, 1, true);
+    view.setUint32(10, 1, true);
+    view.setUint32(14, 1, true);
+    view.setUint32(18, 6000, true);
+    view.setUint32(22, 4000, true);
+    view.setUint16(26, 6, true);
+    view.setUint8(28, 16);
+    view.setUint8(29, 1);
+    view.setBigUint64(30, 3n, true);
+    view.setBigUint64(38, 0n, true);
+    view.setBigUint64(46, 7n, true);
+    view.setBigUint64(54, 3n, true);
+    response.set([1, 1, 0, 128, 255, 255], 62);
+
+    const decoded = parseRawDecodeIpcResponse(response);
+
+    expect(decoded).toMatchObject({
+      width: 1,
+      height: 1,
+      sourceWidth: 6000,
+      sourceHeight: 4000,
+      orientation: 6,
+      bitDepth: 16,
+      cacheHit: true,
+      queueWaitMs: 3,
+      decodeMs: 0,
+      cacheReadMs: 7,
+    });
+    expect(Array.from(decoded.data)).toEqual([257, 32_768, 65_535]);
+  });
+
+  it('requests a mirrored native RAW region and keeps its 16-bit samples for rendering', async () => {
+    coreState.invoke.mockResolvedValue({
+      width: 2,
+      height: 2,
+      sourceWidth: 1000,
+      sourceHeight: 800,
+      data: Array.from({ length: 12 }, (_, index) => index * 257),
+      color_space: 'sRGB',
+      bitDepth: 16,
+      transfer: 'srgb',
+      orientation: 2,
+    });
+
+    const { decodeRequest } = await decodeDesktopRawRegionForWorker({
+      documentId: 'zoom-region',
+      fileName: 'frame.dng',
+      path: '/tmp/frame.dng',
+      size: 1234,
+      sourceWidth: 1000,
+      orientation: 2,
+      region: { x: 100, y: 50, width: 200, height: 150 },
+      maxDimension: 1024,
+      precomputedFilmBase: null,
+    });
+
+    expect(coreState.invoke).toHaveBeenCalledWith('decode_raw_region_binary', {
+      path: '/tmp/frame.dng',
+      x: 700,
+      y: 50,
+      width: 200,
+      height: 150,
+      maxDimension: 1024,
+    });
+    expect(decodeRequest).toMatchObject({
+      documentId: 'zoom-region',
+      rawDimensions: { width: 2, height: 2 },
+      sourceDimensions: { width: 2, height: 2 },
+      highDepthRawBitDepth: 16,
+      mirrorHorizontal: true,
+    });
+    expect(decodeRequest.highDepthRawBuffer).toBeInstanceOf(ArrayBuffer);
+  });
+
   it('estimates the film base from bright border pixels', () => {
     const rgb = createRawRgb(64, 48, [168, 151, 134], [40, 60, 120]);
 
@@ -331,6 +417,10 @@ describe('rawImport', () => {
         width: 64,
         height: 48,
       },
+      sourceDimensions: {
+        width: 64,
+        height: 48,
+      },
       highDepthRawBitDepth: 16,
       highDepthRawTransfer: 'srgb',
       declaredColorProfileName: 'Adobe RGB (1998)',
@@ -343,6 +433,31 @@ describe('rawImport', () => {
     });
     expect(Array.from(new Uint8Array(request.buffer).slice(0, 8))).toEqual([160, 150, 140, 255, 160, 150, 140, 255]);
     expect(Array.from(new Uint16Array(request.highDepthRawBuffer!).slice(0, 6))).toEqual([41120, 38550, 35980, 41120, 38550, 35980]);
+  });
+
+  it('keeps original RAW dimensions while building a lightweight editor preview', () => {
+    const rawResult = {
+      width: 4,
+      height: 3,
+      sourceWidth: 8192,
+      sourceHeight: 5464,
+      data: new Uint16Array(4 * 3 * 3),
+      color_space: 'sRGB',
+      bitDepth: 16 as const,
+      transfer: 'srgb' as const,
+    };
+
+    const request = createWorkerDecodeRequestFromRaw(
+      'doc-preview',
+      'scan.rw2',
+      12_000,
+      rawResult,
+      { includeHighDepth: false },
+    );
+
+    expect(request.rawDimensions).toEqual({ width: 4, height: 3 });
+    expect(request.sourceDimensions).toEqual({ width: 8192, height: 5464 });
+    expect(request.highDepthRawBuffer).toBeUndefined();
   });
 
   it('expands RGB RAW pixels to RGBA for the worker', () => {
