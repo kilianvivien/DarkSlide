@@ -14,7 +14,8 @@
     "evaluate:color": "node scripts/color-accuracy.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:build:mac": "CI=true tauri build --target universal-apple-darwin"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
