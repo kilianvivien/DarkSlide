@@ -45,6 +45,12 @@ describe('createDefaultSettings', () => {
       aspectRatio: null,
     });
     expect(createDefaultSettings().levelAngle).toBe(0);
+    expect(createDefaultSettings()).toMatchObject({
+      toneEnabled: true,
+      toneRangeEnabled: true,
+      whiteBalanceEnabled: true,
+      colorControlsEnabled: true,
+    });
   });
 });
 

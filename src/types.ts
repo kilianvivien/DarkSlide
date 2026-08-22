@@ -223,6 +223,10 @@ export interface LightSourceProfile {
 }
 
 export interface ConversionSettings {
+  toneEnabled?: boolean;
+  toneRangeEnabled?: boolean;
+  whiteBalanceEnabled?: boolean;
+  colorControlsEnabled?: boolean;
   exposure: number;
   contrast: number;
   saturation: number;

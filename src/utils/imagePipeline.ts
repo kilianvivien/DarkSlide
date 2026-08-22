@@ -868,11 +868,43 @@ export function resolveEffectiveSettings(
   settings: ConversionSettings,
   maskTuning?: MaskTuning,
 ) {
-  return maskTuning ? {
+  const toneEnabled = settings.toneEnabled !== false;
+  const toneRangeEnabled = settings.toneRangeEnabled !== false;
+  const whiteBalanceEnabled = settings.whiteBalanceEnabled !== false;
+  const colorControlsEnabled = settings.colorControlsEnabled !== false;
+  const effectiveSettings: ConversionSettings = {
     ...settings,
-    highlightProtection: clamp(settings.highlightProtection + maskTuning.highlightProtectionBias * 100, 0, 100),
-    blackPoint: clamp(settings.blackPoint + maskTuning.blackPointBias * 100, 0, 80),
-  } : settings;
+    exposure: toneEnabled ? settings.exposure : 0,
+    contrast: toneEnabled ? settings.contrast : 0,
+    highlightProtection: toneEnabled ? settings.highlightProtection : 0,
+    shadowRecovery: toneEnabled ? settings.shadowRecovery : 0,
+    blackPoint: toneRangeEnabled ? settings.blackPoint : 0,
+    whitePoint: toneRangeEnabled ? settings.whitePoint : 255,
+    midtoneContrast: toneRangeEnabled ? settings.midtoneContrast : 0,
+    temperature: whiteBalanceEnabled ? settings.temperature : 0,
+    tint: whiteBalanceEnabled ? settings.tint : 0,
+    saturation: colorControlsEnabled ? settings.saturation : 100,
+    redBalance: colorControlsEnabled ? settings.redBalance : 1,
+    greenBalance: colorControlsEnabled ? settings.greenBalance : 1,
+    blueBalance: colorControlsEnabled ? settings.blueBalance : 1,
+    blackAndWhite: colorControlsEnabled
+      ? settings.blackAndWhite
+      : { ...settings.blackAndWhite, enabled: false },
+  };
+
+  if (!maskTuning) {
+    return effectiveSettings;
+  }
+
+  return {
+    ...effectiveSettings,
+    highlightProtection: toneEnabled
+      ? clamp(effectiveSettings.highlightProtection + maskTuning.highlightProtectionBias * 100, 0, 100)
+      : 0,
+    blackPoint: toneRangeEnabled
+      ? clamp(effectiveSettings.blackPoint + maskTuning.blackPointBias * 100, 0, 80)
+      : 0,
+  };
 }
 
 function composeCurveLut(outer: Uint8Array, inner: Uint8Array) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { FilmBaseEstimate } from '../types';
 
 function createPixel(r: number, g: number, b: number) {
@@ -40,6 +40,77 @@ const neutralSettings = createDefaultSettings({
   redBalance: 1,
   greenBalance: 1,
   blueBalance: 1,
+});
+
+describe('adjustment group toggles', () => {
+  it('neutralizes disabled groups without discarding their saved values', () => {
+    const settings = createDefaultSettings({
+      toneEnabled: false,
+      toneRangeEnabled: false,
+      whiteBalanceEnabled: false,
+      colorControlsEnabled: false,
+      exposure: 45,
+      contrast: 30,
+      highlightProtection: 80,
+      shadowRecovery: 60,
+      blackPoint: 24,
+      whitePoint: 210,
+      midtoneContrast: 35,
+      temperature: 40,
+      tint: -30,
+      saturation: 145,
+      redBalance: 1.2,
+      greenBalance: 0.8,
+      blueBalance: 1.1,
+      blackAndWhite: {
+        enabled: true,
+        redMix: 20,
+        greenMix: -10,
+        blueMix: 30,
+        tone: 15,
+      },
+    });
+
+    const effective = resolveEffectiveSettings(settings, {
+      highlightProtectionBias: 0.25,
+      blackPointBias: 0.1,
+    });
+
+    expect(effective).toMatchObject({
+      exposure: 0,
+      contrast: 0,
+      highlightProtection: 0,
+      shadowRecovery: 0,
+      blackPoint: 0,
+      whitePoint: 255,
+      midtoneContrast: 0,
+      temperature: 0,
+      tint: 0,
+      saturation: 100,
+      redBalance: 1,
+      greenBalance: 1,
+      blueBalance: 1,
+      blackAndWhite: { enabled: false },
+    });
+    expect(settings).toMatchObject({
+      exposure: 45,
+      blackPoint: 24,
+      temperature: 40,
+      saturation: 145,
+      blackAndWhite: { enabled: true },
+    });
+  });
+
+  it('treats missing group flags as enabled for older saved settings', () => {
+    const settings = createDefaultSettings({ exposure: 20, temperature: 15 });
+    delete settings.toneEnabled;
+    delete settings.whiteBalanceEnabled;
+
+    expect(resolveEffectiveSettings(settings)).toMatchObject({
+      exposure: 20,
+      temperature: 15,
+    });
+  });
 });
 
 describe('processImageData', () => {
