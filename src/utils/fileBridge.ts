@@ -111,8 +111,10 @@ export interface SaveExportResult {
   path: string | null;
 }
 
-async function openDesktopFile(path: string): Promise<NativeOpenFileResult> {
-  const { readFile, stat } = await import('@tauri-apps/plugin-fs');
+type DesktopFileSystem = Pick<typeof import('@tauri-apps/plugin-fs'), 'readFile' | 'stat'>;
+
+async function openDesktopFile(path: string, fileSystem?: DesktopFileSystem): Promise<NativeOpenFileResult> {
+  const { readFile, stat } = fileSystem ?? await import('@tauri-apps/plugin-fs');
   const fileName = getFileName(path);
   const extension = getFileExtension(fileName);
 
@@ -130,6 +132,35 @@ async function openDesktopFile(path: string): Promise<NativeOpenFileResult> {
     file: new File([bytes], fileName, { type: getMimeTypeForFile(fileName) }),
     path,
     size: bytes.byteLength,
+  };
+}
+
+async function openDesktopFileReference(path: string, fileSystem: DesktopFileSystem): Promise<NativeOpenFileResult> {
+  const fileName = getFileName(path);
+  const extension = getFileExtension(fileName);
+  const metadata = await fileSystem.stat(path);
+
+  if (isRawExtension(extension)) {
+    return {
+      file: new File([], fileName, { type: 'application/octet-stream' }),
+      path,
+      size: typeof metadata.size === 'number' ? metadata.size : 0,
+    };
+  }
+
+  const file = new File([], fileName, { type: getMimeTypeForFile(fileName) });
+  Object.defineProperty(file, 'arrayBuffer', {
+    configurable: true,
+    value: async () => {
+      const bytes = await fileSystem.readFile(path);
+      return bytes.slice().buffer;
+    },
+  });
+
+  return {
+    file,
+    path,
+    size: typeof metadata.size === 'number' ? metadata.size : 0,
   };
 }
 
@@ -166,7 +197,10 @@ export async function openMultipleImageFiles(): Promise<NativeOpenFileResult[]> 
     return [];
   }
 
-  const { open } = await import('@tauri-apps/plugin-dialog');
+  const [{ open }, fileSystem] = await Promise.all([
+    import('@tauri-apps/plugin-dialog'),
+    import('@tauri-apps/plugin-fs'),
+  ]);
   const selected = await open({
     title: 'Open Scans',
     directory: false,
@@ -183,7 +217,7 @@ export async function openMultipleImageFiles(): Promise<NativeOpenFileResult[]> 
     return [];
   }
 
-  return Promise.all(selected.map((path) => openDesktopFile(path)));
+  return Promise.all(selected.map((path) => openDesktopFileReference(path, fileSystem)));
 }
 
 export async function openImageFolder(): Promise<NativeOpenFileResult[]> {
