@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://darkslide.app/schemas/color-accuracy-v1.json",
+  "title": "DarkSlide color accuracy dataset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "referenceWhite", "referenceObserver", "capture", "patches"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "referenceWhite": { "const": "D50" },
+    "referenceObserver": { "const": "2-degree" },
+    "capture": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean", "null"] },
+      "required": [
+        "target",
+        "targetSerial",
+        "referenceDataSource",
+        "filmStock",
+        "development",
+        "camera",
+        "lens",
+        "backlight",
+        "darkslideVersion",
+        "profileId",
+        "profileVersion",
+        "profileIntent",
+        "filmBaseMode",
+        "settingsSource",
+        "settingsSnapshot",
+        "lightSourceId",
+        "labStyleId"
+      ],
+      "properties": {
+        "target": { "type": "string", "minLength": 1 },
+        "targetSerial": { "type": "string", "minLength": 1 },
+        "referenceDataSource": { "type": "string", "minLength": 1 },
+        "filmStock": { "type": "string", "minLength": 1 },
+        "development": { "type": "string", "minLength": 1 },
+        "camera": { "type": "string", "minLength": 1 },
+        "lens": { "type": "string", "minLength": 1 },
+        "backlight": { "type": "string", "minLength": 1 },
+        "darkslideVersion": { "type": "string", "minLength": 1 },
+        "profileId": { "type": "string", "minLength": 1 },
+        "profileVersion": { "type": "integer", "minimum": 1 },
+        "profileIntent": {
+          "description": "technical targets scene-referred accuracy; creative targets a named rendering.",
+          "enum": ["technical", "creative"]
+        },
+        "filmBaseMode": { "enum": ["automatic", "locked"] },
+        "settingsSource": { "enum": ["profile-defaults", "modified"] },
+        "settingsSnapshot": {
+          "description": "The complete ConversionSettings state used for this export.",
+          "type": "object"
+        },
+        "lightSourceId": { "type": ["string", "null"] },
+        "labStyleId": { "type": ["string", "null"] },
+        "exposureBracketEv": { "type": "number" },
+        "notes": { "type": "string" }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "meanDeltaE00": { "type": "number", "minimum": 0 },
+        "medianDeltaE00": { "type": "number", "minimum": 0 },
+        "p95DeltaE00": { "type": "number", "minimum": 0 },
+        "maxDeltaE00": { "type": "number", "minimum": 0 },
+        "neutralMeanDeltaE00": { "type": "number", "minimum": 0 },
+        "meanLightnessError": { "type": "number", "minimum": 0 },
+        "meanChromaError": { "type": "number", "minimum": 0 },
+        "meanHueErrorDegrees": { "type": "number", "minimum": 0 }
+      }
+    },
+    "patches": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "referenceLab"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" },
+          "category": { "type": "string" },
+          "referenceLab": { "$ref": "#/$defs/triplet" },
+          "observedLab": { "$ref": "#/$defs/triplet" },
+          "observedSrgb": {
+            "type": "array",
+            "prefixItems": [
+              { "type": "number", "minimum": 0, "maximum": 255 },
+              { "type": "number", "minimum": 0, "maximum": 255 },
+              { "type": "number", "minimum": 0, "maximum": 255 }
+            ],
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "sampleRect": {
+            "description": "Normalized x, y, width, height within the exported image.",
+            "type": "array",
+            "prefixItems": [
+              { "type": "number", "minimum": 0, "maximum": 1 },
+              { "type": "number", "minimum": 0, "maximum": 1 },
+              { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+              { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+            ],
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "anyOf": [
+          { "required": ["sampleRect"] },
+          { "required": ["observedLab"] },
+          { "required": ["observedSrgb"] }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "triplet": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    }
+  }
+}
