@@ -4,6 +4,7 @@ import {
   ColorManagementSettings,
   ConversionSettings,
   DecodedImage,
+  DensityBalance,
   DocumentTab,
   FilmProfile,
   Roll,
@@ -13,11 +14,14 @@ import {
   createDefaultSettings,
   DEFAULT_COLOR_MANAGEMENT,
   DEFAULT_EXPORT_OPTIONS,
+  FILM_STOCK_DENSITY_PRESETS,
   FILM_PROFILES,
+  LIGHT_SOURCE_PROFILES,
   MAX_FILE_SIZE_BYTES,
   RAW_EDITOR_PREVIEW_MAX_DIMENSION,
   resolveLightSourceIdForProfile,
 } from '../constants';
+import { createAutoAdjustmentPatch, createAutoAnalysisSettings } from '../utils/autoAnalysis';
 import { appendDiagnostic } from '../utils/diagnostics';
 import { pushToast } from '../utils/toastStore';
 import { addRecentFile } from '../utils/recentFilesStore';
@@ -30,10 +34,10 @@ import {
   decodeDesktopRawForWorker,
   rotationFromExifOrientation,
 } from '../utils/rawImport';
-import { shouldUseDirectRawFilmBase } from '../utils/pipelineIntent';
+import { shouldUseDirectRawFilmBase, usesColorChannelPipeline } from '../utils/pipelineIntent';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getSidecarCandidatePaths, parseSidecar } from '../utils/sidecarSettings';
-import { waitForNextPaint } from '../utils/appHelpers';
+import { getResolvedInputProfileId, waitForNextPaint } from '../utils/appHelpers';
 
 type BlockingOverlayState = {
   title: string;
@@ -421,10 +425,11 @@ export function useFileImport({
             const shouldUseDirectBase = shouldUseDirectRawFilmBase(true, activeImportProfile, preferredSettings);
             initialSettings = {
               ...preferredSettings,
-              filmBaseSample: shouldUseDirectBase
-                ? (preferredSettings.filmBaseSample
-                  ? structuredClone(preferredSettings.filmBaseSample)
-                  : (estimatedFilmBase ? structuredClone(estimatedFilmBase) : null))
+              // Keep automatic estimates in the document calibration path.
+              // Promoting one to a settings sample makes it look manual and
+              // disables the measured density balance that removes the mask.
+              filmBaseSample: shouldUseDirectBase && preferredSettings.filmBaseSample
+                ? structuredClone(preferredSettings.filmBaseSample)
                 : null,
             };
           } else {
@@ -564,7 +569,7 @@ export function useFileImport({
       const savedLabStyleId = typeof window !== 'undefined'
         ? window.localStorage.getItem('darkslide_default_lab_style')
         : null;
-      const resolvedProfile = rawImport && preferredImportProfile
+      let resolvedProfile = rawImport && preferredImportProfile
         ? activeImportProfile
         : (rawImportProfile ?? activeImportProfile);
       let restoredSidecar = null;
@@ -598,6 +603,113 @@ export function useFileImport({
         return null;
       }
 
+      const documentColorManagement = createDocumentColorManagement(decoded.metadata, {
+        ...DEFAULT_EXPORT_OPTIONS,
+        ...(activeSidecar?.exportOptions ?? savedExportOptions),
+      });
+      let resolvedEstimatedDensityBalance = decoded.estimatedDensityBalance ?? null;
+
+      // A RAW negative should open as a usable positive. Run the same
+      // frame-aware Auto pass as the editor button after decode has pinned the
+      // base estimate and density balance. Sidecars remain exact and bypass it.
+      if (rawImport && !activeSidecar) {
+        const autoProfile = preferredImportProfile ? activeImportProfile : rawStartupProfile;
+        const stockDensity = FILM_STOCK_DENSITY_PRESETS[autoProfile.id];
+        const stableDensityBalance: DensityBalance = stockDensity
+          ? { ...stockDensity, source: 'film-stock-preset' as const }
+          : {
+            scaleR: 1,
+            scaleG: 1,
+            scaleB: 1,
+            source: 'neutral-fallback' as const,
+          };
+        resolvedEstimatedDensityBalance = stableDensityBalance;
+
+        // The decoder may produce a whole-scene histogram estimate before it
+        // knows which profile will process the negative. Replace it with the
+        // stable profile calibration before Auto and pin it for later reloads.
+        if (decoded.estimatedFilmBase) {
+          try {
+            await worker.applyFilmBaseEstimate({
+              documentId,
+              estimatedFilmBase: decoded.estimatedFilmBase,
+              estimatedDensityBalance: stableDensityBalance,
+            });
+          } catch (calibrationError) {
+            appendDiagnostic({
+              level: 'error',
+              code: 'RAW_DENSITY_CALIBRATION_FAILED',
+              message: formatError(calibrationError),
+              context: { documentId, fileName: file.name },
+            });
+          }
+        }
+
+        const autoLightSourceId = resolveLightSourceIdForProfile(
+          autoProfile,
+          autoProfile.lightSourceId ?? savedLightSourceId,
+          { blackAndWhiteEnabled: initialSettings.blackAndWhite.enabled },
+        );
+        const lightSourceBias = LIGHT_SOURCE_PROFILES.find((profile) => profile.id === (autoLightSourceId ?? 'auto'))
+          ?.spectralBias ?? [1, 1, 1];
+
+        try {
+          const autoResult = await worker.autoAnalyze({
+            documentId,
+            settings: createAutoAnalysisSettings(initialSettings, initialSettings),
+            isColor: usesColorChannelPipeline(autoProfile),
+            profileId: autoProfile.id,
+            filmType: autoProfile.filmType,
+            inputProfileId: getResolvedInputProfileId(decoded.metadata, documentColorManagement),
+            outputProfileId: documentColorManagement.outputProfileId,
+            targetMaxDimension: 1024,
+            maskTuning: autoProfile.maskTuning,
+            colorMatrix: autoProfile.colorMatrix,
+            tonalCharacter: autoProfile.tonalCharacter,
+            cubeLut: autoProfile.lut ?? null,
+            highlightDensityEstimate: 0,
+            flareFloor: decoded.estimatedFlare ?? null,
+            lightSourceBias,
+          });
+          if (autoResult) {
+            initialSettings = {
+              ...initialSettings,
+              ...createAutoAdjustmentPatch(initialSettings, autoResult),
+            };
+            appendDiagnostic({
+              level: 'info',
+              code: 'RAW_AUTO_DEVELOPED',
+              message: file.name,
+              context: {
+                documentId,
+                exposure: autoResult.exposure,
+                blackPoint: autoResult.blackPoint,
+                whitePoint: autoResult.whitePoint,
+                temperature: autoResult.temperature,
+                tint: autoResult.tint,
+                whiteBalanceRed: autoResult.whiteBalanceGains?.red ?? null,
+                whiteBalanceGreen: autoResult.whiteBalanceGains?.green ?? null,
+                whiteBalanceBlue: autoResult.whiteBalanceGains?.blue ?? null,
+              },
+            });
+          }
+        } catch (autoError) {
+          appendDiagnostic({
+            level: 'error',
+            code: 'RAW_AUTO_DEVELOP_FAILED',
+            message: formatError(autoError),
+            context: { documentId, fileName: file.name },
+          });
+        }
+
+        // This immutable transient profile is the true import origin. Global
+        // Reset can restore it even after the user selects another preset.
+        rawImportProfile = createRawImportProfile(autoProfile, initialSettings);
+        if (!preferredImportProfile) {
+          resolvedProfile = rawImportProfile;
+        }
+      }
+
       const nextDocument: WorkspaceDocument = {
         id: documentId,
         source: {
@@ -609,14 +721,11 @@ export function useFileImport({
         settings: activeSidecar
           ? createDefaultSettings(structuredClone(activeSidecar.settings))
           : initialSettings,
-        colorManagement: createDocumentColorManagement(decoded.metadata, {
-          ...DEFAULT_EXPORT_OPTIONS,
-          ...(activeSidecar?.exportOptions ?? savedExportOptions),
-        }),
+        colorManagement: documentColorManagement,
         estimatedFlare: decoded.estimatedFlare,
         estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
         estimatedFilmBase: decoded.estimatedFilmBase ?? null,
-        estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
+        estimatedDensityBalance: resolvedEstimatedDensityBalance,
         lightSourceId: resolveLightSourceIdForProfile(
           resolvedProfile,
           activeSidecar?.lightSourceProfileId ?? resolvedProfile.lightSourceId ?? savedLightSourceId,

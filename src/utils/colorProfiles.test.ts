@@ -6,6 +6,7 @@ import {
   getColorProfileIdFromName,
   identifyIccProfile,
   parseInputIccProfile,
+  tagPreviewImageDataColorSpace,
 } from './colorProfiles';
 
 function writeAscii(bytes: Uint8Array, offset: number, value: string) {
@@ -205,5 +206,13 @@ describe('color profile detection', () => {
       'srgb',
       'totally-bogus-profile' as never,
     )).toThrow(ColorProfileConversionError);
+  });
+
+  it('tags converted preview bytes with the canvas color space', () => {
+    const source = new ImageData(new Uint8ClampedArray([25, 90, 180, 255]), 1, 1);
+    const tagged = tagPreviewImageDataColorSpace(source, 'display-p3');
+
+    expect(tagged.colorSpace).toBe('display-p3');
+    expect(tagged.data).toEqual(source.data);
   });
 });

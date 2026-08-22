@@ -22,7 +22,7 @@ import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences, savePreferences, UserPrefer
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { cubeLutSignature } from './utils/cubeLut';
 import { computeHighlightDensity, getTransformedDimensions, rotateCropClockwise } from './utils/imagePipeline';
-import { analyzeMonochromeSuggestion, createAutoAdjustmentPatch, createAutoAnalysisSettings } from './utils/autoAnalysis';
+import { analyzeMonochromeSuggestion, applyWhiteBalanceGains, createAutoAdjustmentPatch, createAutoAnalysisSettings } from './utils/autoAnalysis';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
 import { BatchJobEntry } from './utils/batchProcessor';
@@ -2900,11 +2900,28 @@ export default function App() {
     const hasManualAdjustments = mode === 'whiteBalance'
       ? documentState.settings.temperature !== defaults.temperature
         || documentState.settings.tint !== defaults.tint
-      : documentState.settings.exposure !== defaults.exposure
+        || documentState.settings.redBalance !== defaults.redBalance
+        || documentState.settings.greenBalance !== defaults.greenBalance
+        || documentState.settings.blueBalance !== defaults.blueBalance
+      : documentState.settings.toneEnabled !== defaults.toneEnabled
+        || documentState.settings.toneRangeEnabled !== defaults.toneRangeEnabled
+        || documentState.settings.whiteBalanceEnabled !== defaults.whiteBalanceEnabled
+        || documentState.settings.colorControlsEnabled !== defaults.colorControlsEnabled
+        || documentState.settings.exposure !== defaults.exposure
+        || documentState.settings.contrast !== defaults.contrast
+        || documentState.settings.saturation !== defaults.saturation
+        || documentState.settings.shadowRecovery !== defaults.shadowRecovery
+        || documentState.settings.midtoneContrast !== defaults.midtoneContrast
+        || documentState.settings.flareCorrection !== defaults.flareCorrection
         || documentState.settings.temperature !== defaults.temperature
         || documentState.settings.tint !== defaults.tint
+        || documentState.settings.redBalance !== defaults.redBalance
+        || documentState.settings.greenBalance !== defaults.greenBalance
+        || documentState.settings.blueBalance !== defaults.blueBalance
         || documentState.settings.blackPoint !== defaults.blackPoint
-        || documentState.settings.whitePoint !== defaults.whitePoint;
+        || documentState.settings.whitePoint !== defaults.whitePoint
+        || documentState.settings.highlightProtection !== defaults.highlightProtection
+        || JSON.stringify(documentState.settings.curves) !== JSON.stringify(defaults.curves);
 
     if (hasManualAdjustments && !await confirmOverwriteAutoAdjust()) {
       return;
@@ -2957,16 +2974,20 @@ export default function App() {
     }
 
     if (mode === 'whiteBalance') {
-      if (result.temperature === null || result.tint === null) {
+      if (!result.whiteBalanceGains) {
         showTransientNotice('No reliable white balance estimate for this image.');
         return;
       }
-      handleSettingsChange({ temperature: result.temperature, tint: result.tint });
+      handleSettingsChange({
+        temperature: defaults.temperature,
+        tint: defaults.tint,
+        ...applyWhiteBalanceGains(defaults, result.whiteBalanceGains),
+      });
       return;
     }
 
     handleSettingsChange(createAutoAdjustmentPatch(defaults, result));
-    if (result.temperature === null || result.tint === null) {
+    if (!result.whiteBalanceGains) {
       showTransientNotice('Auto adjusted tone and kept the profile white balance.');
     }
   }, [

@@ -51,7 +51,7 @@ import { buildSidecarFile, getSidecarPathForExport, serializeSidecar } from '../
 import { sanitizeFilenameBase } from '../utils/imagePipeline';
 import { normalizeExportOptions } from '../utils/exportOptions';
 import { getAutoFrameCrop } from '../utils/frameDetection';
-import { calculateWhiteBalanceOffsets } from '../utils/autoAnalysis';
+import { applyWhiteBalanceGains, calculateWhiteBalanceGains } from '../utils/autoAnalysis';
 
 function createHistoryEntry(
   settings: ConversionSettings,
@@ -108,16 +108,16 @@ export function buildProfileSettingsForDocument(
     ? rawImportProfile.defaultSettings
     : profile.defaultSettings;
   const nextSettings = createDefaultSettings(structuredClone(profileDefaults));
+  if (usesRawImportProfileDefaults) {
+    return nextSettings;
+  }
   const activeFilmBaseSample = currentDocument?.settings.filmBaseSample ?? null;
-  const scanFilmBaseSample = activeFilmBaseSample
-    ?? currentDocument?.estimatedFilmBaseSample
-    ?? null;
   const shouldUseDirectBase = currentDocument
     ? shouldUseDirectRawFilmBase(isRawWorkspaceDocument(currentDocument), profile, nextSettings)
     : false;
 
-  if (!usesRawImportProfileDefaults && shouldUseDirectBase && !nextSettings.filmBaseSample && scanFilmBaseSample) {
-    nextSettings.filmBaseSample = structuredClone(scanFilmBaseSample);
+  if (shouldUseDirectBase && !nextSettings.filmBaseSample && activeFilmBaseSample) {
+    nextSettings.filmBaseSample = structuredClone(activeFilmBaseSample);
     if (activeFilmBaseSample && currentDocument?.settings.filmBaseSampleSource) {
       nextSettings.filmBaseSampleSource = currentDocument.settings.filmBaseSampleSource;
     }
@@ -991,14 +991,21 @@ export function useWorkspaceCommands({
 
   const handleReset = useCallback(() => {
     if (!documentState) return;
-    const nextSettings = buildProfileSettingsForDocument(activeProfile, documentState);
-    if (activeProfile.includesFraming === false) {
-      preserveCurrentFraming(nextSettings, documentState.settings);
-    }
+    const resetProfile = documentState.rawImportProfile ?? activeProfile;
+    const nextSettings = buildProfileSettingsForDocument(resetProfile, documentState);
+    const nextLightSourceId = resolveLightSourceIdForProfile(
+      resetProfile,
+      resetProfile.lightSourceId ?? null,
+      { blackAndWhiteEnabled: nextSettings.blackAndWhite.enabled },
+    );
     pushHistoryEntry(createHistoryEntry(documentState.settings, documentState.labStyleId));
     updateDocument((current) => ({
       ...current,
+      profileId: resetProfile.id,
       settings: nextSettings,
+      lightSourceId: nextLightSourceId,
+      labStyleId: resetProfile.labStyleId ?? null,
+      cropSource: null,
       dirty: false,
     }));
   }, [activeProfile, documentState, pushHistoryEntry, updateDocument]);
@@ -1498,15 +1505,12 @@ export function useWorkspaceCommands({
           const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
           handleSettingsChange({ whitePoint: clamp(luminance, 180, 255) });
         } else if (activePointPicker === 'grey') {
-          const { temperature: temperatureOffset, tint: tintOffset } = calculateWhiteBalanceOffsets(
+          const gains = calculateWhiteBalanceGains(
             sample.r,
             sample.g,
             sample.b,
           );
-          handleSettingsChange({
-            temperature: clamp(documentState.settings.temperature + temperatureOffset, -100, 100),
-            tint: clamp(documentState.settings.tint + tintOffset, -100, 100),
-          });
+          handleSettingsChange(applyWhiteBalanceGains(documentState.settings, gains));
         }
 
         setActivePointPicker(null);

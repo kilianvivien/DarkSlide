@@ -47,7 +47,7 @@ import { appendDiagnostic } from './diagnostics';
 import { pushToast } from './toastStore';
 import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
-import { convertImageDataColorProfile, getInputProfileLabel, getPreferredPreviewDisplayProfile } from './colorProfiles';
+import { convertImageDataColorProfile, getInputProfileLabel, getPreferredPreviewDisplayProfile, tagPreviewImageDataColorSpace } from './colorProfiles';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
 import { finalizeExportBlob } from './imageMetadata';
 import { WorkerMessage, WorkerRequest, WorkerResponse } from './workerProtocol';
@@ -423,6 +423,8 @@ export class ImageWorkerClient {
 
   private lastConversionAnalysis = new Map<string, ConversionAnalysisResult>();
 
+  private lastConversionAnalysisKey = new Map<string, string>();
+
   private lastConversionDebugJson = new Map<string, string>();
 
   private lastDraftHistogram: HistogramData | null = null;
@@ -654,6 +656,33 @@ export class ImageWorkerClient {
       precomputedFilmBase: payload.precomputedFilmBase
         ? { ...payload.precomputedFilmBase, sample: { ...payload.precomputedFilmBase.sample } }
         : payload.precomputedFilmBase,
+      precomputedDensityBalance: payload.precomputedDensityBalance
+        ? { ...payload.precomputedDensityBalance }
+        : payload.precomputedDensityBalance,
+    };
+  }
+
+  private pinDecodeCalibration(
+    payload: DecodeRequest,
+    calibration: DocumentCalibration | null,
+  ): DecodeRequest {
+    if (!calibration) {
+      return payload;
+    }
+
+    return {
+      ...payload,
+      precomputedFilmBase: calibration.estimatedFilmBase
+        ? structuredClone(calibration.estimatedFilmBase)
+        : null,
+      precomputedFilmBaseSample: calibration.estimatedFilmBaseSample
+        ? structuredClone(calibration.estimatedFilmBaseSample)
+        : null,
+      // Keep an explicit null. It means the preview rejected a measured
+      // channel balance, which is just as important to preserve as a value.
+      precomputedDensityBalance: calibration.estimatedDensityBalance
+        ? structuredClone(calibration.estimatedDensityBalance)
+        : null,
     };
   }
 
@@ -1001,6 +1030,7 @@ export class ImageWorkerClient {
       true,
     );
     this.lastConversionAnalysis.set(payload.documentId, result);
+    this.lastConversionAnalysisKey.set(payload.documentId, JSON.stringify(payload));
     this.logConversionParametersIfChanged(payload.documentId, result.debug);
     return result;
   }
@@ -1255,6 +1285,11 @@ export class ImageWorkerClient {
     }
     phaseTimings.histogramBuildMs = Math.round(performance.now() - histogramStartedAt);
 
+    // The bytes above are encoded for the display profile. ImageData defaults
+    // to sRGB, so leaving that tag in place makes the browser transform P3
+    // values a second time when it draws them into the P3 preview canvas.
+    imageData = tagPreviewImageDataColorSpace(imageData, displayProfileId);
+
     return {
       imageData,
       histogram,
@@ -1342,6 +1377,14 @@ export class ImageWorkerClient {
     const analysis = this.lastConversionAnalysis.get(sourceDocumentId);
     if (analysis) {
       this.lastConversionAnalysis.set(targetDocumentId, structuredClone(analysis));
+    }
+    const analysisKey = this.lastConversionAnalysisKey.get(sourceDocumentId);
+    if (analysisKey) {
+      const inheritedRequest = JSON.parse(analysisKey) as ConversionAnalysisRequest;
+      this.lastConversionAnalysisKey.set(targetDocumentId, JSON.stringify({
+        ...inheritedRequest,
+        documentId: targetDocumentId,
+      }));
     }
   }
 
@@ -1507,10 +1550,19 @@ export class ImageWorkerClient {
       () => this.request<RenderResult>('render', workerPayload),
       allowRecovery,
     );
+    if (result.conversionAnalysis) {
+      this.lastConversionAnalysis.set(payload.documentId, result.conversionAnalysis);
+      this.lastConversionAnalysisKey.set(
+        payload.documentId,
+        JSON.stringify(this.buildConversionAnalysisRequest(payload)),
+      );
+      this.logConversionParametersIfChanged(payload.documentId, result.conversionAnalysis.debug);
+    }
     const phaseTimings = createEmptyPhaseTimings();
     const displayProfileId = getPreferredPreviewDisplayProfile();
     const displayConversionStartedAt = performance.now();
     convertImageDataColorProfile(result.imageData, payload.outputProfileId ?? 'srgb', displayProfileId);
+    const displayImageData = tagPreviewImageDataColorSpace(result.imageData, displayProfileId);
     phaseTimings.previewDisplayColorConversionMs = Math.round(performance.now() - displayConversionStartedAt);
 
     const jobDurationMs = Math.round(performance.now() - startedAt);
@@ -1551,7 +1603,7 @@ export class ImageWorkerClient {
     this.previewBackend = 'cpu-worker';
     this.lastPreviewJob = snapshot;
     this.setPendingPreviewPresentation(payload.documentId, payload.revision, startedAt, phaseTimings);
-    return result;
+    return displayImageData === result.imageData ? result : { ...result, imageData: displayImageData };
   }
 
   private async renderInternal(payload: RenderRequest, allowRecovery: boolean): Promise<RenderResult> {
@@ -1878,6 +1930,7 @@ export class ImageWorkerClient {
       estimatedDensityBalance: result.estimatedDensityBalance,
     });
     this.lastConversionAnalysis.delete(payload.documentId);
+    this.lastConversionAnalysisKey.delete(payload.documentId);
     return result;
   }
 
@@ -1960,15 +2013,29 @@ export class ImageWorkerClient {
     this.activeExports.set(payload.documentId, cancellation);
     this.noteExportStateChange(1);
     const reloaders = this.documentReloaders.get(payload.documentId);
+    const previewCalibration = this.documentCalibration.has(payload.documentId)
+      ? structuredClone(this.documentCalibration.get(payload.documentId)!)
+      : null;
+    const exportAnalysisKey = JSON.stringify(this.buildConversionAnalysisRequest(payload));
+    const previewAnalysis = this.lastConversionAnalysisKey.get(payload.documentId) === exportAnalysisKey
+      ? this.lastConversionAnalysis.get(payload.documentId) ?? null
+      : null;
+    const exportPayload: ExportRequest = previewAnalysis
+      ? {
+        ...payload,
+        pinnedResidualBaseOffset: previewAnalysis.residualBaseOffset,
+        pinnedHighlightDensity: previewAnalysis.highlightDensity,
+      }
+      : payload;
     try {
       if (reloaders) {
-        const fullRequest = await reloaders.full();
+        const fullRequest = this.pinDecodeCalibration(await reloaders.full(), previewCalibration);
         await this.decode(fullRequest, { retainRecoveryCache: false });
       } else {
         await this.ensureDocumentLoaded(payload.documentId);
       }
       if (cancellation.cancelled) throw new ImageExportCancelledError();
-      const result = await this.exportInternal(payload, true);
+      const result = await this.exportInternal(exportPayload, true);
       if (cancellation.cancelled) throw new ImageExportCancelledError();
       cancellation.workerPending = false;
       const finalized = await finalizeExportBlob(result, payload.options, payload.sourceExif);
@@ -1982,7 +2049,7 @@ export class ImageWorkerClient {
     } finally {
       if (reloaders && this.documentReloaders.get(payload.documentId) === reloaders) {
         try {
-          const previewRequest = await reloaders.preview();
+          const previewRequest = this.pinDecodeCalibration(await reloaders.preview(), previewCalibration);
           await this.decode(previewRequest, { retainRecoveryCache: false });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -2104,8 +2171,17 @@ export class ImageWorkerClient {
     });
 
     try {
-      const analysis = await this.fetchConversionAnalysis(this.buildConversionAnalysisRequest(payload));
-      const residualBaseOffset = analysis.residualBaseOffset;
+      const hasPinnedPreviewAnalysis = payload.pinnedHighlightDensity !== undefined
+        && payload.pinnedResidualBaseOffset !== undefined;
+      const analysis = hasPinnedPreviewAnalysis
+        ? null
+        : await this.fetchConversionAnalysis(this.buildConversionAnalysisRequest(payload));
+      const residualBaseOffset = hasPinnedPreviewAnalysis
+        ? payload.pinnedResidualBaseOffset ?? null
+        : analysis!.residualBaseOffset;
+      const highlightDensity = hasPinnedPreviewAnalysis
+        ? payload.pinnedHighlightDensity!
+        : analysis!.highlightDensity;
       const prepared = await this.prepareTileJob({
         documentId: payload.documentId,
         jobId,
@@ -2129,7 +2205,7 @@ export class ImageWorkerClient {
         payload.labTonalCharacterOverride,
         payload.labSaturationBias,
         payload.labTemperatureBias,
-        analysis.highlightDensity,
+        highlightDensity,
         payload.filmType,
         estimatedFilmBaseSample,
         estimatedDensityBalance,
@@ -2265,6 +2341,7 @@ export class ImageWorkerClient {
     this.thumbnailPreviewCache.delete(documentId);
     this.documentCalibration.delete(documentId);
     this.lastConversionAnalysis.delete(documentId);
+    this.lastConversionAnalysisKey.delete(documentId);
     this.lastConversionDebugJson.delete(documentId);
     this.documentReloaders.delete(documentId);
     this.documentDecodeInfo.delete(documentId);

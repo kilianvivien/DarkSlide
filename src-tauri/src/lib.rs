@@ -19,7 +19,7 @@ use tauri::RunEvent;
 use tauri_plugin_updater::UpdaterExt;
 
 const GITHUB_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
-const RAW_PREVIEW_CACHE_VERSION: u16 = 1;
+const RAW_PREVIEW_CACHE_VERSION: u16 = 2;
 const RAW_PREVIEW_CACHE_MAGIC: &[u8; 8] = b"DSRAW001";
 const RAW_IPC_MAGIC: &[u8; 8] = b"DSRIPC01";
 const RAW_IPC_VERSION: u16 = 1;
@@ -405,13 +405,16 @@ fn clamp_raw_region(
 fn decode_raw_uncached(path: &str, max_dimension: Option<u32>) -> Result<RawDecodeResult, String> {
     let raw_image = rawler::decode_file(&path).map_err(|error| error.to_string())?;
     let developed = RawDevelop {
-        // Camera white balance is tuned for the photographed scene, not for an
-        // orange film negative. Applying it here makes DarkSlide's own negative
-        // conversion start from an already-skewed source.
+        // Rawler's calibration matrix expects sensor white-balance gains. If
+        // they are omitted, the demosaiced RAW retains the sensor's green bias
+        // and film-base analysis mistakes that bias for dye density. The
+        // negative inversion removes the orange mask later; this step only
+        // brings the camera capture into calibrated RGB.
         steps: vec![
             ProcessingStep::Rescale,
             ProcessingStep::Demosaic,
             ProcessingStep::CropActiveArea,
+            ProcessingStep::WhiteBalance,
             ProcessingStep::Calibrate,
             ProcessingStep::CropDefault,
             ProcessingStep::SRgb,
@@ -469,6 +472,7 @@ fn decode_raw_region_uncached(
             ProcessingStep::Rescale,
             ProcessingStep::Demosaic,
             ProcessingStep::CropActiveArea,
+            ProcessingStep::WhiteBalance,
             ProcessingStep::Calibrate,
             ProcessingStep::CropDefault,
             ProcessingStep::SRgb,

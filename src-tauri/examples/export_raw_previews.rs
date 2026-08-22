@@ -26,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ProcessingStep::Rescale,
             ProcessingStep::Demosaic,
             ProcessingStep::CropActiveArea,
+            ProcessingStep::WhiteBalance,
             ProcessingStep::Calibrate,
             ProcessingStep::CropDefault,
             ProcessingStep::SRgb,

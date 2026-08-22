@@ -98,6 +98,14 @@ describe('FILM_PROFILES', () => {
     }
   });
 
+  it('keeps Kodak Gold blue density in range instead of collapsing it', () => {
+    expect(FILM_STOCK_DENSITY_PRESETS['gold-200']).toEqual({
+      scaleR: 2.2,
+      scaleG: 1,
+      scaleB: 0.86,
+    });
+  });
+
   it('keeps built-in profile settings and tonal behavior bounded', () => {
     for (const profile of FILM_PROFILES) {
       expect(profile.defaultSettings.blackPoint, profile.id).toBeGreaterThanOrEqual(0);

@@ -458,17 +458,20 @@ export const Sidebar = memo(function Sidebar({
     onSettingsChange({
       temperature: resetDefaults.temperature,
       tint: resetDefaults.tint,
+      redBalance: resetDefaults.redBalance,
+      greenBalance: resetDefaults.greenBalance,
+      blueBalance: resetDefaults.blueBalance,
     });
   }, [onSettingsChange, resetDefaults]);
 
   const handleResetGeometry = useCallback(() => {
     onSettingsChange({
-      rotation: 0,
-      levelAngle: 0,
-      lensDistortion: 0,
-      crop: { x: 0, y: 0, width: 1, height: 1, aspectRatio: null },
+      rotation: resetDefaults.rotation,
+      levelAngle: resetDefaults.levelAngle,
+      lensDistortion: resetDefaults.lensDistortion,
+      crop: structuredClone(resetDefaults.crop),
     });
-  }, [onSettingsChange]);
+  }, [onSettingsChange, resetDefaults]);
 
   const handleLevelAngleChange = useCallback((levelAngle: number) => {
     onSettingsChange({ levelAngle });

@@ -4,7 +4,9 @@ import {
   analyzeExposure,
   analyzeMidtoneContrast,
   analyzeMonochromeSuggestion,
+  applyWhiteBalanceGains,
   autoAnalyze,
+  calculateWhiteBalanceGains,
   calculateWhiteBalanceOffsets,
   createAutoAdjustmentPatch,
   createAutoAnalysisSettings,
@@ -103,20 +105,88 @@ describe('autoAnalysis', () => {
       whitePoint: 244,
       temperature: null,
       tint: null,
+      whiteBalanceGains: null,
       contrast: null,
       midtoneBoostPoint: null,
       suggestedCurves: null,
     });
 
     expect(patch).toEqual({
+      toneEnabled: profileDefaults.toneEnabled,
+      toneRangeEnabled: profileDefaults.toneRangeEnabled,
+      whiteBalanceEnabled: profileDefaults.whiteBalanceEnabled,
+      colorControlsEnabled: profileDefaults.colorControlsEnabled,
       exposure: 3,
-      blackPoint: 5,
-      whitePoint: 244,
+      contrast: 18,
+      saturation: profileDefaults.saturation,
+      shadowRecovery: profileDefaults.shadowRecovery,
+      midtoneContrast: profileDefaults.midtoneContrast,
+      flareCorrection: profileDefaults.flareCorrection,
       temperature: 4,
       tint: -2,
-      contrast: 18,
+      redBalance: profileDefaults.redBalance,
+      greenBalance: profileDefaults.greenBalance,
+      blueBalance: profileDefaults.blueBalance,
+      blackPoint: 5,
+      whitePoint: 244,
+      highlightProtection: profileDefaults.highlightProtection,
       curves: profileDefaults.curves,
     });
+  });
+
+  it('replaces every development control from the profile baseline', () => {
+    const profileDefaults = createDefaultSettings({
+      contrast: 14,
+      saturation: 108,
+      shadowRecovery: 7,
+      midtoneContrast: 3,
+      flareCorrection: 46,
+      redBalance: 1.12,
+      greenBalance: 0.98,
+      blueBalance: 0.91,
+      highlightProtection: 28,
+    });
+
+    const first = createAutoAdjustmentPatch(profileDefaults, {
+      exposure: 5,
+      blackPoint: 4,
+      whitePoint: 241,
+      temperature: 9,
+      tint: -3,
+      whiteBalanceGains: { red: 0.9, green: 1, blue: 1.1 },
+      contrast: 19,
+      midtoneBoostPoint: null,
+      suggestedCurves: null,
+    });
+    const second = createAutoAdjustmentPatch(profileDefaults, {
+      exposure: 5,
+      blackPoint: 4,
+      whitePoint: 241,
+      temperature: 9,
+      tint: -3,
+      whiteBalanceGains: { red: 0.9, green: 1, blue: 1.1 },
+      contrast: 19,
+      midtoneBoostPoint: null,
+      suggestedCurves: null,
+    });
+
+    expect(second).toEqual(first);
+    expect(first).toMatchObject({
+      exposure: 5,
+      contrast: 19,
+      saturation: 108,
+      shadowRecovery: 7,
+      midtoneContrast: 3,
+      flareCorrection: 46,
+      temperature: 0,
+      tint: 0,
+      greenBalance: 0.98,
+      blackPoint: 4,
+      whitePoint: 241,
+      highlightProtection: 28,
+    });
+    expect(first.redBalance).toBeCloseTo(1.008);
+    expect(first.blueBalance).toBeCloseTo(1.001);
   });
 
   it('raises exposure for a dark-biased histogram', () => {
@@ -125,6 +195,31 @@ describe('autoAnalysis', () => {
     histogram.l[48] = 100;
 
     expect(analyzeExposure(histogram).exposure).toBe(30);
+  });
+
+  it('uses a conservative positive density correction for color negatives', () => {
+    const histogram = createHistogramData();
+    histogram.l[24] = 200;
+    histogram.l[48] = 100;
+
+    expect(analyzeExposure(histogram, 'color-negative').exposure).toBe(18);
+  });
+
+  it('holds small B&W lifts at zero and caps recovery for a severely dark negative', () => {
+    const nearBaselineHistogram = createHistogramData();
+    nearBaselineHistogram.l[110] = 100;
+    nearBaselineHistogram.l[124] = 100;
+    expect(analyzeExposure(nearBaselineHistogram, 'black-and-white-negative').exposure).toBe(0);
+
+    const darkHistogram = createHistogramData();
+    darkHistogram.l[24] = 200;
+    darkHistogram.l[48] = 100;
+    expect(analyzeExposure(darkHistogram, 'black-and-white-negative').exposure).toBe(6);
+
+    const brightHistogram = createHistogramData();
+    brightHistogram.l[160] = 200;
+    brightHistogram.l[224] = 100;
+    expect(analyzeExposure(brightHistogram, 'black-and-white-negative').exposure).toBeLessThan(0);
   });
 
   it('coordinates density and tone range without a second midtone lift', () => {
@@ -169,12 +264,34 @@ describe('autoAnalysis', () => {
     });
   });
 
+  it('solves multiplicative gains without changing overall channel energy', () => {
+    const gains = calculateWhiteBalanceGains(100, 90, 140);
+    const corrected = [100 * gains.red, 90 * gains.green, 140 * gains.blue];
+
+    expect(corrected[0]).toBeCloseTo(corrected[1]);
+    expect(corrected[1]).toBeCloseTo(corrected[2]);
+    expect(gains.red * gains.green * gains.blue).toBeCloseTo(1);
+    expect(applyWhiteBalanceGains(
+      { redBalance: 1.1, greenBalance: 1, blueBalance: 0.9 },
+      gains,
+    )).toEqual({
+      redBalance: 1.1 * gains.red,
+      greenBalance: gains.green,
+      blueBalance: 0.9 * gains.blue,
+    });
+  });
+
   it('accepts a plausible neutral with a cast that the old absolute-chroma cutoff rejected', () => {
     const imageData = createImageData(80, 80, () => [82, 110, 142]);
 
-    expect(analyzeColorBalance(imageData)).toEqual({
+    expect(analyzeColorBalance(imageData)).toMatchObject({
       temperature: 30,
       tint: 2,
+      whiteBalanceGains: expect.objectContaining({
+        red: expect.any(Number),
+        green: expect.any(Number),
+        blue: expect.any(Number),
+      }),
     });
   });
 
@@ -198,7 +315,38 @@ describe('autoAnalysis', () => {
     expect(analyzeColorBalance(imageData)).toEqual({
       temperature: null,
       tint: null,
+      whiteBalanceGains: null,
     });
+  });
+
+  it('rejects an extreme scene-derived white balance for a color negative', () => {
+    const imageData = createImageData(80, 80, () => [120, 170, 100]);
+
+    expect(analyzeColorBalance(imageData, true)).toEqual({
+      temperature: null,
+      tint: null,
+      whiteBalanceGains: null,
+    });
+    expect(analyzeColorBalance(imageData, false).tint).not.toBeNull();
+  });
+
+  it('damps a broadly supported negative correction instead of discarding it', () => {
+    const imageData = createImageData(80, 80, () => [100, 130, 150]);
+    const result = analyzeColorBalance(imageData, true);
+
+    expect(result.whiteBalanceGains).not.toBeNull();
+    const gains = Object.values(result.whiteBalanceGains!);
+    expect(Math.max(...gains) / Math.min(...gains)).toBeLessThanOrEqual(1.18);
+    expect(Math.max(...gains) / Math.min(...gains)).toBeGreaterThan(1);
+  });
+
+  it('does not create per-channel clipping curves during Auto', () => {
+    const histogram = createHistogramData();
+    histogram.l[96] = 400;
+    histogram.l[160] = 400;
+    const imageData = createImageData(80, 80, () => [110, 105, 34]);
+
+    expect(autoAnalyze(histogram, imageData, true).suggestedCurves).toBeNull();
   });
 
   it('returns a complete auto-analysis payload with nullable white balance', () => {
@@ -218,6 +366,11 @@ describe('autoAnalysis', () => {
     expect(result.temperature).toBeLessThanOrEqual(100);
     expect(result.tint).toBeGreaterThanOrEqual(-100);
     expect(result.tint).toBeLessThanOrEqual(100);
+    expect(result.whiteBalanceGains).toEqual(expect.objectContaining({
+      red: expect.any(Number),
+      green: expect.any(Number),
+      blue: expect.any(Number),
+    }));
   });
 
   it('suggests black and white conversion for a near-neutral monochrome scan', () => {

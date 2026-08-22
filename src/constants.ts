@@ -399,7 +399,11 @@ export const FILM_STOCK_DENSITY_PRESETS: Record<string, Omit<DensityBalance, 'so
   'ektacolor-pro-400': { scaleR: 1, scaleG: 1, scaleB: 0.62 },
   'ektacolor-pro-800': { scaleR: 1, scaleG: 1, scaleB: 0.61 },
   'ektar-100': { scaleR: 1, scaleG: 1, scaleB: 0.58 },
-  'gold-200': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
+  // Kodak Gold's red and blue dye layers have materially different density
+  // slopes. A neutral red scale plus an extreme 0.60 blue scale collapses blue
+  // objects and leaves the positive red. These ratios keep all three layers in
+  // range before the profile matrix and user balance controls are applied.
+  'gold-200': { scaleR: 2.2, scaleG: 1, scaleB: 0.86 },
   'gold-100': { scaleR: 1, scaleG: 1, scaleB: 0.6 },
   'ultramax-400': { scaleR: 1, scaleG: 1, scaleB: 0.59 },
   'colorplus-200': { scaleR: 1, scaleG: 1, scaleB: 0.6 },

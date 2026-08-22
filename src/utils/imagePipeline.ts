@@ -29,7 +29,7 @@ const DENSITY_EPSILON = 1e-6;
 // Trusted range for auto-measured per-channel density scales. A raw scale
 // outside this band is treated as a failed measurement, not clamped into it.
 const DENSITY_BALANCE_CLAMP_LOW = 0.4;
-const DENSITY_BALANCE_CLAMP_HIGH = 2;
+const DENSITY_BALANCE_CLAMP_HIGH = 3.2;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -387,14 +387,25 @@ function resolveDensityBalance(
     return { scaleR: 1, scaleG: 1, scaleB: 1, source: 'film-stock-preset' };
   }
 
+  // A deliberate roll or manual calibration is more specific than a stock
+  // default and must survive profile selection.
+  if (estimatedDensityBalance?.source === 'manual') {
+    return estimatedDensityBalance;
+  }
+
   const preset = profileId ? FILM_STOCK_DENSITY_PRESETS[profileId] : undefined;
   if (preset) {
     return { ...preset, source: 'film-stock-preset' };
   }
 
-  // Without a stock preset or a measured estimate there is no evidence to
-  // tilt the channels, so stay neutral rather than guessing.
-  return estimatedDensityBalance ?? { scaleR: 1, scaleG: 1, scaleB: 1, source: 'auto-histogram' };
+  // Whole-scene channel histograms describe the subject palette, not the
+  // response of the film's dye layers. Only reuse a balance that was pinned
+  // from a stock or deliberate calibration. Otherwise stay neutral.
+  if (estimatedDensityBalance?.source === 'film-stock-preset') {
+    return estimatedDensityBalance;
+  }
+
+  return { scaleR: 1, scaleG: 1, scaleB: 1, source: 'neutral-fallback' };
 }
 
 function convertEstimatedFilmBaseSampleToWorkingProfile(
@@ -492,8 +503,13 @@ export function resolveDensityInversionParams(
 
   // A monochrome render has no dye-layer contrast mismatch to normalize —
   // per-channel density scales only tilt the channels feeding the B&W mix.
-  const densityBalance = resolveDensityBalance(isColor && !monochrome, profileId, estimatedDensityBalance);
-  const densityScaleLowConfidence = isColor && !monochrome && densityBalance.source === 'clamp-rejected';
+  const densityBalance = resolveDensityBalance(
+    isColor && !monochrome,
+    profileId,
+    estimatedDensityBalance,
+  );
+  const densityScaleLowConfidence = isColor && !monochrome
+    && densityBalance.source === 'clamp-rejected';
 
   // Below the reject gate (or an explicitly refused estimate) the evidence is
   // too weak to trust as a hard density zero point. The estimate's own sample
@@ -626,6 +642,7 @@ export function computeDensityBalance(
   imageData: ImageData,
   filmBaseSample: FilmBaseSample,
   profileId: ColorProfileId = 'srgb',
+  sampleRegion: { left: number; top: number; right: number; bottom: number } | null = null,
 ): DensityBalance {
   const { data, width, height } = imageData;
   const baseR = clamp(decodeProfileChannel(profileId, filmBaseSample.r / 255), DENSITY_EPSILON, 1);
@@ -636,8 +653,16 @@ export function computeDensityBalance(
   const densitiesB: number[] = [];
   const totalPixels = width * height;
   const sampleStride = Math.max(1, Math.floor(totalPixels / 50_000));
+  const regionLeft = sampleRegion ? clamp(Math.floor(sampleRegion.left * width), 0, width - 1) : 0;
+  const regionTop = sampleRegion ? clamp(Math.floor(sampleRegion.top * height), 0, height - 1) : 0;
+  const regionRight = sampleRegion ? clamp(Math.ceil(sampleRegion.right * width), regionLeft + 1, width) : width;
+  const regionBottom = sampleRegion ? clamp(Math.ceil(sampleRegion.bottom * height), regionTop + 1, height) : height;
 
   for (let index = 0; index < data.length; index += 4 * sampleStride) {
+    const pixelIndex = index / 4;
+    const x = pixelIndex % width;
+    const y = Math.floor(pixelIndex / width);
+    if (x < regionLeft || x >= regionRight || y < regionTop || y >= regionBottom) continue;
     const r = decodeProfileChannel(profileId, data[index] / 255);
     const g = decodeProfileChannel(profileId, data[index + 1] / 255);
     const b = decodeProfileChannel(profileId, data[index + 2] / 255);
@@ -771,6 +796,21 @@ export function computeResidualBaseOffset(
   estimatedDensityBalance: DensityBalance | null = null,
 ): ResidualBaseOffset | null {
   if (!isColor || filmType !== 'negative' || settings.residualBaseCorrection === false) {
+    return null;
+  }
+
+  // Residual subtraction treats a channel percentile as absolute film-base
+  // density. That is only safe when the base came from an explicit sample or
+  // a trusted rebate estimate. A conservative fallback is scene content, not
+  // a Dmin measurement, and can otherwise subtract most of one or two color
+  // channels from every pixel.
+  const normalizedEstimate = normalizeFilmBaseEstimate(estimatedFilmBaseSample);
+  const hasTrustedBase = settings.filmBaseSample != null || (
+    normalizedEstimate != null
+    && normalizedEstimate.source !== 'low-confidence'
+    && normalizedEstimate.confidence >= FILM_BASE_CONFIDENCE.accept
+  );
+  if (!hasTrustedBase) {
     return null;
   }
 

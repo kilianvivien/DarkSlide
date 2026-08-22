@@ -1,5 +1,5 @@
 import { FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
-import { ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
+import { ConversionSettings, DecodeRequest, DetectedFrame, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
 import type { RawSourceRegion } from './zoomRegionPreview';
 import { getColorProfileIdFromName } from './colorProfiles';
 import { clamp } from './math';
@@ -681,6 +681,114 @@ export function estimateFilmBase(
   return estimateFilmBaseCore(pixels, width, height, stride, 1);
 }
 
+// Once frame detection has located the exposed image, the dominant smooth RGB
+// cluster outside that gate is a better Dmin candidate than a whole-image
+// percentile. This handles camera scans with black holders and bright sprocket
+// holes surrounding a narrow strip of clear orange rebate.
+export function estimateFilmBaseFromDetectedFrame(
+  pixels: ArrayLike<number>,
+  width: number,
+  height: number,
+  stride: 3 | 4,
+  frame: DetectedFrame,
+): FilmBaseEstimate | null {
+  if (width < 2 || height < 2 || pixels.length < width * height * stride) {
+    return null;
+  }
+
+  const left = clamp(Math.floor(frame.left * width), 0, width - 1);
+  const right = clamp(Math.ceil(frame.right * width), left + 1, width);
+  const top = clamp(Math.floor(frame.top * height), 0, height - 1);
+  const bottom = clamp(Math.ceil(frame.bottom * height), top + 1, height);
+  const pixelStep = Math.max(1, Math.round(Math.sqrt((width * height) / ANALYSIS_MAX_SAMPLES)));
+  const bins = new Map<number, number>();
+  let candidateCount = 0;
+
+  for (let y = 0; y < height; y += pixelStep) {
+    for (let x = 0; x < width; x += pixelStep) {
+      if (x >= left && x < right && y >= top && y < bottom) continue;
+      const index = (y * width + x) * stride;
+      const r = clamp(Math.round(pixels[index] ?? 0), 0, 255);
+      const g = clamp(Math.round(pixels[index + 1] ?? 0), 0, 255);
+      const b = clamp(Math.round(pixels[index + 2] ?? 0), 0, 255);
+      const maximum = Math.max(r, g, b);
+      const minimum = Math.min(r, g, b);
+      const luminance = LUMINANCE_R * r + LUMINANCE_G * g + LUMINANCE_B * b;
+      if (maximum < FILM_BASE_CONFIDENCE.minPlausibleLuminance || luminance < 42 || minimum > 232) continue;
+      const key = (Math.floor(r / 8) << 10) | (Math.floor(g / 8) << 5) | Math.floor(b / 8);
+      bins.set(key, (bins.get(key) ?? 0) + 1);
+      candidateCount += 1;
+    }
+  }
+
+  if (candidateCount < 256 || bins.size === 0) return null;
+  let modeKey = 0;
+  let modeCount = 0;
+  for (const [key, count] of bins) {
+    if (count > modeCount) {
+      modeKey = key;
+      modeCount = count;
+    }
+  }
+
+  const centerR = ((modeKey >> 10) & 31) * 8 + 4;
+  const centerG = ((modeKey >> 5) & 31) * 8 + 4;
+  const centerB = (modeKey & 31) * 8 + 4;
+  let count = 0;
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+  let sumSqR = 0;
+  let sumSqG = 0;
+  let sumSqB = 0;
+
+  for (let y = 0; y < height; y += pixelStep) {
+    for (let x = 0; x < width; x += pixelStep) {
+      if (x >= left && x < right && y >= top && y < bottom) continue;
+      const index = (y * width + x) * stride;
+      const r = clamp(Math.round(pixels[index] ?? 0), 0, 255);
+      const g = clamp(Math.round(pixels[index + 1] ?? 0), 0, 255);
+      const b = clamp(Math.round(pixels[index + 2] ?? 0), 0, 255);
+      if (Math.abs(r - centerR) > 12 || Math.abs(g - centerG) > 12 || Math.abs(b - centerB) > 12) continue;
+      sumR += r;
+      sumG += g;
+      sumB += b;
+      sumSqR += r * r;
+      sumSqG += g * g;
+      sumSqB += b * b;
+      count += 1;
+    }
+  }
+
+  const clusterFraction = count / candidateCount;
+  if (count < 256 || clusterFraction < 0.04) return null;
+  const meanR = sumR / count;
+  const meanG = sumG / count;
+  const meanB = sumB / count;
+  const standardDeviation = Math.max(
+    Math.sqrt(Math.max(0, sumSqR / count - meanR * meanR)),
+    Math.sqrt(Math.max(0, sumSqG / count - meanG * meanG)),
+    Math.sqrt(Math.max(0, sumSqB / count - meanB * meanB)),
+  );
+  if (standardDeviation > FILM_BASE_CONFIDENCE.maxRegionStdDev) return null;
+
+  const coverageScore = clamp(clusterFraction / 0.25, 0, 1);
+  const uniformityScore = clamp(1 - standardDeviation / FILM_BASE_CONFIDENCE.maxRegionStdDev, 0, 1);
+  const confidence = clamp(0.5 + coverageScore * 0.25 + uniformityScore * 0.2, 0, 0.9);
+
+  return {
+    sample: {
+      r: clamp(Math.round(meanR), 1, 255),
+      g: clamp(Math.round(meanG), 1, 255),
+      b: clamp(Math.round(meanB), 1, 255),
+    },
+    source: 'frame-rebate',
+    confidence,
+    rejectedCandidates: Math.max(0, candidateCount - count),
+    clamped: false,
+  };
+}
+
 // Conservative bright-percentile base over the whole frame (not just the
 // border): guarantees a high transmittance reference so the density inversion
 // cannot collapse the image to black. Used when the crush guard demotes an
@@ -772,33 +880,24 @@ export function getFilmBaseExposure(sample: FilmBaseSample | null, targetWhitePo
 
 export function buildRawInitialSettings(
   baseSettings: ConversionSettings,
-  rgb: ArrayLike<number>,
-  width: number,
-  height: number,
+  _rgb: ArrayLike<number>,
+  _width: number,
+  _height: number,
   orientation: number | null | undefined,
-  estimatedFilmBase: FilmBaseSample | FilmBaseEstimate | null = estimateFilmBase(rgb, width, height, 3),
+  _estimatedFilmBase: FilmBaseSample | FilmBaseEstimate | null = null,
 ) {
   const nextSettings = structuredClone(baseSettings);
-
-  // A distrusted estimate must not seed the white balance — a wrong base start
-  // compounds the wrong reference (diagnosis §"fallback behavior is too eager").
-  // Bare samples carry no confidence signal and are treated as trusted.
-  const estimate = estimatedFilmBase && typeof estimatedFilmBase === 'object' && 'sample' in estimatedFilmBase
-    ? estimatedFilmBase
-    : null;
-  const bareSample = estimate ? estimate.sample : (estimatedFilmBase as FilmBaseSample | null);
-  const lowConfidence = estimate != null
-    && (estimate.confidence < FILM_BASE_CONFIDENCE.reject || estimate.source === 'low-confidence');
-  const channelBalance = lowConfidence
-    ? { redBalance: 1, greenBalance: 1, blueBalance: 1 }
-    : getFilmBaseChannelBalance(bareSample);
 
   return {
     ...nextSettings,
     filmBaseSample: null,
-    redBalance: clamp(nextSettings.redBalance * channelBalance.redBalance, 0.01, 8),
-    greenBalance: clamp(nextSettings.greenBalance * channelBalance.greenBalance, 0.01, 8),
-    blueBalance: clamp(nextSettings.blueBalance * channelBalance.blueBalance, 0.01, 8),
+    // The density inversion already converts every estimated base channel to
+    // density zero and applies the measured dye-layer scale. Multiplying the
+    // same base ratios into RGB balance here applied the orange-mask correction
+    // twice, causing strong red/orange imports such as P1075819.RW2.
+    redBalance: nextSettings.redBalance,
+    greenBalance: nextSettings.greenBalance,
+    blueBalance: nextSettings.blueBalance,
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
 }

@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings, MAX_FILE_SIZE_BYTES } from './constants';
 import type { ConversionSettings } from './types';
+import { calculateWhiteBalanceGains } from './utils/autoAnalysis';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -117,6 +118,7 @@ const fileBridgeState = vi.hoisted(() => ({
   chooseApplicationPath: vi.fn(),
   confirmDiscard: vi.fn(),
   confirmFilmBaseReanalysis: vi.fn(),
+  confirmOverwriteAutoAdjust: vi.fn(),
   confirmReplacePresetLibrary: vi.fn(),
   saveToDirectory: vi.fn(),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
@@ -264,6 +266,37 @@ vi.mock('./components/Sidebar', () => ({
         </button>
         <button type="button" onClick={onAutoWhiteBalance}>
           Auto WB
+        </button>
+        <button
+          type="button"
+          onClick={() => onSettingsChange({
+            toneEnabled: false,
+            toneRangeEnabled: false,
+            whiteBalanceEnabled: false,
+            colorControlsEnabled: false,
+            exposure: -37,
+            contrast: 72,
+            saturation: 31,
+            shadowRecovery: 64,
+            midtoneContrast: -28,
+            flareCorrection: 5,
+            temperature: -41,
+            tint: 38,
+            redBalance: 0.54,
+            greenBalance: 1.43,
+            blueBalance: 0.61,
+            blackPoint: 52,
+            whitePoint: 193,
+            highlightProtection: 91,
+            curves: {
+              rgb: [{ x: 0, y: 0 }, { x: 128, y: 190 }, { x: 255, y: 255 }],
+              red: [{ x: 0, y: 0 }, { x: 32, y: 0 }, { x: 255, y: 255 }],
+              green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+              blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+            },
+          })}
+        >
+          Apply Stacked Develop Adjustments
         </button>
         <div>Crop Source: {cropSource ?? 'none'}</div>
         <div>Current Rotation: {settings.rotation ?? 0}</div>
@@ -644,6 +677,7 @@ vi.mock('./utils/fileBridge', () => ({
   chooseApplicationPath: fileBridgeState.chooseApplicationPath,
   confirmDiscard: fileBridgeState.confirmDiscard,
   confirmFilmBaseReanalysis: fileBridgeState.confirmFilmBaseReanalysis,
+  confirmOverwriteAutoAdjust: fileBridgeState.confirmOverwriteAutoAdjust,
   confirmReplacePresetLibrary: fileBridgeState.confirmReplacePresetLibrary,
   saveToDirectory: fileBridgeState.saveToDirectory,
   saveExportBlob: fileBridgeState.saveExportBlob,
@@ -764,6 +798,13 @@ async function flushMicrotasks() {
   });
 }
 
+function getPresetsPane() {
+  const openPane = screen.queryByTestId('presets');
+  if (openPane) return openPane;
+  fireEvent.click(screen.getByRole('button', { name: 'Film profiles' }));
+  return screen.getByTestId('presets');
+}
+
 describe('App import and preview pipeline', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -826,6 +867,7 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.chooseApplicationPath.mockReset();
     fileBridgeState.confirmDiscard.mockReset();
     fileBridgeState.confirmFilmBaseReanalysis.mockReset();
+    fileBridgeState.confirmOverwriteAutoAdjust.mockReset();
     fileBridgeState.confirmReplacePresetLibrary.mockReset();
     fileBridgeState.saveToDirectory.mockReset();
     fileBridgeState.saveExportBlob.mockReset();
@@ -848,6 +890,7 @@ describe('App import and preview pipeline', () => {
     });
     fileBridgeState.confirmDiscard.mockResolvedValue(true);
     fileBridgeState.confirmFilmBaseReanalysis.mockResolvedValue(true);
+    fileBridgeState.confirmOverwriteAutoAdjust.mockResolvedValue(true);
     fileBridgeState.confirmReplacePresetLibrary.mockResolvedValue(true);
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -1390,10 +1433,10 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
+    expect(within(getPresetsPane()).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
 
     const renderCallsAfterImport = workerState.render.mock.calls.length;
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic Color' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Generic Color' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1411,11 +1454,11 @@ describe('App import and preview pipeline', () => {
         blueBalance: number;
       };
     };
-    expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 200, g: 180, b: 150 });
-    expect(latestRenderCall.settings.rotation).toBe(0);
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
+    expect(latestRenderCall.settings.rotation).toBe(90);
 
     const renderCallsAfterGeneric = workerState.render.mock.calls.length;
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Raw Import Result' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1435,9 +1478,9 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.settings.filmBaseSample).toBeNull();
     expect(latestRenderCall.settings.exposure).toBe(0);
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * ((255 - 180) / (255 - 200)));
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * ((255 - 180) / (255 - 150)));
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9);
     expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
@@ -1767,7 +1810,7 @@ describe('App import and preview pipeline', () => {
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'CineStill 400D' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'CineStill 400D' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -1812,7 +1855,7 @@ describe('App import and preview pipeline', () => {
       blueBalance: 0.96,
       blackPoint: 7,
       highlightProtection: 38,
-      filmBaseSample: { r: 135, g: 163, b: 107 },
+      filmBaseSample: null,
     });
 
     const secondRenderPayload = workerState.render.mock.calls[1]?.[0] as {
@@ -1823,7 +1866,7 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
   });
 
-  it('resets back to the exact Raw Import Result startup state when that preset is selected', async () => {
+  it('automatically develops RAW imports and resets every setting to that exact import state', async () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
     fileBridgeState.openImageFile.mockResolvedValue({
       file: createFile('reset-raw.nef', 'application/octet-stream'),
@@ -1850,6 +1893,7 @@ describe('App import and preview pipeline', () => {
       whitePoint: 238,
       temperature: 22,
       tint: 3,
+      whiteBalanceGains: { red: 0.9, green: 1, blue: 1.1 },
     });
 
     render(<App />);
@@ -1863,7 +1907,26 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Auto' }));
+    expect(workerState.autoAnalyze).toHaveBeenCalledTimes(1);
+    expect(fileBridgeState.confirmOverwriteAutoAdjust).not.toHaveBeenCalled();
+    const importedRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      profileId: string;
+      settings: ConversionSettings;
+    };
+    expect(importedRenderCall.settings).toMatchObject({
+      exposure: 6,
+      blackPoint: 4,
+      whitePoint: 238,
+      temperature: 0,
+      tint: 0,
+      greenBalance: 1,
+      rotation: 90,
+    });
+    expect(importedRenderCall.settings.redBalance).toBeCloseTo(1.008);
+    expect(importedRenderCall.settings.blueBalance).toBeCloseTo(0.99);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Film profiles' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -1878,33 +1941,12 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
-      settings: {
-        filmBaseSample: { r: number; g: number; b: number } | null;
-        exposure: number;
-        redBalance: number;
-        greenBalance: number;
-        blueBalance: number;
-        blackPoint: number;
-        whitePoint: number;
-        temperature: number;
-        tint: number;
-        rotation: number;
-      };
+      profileId: string;
+      settings: ConversionSettings;
     };
 
-    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
-    expect(latestRenderCall.settings.exposure).toBe(0);
-    // The flat {76,73,68} frame is a dim negative whose luminance is below the
-    // clear-base plausibility floor, so the estimator refuses it and startup
-    // keeps neutral stock white balance instead of a distrusted border tilt.
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12);
-    expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9);
-    expect(latestRenderCall.settings.blackPoint).toBe(8);
-    expect(latestRenderCall.settings.whitePoint).toBe(245);
-    expect(latestRenderCall.settings.temperature).toBe(0);
-    expect(latestRenderCall.settings.tint).toBe(0);
-    expect(latestRenderCall.settings.rotation).toBe(90);
+    expect(latestRenderCall.profileId).toBe('raw-import-result');
+    expect(latestRenderCall.settings).toEqual(importedRenderCall.settings);
   });
 
   it('auto-applies the configured preset to RAW imports while preserving Raw Import Result as a reset target', async () => {
@@ -1992,9 +2034,9 @@ describe('App import and preview pipeline', () => {
     expect(importRenderCall.settings.saturation).toBe(0);
     expect(importRenderCall.settings.filmBaseSample).toBeNull();
     expect(importRenderCall.settings.rotation).toBe(0);
-    expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
+    expect(within(getPresetsPane()).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Raw Import Result' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -2012,10 +2054,10 @@ describe('App import and preview pipeline', () => {
     };
 
     expect(resetRenderCall.profileId).toBe('raw-import-result');
-    expect(resetRenderCall.isColor).toBe(true);
-    expect(resetRenderCall.settings.saturation).toBe(100);
+    expect(resetRenderCall.isColor).toBe(false);
+    expect(resetRenderCall.settings.saturation).toBe(0);
     expect(resetRenderCall.settings.filmBaseSample).toBeNull();
-    expect(resetRenderCall.settings.rotation).toBe(90);
+    expect(resetRenderCall.settings.rotation).toBe(0);
   });
 
   it('matches the manual preset-apply settings when auto-applying a color preset to a RAW import', async () => {
@@ -2115,7 +2157,7 @@ describe('App import and preview pipeline', () => {
       blueBalance: 0.96,
       blackPoint: 7,
       highlightProtection: 38,
-      filmBaseSample: { r: 135, g: 163, b: 107 },
+      filmBaseSample: null,
     });
   });
 
@@ -2152,7 +2194,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2191,7 +2233,7 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.lightSourceBias).toEqual([0.82, 0.87, 1]);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2203,7 +2245,7 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.94, 0.88]);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Fuji Provia 100F' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Fuji Provia 100F' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2271,9 +2313,10 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Basic adjustments' }));
     fireEvent.click(screen.getByRole('button', { name: 'Select Auto Light Source' }));
     await flushMicrotasks();
     await act(async () => {
@@ -2282,7 +2325,7 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
     expect(screen.getByText('Current Light Source: auto')).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Custom Preset' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Saved Custom Preset' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2292,6 +2335,7 @@ describe('App import and preview pipeline', () => {
     const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
       lightSourceBias: [number, number, number];
     };
+    fireEvent.click(screen.getByRole('button', { name: 'Basic adjustments' }));
     expect(screen.getByText('Current Light Source: daylight')).toBeInTheDocument();
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.98, 0.95]);
   });
@@ -2329,7 +2373,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Phoenix LUT' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Phoenix LUT' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2387,9 +2431,10 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset With Crop' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Save Custom Preset With Crop' }));
     await flushMicrotasks();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Basic adjustments' }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply Square Crop' }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply Half Rotation' }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply Lens Correction' }));
@@ -2399,7 +2444,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Crop Preset' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Saved Crop Preset' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2588,7 +2633,7 @@ describe('App import and preview pipeline', () => {
 
     expect(screen.getByText('This scan looks monochrome. Convert it to black and white?')).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
 
     expect(screen.queryByText('This scan looks monochrome. Convert it to black and white?')).not.toBeInTheDocument();
@@ -2936,8 +2981,12 @@ describe('App import and preview pipeline', () => {
     const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
       settings: ConversionSettings;
     };
-    expect(latestRenderCall.settings.temperature).toBe(20);
-    expect(latestRenderCall.settings.tint).toBe(30);
+    const gains = calculateWhiteBalanceGains(100, 90, 140);
+    expect(latestRenderCall.settings.temperature).toBe(0);
+    expect(latestRenderCall.settings.tint).toBe(0);
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * gains.red);
+    expect(latestRenderCall.settings.greenBalance).toBeCloseTo(gains.green);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * gains.blue);
   });
 
   it('uses film-base sampling to rerun standard RAW color-negative conversion with the sampled base', async () => {
@@ -2981,7 +3030,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Kodak Gold 200' }));
+    fireEvent.click(within(getPresetsPane()).getByRole('button', { name: 'Kodak Gold 200' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2998,6 +3047,7 @@ describe('App import and preview pipeline', () => {
       };
     };
 
+    fireEvent.click(screen.getByRole('button', { name: 'Basic adjustments' }));
     fireEvent.click(screen.getByText('Toggle Film Base Picker'));
 
     const canvas = document.querySelector('canvas');
@@ -3209,10 +3259,21 @@ describe('App import and preview pipeline', () => {
       whitePoint: 238,
       temperature: 22,
       tint: 3,
+      whiteBalanceGains: { red: 0.9, green: 1, blue: 1.1 },
     });
 
     render(<App />);
     await uploadFile(createFile('auto-basic.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    const baseSettings = structuredClone((workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: ConversionSettings;
+    }).settings);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Stacked Develop Adjustments' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -3227,6 +3288,7 @@ describe('App import and preview pipeline', () => {
     await flushMicrotasks();
 
     expect(workerState.autoAnalyze).toHaveBeenCalledTimes(1);
+    expect(fileBridgeState.confirmOverwriteAutoAdjust).toHaveBeenCalledOnce();
     const autoRequest = workerState.autoAnalyze.mock.calls[0]?.[0] as {
       targetMaxDimension: number;
       highlightDensityEstimate: number;
@@ -3258,11 +3320,71 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.exposure).toBe(6);
     expect(latestRenderCall.settings.blackPoint).toBe(4);
     expect(latestRenderCall.settings.whitePoint).toBe(238);
-    expect(latestRenderCall.settings.temperature).toBe(22);
-    expect(latestRenderCall.settings.tint).toBe(3);
+    expect(latestRenderCall.settings.temperature).toBe(0);
+    expect(latestRenderCall.settings.tint).toBe(0);
+    expect(latestRenderCall.settings).toMatchObject({
+      toneEnabled: baseSettings.toneEnabled,
+      toneRangeEnabled: baseSettings.toneRangeEnabled,
+      whiteBalanceEnabled: baseSettings.whiteBalanceEnabled,
+      colorControlsEnabled: baseSettings.colorControlsEnabled,
+      contrast: baseSettings.contrast,
+      saturation: baseSettings.saturation,
+      shadowRecovery: baseSettings.shadowRecovery,
+      midtoneContrast: baseSettings.midtoneContrast,
+      flareCorrection: baseSettings.flareCorrection,
+      redBalance: baseSettings.redBalance * 0.9,
+      greenBalance: baseSettings.greenBalance,
+      blueBalance: baseSettings.blueBalance * 1.1,
+      highlightProtection: baseSettings.highlightProtection,
+      curves: baseSettings.curves,
+    });
+
+    const firstAutoSettings = structuredClone(latestRenderCall.settings);
+    fireEvent.click(screen.getByRole('button', { name: 'Auto' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.autoAnalyze).toHaveBeenCalledTimes(2);
+    const secondAutoRequest = workerState.autoAnalyze.mock.calls[1]?.[0] as { settings: ConversionSettings };
+    expect(secondAutoRequest.settings).toEqual(autoRequest.settings);
+    expect((workerState.render.mock.calls.at(-1)?.[0] as { settings: ConversionSettings }).settings).toEqual(firstAutoSettings);
   });
 
-  it('applies only temperature and tint from the Auto WB button', async () => {
+  it('keeps manual adjustments when the Auto overwrite prompt is cancelled', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    fileBridgeState.confirmOverwriteAutoAdjust.mockResolvedValue(false);
+
+    render(<App />);
+    await uploadFile(createFile('auto-cancel.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Stacked Develop Adjustments' }));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+    const renderCount = workerState.render.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto' }));
+    await flushMicrotasks();
+
+    expect(fileBridgeState.confirmOverwriteAutoAdjust).toHaveBeenCalledOnce();
+    expect(workerState.autoAnalyze).not.toHaveBeenCalled();
+    expect(workerState.render).toHaveBeenCalledTimes(renderCount);
+  });
+
+  it('applies only diagonal color gains from the Auto WB button', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
       createRenderResult(payload.documentId, payload.revision, 300, 200)
@@ -3273,6 +3395,7 @@ describe('App import and preview pipeline', () => {
       whitePoint: 238,
       temperature: 22,
       tint: 3,
+      whiteBalanceGains: { red: 0.9, green: 1, blue: 1.1 },
       contrast: 30,
       midtoneBoostPoint: { x: 128, y: 150 },
     });
@@ -3302,8 +3425,11 @@ describe('App import and preview pipeline', () => {
       settings: ConversionSettings;
     };
 
-    expect(latestRenderCall.settings.temperature).toBe(22);
-    expect(latestRenderCall.settings.tint).toBe(3);
+    expect(latestRenderCall.settings.temperature).toBe(0);
+    expect(latestRenderCall.settings.tint).toBe(0);
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * 0.9);
+    expect(latestRenderCall.settings.greenBalance).toBeCloseTo(1);
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * 1.1);
     // Every tone field stays untouched by the WB-only action.
     expect(latestRenderCall.settings.exposure).toBe(beforeCall.settings.exposure);
     expect(latestRenderCall.settings.blackPoint).toBe(beforeCall.settings.blackPoint);
@@ -3323,6 +3449,7 @@ describe('App import and preview pipeline', () => {
       whitePoint: 240,
       temperature: null,
       tint: null,
+      whiteBalanceGains: null,
     });
 
     render(<App />);
@@ -3339,6 +3466,8 @@ describe('App import and preview pipeline', () => {
       vi.runOnlyPendingTimers();
     });
     await flushMicrotasks();
+
+    expect(fileBridgeState.confirmOverwriteAutoAdjust).not.toHaveBeenCalled();
 
     const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
       settings: {
@@ -3364,6 +3493,7 @@ describe('App import and preview pipeline', () => {
       whitePoint: number;
       temperature: number;
       tint: number;
+      whiteBalanceGains: { red: number; green: number; blue: number } | null;
     }>();
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
@@ -3396,6 +3526,7 @@ describe('App import and preview pipeline', () => {
       whitePoint: 236,
       temperature: 18,
       tint: 4,
+      whiteBalanceGains: { red: 1, green: 1, blue: 1 },
     });
     await flushMicrotasks();
     await act(async () => {

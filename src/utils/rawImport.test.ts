@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings, FILM_BASE_CONFIDENCE } from '../constants';
 import { processImageData } from './imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, decodeDesktopRawRegionForWorker, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, parseRawDecodeIpcResponse, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, decodeDesktopRawRegionForWorker, estimateFilmBase, estimateFilmBase16, estimateFilmBaseFromDetectedFrame, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, parseRawDecodeIpcResponse, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 
 const coreState = vi.hoisted(() => ({ invoke: vi.fn() }));
 
@@ -269,7 +269,7 @@ describe('rawImport', () => {
     expect(rotationFromExifOrientation(7)).toBe(90);
   });
 
-  it('builds RAW startup settings with derived balance and rotation defaults', () => {
+  it('builds RAW startup settings without applying film-base balance twice', () => {
     const base = createDefaultSettings();
     const rgb = createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]);
 
@@ -277,13 +277,13 @@ describe('rawImport', () => {
       rotation: 90,
       filmBaseSample: null,
       exposure: base.exposure,
-      redBalance: (255 - 150) / (255 - 160),
+      redBalance: base.redBalance,
       greenBalance: 1,
-      blueBalance: (255 - 150) / (255 - 140),
+      blueBalance: base.blueBalance,
     });
   });
 
-  it('keeps stock-specific tuning while layering border-derived balance correction on top', () => {
+  it('keeps stock-specific tuning while density inversion owns the base correction', () => {
     const base = createDefaultSettings({
       exposure: 6,
       temperature: 8,
@@ -300,9 +300,9 @@ describe('rawImport', () => {
       exposure: 6,
       temperature: 8,
       tint: -2,
-      redBalance: 1.16 * ((255 - 150) / (255 - 160)),
+      redBalance: 1.16,
       greenBalance: 1,
-      blueBalance: 0.86 * ((255 - 150) / (255 - 140)),
+      blueBalance: 0.86,
     });
   });
 
@@ -349,7 +349,7 @@ describe('rawImport', () => {
     );
   });
 
-  it('uses RAW startup settings that avoid subtractive film-base startup while keeping a controlled channel balance', () => {
+  it('uses RAW startup settings that leave estimated film-base correction to density inversion', () => {
     const width = 80;
     const height = 56;
     const estimatedFilmBaseSample = { r: 76, g: 73, b: 68 } as const;
@@ -371,8 +371,8 @@ describe('rawImport', () => {
     const startupMeans = meanInnerChannels(startupImage);
 
     expect(startupSettings.exposure).toBe(baseSettings.exposure);
-    expect(startupSettings.redBalance).toBeCloseTo(1.12 * ((255 - 73) / (255 - 76)));
-    expect(startupSettings.blueBalance).toBeCloseTo(0.9 * ((255 - 73) / (255 - 68)));
+    expect(startupSettings.redBalance).toBeCloseTo(1.12);
+    expect(startupSettings.blueBalance).toBeCloseTo(0.9);
     expect(sumBins(startupHistogram.l.slice(240))).toBeLessThanOrEqual(sumBins(legacyHistogram.l.slice(240)));
     expect(startupMeans.b / Math.max(startupMeans.r, 1)).toBeLessThan(1.35);
     expect(startupMeans.b / Math.max(startupMeans.g, 1)).toBeLessThan(1.35);
@@ -475,6 +475,31 @@ describe('rawImport', () => {
 });
 
 describe('estimateFilmBase (confidence-scored)', () => {
+  it('uses a detected gate to isolate clear rebate from holder and sprocket holes', () => {
+    const rebate: [number, number, number] = [130, 76, 44];
+    const rgb = buildRgb(200, 150, (x, y) => {
+      const insideFrame = x >= 12 && x < 190 && y >= 7 && y < 139;
+      if (insideFrame) return [62, 48, 38];
+      if (y < 4 && x % 24 < 10) return [180, 180, 180];
+      if (x < 3 || x >= 197) return [8, 8, 8];
+      return rebate;
+    });
+
+    const estimate = estimateFilmBaseFromDetectedFrame(rgb, 200, 150, 3, {
+      left: 12 / 200,
+      right: 190 / 200,
+      top: 7 / 150,
+      bottom: 139 / 150,
+      angle: 0,
+      confidence: 6,
+    });
+
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('frame-rebate');
+    expect(estimate!.confidence).toBeGreaterThanOrEqual(FILM_BASE_CONFIDENCE.accept);
+    expect(estimate!.sample).toEqual({ r: rebate[0], g: rebate[1], b: rebate[2] });
+  });
+
   it('reports high confidence and outer-border provenance for a clean bright border', () => {
     const border: [number, number, number] = [168, 151, 134];
     const rgb = buildRgb(160, 120, (x, y) => (

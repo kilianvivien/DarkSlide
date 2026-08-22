@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, computeResidualBaseOffset, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { FilmBaseEstimate } from '../types';
 
 function createPixel(r: number, g: number, b: number) {
@@ -271,9 +271,9 @@ describe('computeDensityBalance', () => {
     expect(balance.source).toBe('auto-histogram');
     expect(balance.scaleG).toBe(1);
     expect(balance.scaleR).toBeGreaterThan(0.4);
-    expect(balance.scaleR).toBeLessThan(2);
+    expect(balance.scaleR).toBeLessThan(3.2);
     expect(balance.scaleB).toBeGreaterThan(0.4);
-    expect(balance.scaleB).toBeLessThan(2);
+    expect(balance.scaleB).toBeLessThan(3.2);
     expect(balance.scaleR).not.toBeCloseTo(1, 3);
     expect(balance.scaleB).not.toBeCloseTo(1, 3);
   });
@@ -294,6 +294,37 @@ describe('computeDensityBalance', () => {
     expect(balance.scaleR).toBe(1);
     expect(balance.scaleG).toBe(1);
     expect(balance.scaleB).toBe(1);
+  });
+});
+
+describe('computeResidualBaseOffset', () => {
+  it('does not subtract scene color when the film-base estimate was rejected', () => {
+    const imageData = createGrid(40, [
+      [80, 150, 130],
+      [100, 170, 145],
+    ]);
+
+    const offset = computeResidualBaseOffset(
+      imageData,
+      createDefaultSettings(),
+      true,
+      'negative',
+      'srgb',
+      'srgb',
+      [1, 1, 1],
+      null,
+      'gold-200',
+      {
+        sample: { r: 153, g: 144, b: 141 },
+        source: 'low-confidence',
+        confidence: 0,
+        rejectedCandidates: 14,
+        clamped: false,
+      },
+      { scaleR: 1, scaleG: 1, scaleB: 1, source: 'clamp-rejected' },
+    );
+
+    expect(offset).toBeNull();
   });
 });
 
@@ -463,7 +494,7 @@ describe('resolveDensityInversionParams confidence handling', () => {
     expect(params.densityScaleSource).toBe('neutral');
   });
 
-  it('retains color density balancing when the B&W toggle is disabled', () => {
+  it('does not treat a scene histogram as color-negative film calibration', () => {
     const estimate: FilmBaseEstimate = {
       sample: { r: 114, g: 174, b: 154 }, source: 'frame-rebate', confidence: 0.7, rejectedCandidates: 2, clamped: false,
     };
@@ -480,8 +511,93 @@ describe('resolveDensityInversionParams confidence handling', () => {
       0.5,
     );
 
-    expect(params.densityScale).toEqual([1.1, 1, 0.9]);
-    expect(params.densityScaleSource).toBe('auto-histogram');
+    expect(params.densityScale).toEqual([1, 1, 1]);
+    expect(params.densityScaleSource).toBe('neutral-fallback');
+    expect(params.lowConfidence).toBe(false);
+  });
+
+  it('keeps film-stock calibration when the scene histogram disagrees', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 151, g: 89, b: 53 }, source: 'frame-rebate', confidence: 0.67, rejectedCandidates: 18, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      settingsNoManual,
+      true,
+      'negative',
+      'gold-200',
+      estimate,
+      { scaleR: 1.01, scaleG: 1, scaleB: 1.55, source: 'auto-histogram' },
+      'srgb',
+      'srgb',
+      null,
+      0.5,
+    );
+
+    expect(params.densityScale).toEqual([2.2, 1, 0.86]);
+    expect(params.densityScaleSource).toBe('film-stock-preset');
+  });
+
+  it('prefers deliberate calibration over the selected film-stock preset', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 151, g: 89, b: 53 }, source: 'frame-rebate', confidence: 0.67, rejectedCandidates: 18, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      settingsNoManual,
+      true,
+      'negative',
+      'gold-200',
+      estimate,
+      { scaleR: 1.12, scaleG: 1, scaleB: 0.74, source: 'manual' },
+      'srgb',
+      'srgb',
+      null,
+      0.5,
+    );
+
+    expect(params.densityScale).toEqual([1.12, 1, 0.74]);
+    expect(params.densityScaleSource).toBe('manual');
+  });
+
+  it('retains a pinned import calibration for the transient RAW profile', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 151, g: 89, b: 53 }, source: 'frame-rebate', confidence: 0.67, rejectedCandidates: 18, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      settingsNoManual,
+      true,
+      'negative',
+      'raw-import-result',
+      estimate,
+      { scaleR: 1.08, scaleG: 1, scaleB: 0.72, source: 'film-stock-preset' },
+      'srgb',
+      'srgb',
+      null,
+      0.5,
+    );
+
+    expect(params.densityScale).toEqual([1.08, 1, 0.72]);
+    expect(params.densityScaleSource).toBe('film-stock-preset');
+  });
+
+  it('keeps the film-stock fallback when the frame estimate is not trusted', () => {
+    const estimate: FilmBaseEstimate = {
+      sample: { r: 153, g: 144, b: 141 }, source: 'low-confidence', confidence: 0, rejectedCandidates: 14, clamped: false,
+    };
+    const params = resolveDensityInversionParams(
+      settingsNoManual,
+      true,
+      'negative',
+      'gold-200',
+      estimate,
+      { scaleR: 1.2, scaleG: 1, scaleB: 1.3, source: 'auto-histogram' },
+      'srgb',
+      'srgb',
+      null,
+      0.5,
+    );
+
+    expect(params.densityScale).toEqual([2.2, 1, 0.86]);
+    expect(params.densityScaleSource).toBe('film-stock-preset');
   });
 
   it('keeps a manual B&W base per-channel (luminance-first does not leak into manual)', () => {

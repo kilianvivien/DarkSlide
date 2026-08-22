@@ -5,9 +5,9 @@ const WB_MARGIN_RATIO = 0.04;
 const WB_MARGIN_MIN = 8;
 const WB_MARGIN_MAX = 48;
 const WB_LUMA_MIN = 72;
-const WB_LUMA_MAX = 196;
+const WB_LUMA_MAX = 225;
 const WB_CHANNEL_MIN = 12;
-const WB_CHANNEL_MAX = 243;
+const WB_CHANNEL_MAX = 248;
 const WB_MAX_SATURATION = 0.35;
 const WB_MIN_SAMPLE_COUNT = 256;
 const WB_MIN_SAMPLE_RATIO = 0.0005;
@@ -19,10 +19,19 @@ const MIDTONE_COMPRESSION_THRESHOLD = 0.35;
 const MIDTONE_MAX_BOOST = 25;
 const AUTO_EXPOSURE_TARGET = 127.5;
 const AUTO_EXPOSURE_LIMIT = 30;
+const COLOR_NEGATIVE_POSITIVE_EXPOSURE_STRENGTH = 0.6;
+const BW_NEGATIVE_POSITIVE_EXPOSURE_DEADBAND = 6;
+const BW_NEGATIVE_POSITIVE_EXPOSURE_STRENGTH = 0.25;
+const BW_NEGATIVE_POSITIVE_EXPOSURE_LIMIT = 6;
 const AUTO_BLACK_POINT_STRENGTH = 0.25;
 const AUTO_WHITE_POINT_STRENGTH = 0.5;
 const WB_MAX_SATURATION_RELAXED = 0.55;
 const WB_MINKOWSKI_POWER = 6;
+const NEGATIVE_WB_DIRECT_GAIN_RATIO = 1.28;
+const NEGATIVE_WB_REJECT_GAIN_RATIO = 3;
+const NEGATIVE_WB_MIN_SAMPLE_RATIO = 0.002;
+const NEGATIVE_WB_FULL_SAMPLE_RATIO = 0.08;
+const NEGATIVE_WB_DAMPED_MAX_GAIN_RATIO = 1.18;
 const MONO_MARGIN_RATIO = 0.05;
 const MONO_MARGIN_MIN = 8;
 const MONO_MARGIN_MAX = 64;
@@ -98,8 +107,30 @@ export function createAutoAnalysisSettings(
 export function createAutoAdjustmentPatch(
   profileDefaults: ConversionSettings,
   result: AutoAnalyzeResult,
-): Pick<ConversionSettings, 'exposure' | 'blackPoint' | 'whitePoint' | 'temperature' | 'tint' | 'contrast' | 'curves'> {
+): Pick<
+  ConversionSettings,
+  | 'toneEnabled'
+  | 'toneRangeEnabled'
+  | 'whiteBalanceEnabled'
+  | 'colorControlsEnabled'
+  | 'exposure'
+  | 'contrast'
+  | 'saturation'
+  | 'shadowRecovery'
+  | 'midtoneContrast'
+  | 'flareCorrection'
+  | 'temperature'
+  | 'tint'
+  | 'redBalance'
+  | 'greenBalance'
+  | 'blueBalance'
+  | 'blackPoint'
+  | 'whitePoint'
+  | 'highlightProtection'
+  | 'curves'
+> {
   const curves = structuredClone(profileDefaults.curves);
+  const whiteBalance = applyWhiteBalanceGains(profileDefaults, result.whiteBalanceGains);
 
   if (result.midtoneBoostPoint) {
     curves.rgb = [{ x: 0, y: 0 }, result.midtoneBoostPoint, { x: 255, y: 255 }];
@@ -115,12 +146,24 @@ export function createAutoAdjustmentPatch(
   }
 
   return {
+    toneEnabled: profileDefaults.toneEnabled,
+    toneRangeEnabled: profileDefaults.toneRangeEnabled,
+    whiteBalanceEnabled: profileDefaults.whiteBalanceEnabled,
+    colorControlsEnabled: profileDefaults.colorControlsEnabled,
     exposure: result.exposure,
+    contrast: result.contrast ?? profileDefaults.contrast,
+    saturation: profileDefaults.saturation,
+    shadowRecovery: profileDefaults.shadowRecovery,
+    midtoneContrast: profileDefaults.midtoneContrast,
+    flareCorrection: profileDefaults.flareCorrection,
+    // Auto WB uses diagonal gains. Keep the additive controls at their profile
+    // values so repeated Auto runs cannot accumulate offsets or shift black.
+    temperature: profileDefaults.temperature,
+    tint: profileDefaults.tint,
+    ...whiteBalance,
     blackPoint: result.blackPoint,
     whitePoint: result.whitePoint,
-    temperature: result.temperature ?? profileDefaults.temperature,
-    tint: result.tint ?? profileDefaults.tint,
-    contrast: result.contrast ?? profileDefaults.contrast,
+    highlightProtection: profileDefaults.highlightProtection,
     curves,
   };
 }
@@ -158,7 +201,12 @@ function percentile(bins: number[], fraction: number) {
   return bins.length - 1;
 }
 
-export function analyzeExposure(histogram: HistogramData): Pick<AutoAnalyzeResult, 'exposure' | 'blackPoint' | 'whitePoint'> {
+export type AutoExposureMode = 'standard' | 'color-negative' | 'black-and-white-negative';
+
+export function analyzeExposure(
+  histogram: HistogramData,
+  mode: AutoExposureMode = 'standard',
+): Pick<AutoAnalyzeResult, 'exposure' | 'blackPoint' | 'whitePoint'> {
   const p1 = percentile(histogram.l, 0.01);
   const p99 = percentile(histogram.l, 0.99);
   const midpoint = Math.max(1, (p1 + p99) / 2);
@@ -168,11 +216,24 @@ export function analyzeExposure(histogram: HistogramData): Pick<AutoAnalyzeResul
   // stop in either direction. Negative conversion has already established the
   // broad density range, and a larger automatic move tends to erase high-key
   // or low-key intent.
-  const exposure = clamp(
+  const solvedExposure = clamp(
     Math.round(50 * Math.log2(AUTO_EXPOSURE_TARGET / midpoint)),
     -AUTO_EXPOSURE_LIMIT,
     AUTO_EXPOSURE_LIMIT,
   );
+  const exposure = mode === 'black-and-white-negative'
+    ? solvedExposure <= BW_NEGATIVE_POSITIVE_EXPOSURE_DEADBAND
+      ? Math.min(0, solvedExposure)
+      : Math.min(
+        BW_NEGATIVE_POSITIVE_EXPOSURE_LIMIT,
+        Math.round(
+          (solvedExposure - BW_NEGATIVE_POSITIVE_EXPOSURE_DEADBAND)
+          * BW_NEGATIVE_POSITIVE_EXPOSURE_STRENGTH,
+        ),
+      )
+    : mode === 'color-negative' && solvedExposure > 0
+      ? Math.round(solvedExposure * COLOR_NEGATIVE_POSITIVE_EXPOSURE_STRENGTH)
+      : solvedExposure;
   const exposureFactor = Math.pow(2, exposure / 50);
   const adjustedP1 = p1 * exposureFactor;
   const adjustedP99 = p99 * exposureFactor;
@@ -262,7 +323,13 @@ function sampleColorBalance(
   width: number,
   height: number,
   maxSaturation: number,
-): { temperature: number; tint: number; sampleCount: number } | null {
+): {
+  temperature: number;
+  tint: number;
+  whiteBalanceGains: NonNullable<AutoAnalyzeResult['whiteBalanceGains']>;
+  sampleCount: number;
+  sampleRatio: number;
+} | null {
   const margin = clamp(
     Math.round(Math.min(width, height) * WB_MARGIN_RATIO),
     WB_MARGIN_MIN,
@@ -328,10 +395,17 @@ function sampleColorBalance(
   const estimateG = Math.pow(poweredG / sampleCount, 1 / WB_MINKOWSKI_POWER) * 255;
   const estimateB = Math.pow(poweredB / sampleCount, 1 / WB_MINKOWSKI_POWER) * 255;
   const offsets = calculateWhiteBalanceOffsets(estimateR, estimateG, estimateB);
+  const whiteBalanceGains = calculateWhiteBalanceGains(estimateR, estimateG, estimateB);
+  const sampleCapacity = Math.max(
+    1,
+    Math.ceil((right - left) / WB_SAMPLE_STRIDE) * Math.ceil((bottom - top) / WB_SAMPLE_STRIDE),
+  );
 
   return {
     ...offsets,
+    whiteBalanceGains,
     sampleCount,
+    sampleRatio: sampleCount / sampleCapacity,
   };
 }
 
@@ -351,23 +425,105 @@ export function calculateWhiteBalanceOffsets(
   };
 }
 
-export function analyzeColorBalance(imageData: ImageData, _isColorNegative = false): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
+/**
+ * Solve diagonal white-balance gains for a sampled neutral. The geometric
+ * mean preserves the sample's overall energy while equalizing its channels.
+ */
+export function calculateWhiteBalanceGains(
+  red: number,
+  green: number,
+  blue: number,
+): NonNullable<AutoAnalyzeResult['whiteBalanceGains']> {
+  const safeRed = Math.max(red, 1);
+  const safeGreen = Math.max(green, 1);
+  const safeBlue = Math.max(blue, 1);
+  const target = Math.cbrt(safeRed * safeGreen * safeBlue);
+  return {
+    red: clamp(target / safeRed, 0.5, 2),
+    green: clamp(target / safeGreen, 0.5, 2),
+    blue: clamp(target / safeBlue, 0.5, 2),
+  };
+}
+
+export function applyWhiteBalanceGains(
+  baseline: Pick<ConversionSettings, 'redBalance' | 'greenBalance' | 'blueBalance'>,
+  gains: AutoAnalyzeResult['whiteBalanceGains'],
+): Pick<ConversionSettings, 'redBalance' | 'greenBalance' | 'blueBalance'> {
+  return {
+    redBalance: clamp(baseline.redBalance * (gains?.red ?? 1), 0.5, 1.5),
+    greenBalance: clamp(baseline.greenBalance * (gains?.green ?? 1), 0.5, 1.5),
+    blueBalance: clamp(baseline.blueBalance * (gains?.blue ?? 1), 0.5, 1.5),
+  };
+}
+
+function dampWhiteBalanceGains(
+  gains: NonNullable<AutoAnalyzeResult['whiteBalanceGains']>,
+  strength: number,
+  maximumRatio: number,
+): NonNullable<AutoAnalyzeResult['whiteBalanceGains']> {
+  const logs = [Math.log(gains.red), Math.log(gains.green), Math.log(gains.blue)];
+  const centeredMean = (logs[0] + logs[1] + logs[2]) / 3;
+  const centered = logs.map((value) => value - centeredMean);
+  const range = Math.max(...centered) - Math.min(...centered);
+  const ratioScale = range > 0 ? Math.log(maximumRatio) / range : 1;
+  const scale = Math.min(strength, ratioScale);
+  return {
+    red: Math.exp(centered[0] * scale),
+    green: Math.exp(centered[1] * scale),
+    blue: Math.exp(centered[2] * scale),
+  };
+}
+
+export function analyzeColorBalance(
+  imageData: ImageData,
+  isColorNegative = false,
+): Pick<AutoAnalyzeResult, 'temperature' | 'tint' | 'whiteBalanceGains'> {
   const { data, width, height } = imageData;
   if (width <= 0 || height <= 0) {
-    return { temperature: null, tint: null };
+    return { temperature: null, tint: null, whiteBalanceGains: null };
   }
 
   const firstPass = sampleColorBalance(data, width, height, WB_MAX_SATURATION);
-  const secondPass = firstPass === null
+  const secondPass = firstPass === null && !isColorNegative
     ? sampleColorBalance(data, width, height, WB_MAX_SATURATION_RELAXED)
     : null;
 
   const result = secondPass ?? firstPass;
   if (!result) {
-    return { temperature: null, tint: null };
+    return { temperature: null, tint: null, whiteBalanceGains: null };
   }
 
-  return { temperature: result.temperature, tint: result.tint };
+  // A color negative is not expected to average neutral. Accept small moves
+  // directly. Larger moves require broad neutral coverage and are damped so a
+  // colored scene cannot replace the stock/profile calibration.
+  const gains = Object.values(result.whiteBalanceGains);
+  const gainRatio = Math.max(...gains) / Math.max(Math.min(...gains), 0.01);
+  if (isColorNegative && gainRatio > NEGATIVE_WB_DIRECT_GAIN_RATIO) {
+    if (gainRatio > NEGATIVE_WB_REJECT_GAIN_RATIO || result.sampleRatio < NEGATIVE_WB_MIN_SAMPLE_RATIO) {
+      return { temperature: null, tint: null, whiteBalanceGains: null };
+    }
+    const confidence = clamp(
+      (result.sampleRatio - NEGATIVE_WB_MIN_SAMPLE_RATIO)
+      / (NEGATIVE_WB_FULL_SAMPLE_RATIO - NEGATIVE_WB_MIN_SAMPLE_RATIO),
+      0,
+      1,
+    );
+    return {
+      temperature: result.temperature,
+      tint: result.tint,
+      whiteBalanceGains: dampWhiteBalanceGains(
+        result.whiteBalanceGains,
+        0.35 + confidence * 0.3,
+        NEGATIVE_WB_DAMPED_MAX_GAIN_RATIO,
+      ),
+    };
+  }
+
+  return {
+    temperature: result.temperature,
+    tint: result.tint,
+    whiteBalanceGains: result.whiteBalanceGains,
+  };
 }
 
 export function analyzeMonochromeSuggestion(imageData: ImageData): MonochromeSuggestionAnalysis {
@@ -550,17 +706,15 @@ export function analyzeMonochromeSuggestion(imageData: ImageData): MonochromeSug
 }
 
 export function autoAnalyze(histogram: HistogramData, imageData: ImageData, isColorNegative = false): AutoAnalyzeResult {
-  const channelFloors = analyzeChannelFloors(imageData);
-  const hasSuggestedCurves = channelFloors.redFloor !== null
-    || channelFloors.greenFloor !== null
-    || channelFloors.blueFloor !== null;
   const midtone = analyzeMidtoneContrast(histogram);
 
   return {
-    ...analyzeExposure(histogram),
+    ...analyzeExposure(histogram, isColorNegative ? 'color-negative' : 'standard'),
     ...analyzeColorBalance(imageData, isColorNegative),
     contrast: midtone.contrast,
     midtoneBoostPoint: midtone.midtoneBoostPoint,
-    suggestedCurves: hasSuggestedCurves ? channelFloors : null,
+    // Per-channel black-floor curves destroy legitimate colored shadows. Auto
+    // owns tonal range, not independent RGB clipping.
+    suggestedCurves: null,
   };
 }

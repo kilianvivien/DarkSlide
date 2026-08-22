@@ -40,7 +40,17 @@ import { Sidebar } from './Sidebar';
 
 describe('Sidebar', () => {
   it('resets each adjustment section to the active profile defaults without crossing section boundaries', () => {
-    const activeProfile = FILM_PROFILES.find((profile) => profile.id === 'portra-400');
+    const sourceProfile = FILM_PROFILES.find((profile) => profile.id === 'portra-400');
+    const activeProfile = sourceProfile ? {
+      ...sourceProfile,
+      defaultSettings: createDefaultSettings({
+        ...sourceProfile.defaultSettings,
+        rotation: 90,
+        levelAngle: 1.5,
+        lensDistortion: 7,
+        crop: { x: 0.1, y: 0.12, width: 0.8, height: 0.74, aspectRatio: null },
+      }),
+    } : null;
     const onSettingsChange = vi.fn();
     expect(activeProfile).toBeTruthy();
 
@@ -106,6 +116,14 @@ describe('Sidebar', () => {
       blueBalance: activeProfile?.defaultSettings.blueBalance,
     });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Reset geometry' }));
+    expect(onSettingsChange).toHaveBeenLastCalledWith({
+      rotation: 90,
+      levelAngle: 1.5,
+      lensDistortion: 7,
+      crop: { x: 0.1, y: 0.12, width: 0.8, height: 0.74, aspectRatio: null },
+    });
+
     fireEvent.click(screen.getByRole('button', { name: /advanced/i }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset tone adjustments' }));
@@ -127,6 +145,9 @@ describe('Sidebar', () => {
     expect(onSettingsChange).toHaveBeenLastCalledWith({
       temperature: activeProfile?.defaultSettings.temperature,
       tint: activeProfile?.defaultSettings.tint,
+      redBalance: activeProfile?.defaultSettings.redBalance,
+      greenBalance: activeProfile?.defaultSettings.greenBalance,
+      blueBalance: activeProfile?.defaultSettings.blueBalance,
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand Color controls' }));

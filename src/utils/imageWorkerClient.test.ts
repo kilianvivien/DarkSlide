@@ -447,15 +447,54 @@ describe('ImageWorkerClient', () => {
       size: 100,
     }));
     client.registerDocumentReloaders('doc-1', { full, preview });
+    const previewFilmBase = {
+      sample: { r: 214, g: 148, b: 92 },
+      confidence: 0.91,
+      source: 'outer-border' as const,
+    };
+    const previewDensityBalance = {
+      scaleR: 1.42,
+      scaleG: 1,
+      scaleB: 0.73,
+      source: 'auto-histogram' as const,
+    };
+    const clientInternals = client as unknown as {
+      documentCalibration: Map<string, unknown>;
+      lastConversionAnalysis: Map<string, unknown>;
+      lastConversionAnalysisKey: Map<string, string>;
+      buildConversionAnalysisRequest: (payload: unknown) => unknown;
+    };
+    clientInternals.documentCalibration.set('doc-1', {
+      estimatedFilmBaseSample: previewFilmBase.sample,
+      estimatedFilmBase: previewFilmBase,
+      estimatedDensityBalance: previewDensityBalance,
+    });
+    clientInternals.lastConversionAnalysis.set('doc-1', {
+      type: 'conversion-analysis',
+      residualBaseOffset: [0.012, 0.004, 0.019],
+      highlightDensity: 0.27,
+      debug: {},
+    });
 
-    const exported = client.export({
+    const exportPayload = {
       ...createRenderPayload(),
       options: createExportOptions(),
-    } as never);
+    };
+    clientInternals.lastConversionAnalysisKey.set(
+      'doc-1',
+      JSON.stringify(clientInternals.buildConversionAnalysisRequest(exportPayload)),
+    );
+
+    const exported = client.export(exportPayload as never);
     await flushAsyncWork();
 
     const fullDecodeRequest = worker.postedMessages[0];
     expect(fullDecodeRequest?.type).toBe('decode');
+    expect(fullDecodeRequest?.payload).toMatchObject({
+      precomputedFilmBase: previewFilmBase,
+      precomputedFilmBaseSample: previewFilmBase.sample,
+      precomputedDensityBalance: previewDensityBalance,
+    });
     worker.onmessage?.({
       data: {
         id: fullDecodeRequest?.id,
@@ -478,6 +517,10 @@ describe('ImageWorkerClient', () => {
 
     const exportRequest = worker.postedMessages[1];
     expect(exportRequest?.type).toBe('export');
+    expect(exportRequest?.payload).toMatchObject({
+      pinnedResidualBaseOffset: [0.012, 0.004, 0.019],
+      pinnedHighlightDensity: 0.27,
+    });
     worker.onmessage?.({
       data: {
         id: exportRequest?.id,
@@ -493,6 +536,11 @@ describe('ImageWorkerClient', () => {
 
     const previewDecodeRequest = worker.postedMessages[2];
     expect(previewDecodeRequest?.type).toBe('decode');
+    expect(previewDecodeRequest?.payload).toMatchObject({
+      precomputedFilmBase: previewFilmBase,
+      precomputedFilmBaseSample: previewFilmBase.sample,
+      precomputedDensityBalance: previewDensityBalance,
+    });
     worker.onmessage?.({
       data: {
         id: previewDecodeRequest?.id,

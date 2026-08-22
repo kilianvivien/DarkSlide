@@ -912,6 +912,24 @@ export function convertImageDataColorProfile(
   return imageData;
 }
 
+export function tagPreviewImageDataColorSpace(
+  imageData: ImageData,
+  profileId: ColorProfileId,
+) {
+  const colorSpace = profileId === 'display-p3' ? 'display-p3' : 'srgb';
+  if (imageData.colorSpace === colorSpace) {
+    return imageData;
+  }
+
+  try {
+    return new ImageData(imageData.data, imageData.width, imageData.height, { colorSpace });
+  } catch {
+    // Older WebViews do not accept ImageDataSettings. They are sRGB-only, and
+    // getPreferredPreviewDisplayProfile already chooses sRGB for them.
+    return imageData;
+  }
+}
+
 export function supportsDisplayP3Canvas() {
   if (displayP3Support !== null) {
     return displayP3Support;

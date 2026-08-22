@@ -65,7 +65,7 @@ import {
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
-import { analyzeChannelFloors, analyzeColorBalance, analyzeExposure, analyzeMidtoneContrast } from './autoAnalysis';
+import { analyzeColorBalance, analyzeExposure, analyzeMidtoneContrast } from './autoAnalysis';
 import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS, resolveDustRemovalSettings } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
 import { convertImageDataColorProfile, getColorProfileIdFromName, parseInputIccProfile } from './colorProfiles';
@@ -80,7 +80,7 @@ import {
 } from './workerGeometryCache';
 import { sampleCubeLut } from './cubeLut';
 import { clamp } from './math';
-import { computeBrightPercentileSample, estimateFilmBase, mirrorFromExifOrientation } from './rawImport';
+import { computeBrightPercentileSample, estimateFilmBase, estimateFilmBaseFromDetectedFrame, mirrorFromExifOrientation } from './rawImport';
 import { usesColorChannelPipeline } from './pipelineIntent';
 import { correctLensDistortionImageData, estimateLensDistortion, mapLensCorrectedPoint, normalizeLensDistortion } from './lensCorrection';
 import { encodeExportRaster } from './exportEncoder';
@@ -249,13 +249,40 @@ function readDecodeAnalysisPreview(previews: StoredPreview[]) {
 function estimateDecodeCalibration(
   previews: StoredPreview[],
   precomputedEstimate: FilmBaseEstimate | null = null,
+  precomputedDensityBalance?: DensityBalance | null,
 ) {
+  // Full-resolution RAW reloads are temporary export machinery. If the editor
+  // supplied pinned calibration, do not let a second frame scan choose a different
+  // negative conversion from the one the user approved in the preview.
+  if (precomputedDensityBalance !== undefined) {
+    return {
+      estimate: precomputedEstimate,
+      densityBalance: precomputedDensityBalance,
+    };
+  }
+
   const imageData = readDecodeAnalysisPreview(previews);
-  const estimate = precomputedEstimate ?? (imageData
+  const initialEstimate = precomputedEstimate ?? (imageData
     ? normalizeFilmBaseEstimate(estimateFilmBase(imageData.data, imageData.width, imageData.height, 3))
     : null);
+  const detectedFrame = imageData
+    ? detectFrame(imageData.data, imageData.width, imageData.height)
+    : null;
+  const frameGuidedEstimate = imageData && detectedFrame
+    ? estimateFilmBaseFromDetectedFrame(
+      imageData.data,
+      imageData.width,
+      imageData.height,
+      4,
+      detectedFrame,
+    )
+    : null;
+  const estimate = frameGuidedEstimate
+    && frameGuidedEstimate.confidence > (initialEstimate?.confidence ?? 0)
+    ? frameGuidedEstimate
+    : initialEstimate;
   const densityBalance = estimate?.sample && imageData
-    ? computeDensityBalance(imageData, estimate.sample)
+    ? computeDensityBalance(imageData, estimate.sample, 'srgb', detectedFrame)
     : null;
   return { estimate, densityBalance };
 }
@@ -1290,8 +1317,14 @@ async function handleDecode(payload: DecodeRequest) {
     const previewStore = buildPreviewLevels(canvas, payload.displayScaleFactor);
     const precomputedEstimate = payload.precomputedFilmBase
       ?? normalizeFilmBaseEstimate(payload.precomputedFilmBaseSample ?? null);
-    const calibration = estimateDecodeCalibration(previewStore, precomputedEstimate);
-    const guarded = guardFilmBaseAgainstCrush(calibration.estimate, previewStore, calibration.densityBalance);
+    const calibration = estimateDecodeCalibration(
+      previewStore,
+      precomputedEstimate,
+      payload.precomputedDensityBalance,
+    );
+    const guarded = payload.precomputedDensityBalance !== undefined
+      ? calibration
+      : guardFilmBaseAgainstCrush(calibration.estimate, previewStore, calibration.densityBalance);
     const estimatedFilmBase = guarded.estimate;
     const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
     const estimatedDensityBalance = guarded.densityBalance;
@@ -1688,18 +1721,19 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   );
 
   const isColorNegative = payload.isColor && (payload.filmType ?? 'negative') === 'negative';
-  const channelFloors = analyzeChannelFloors(whiteBalanceImageData);
-  const hasSuggestedCurves = channelFloors.redFloor !== null
-    || channelFloors.greenFloor !== null
-    || channelFloors.blueFloor !== null;
+  const exposureMode = (payload.filmType ?? 'negative') !== 'negative'
+    ? 'standard'
+    : (!payload.isColor || analysisSettings.blackAndWhite.enabled)
+      ? 'black-and-white-negative'
+      : 'color-negative';
   const midtone = analyzeMidtoneContrast(toneHistogram);
 
   return {
-    ...analyzeExposure(toneHistogram),
+    ...analyzeExposure(toneHistogram, exposureMode),
     ...analyzeColorBalance(whiteBalanceImageData, isColorNegative),
     contrast: midtone.contrast,
     midtoneBoostPoint: midtone.midtoneBoostPoint,
-    suggestedCurves: hasSuggestedCurves ? channelFloors : null,
+    suggestedCurves: null,
   } satisfies AutoAnalyzeResult;
 }
 
@@ -1797,6 +1831,19 @@ function handleRender(payload: RenderRequest) {
     highlightDensity,
     baseSampleSource: densityInversion.baseSampleSource,
     lowConfidence: densityInversion.lowConfidence,
+    conversionAnalysis: usesProcessedPipeline && !usesProvisionalAnalysis
+      ? {
+        type: 'conversion-analysis',
+        residualBaseOffset,
+        highlightDensity: pinnedHighlightDensity,
+        debug: buildConversionParametersDebug(
+          document,
+          payload,
+          residualBaseOffset,
+          pinnedHighlightDensity,
+        ),
+      }
+      : undefined,
   } satisfies RenderResult;
 }
 
@@ -1897,11 +1944,25 @@ function handleReestimateFilmBase(payload: ReestimateFilmBaseRequest): Reestimat
     }
   }
 
-  const rawEstimate = normalizeFilmBaseEstimate(
+  const initialEstimate = normalizeFilmBaseEstimate(
     estimateFilmBase(outsideCrop.data, outsideCrop.width, outsideCrop.height, 4),
   );
+  const detectedFrame = detectFrame(imageData.data, imageData.width, imageData.height);
+  const frameGuidedEstimate = detectedFrame
+    ? estimateFilmBaseFromDetectedFrame(
+      imageData.data,
+      imageData.width,
+      imageData.height,
+      4,
+      detectedFrame,
+    )
+    : null;
+  const rawEstimate = frameGuidedEstimate
+    && frameGuidedEstimate.confidence > (initialEstimate?.confidence ?? 0)
+    ? frameGuidedEstimate
+    : initialEstimate;
   const priorDensityBalance = rawEstimate
-    ? computeDensityBalance(imageData, rawEstimate.sample)
+    ? computeDensityBalance(imageData, rawEstimate.sample, 'srgb', detectedFrame)
     : null;
   const guarded = rawEstimate
     ? applyCrushGuard(
@@ -1944,13 +2005,10 @@ function canUseHighDepthRawExport(document: StoredDocument, payload: ExportReque
   );
 }
 
-async function handleExport(payload: ExportRequest) {
-  const document = getStoredDocument(payload.documentId);
-  const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
-
-  if (canUseHighDepthRawExport(document, payload) && document.highDepthRawSource) {
-    const transformed = transformHighDepthRawSource(document.highDepthRawSource, payload.settings);
-    const residualBaseOffset = getPinnedResidualBaseOffset(
+function resolveExportAnalysis(document: StoredDocument, payload: ExportRequest) {
+  const residualBaseOffset = payload.pinnedResidualBaseOffset !== undefined
+    ? payload.pinnedResidualBaseOffset
+    : getPinnedResidualBaseOffset(
       document,
       payload.settings,
       payload.isColor,
@@ -1961,7 +2019,20 @@ async function handleExport(payload: ExportRequest) {
       payload.flareFloor ?? null,
       payload.profileId ?? null,
     );
-    const pinnedHighlightDensity = getPinnedHighlightDensity(document, payload, residualBaseOffset);
+  const highlightDensity = payload.pinnedHighlightDensity !== undefined
+    ? payload.pinnedHighlightDensity
+    : getPinnedHighlightDensity(document, payload, residualBaseOffset);
+
+  return { residualBaseOffset, highlightDensity };
+}
+
+async function handleExport(payload: ExportRequest) {
+  const document = getStoredDocument(payload.documentId);
+  const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
+
+  if (canUseHighDepthRawExport(document, payload) && document.highDepthRawSource) {
+    const transformed = transformHighDepthRawSource(document.highDepthRawSource, payload.settings);
+    const { residualBaseOffset, highlightDensity } = resolveExportAnalysis(document, payload);
 
     if (!payload.skipProcessing) {
       processFloatRaster(
@@ -1977,7 +2048,7 @@ async function handleExport(payload: ExportRequest) {
         payload.labTonalCharacterOverride,
         payload.labSaturationBias ?? 0,
         payload.labTemperatureBias ?? 0,
-        pinnedHighlightDensity,
+        highlightDensity,
         payload.inputProfileId ?? 'srgb',
         payload.outputProfileId ?? 'srgb',
         payload.profileId ?? null,
@@ -2009,18 +2080,7 @@ async function handleExport(payload: ExportRequest) {
   if (!ctx) throw new Error('Could not create export canvas.');
 
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  const residualBaseOffset = getPinnedResidualBaseOffset(
-    document,
-    payload.settings,
-    payload.isColor,
-    payload.filmType ?? 'negative',
-    payload.inputProfileId ?? 'srgb',
-    payload.outputProfileId ?? 'srgb',
-    payload.lightSourceBias ?? [1, 1, 1],
-    payload.flareFloor ?? null,
-    payload.profileId ?? null,
-  );
-  const pinnedHighlightDensity = getPinnedHighlightDensity(document, payload, residualBaseOffset);
+  const { residualBaseOffset, highlightDensity } = resolveExportAnalysis(document, payload);
 
   if (payload.skipProcessing) {
     return {
@@ -2046,7 +2106,7 @@ async function handleExport(payload: ExportRequest) {
     payload.labTonalCharacterOverride,
     payload.labSaturationBias ?? 0,
     payload.labTemperatureBias ?? 0,
-    pinnedHighlightDensity,
+    highlightDensity,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     payload.profileId ?? null,

@@ -165,7 +165,7 @@ export interface DensityBalance {
   scaleR: number;
   scaleG: number;
   scaleB: number;
-  source: 'auto-histogram' | 'film-stock-preset' | 'manual' | 'clamp-rejected';
+  source: 'auto-histogram' | 'film-stock-preset' | 'manual' | 'clamp-rejected' | 'neutral-fallback';
 }
 
 export type PointPickerMode = 'black' | 'white' | 'grey';
@@ -524,6 +524,10 @@ export interface DecodeRequest {
   highDepthRawTransfer?: 'srgb';
   precomputedFilmBaseSample?: FilmBaseSample | null;
   precomputedFilmBase?: FilmBaseEstimate | null;
+  // A path-backed RAW is decoded twice: a lightweight editor copy and the
+  // full source used for export. When present, this keeps the full decode on
+  // the exact per-channel calibration chosen for the visible preview.
+  precomputedDensityBalance?: DensityBalance | null;
   declaredColorProfileName?: string | null;
   declaredColorProfileId?: ColorProfileId | null;
   mirrorHorizontal?: boolean;
@@ -574,6 +578,7 @@ export interface RenderResult {
   // document) without recomputing the resolver.
   baseSampleSource?: FilmBaseResolvedSource;
   lowConfidence?: boolean;
+  conversionAnalysis?: ConversionAnalysisResult;
 }
 
 export interface PreparePreviewBitmapRequest {
@@ -609,6 +614,11 @@ export interface ExportRequest {
   labSaturationBias?: number;
   labTemperatureBias?: number;
   highlightDensityEstimate?: number;
+  // Filled by ImageWorkerClient from the last settled preview analysis. These
+  // values must survive the temporary full-resolution RAW reload or the export
+  // can resolve a different negative conversion than the canvas showed.
+  pinnedResidualBaseOffset?: [number, number, number] | null;
+  pinnedHighlightDensity?: number;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
   skipProcessing?: boolean;
@@ -886,6 +896,11 @@ export interface AutoAnalyzeResult {
   whitePoint: number;
   temperature: number | null;
   tint: number | null;
+  whiteBalanceGains: {
+    red: number;
+    green: number;
+    blue: number;
+  } | null;
   contrast: number | null;
   midtoneBoostPoint: { x: number; y: number } | null;
   suggestedCurves: {
