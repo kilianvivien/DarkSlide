@@ -3,6 +3,7 @@ import { ImageWorkerClient } from './imageWorkerClient';
 import { computeHighlightDensity, getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
 import { usesColorChannelPipeline } from './pipelineIntent';
 import { decodeDesktopRawForWorker, isRawExtension } from './rawImport';
+import { getAutoFrameCrop } from './frameDetection';
 import { isDesktopShell, saveExportBlob, saveToDirectory } from './fileBridge';
 import type { AutoAnalyzeResult } from '../types';
 
@@ -212,7 +213,8 @@ export async function* runBatch(
             buffer,
             fileName: entry.filename,
             mime: entry.file.type || 'application/octet-stream',
-            size: entry.file.size,
+            // Desktop entries are lazy references; their recorded size is authoritative.
+            size: entry.size || buffer.byteLength,
           });
           sourceMetadata = decoded.metadata;
           entry.estimatedFlare = decoded.estimatedFlare;
@@ -244,14 +246,15 @@ export async function* runBatch(
         };
       }
       if (entry.detectedFrame && options.autoCrop !== false) {
-        entrySettings.crop = {
-          x: entry.detectedFrame.left,
-          y: entry.detectedFrame.top,
-          width: entry.detectedFrame.right - entry.detectedFrame.left,
-          height: entry.detectedFrame.bottom - entry.detectedFrame.top,
-          aspectRatio: null,
-        };
-        entrySettings.levelAngle = entry.detectedFrame.angle;
+        // The frame is measured on the unrotated source. Map it through the
+        // shared rotation and level angle; the detected tilt is not applied.
+        entrySettings.crop = getAutoFrameCrop(
+          entry.detectedFrame,
+          entrySettings.rotation,
+          entrySettings.levelAngle,
+          sourceMetadata?.width ?? 1,
+          sourceMetadata?.height ?? 1,
+        );
       }
 
       if ((options.autoDustRemoval ?? entrySettings.dustRemoval?.autoEnabled) && entrySettings.dustRemoval?.autoEnabled) {
