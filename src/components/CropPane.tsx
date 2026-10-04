@@ -289,6 +289,7 @@ export const CropPane = memo(function CropPane({
             min={-10}
             max={10}
             step={0.1}
+            fineStep={0.1}
             valueLabel={`${levelAngle.toFixed(1)}°`}
             onChange={onLevelAngleChange}
             onInteractionStart={() => onLevelInteractionChange?.(true)}

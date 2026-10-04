@@ -1,4 +1,5 @@
 import React, { memo, useCallback, useId } from 'react';
+import { StepButtons } from './StepButtons';
 
 interface SliderProps {
   label: string;
@@ -9,6 +10,8 @@ interface SliderProps {
   onChange: (value: number) => void;
   unit?: string;
   valueLabel?: string;
+  /** Shows −/+ buttons that move the value by this amount. */
+  fineStep?: number;
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
 }
@@ -22,6 +25,7 @@ export const Slider = memo(function Slider({
   onChange,
   unit = '',
   valueLabel,
+  fineStep,
   onInteractionStart,
   onInteractionEnd,
 }: SliderProps) {
@@ -35,7 +39,22 @@ export const Slider = memo(function Slider({
     <div className="flex flex-col gap-1.5 mb-4">
       <div className="flex justify-between items-center px-1">
         <label htmlFor={inputId} className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">{label}</label>
-        <span className="text-[11px] font-mono text-zinc-500">{valueLabel ?? `${value}${unit}`}</span>
+        {fineStep !== undefined ? (
+          <StepButtons
+            label={label}
+            value={value}
+            min={min}
+            max={max}
+            step={fineStep}
+            onChange={onChange}
+            unit={unit}
+            valueLabel={valueLabel}
+            onInteractionStart={onInteractionStart}
+            onInteractionEnd={onInteractionEnd}
+          />
+        ) : (
+          <span className="text-[11px] font-mono text-zinc-500">{valueLabel ?? `${value}${unit}`}</span>
+        )}
       </div>
       <input
         id={inputId}
