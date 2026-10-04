@@ -706,7 +706,7 @@ pub fn run() {
                     .accelerator("Shift+CmdOrCtrl+O")
                     .build(app)?;
             let batch_export_item =
-                MenuItemBuilder::with_id("batch-export", "Batch Export…")
+                MenuItemBuilder::with_id("batch-export", "Export Frames…")
                     .accelerator("CmdOrCtrl+Shift+E")
                     .build(app)?;
             let close_image_item = MenuItemBuilder::with_id("close-image", "Close Image")
@@ -733,11 +733,11 @@ pub fn run() {
                     .accelerator("CmdOrCtrl+Alt+C")
                     .build(app)?;
             let toggle_adjustments_item =
-                MenuItemBuilder::with_id("toggle-adjustments-pane", "Toggle Adjustments Pane")
+                MenuItemBuilder::with_id("toggle-adjustments-pane", "Toggle Inspector")
                     .accelerator("CmdOrCtrl+\\")
                     .build(app)?;
             let toggle_profiles_item =
-                MenuItemBuilder::with_id("toggle-profiles-pane", "Toggle Profiles Pane")
+                MenuItemBuilder::with_id("toggle-profiles-pane", "Film Profiles")
                     .accelerator("CmdOrCtrl+Shift+\\")
                     .build(app)?;
             let scan_session_item =

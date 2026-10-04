@@ -708,17 +708,17 @@ export function AppShell({
         </AnimatePresence>
 
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-zinc-900/30">
-          <header className="z-20 flex h-14 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950/50 px-4 backdrop-blur-xl">
-            <div className="flex items-center gap-4">
+          <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-4 border-b border-zinc-800 bg-zinc-950/50 px-4 backdrop-blur-xl">
+            <div className="flex min-w-0 flex-1 items-center gap-4">
               <h1 className="ml-2 text-sm font-bold tracking-tight text-zinc-100">
                 Dark<span className="font-medium text-zinc-500">Slide</span>
               </h1>
               {documentState && (
                 <div className="ml-2 hidden min-w-0 items-baseline gap-3 border-l border-zinc-800 pl-4 md:flex">
-                  <span className="max-w-[260px] truncate text-sm font-medium text-zinc-200" title={documentState.source.name}>
+                  <span className="min-w-0 max-w-[260px] truncate text-sm font-medium text-zinc-200" title={documentState.source.name}>
                     {documentState.source.name}
                   </span>
-                  <span className="whitespace-nowrap font-mono text-[11px] text-zinc-500">
+                  <span className="hidden whitespace-nowrap font-mono text-[11px] text-zinc-500 xl:inline">
                     {activeFrameIndex >= 0 && tabs.length > 1 ? `${activeFrameIndex + 1} / ${tabs.length} · ` : ''}
                     {`${documentState.source.width.toLocaleString()} × ${documentState.source.height.toLocaleString()} px`}
                     {activeRoll ? ` · ${activeRoll.name}` : ''}
@@ -727,7 +727,7 @@ export function AppShell({
               )}
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex shrink-0 items-center gap-3">
               {documentState && (
                 <>
                   <div className="mr-2 flex items-center gap-1">
