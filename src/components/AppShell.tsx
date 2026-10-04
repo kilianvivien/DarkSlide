@@ -62,7 +62,7 @@ import {
   WorkspaceDocument,
 } from '../types';
 import { MaxResidentDocs } from '../utils/residentDocsStore';
-import { computePanTranslate, PanGeometry } from '../hooks/useViewportZoom';
+import { computePanTranslate, PanGeometry, WheelZoomOptions } from '../hooks/useViewportZoom';
 
 type AppShellProps = {
   usesNativeFileDialogs: boolean;
@@ -273,7 +273,7 @@ type AppShellProps = {
   onUpdateChannelChange: (channel: 'stable' | 'beta') => void;
   onCheckForUpdates: () => void;
   onCanvasClick: (event: React.MouseEvent<HTMLCanvasElement>) => Promise<void>;
-  onHandleZoomWheel: (deltaY: number, normX: number, normY: number) => void;
+  onHandleZoomWheel: (deltaY: number, normX: number, normY: number, options?: WheelZoomOptions) => void;
   onStartPan: (clientX: number, clientY: number) => void;
   onUpdatePan: (clientX: number, clientY: number, imageWidth: number, imageHeight: number, viewportWidth: number, viewportHeight: number, effectiveZoom: number) => void;
   onEndPan: () => void;
@@ -511,9 +511,16 @@ export function AppShell({
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
       const rect = element.getBoundingClientRect();
-      const normX = (event.clientX - rect.left) / rect.width;
-      const normY = (event.clientY - rect.top) / rect.height;
-      onHandleZoomWheel(event.deltaY, normX, normY);
+      // Without a measurable box (not laid out yet), anchor at the centre.
+      const normX = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5;
+      const normY = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0.5;
+      // Normalise line- and page-mode deltas (Firefox mouse wheels) to pixels.
+      const deltaScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
+      onHandleZoomWheel(event.deltaY * deltaScale, normX, normY, {
+        containerWidth: rect.width > 0 ? rect.width : undefined,
+        containerHeight: rect.height > 0 ? rect.height : undefined,
+        pinch: event.ctrlKey,
+      });
     };
 
     element.addEventListener('wheel', handleWheel, { passive: false });

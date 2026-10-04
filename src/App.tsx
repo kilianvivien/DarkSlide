@@ -12,7 +12,7 @@ import { useDocumentTabs } from './hooks/useDocumentTabs';
 import { useRenderQueue } from './hooks/useRenderQueue';
 import { useWorkspaceCommands } from './hooks/useWorkspaceCommands';
 import { useCustomLightSources } from './hooks/useCustomLightSources';
-import { useViewportZoom } from './hooks/useViewportZoom';
+import { useViewportZoom, WheelZoomOptions } from './hooks/useViewportZoom';
 import { useRolls } from './hooks/useRolls';
 import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
@@ -619,9 +619,9 @@ export default function App() {
     }, delayMs);
   }, [finishZoomInteraction]);
 
-  const handleZoomWheel = useCallback((deltaY: number, normX: number, normY: number) => {
+  const handleZoomWheel = useCallback((deltaY: number, normX: number, normY: number, options?: WheelZoomOptions) => {
     beginZoomInteraction();
-    handleZoomWheelRaw(deltaY, normX, normY);
+    handleZoomWheelRaw(deltaY, normX, normY, options);
     scheduleZoomInteractionFinish(200);
   }, [beginZoomInteraction, handleZoomWheelRaw, scheduleZoomInteractionFinish]);
 
