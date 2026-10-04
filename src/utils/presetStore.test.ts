@@ -3,6 +3,24 @@ import { createDefaultSettings } from '../constants';
 import { createPresetBackupFile, validateDarkslideFile, validatePresetBackupFile } from './presetStore';
 
 describe('validateDarkslideFile', () => {
+  it('retains explicit film calibration in serialized custom presets', () => {
+    const densityBalance = { scaleR: 1, scaleG: 1, scaleB: 0.6, source: 'film-stock-preset' };
+    const profile = {
+      id: 'custom-calibrated', name: 'Gold look', type: 'color',
+      defaultSettings: { ...createDefaultSettings(), densityBalance, filmBaseSampleProfileId: 'srgb' },
+    };
+    expect(validateDarkslideFile(JSON.parse(JSON.stringify({ darkslideVersion: '1.0.0', profile })))?.profile.defaultSettings).toMatchObject({ densityBalance, filmBaseSampleProfileId: 'srgb' });
+  });
+
+  it.each([0, -1, NaN, Infinity])('rejects invalid persisted film calibration: %s', (scaleB) => {
+    expect(validateDarkslideFile({
+      darkslideVersion: '1.0.0',
+      profile: { id: 'custom-invalid', name: 'Invalid', type: 'color', defaultSettings: {
+        ...createDefaultSettings(), densityBalance: { scaleR: 1, scaleG: 1, scaleB, source: 'manual' },
+      } },
+    })).toBeNull();
+  });
+
   it('accepts a valid preset file payload', () => {
     expect(validateDarkslideFile({
       darkslideVersion: '1.0.0',

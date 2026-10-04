@@ -72,9 +72,12 @@ describe('useRolls', () => {
     });
 
     act(() => {
-      hookValue?.applyFilmBaseToRoll({ r: 245, g: 244, b: 243 }, rollId);
+      hookValue?.applyFilmBaseToRoll({ r: 245, g: 244, b: 243 }, rollId, 'adobe-rgb');
     });
 
     expect(hookValue?.rolls.get(rollId)?.filmBaseSample).toEqual({ r: 245, g: 244, b: 243 });
+    expect(hookValue?.rolls.get(rollId)?.filmBaseSampleProfileId).toBe('adobe-rgb');
+    const stored = JSON.parse(localStorage.getItem('darkslide_rolls_v2')!);
+    expect(stored.rolls[0].filmBaseSampleProfileId).toBe('adobe-rgb');
   });
 });

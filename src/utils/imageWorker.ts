@@ -1,5 +1,7 @@
 /// <reference lib="webworker" />
 
+import { cubeLutSignature } from './cubeLut';
+
 import UTIF from 'utif';
 import {
   AutoAnalyzeRequest,
@@ -49,6 +51,7 @@ import {
   buildEmptyHistogram,
   computeResidualBaseOffset,
   computeDensityBalance,
+  computeRawDensityBalance,
   computeHighlightDensity,
   getExtensionFromFormat,
   getFilmBaseBalance,
@@ -438,6 +441,8 @@ function getPinnedResidualBaseOffset(
 
   const cacheKey = JSON.stringify([
     settings.filmBaseSample,
+    settings.filmBaseSampleProfileId ?? null,
+    settings.densityBalance ?? null,
     settings.flareCorrection ?? 50,
     isColor,
     filmType,
@@ -511,6 +516,7 @@ function getPinnedHighlightDensity(
     payload.labTonalCharacterOverride ?? null,
     payload.labSaturationBias ?? 0,
     payload.labTemperatureBias ?? 0,
+    payload.cubeLut ? cubeLutSignature(payload.cubeLut) : null,
   ]);
   const cached = document.highlightDensityCache.get(cacheKey);
   if (cached !== undefined) {
@@ -575,6 +581,7 @@ function buildConversionParametersDebug(
     payload.outputProfileId ?? 'srgb',
     payload.flareFloor ?? null,
     (payload.settings.flareCorrection ?? 50) / 100,
+    payload.lightSourceBias ?? [1, 1, 1],
   );
 
   return {
@@ -1107,6 +1114,7 @@ function applyAnalysisInversionStage(
     outputProfileId,
     options.flareFloor ?? null,
     flareStrength,
+    lightSourceBias,
   );
 
   for (let index = 0; index < data.length; index += 4) {
@@ -1224,7 +1232,9 @@ async function handleDecode(payload: DecodeRequest) {
     const previewStore = buildPreviewLevels(canvas, payload.displayScaleFactor);
     const rawEstimate = payload.precomputedFilmBase
       ?? normalizeFilmBaseEstimate(payload.precomputedFilmBaseSample ?? estimateCanvasFilmBase(canvas));
-    const priorDensityBalance = estimateCanvasDensityBalance(canvas, rawEstimate?.sample ?? null);
+    const priorDensityBalance = highDepthRawSource && rawEstimate
+      ? computeRawDensityBalance(highDepthRawSource.data, width, height, rawEstimate.sample, payload.declaredColorProfileId ?? 'srgb')
+      : estimateCanvasDensityBalance(canvas, rawEstimate?.sample ?? null);
     const guarded = guardFilmBaseAgainstCrush(rawEstimate, previewStore, priorDensityBalance);
     const estimatedFilmBase = guarded.estimate;
     const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
@@ -1237,6 +1247,8 @@ async function handleDecode(payload: DecodeRequest) {
       size: payload.size,
       width: canvas.width,
       height: canvas.height,
+      decoderColorProfileName: payload.declaredColorProfileName ?? null,
+      decoderColorProfileId: payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName),
     };
 
     documents.set(payload.documentId, {
@@ -1692,6 +1704,7 @@ function handleRender(payload: RenderRequest) {
     payload.outputProfileId ?? 'srgb',
     payload.flareFloor ?? null,
     (payload.settings.flareCorrection ?? 50) / 100,
+    payload.lightSourceBias ?? [1, 1, 1],
   );
 
   return {

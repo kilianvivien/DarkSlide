@@ -1,6 +1,6 @@
 import React, { Dispatch, MutableRefObject, SetStateAction, useCallback, useEffect } from 'react';
 import { flushSync } from 'react-dom';
-import { createDefaultSettings, MAX_OPEN_TABS, resolveLightSourceIdForProfile } from '../constants';
+import { MAX_OPEN_TABS, resolveLightSourceIdForProfile } from '../constants';
 import { useFileImport } from './useFileImport';
 import { appendDiagnostic, getDiagnosticsReport } from '../utils/diagnostics';
 import { pushToast } from '../utils/toastStore';
@@ -23,7 +23,8 @@ import { notifyExportFinished, primeExportNotificationsPermission } from '../uti
 import { clamp } from '../utils/math';
 import { computeHighlightDensity, resolveDensityInversionParams } from '../utils/imagePipeline';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
-import { isRawWorkspaceDocument, rendersMonochrome, shouldUseDirectRawFilmBase, usesColorChannelPipeline } from '../utils/pipelineIntent';
+import { buildProfileSettingsForDocument, createPresetRecipe } from '../utils/presetRecipe';
+import { rendersMonochrome, usesColorChannelPipeline } from '../utils/pipelineIntent';
 import {
   BatchJobEntry,
 } from '../utils/batchProcessor';
@@ -72,14 +73,6 @@ function buildQuickExportCrop(crop: ConversionSettings['crop']) {
   };
 }
 
-const DEFAULT_PRESET_CROP: ConversionSettings['crop'] = {
-  x: 0,
-  y: 0,
-  width: 1,
-  height: 1,
-  aspectRatio: null,
-};
-
 function preserveCurrentFraming(
   nextSettings: ConversionSettings,
   currentSettings: ConversionSettings | null | undefined,
@@ -91,43 +84,6 @@ function preserveCurrentFraming(
   nextSettings.crop = structuredClone(currentSettings.crop);
   nextSettings.rotation = currentSettings.rotation;
   nextSettings.levelAngle = currentSettings.levelAngle;
-  return nextSettings;
-}
-
-function buildProfileSettingsForDocument(
-  profile: FilmProfile,
-  currentDocument: WorkspaceDocument | null,
-) {
-  const rawImportProfile = currentDocument?.rawImportProfile ?? null;
-  const usesRawImportProfileDefaults = Boolean(rawImportProfile && profile.id === rawImportProfile.id);
-  const profileDefaults = usesRawImportProfileDefaults && rawImportProfile
-    ? rawImportProfile.defaultSettings
-    : profile.defaultSettings;
-  const nextSettings = createDefaultSettings(structuredClone(profileDefaults));
-  const activeFilmBaseSample = currentDocument?.settings.filmBaseSample ?? null;
-  const scanFilmBaseSample = activeFilmBaseSample
-    ?? currentDocument?.estimatedFilmBaseSample
-    ?? null;
-  const shouldUseDirectBase = currentDocument
-    ? shouldUseDirectRawFilmBase(isRawWorkspaceDocument(currentDocument), profile, nextSettings)
-    : false;
-
-  if (!usesRawImportProfileDefaults && shouldUseDirectBase && !nextSettings.filmBaseSample && scanFilmBaseSample) {
-    nextSettings.filmBaseSample = structuredClone(scanFilmBaseSample);
-    if (activeFilmBaseSample && currentDocument?.settings.filmBaseSampleSource) {
-      nextSettings.filmBaseSampleSource = currentDocument.settings.filmBaseSampleSource;
-    }
-  } else if (currentDocument && isRawWorkspaceDocument(currentDocument) && !shouldUseDirectBase) {
-    // Presets change the look, not the physical base reference of this scan:
-    // a sample the user (or roll) already established on a negative survives,
-    // only estimate-driven flows fall back to the confidence-aware estimate.
-    const keepsActiveSample = (profile.filmType ?? 'negative') === 'negative' && activeFilmBaseSample;
-    nextSettings.filmBaseSample = keepsActiveSample ? structuredClone(activeFilmBaseSample) : null;
-    if (keepsActiveSample && currentDocument.settings.filmBaseSampleSource) {
-      nextSettings.filmBaseSampleSource = currentDocument.settings.filmBaseSampleSource;
-    }
-  }
-
   return nextSettings;
 }
 
@@ -879,9 +835,20 @@ export function useWorkspaceCommands({
       : undefined;
 
     const nextSettings = buildProfileSettingsForDocument(profile, documentState);
-    if (profile.includesFraming === false) {
-      preserveCurrentFraming(nextSettings, documentState?.settings);
-    }
+    appendDiagnostic({
+      level: 'info',
+      code: 'PRESET_APPLIED',
+      message: profile.name,
+      context: {
+        documentId: documentState?.id ?? null,
+        presetId: profile.id,
+        previousProfileId: documentState?.profileId ?? null,
+        changedSettings: Object.keys(nextSettings).filter((key) => (
+          JSON.stringify(nextSettings[key as keyof ConversionSettings])
+          !== JSON.stringify(documentState?.settings[key as keyof ConversionSettings])
+        )).join(', '),
+      },
+    });
 
     updateDocument((current) => ({
       ...current,
@@ -905,44 +872,21 @@ export function useWorkspaceCommands({
     saveFraming?: boolean;
   }) => {
     if (!documentState) return;
-    const presetSettings = structuredClone(documentState.settings);
-    if (!metadata?.saveFraming) {
-      presetSettings.crop = structuredClone(DEFAULT_PRESET_CROP);
-      presetSettings.rotation = 0;
-      presetSettings.levelAngle = 0;
-    }
-
-    const newPreset = savePreset({
+    const newPreset = savePreset(createPresetRecipe(documentState, activeProfile, {
+      ...metadata,
       id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
         ? `custom-${crypto.randomUUID()}`
         : `custom-${Date.now()}`,
-      version: 1,
       name,
-      type: activeProfile.type,
-      filmType: activeProfile.filmType,
-      category: activeProfile.category,
-      description: 'Custom DarkSlide preset',
-      defaultSettings: presetSettings,
-      // A LUT preset's whole conversion lives in its table, so saving a new
-      // preset from one has to carry it over — without it the saved preset
-      // falls back to DarkSlide's own inversion and looks nothing like what
-      // was on screen when the user hit Save.
-      lut: activeProfile.lut ?? null,
-      isCustom: true,
-      tags: activeProfile.lut ? [...savePresetTags, 'lut'] : savePresetTags,
-      filmStock: metadata?.filmStock?.trim() ? metadata.filmStock.trim() : null,
-      scannerType: metadata?.scannerType ?? null,
-      includesFraming: Boolean(metadata?.saveFraming),
-      lightSourceId: documentState.lightSourceId ?? null,
-      folderId: metadata?.folderId ?? null,
-      labStyleId: documentState.labStyleId ?? null,
+    }, savePresetTags));
+    // Saving a library entry does not edit the document or mark it as exported.
+    appendDiagnostic({
+      level: 'info',
+      code: 'PRESET_SAVED',
+      message: name,
+      context: { documentId: documentState.id, presetId: newPreset.id, sourceProfileId: activeProfile.id },
     });
-    updateDocument((current) => ({
-      ...current,
-      profileId: newPreset.id,
-      dirty: false,
-    }));
-  }, [activeProfile.category, activeProfile.filmType, activeProfile.lut, activeProfile.type, documentState, savePreset, savePresetTags, updateDocument]);
+  }, [activeProfile, documentState, savePreset, savePresetTags]);
 
   const handleImportPreset = useCallback((profile: FilmProfile, options?: { overwriteId?: string; renameTo?: string }) => {
     importPreset({
@@ -1392,6 +1336,7 @@ export function useWorkspaceCommands({
           handleSettingsChange({
             filmBaseSample: sample,
             filmBaseSampleSource: 'manual',
+            filmBaseSampleProfileId: documentState.colorManagement.outputProfileId,
           });
         } else {
           handleSettingsChange(getFilmBaseCorrectionSettings(sample));
@@ -1479,6 +1424,9 @@ export function useWorkspaceCommands({
         ...canvasSize,
       },
       document: documentState,
+      activeProfile,
+      activeLabStyle,
+      lightSourceProfile: getLightSourceProfile(documentState?.lightSourceId ?? null),
       diagnostics: getDiagnosticsReport(),
       pipeline: {
         activeDocumentId: activeDocumentIdRef.current,
@@ -1499,6 +1447,7 @@ export function useWorkspaceCommands({
             outputProfileId,
             documentState.estimatedFlare ?? null,
             (documentState.settings.flareCorrection ?? 50) / 100,
+            getLightSourceProfile(documentState.lightSourceId ?? null).spectralBias,
           );
           return {
             activePipeline: 'standard',
@@ -1538,7 +1487,7 @@ export function useWorkspaceCommands({
     } catch {
       setError('Could not copy debug info to the clipboard.');
     }
-  }, [activeDocumentIdRef, activeProfile.filmType, activeProfile.id, activeProfile.type, activeRenderRequestRef, canvasSize, documentState, fitScale, fullRenderTargetDimension, hasVisiblePreview, importSessionRef, renderBackendDiagnostics, setError, showTransientNotice, targetMaxDimension]);
+  }, [activeDocumentIdRef, activeProfile, activeLabStyle, getLightSourceProfile, activeRenderRequestRef, canvasSize, documentState, fitScale, fullRenderTargetDimension, hasVisiblePreview, importSessionRef, renderBackendDiagnostics, setError, showTransientNotice, targetMaxDimension]);
 
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();

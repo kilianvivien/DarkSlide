@@ -223,6 +223,9 @@ export interface LightSourceProfile {
 }
 
 export interface ConversionSettings {
+  // Explicit film calibration survives renaming/saving a profile. Missing
+  // values retain the legacy stock-ID lookup and per-image automatic analysis.
+  densityBalance?: DensityBalance | null;
   exposure: number;
   contrast: number;
   saturation: number;
@@ -246,6 +249,9 @@ export interface ConversionSettings {
   // with persisted presets/sidecars). 'roll' marks a base shared from another
   // frame in the roll rather than picked directly on this frame.
   filmBaseSampleSource?: 'manual' | 'roll';
+  // Picker samples are encoded in the working profile at pick time. Retain it
+  // so changing the output/export profile cannot reinterpret the RGB triple.
+  filmBaseSampleProfileId?: ColorProfileId;
   residualBaseCorrection?: boolean;
   blackAndWhite: BlackAndWhiteSettings;
   sharpen: SharpenSettings;
@@ -304,6 +310,7 @@ export interface Roll {
   date: string | null;
   notes: string;
   filmBaseSample: FilmBaseSample | null;
+  filmBaseSampleProfileId?: ColorProfileId;
   createdAt: number;
   directory: string | null;
 }
@@ -368,6 +375,7 @@ export interface FilmProfile {
   filmStock?: string | null;
   scannerType?: ScannerType | null;
   includesFraming?: boolean;
+  includesImageRepairs?: boolean;
   lightSourceId?: string | null;
   folderId?: string | null;
   labStyleId?: string | null;

@@ -29,7 +29,6 @@ import {
   decodeDesktopRawForWorker,
   rotationFromExifOrientation,
 } from '../utils/rawImport';
-import { shouldUseDirectRawFilmBase } from '../utils/pipelineIntent';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { getSidecarCandidatePaths, parseSidecar } from '../utils/sidecarSettings';
 
@@ -282,7 +281,7 @@ export function useFileImport({
         filmBaseSample: rawImport
           ? null
           : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : activeImportProfile.defaultSettings.filmBaseSample),
-        ...(!rawImport && roll?.filmBaseSample ? { filmBaseSampleSource: 'roll' as const } : {}),
+        ...(!rawImport && roll?.filmBaseSample ? { filmBaseSampleSource: 'roll' as const, filmBaseSampleProfileId: roll.filmBaseSampleProfileId } : {}),
       },
       colorManagement: DEFAULT_COLOR_MANAGEMENT,
       estimatedFlare: null,
@@ -322,6 +321,7 @@ export function useFileImport({
         filmBaseSample: rawImport
           ? null
           : (roll?.filmBaseSample ? structuredClone(roll.filmBaseSample) : activeImportProfile.defaultSettings.filmBaseSample),
+        ...(!rawImport && roll?.filmBaseSample ? { filmBaseSampleSource: 'roll' as const, filmBaseSampleProfileId: roll.filmBaseSampleProfileId } : {}),
       };
       let rawImportProfile: FilmProfile | null = null;
 
@@ -347,19 +347,15 @@ export function useFileImport({
           ));
           if (preferredImportProfile) {
             const preferredSettings = createDefaultSettings(structuredClone(activeImportProfile.defaultSettings));
-            const shouldUseDirectBase = shouldUseDirectRawFilmBase(true, activeImportProfile, preferredSettings);
             initialSettings = {
               ...preferredSettings,
-              filmBaseSample: shouldUseDirectBase
-                ? (preferredSettings.filmBaseSample
-                  ? structuredClone(preferredSettings.filmBaseSample)
-                  : (estimatedFilmBase ? structuredClone(estimatedFilmBase) : null))
-                : null,
+              rotation: rotationFromExifOrientation(rawResult.orientation),
             };
           } else {
             initialSettings = rawStartupSettings;
           }
           rawImportProfile = createRawImportProfile(rawStartupProfile, rawStartupSettings);
+          if (!preferredImportProfile) initialSettings = structuredClone(rawImportProfile.defaultSettings);
 
           if (estimatedFilmBase) {
             appendDiagnostic({

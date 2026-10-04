@@ -33,6 +33,7 @@ function isValidPresetFolder(value: unknown): value is PresetFolder {
 function isValidProfile(value: unknown): value is FilmProfile {
   if (!isRecord(value)) return false;
   const defaultSettings = value.defaultSettings;
+  const densityBalance = isRecord(defaultSettings) ? defaultSettings.densityBalance : null;
   return (
     typeof value.id === 'string'
     && typeof value.name === 'string'
@@ -43,6 +44,17 @@ function isValidProfile(value: unknown): value is FilmProfile {
     && isRecord(defaultSettings)
     && typeof defaultSettings.exposure === 'number'
     && typeof defaultSettings.contrast === 'number'
+    && (defaultSettings.filmBaseSampleProfileId === undefined
+      || ['srgb', 'display-p3', 'adobe-rgb', 'linear'].includes(String(defaultSettings.filmBaseSampleProfileId)))
+    && (densityBalance == null || (
+      isRecord(densityBalance)
+      && ['scaleR', 'scaleG', 'scaleB'].every((key) => (
+        typeof densityBalance[key] === 'number'
+        && Number.isFinite(densityBalance[key])
+        && densityBalance[key] > 0
+      ))
+      && ['auto-histogram', 'film-stock-preset', 'manual', 'clamp-rejected'].includes(String(densityBalance.source))
+    ))
   );
 }
 

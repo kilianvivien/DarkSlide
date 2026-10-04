@@ -2,6 +2,7 @@ import { FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from 
 import { ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
 import { getColorProfileIdFromName } from './colorProfiles';
 import { clamp } from './math';
+import { preserveProfileCalibration } from './presetRecipe';
 
 export const RAW_IMPORT_PROFILE_ID = 'raw-import-result';
 
@@ -636,33 +637,19 @@ export function getFilmBaseExposure(sample: FilmBaseSample | null, targetWhitePo
 
 export function buildRawInitialSettings(
   baseSettings: ConversionSettings,
-  rgb: ArrayLike<number>,
-  width: number,
-  height: number,
+  _rgb: ArrayLike<number>,
+  _width: number,
+  _height: number,
   orientation: number | null | undefined,
-  estimatedFilmBase: FilmBaseSample | FilmBaseEstimate | null = estimateFilmBase(rgb, width, height, 3),
+  _estimatedFilmBase: FilmBaseSample | FilmBaseEstimate | null = null,
 ) {
   const nextSettings = structuredClone(baseSettings);
 
-  // A distrusted estimate must not seed the white balance — a wrong base start
-  // compounds the wrong reference (diagnosis §"fallback behavior is too eager").
-  // Bare samples carry no confidence signal and are treated as trusted.
-  const estimate = estimatedFilmBase && typeof estimatedFilmBase === 'object' && 'sample' in estimatedFilmBase
-    ? estimatedFilmBase
-    : null;
-  const bareSample = estimate ? estimate.sample : (estimatedFilmBase as FilmBaseSample | null);
-  const lowConfidence = estimate != null
-    && (estimate.confidence < FILM_BASE_CONFIDENCE.reject || estimate.source === 'low-confidence');
-  const channelBalance = lowConfidence
-    ? { redBalance: 1, greenBalance: 1, blueBalance: 1 }
-    : getFilmBaseChannelBalance(bareSample);
-
+  // Film-base color is already removed by density inversion. Applying the
+  // legacy complement-derived channel gains here compensates it twice.
   return {
     ...nextSettings,
     filmBaseSample: null,
-    redBalance: clamp(nextSettings.redBalance * channelBalance.redBalance, 0.01, 8),
-    greenBalance: clamp(nextSettings.greenBalance * channelBalance.greenBalance, 0.01, 8),
-    blueBalance: clamp(nextSettings.blueBalance * channelBalance.blueBalance, 0.01, 8),
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
 }
@@ -673,6 +660,6 @@ export function createRawImportProfile(baseProfile: FilmProfile, settings: Conve
     id: RAW_IMPORT_PROFILE_ID,
     name: 'Raw Import Result',
     description: 'Exact starting point produced during RAW import.',
-    defaultSettings: structuredClone(settings),
+    defaultSettings: preserveProfileCalibration(settings, baseProfile),
   } satisfies FilmProfile;
 }

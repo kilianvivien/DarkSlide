@@ -18,7 +18,7 @@ import {
   TonalCharacter,
 } from '../types';
 import { DENSITY_TO_POSITIVE_GAMMA, FILM_BASE_CONFIDENCE, FILM_STOCK_DENSITY_PRESETS, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS } from '../constants';
-import { convertRgbBetweenProfiles, decodeProfileChannel, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
+import { convertRgbBetweenProfiles, decodeProfileChannel, encodeProfileChannel, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
 import { sampleCubeLut } from './cubeLut';
 import { clamp } from './math';
 
@@ -382,9 +382,15 @@ function resolveDensityBalance(
   isColor: boolean,
   profileId?: string | null,
   estimatedDensityBalance?: DensityBalance | null,
+  explicitBalance?: DensityBalance | null,
 ): DensityBalance {
   if (!isColor) {
     return { scaleR: 1, scaleG: 1, scaleB: 1, source: 'film-stock-preset' };
+  }
+
+  if (explicitBalance && [explicitBalance.scaleR, explicitBalance.scaleG, explicitBalance.scaleB]
+    .every((scale) => Number.isFinite(scale) && scale > 0)) {
+    return explicitBalance;
   }
 
   const preset = profileId ? FILM_STOCK_DENSITY_PRESETS[profileId] : undefined;
@@ -411,9 +417,9 @@ function convertEstimatedFilmBaseSampleToWorkingProfile(
   );
 
   return {
-    r: clamp(Math.round(r * 255), 1, 255),
-    g: clamp(Math.round(g * 255), 1, 255),
-    b: clamp(Math.round(b * 255), 1, 255),
+    r: clamp(r * 255, 1, 255),
+    g: clamp(g * 255, 1, 255),
+    b: clamp(b * 255, 1, 255),
   };
 }
 
@@ -422,16 +428,21 @@ function sampleChannelToDensity(
   outputProfileId: ColorProfileId,
   flareFloor: number,
   flareStrength: number,
+  lightSourceBias = 1,
 ) {
   // Run the base sample through the same flare subtraction and transfer
   // decode as the pixels so the film base lands exactly at density zero.
-  const corrected = clamp(encodedSampleValue / 255 - flareFloor * flareStrength, 1 / 255, 1);
+  const corrected = applyLightSourceCorrection(
+    applyFlareCorrection(encodedSampleValue / 255, flareFloor, flareStrength),
+    lightSourceBias,
+    outputProfileId,
+  );
   return -Math.log10(clamp(decodeProfileChannel(outputProfileId, corrected), DENSITY_EPSILON, 1));
 }
 
 export function resolveDensityInversionParams(
   settings: Pick<ConversionSettings, 'filmBaseSample' | 'filmBaseSampleSource' | 'flareCorrection'>
-    & Partial<Pick<ConversionSettings, 'blackAndWhite'>>,
+    & Partial<Pick<ConversionSettings, 'blackAndWhite' | 'densityBalance' | 'filmBaseSampleProfileId'>>,
   isColor: boolean,
   filmType: FilmProfileType,
   profileId: string | null = null,
@@ -441,6 +452,7 @@ export function resolveDensityInversionParams(
   outputProfileId: ColorProfileId = 'srgb',
   flareFloor: [number, number, number] | null = null,
   flareStrength = 0.5,
+  lightSourceBias: [number, number, number] = [1, 1, 1],
 ): DensityInversionParams {
   if (filmType !== 'negative') {
     return DISABLED_DENSITY_INVERSION;
@@ -456,7 +468,9 @@ export function resolveDensityInversionParams(
   const convertedEstimate = estimate
     ? convertEstimatedFilmBaseSampleToWorkingProfile(estimate.sample, inputProfileId, outputProfileId)
     : null;
-  const manualSample = settings.filmBaseSample ?? null;
+  const manualSample = settings.filmBaseSample && settings.filmBaseSampleProfileId
+    ? convertEstimatedFilmBaseSampleToWorkingProfile(settings.filmBaseSample, settings.filmBaseSampleProfileId, outputProfileId)
+    : settings.filmBaseSample ?? null;
   const usingEstimateSample = !manualSample && convertedEstimate != null;
   const resolvedSample = manualSample ?? convertedEstimate ?? null;
   const flareFloorNormalized: [number, number, number] = flareFloor
@@ -464,9 +478,9 @@ export function resolveDensityInversionParams(
     : [0, 0, 0];
   const baseDensity: [number, number, number] = resolvedSample
     ? [
-      sampleChannelToDensity(resolvedSample.r, outputProfileId, flareFloorNormalized[0], flareStrength),
-      sampleChannelToDensity(resolvedSample.g, outputProfileId, flareFloorNormalized[1], flareStrength),
-      sampleChannelToDensity(resolvedSample.b, outputProfileId, flareFloorNormalized[2], flareStrength),
+      sampleChannelToDensity(resolvedSample.r, outputProfileId, flareFloorNormalized[0], flareStrength, lightSourceBias[0]),
+      sampleChannelToDensity(resolvedSample.g, outputProfileId, flareFloorNormalized[1], flareStrength, lightSourceBias[1]),
+      sampleChannelToDensity(resolvedSample.b, outputProfileId, flareFloorNormalized[2], flareStrength, lightSourceBias[2]),
     ]
     : [0, 0, 0];
 
@@ -476,9 +490,11 @@ export function resolveDensityInversionParams(
   // confidence, and blend halfway toward luminance at high confidence. Manual
   // B&W samples are left byte-identical (the user's explicit reference).
   if (monochrome && usingEstimateSample && resolvedSample) {
-    const lumValue = 0.299 * resolvedSample.r + 0.587 * resolvedSample.g + 0.114 * resolvedSample.b;
-    const lumFlareFloor = 0.299 * flareFloorNormalized[0] + 0.587 * flareFloorNormalized[1] + 0.114 * flareFloorNormalized[2];
-    const baseDensityLum = sampleChannelToDensity(lumValue, outputProfileId, lumFlareFloor, flareStrength);
+    const corrected = [resolvedSample.r, resolvedSample.g, resolvedSample.b].map((value, channel) => (
+      applyLightSourceCorrection(applyFlareCorrection(value / 255, flareFloorNormalized[channel], flareStrength), lightSourceBias[channel], outputProfileId)
+    ));
+    const lumValue = 255 * (0.299 * corrected[0] + 0.587 * corrected[1] + 0.114 * corrected[2]);
+    const baseDensityLum = sampleChannelToDensity(lumValue, outputProfileId, 0, 0);
     if (estimate!.confidence < FILM_BASE_CONFIDENCE.accept) {
       baseDensity[0] = baseDensityLum;
       baseDensity[1] = baseDensityLum;
@@ -492,7 +508,7 @@ export function resolveDensityInversionParams(
 
   // A monochrome render has no dye-layer contrast mismatch to normalize —
   // per-channel density scales only tilt the channels feeding the B&W mix.
-  const densityBalance = resolveDensityBalance(isColor && !monochrome, profileId, estimatedDensityBalance);
+  const densityBalance = resolveDensityBalance(isColor && !monochrome, profileId, estimatedDensityBalance, settings.densityBalance);
   const densityScaleLowConfidence = isColor && !monochrome && densityBalance.source === 'clamp-rejected';
 
   // Below the reject gate (or an explicitly refused estimate) the evidence is
@@ -628,6 +644,28 @@ export function computeDensityBalance(
   profileId: ColorProfileId = 'srgb',
 ): DensityBalance {
   const { data, width, height } = imageData;
+  return computeRasterDensityBalance(data, width, height, 4, 255, filmBaseSample, profileId);
+}
+
+export function computeRawDensityBalance(
+  rgb: Uint16Array,
+  width: number,
+  height: number,
+  filmBaseSample: FilmBaseSample,
+  profileId: ColorProfileId = 'srgb',
+): DensityBalance {
+  return computeRasterDensityBalance(rgb, width, height, 3, 65535, filmBaseSample, profileId);
+}
+
+function computeRasterDensityBalance(
+  data: ArrayLike<number>,
+  width: number,
+  height: number,
+  channels: 3 | 4,
+  channelMax: number,
+  filmBaseSample: FilmBaseSample,
+  profileId: ColorProfileId,
+): DensityBalance {
   const baseR = clamp(decodeProfileChannel(profileId, filmBaseSample.r / 255), DENSITY_EPSILON, 1);
   const baseG = clamp(decodeProfileChannel(profileId, filmBaseSample.g / 255), DENSITY_EPSILON, 1);
   const baseB = clamp(decodeProfileChannel(profileId, filmBaseSample.b / 255), DENSITY_EPSILON, 1);
@@ -637,10 +675,10 @@ export function computeDensityBalance(
   const totalPixels = width * height;
   const sampleStride = Math.max(1, Math.floor(totalPixels / 50_000));
 
-  for (let index = 0; index < data.length; index += 4 * sampleStride) {
-    const r = decodeProfileChannel(profileId, data[index] / 255);
-    const g = decodeProfileChannel(profileId, data[index + 1] / 255);
-    const b = decodeProfileChannel(profileId, data[index + 2] / 255);
+  for (let index = 0; index < data.length; index += channels * sampleStride) {
+    const r = decodeProfileChannel(profileId, data[index] / channelMax);
+    const g = decodeProfileChannel(profileId, data[index + 1] / channelMax);
+    const b = decodeProfileChannel(profileId, data[index + 2] / channelMax);
 
     if (r < 0.02 || g < 0.02 || b < 0.02) continue;
     if (r > 0.98 && g > 0.98 && b > 0.98) continue;
@@ -705,8 +743,10 @@ function applyFlareCorrection(value: number, floor: number, strength: number) {
   return Math.max(0, value - floor * strength);
 }
 
-export function applyLightSourceCorrection(value: number, bias: number) {
-  return clamp(value / Math.max(bias, 0.05), 0, 1);
+export function applyLightSourceCorrection(value: number, bias: number, profile: ColorProfileId = 'srgb') {
+  if (bias === 1) return clamp(value, 0, 1);
+  // Spectral gains act on light/transmittance, not gamma-encoded RGB.
+  return encodeProfileChannel(profile, decodeProfileChannel(profile, value) / Math.max(bias, 0.05));
 }
 
 export function applyInversionStage(
@@ -726,9 +766,9 @@ export function applyInversionStage(
   g = applyFlareCorrection(g, flareFloorNormalized[1], flareStrength);
   b = applyFlareCorrection(b, flareFloorNormalized[2], flareStrength);
 
-  r = applyLightSourceCorrection(r, lightSourceBias[0]);
-  g = applyLightSourceCorrection(g, lightSourceBias[1]);
-  b = applyLightSourceCorrection(b, lightSourceBias[2]);
+  r = applyLightSourceCorrection(r, lightSourceBias[0], outputProfileId);
+  g = applyLightSourceCorrection(g, lightSourceBias[1], outputProfileId);
+  b = applyLightSourceCorrection(b, lightSourceBias[2], outputProfileId);
 
   if (densityInversion.enabled) {
     r = applyDensityInversion(r, outputProfileId, densityInversion.baseDensity[0], densityInversion.densityScale[0], densityInversion.gamma[0]);
@@ -791,6 +831,7 @@ export function computeResidualBaseOffset(
     outputProfileId,
     flareFloor,
     flareStrength,
+    lightSourceBias,
   );
   const sampleStride = Math.max(1, Math.floor((width * height) / 50_000));
   const rs: number[] = [];
@@ -1013,6 +1054,7 @@ export function buildProcessingUniforms(
     outputProfileId,
     flareFloor,
     flareCorrection / 100,
+    lightSourceBias,
   );
 
   return new Float32Array([
@@ -1435,6 +1477,7 @@ export function processImageData(
     outputProfileId,
     flareFloor,
     flareStrength,
+    lightSourceBias,
   );
 
   for (let index = 0; index < 256; index += 1) {
@@ -1647,6 +1690,7 @@ export function processFloatRaster(
     outputProfileId,
     flareFloor,
     flareStrength,
+    lightSourceBias,
   );
 
   for (let pixel = 0; pixel < raster.width * raster.height; pixel += 1) {

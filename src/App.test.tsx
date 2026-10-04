@@ -1052,7 +1052,7 @@ describe('App import and preview pipeline', () => {
         blueBalance: number;
       };
     };
-    expect(latestRenderCall.settings.filmBaseSample).toEqual({ r: 200, g: 180, b: 150 });
+    expect(latestRenderCall.settings.filmBaseSample).toBeNull();
     expect(latestRenderCall.settings.rotation).toBe(0);
 
     const renderCallsAfterGeneric = workerState.render.mock.calls.length;
@@ -1076,9 +1076,9 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.settings.filmBaseSample).toBeNull();
     expect(latestRenderCall.settings.exposure).toBe(0);
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12 * ((255 - 180) / (255 - 200)));
+    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9 * ((255 - 180) / (255 - 150)));
+    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9);
     expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
@@ -1453,7 +1453,7 @@ describe('App import and preview pipeline', () => {
       blueBalance: 0.96,
       blackPoint: 7,
       highlightProtection: 38,
-      filmBaseSample: { r: 135, g: 163, b: 107 },
+      filmBaseSample: null,
     });
 
     const secondRenderPayload = workerState.render.mock.calls[1]?.[0] as {
@@ -1632,7 +1632,7 @@ describe('App import and preview pipeline', () => {
     expect(importRenderCall.isColor).toBe(false);
     expect(importRenderCall.settings.saturation).toBe(0);
     expect(importRenderCall.settings.filmBaseSample).toBeNull();
-    expect(importRenderCall.settings.rotation).toBe(0);
+    expect(importRenderCall.settings.rotation).toBe(90);
     expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
 
     fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
@@ -1756,7 +1756,7 @@ describe('App import and preview pipeline', () => {
       blueBalance: 0.96,
       blackPoint: 7,
       highlightProtection: 38,
-      filmBaseSample: { r: 135, g: 163, b: 107 },
+      filmBaseSample: null,
     });
   });
 
@@ -1890,7 +1890,7 @@ describe('App import and preview pipeline', () => {
     expect(localStorage.getItem('darkslide_default_light_source')).toBe('cs-lite');
   });
 
-  it('saves and reapplies the embedded light source with a custom preset', async () => {
+  it('saves without changing the render and reapplies the embedded light source and calibration', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
       createRenderResult(payload.documentId, payload.revision, 300, 200)
@@ -1912,8 +1912,13 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
+    const renderCountBeforeSave = workerState.render.mock.calls.length;
+    const renderBeforeSave = structuredClone(workerState.render.mock.calls.at(-1)?.[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
+    await act(async () => { vi.runAllTimers(); });
+    await flushMicrotasks();
+    expect(workerState.render).toHaveBeenCalledTimes(renderCountBeforeSave);
 
     fireEvent.click(screen.getByRole('button', { name: 'Select Auto Light Source' }));
     await flushMicrotasks();
@@ -1932,9 +1937,15 @@ describe('App import and preview pipeline', () => {
 
     const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
       lightSourceBias: [number, number, number];
+      colorMatrix: number[];
+      tonalCharacter: unknown;
+      settings: ConversionSettings;
     };
     expect(screen.getByText('Current Light Source: daylight')).toBeInTheDocument();
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.98, 0.95]);
+    expect(latestRenderCall.colorMatrix).toEqual(renderBeforeSave.colorMatrix);
+    expect(latestRenderCall.tonalCharacter).toEqual(renderBeforeSave.tonalCharacter);
+    expect(latestRenderCall.settings.densityBalance).toEqual({ scaleR: 1, scaleG: 1, scaleB: 0.6, source: 'film-stock-preset' });
   });
 
   it('carries a profile LUT into a preset saved from it, and into the render', async () => {

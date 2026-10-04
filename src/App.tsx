@@ -31,6 +31,7 @@ import { BlockingOverlayState, createDocumentColorManagement, formatError, getCa
 import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore';
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
 import { usesColorChannelPipeline } from './utils/pipelineIntent';
+import { resolveDocumentProfile } from './utils/presetRecipe';
 import { normalizeExportOptions } from './utils/exportOptions';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
@@ -412,13 +413,8 @@ export default function App() {
     [...FILM_PROFILES, ...customPresets].forEach((profile) => {
       map.set(profile.id, profile);
     });
-    tabs.forEach((tab) => {
-      if (tab.document.rawImportProfile) {
-        map.set(tab.document.rawImportProfile.id, tab.document.rawImportProfile);
-      }
-    });
     return map;
-  }, [customPresets, tabs]);
+  }, [customPresets]);
   const builtinProfiles = useMemo(() => (
     documentState?.rawImportProfile
       ? [documentState.rawImportProfile, ...FILM_PROFILES]
@@ -538,7 +534,7 @@ export default function App() {
     return ensureRollForDirectory(normalized.slice(0, lastSlash)).id;
   }, [ensureRollForDirectory]);
   const activeProfile = documentState
-    ? profilesById.get(documentState.profileId) ?? fallbackProfile
+    ? resolveDocumentProfile(documentState, profilesById, fallbackProfile)
     : fallbackProfile;
   const activeLabStyle = useMemo(
     () => (documentState?.labStyleId ? LAB_STYLE_PROFILES_MAP[documentState.labStyleId] ?? null : null),
@@ -2590,7 +2586,8 @@ export default function App() {
     const confirmed = await confirmSyncFilmBase(roll.name);
     if (!confirmed) return;
 
-    applyFilmBaseToRoll(sourceDocument.settings.filmBaseSample, rollId);
+    applyFilmBaseToRoll(sourceDocument.settings.filmBaseSample, rollId,
+      sourceDocument.settings.filmBaseSampleProfileId ?? sourceDocument.colorManagement.outputProfileId);
     showTransientNotice(`Applied ${roll.name} film base to the full roll.`, 'success');
   }, [applyFilmBaseToRoll, getRollById, showTransientNotice, tabsRef]);
 
@@ -2637,7 +2634,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       return;
     }
 
-    const profile = profilesById.get(tab.document.profileId) ?? fallbackProfile;
+    const profile = resolveDocumentProfile(tab.document, profilesById, fallbackProfile);
     const labStyle = tab.document.labStyleId ? LAB_STYLE_PROFILES_MAP[tab.document.labStyleId] ?? null : null;
     const outputProfileId = tab.document.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
     const lightSourceBias = lightSourceProfilesById.get(tab.document.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
@@ -2743,7 +2740,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       return;
     }
 
-    const profile = profilesById.get(tab.document.profileId) ?? fallbackProfile;
+    const profile = resolveDocumentProfile(tab.document, profilesById, fallbackProfile);
     const labStyle = tab.document.labStyleId ? LAB_STYLE_PROFILES_MAP[tab.document.labStyleId] ?? null : null;
     const lightSourceBias = lightSourceProfilesById.get(tab.document.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const result = await worker.export({

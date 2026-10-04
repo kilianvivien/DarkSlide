@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { DocumentTab, FilmBaseSample, Roll } from '../types';
+import { ColorProfileId, DocumentTab, FilmBaseSample, Roll } from '../types';
 
 const STORAGE_KEY = 'darkslide_rolls_v2';
 const LEGACY_STORAGE_KEY = 'darkslide_rolls_v1';
@@ -186,7 +186,7 @@ export function useRolls({
     updateRoll(rollId, { profileId: sourceTab.document.profileId });
   }, [tabs, updateRoll, updateTabById]);
 
-  const applyFilmBaseToRoll = useCallback((filmBase: FilmBaseSample, rollId: string) => {
+  const applyFilmBaseToRoll = useCallback((filmBase: FilmBaseSample, rollId: string, profileId?: ColorProfileId) => {
     writeRolls((current) => {
       const existing = current.get(rollId);
       if (!existing) {
@@ -197,6 +197,7 @@ export function useRolls({
       next.set(rollId, {
         ...existing,
         filmBaseSample: structuredClone(filmBase),
+        filmBaseSampleProfileId: profileId,
       });
       return next;
     });
@@ -218,6 +219,7 @@ export function useRolls({
             ...currentTab.document.settings,
             filmBaseSample: structuredClone(filmBase),
             filmBaseSampleSource: 'roll',
+            filmBaseSampleProfileId: profileId,
           },
           dirty: true,
         },

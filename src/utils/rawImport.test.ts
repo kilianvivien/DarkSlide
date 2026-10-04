@@ -183,7 +183,7 @@ describe('rawImport', () => {
     expect(rotationFromExifOrientation(7)).toBe(90);
   });
 
-  it('builds RAW startup settings with derived balance and rotation defaults', () => {
+  it('builds RAW startup settings without a second film-base balance correction', () => {
     const base = createDefaultSettings();
     const rgb = createRawRgb(64, 48, [160, 150, 140], [40, 60, 120]);
 
@@ -191,13 +191,13 @@ describe('rawImport', () => {
       rotation: 90,
       filmBaseSample: null,
       exposure: base.exposure,
-      redBalance: (255 - 150) / (255 - 160),
+      redBalance: 1,
       greenBalance: 1,
-      blueBalance: (255 - 150) / (255 - 140),
+      blueBalance: 1,
     });
   });
 
-  it('keeps stock-specific tuning while layering border-derived balance correction on top', () => {
+  it('keeps stock-specific tuning and removes only the automatic film-base gain', () => {
     const base = createDefaultSettings({
       exposure: 6,
       temperature: 8,
@@ -214,9 +214,9 @@ describe('rawImport', () => {
       exposure: 6,
       temperature: 8,
       tint: -2,
-      redBalance: 1.16 * ((255 - 150) / (255 - 160)),
+      redBalance: 1.16,
       greenBalance: 1,
-      blueBalance: 0.86 * ((255 - 150) / (255 - 140)),
+      blueBalance: 0.86,
     });
   });
 
@@ -234,7 +234,7 @@ describe('rawImport', () => {
       id: RAW_IMPORT_PROFILE_ID,
       name: 'Raw Import Result',
       type: 'color',
-      defaultSettings: settings,
+      defaultSettings: { ...settings, densityBalance: { scaleR: 1, scaleG: 1, scaleB: 0.6, source: 'film-stock-preset' } },
     });
   });
 
@@ -285,8 +285,8 @@ describe('rawImport', () => {
     const startupMeans = meanInnerChannels(startupImage);
 
     expect(startupSettings.exposure).toBe(baseSettings.exposure);
-    expect(startupSettings.redBalance).toBeCloseTo(1.12 * ((255 - 73) / (255 - 76)));
-    expect(startupSettings.blueBalance).toBeCloseTo(0.9 * ((255 - 73) / (255 - 68)));
+    expect(startupSettings.redBalance).toBeCloseTo(1.12);
+    expect(startupSettings.blueBalance).toBeCloseTo(0.9);
     expect(sumBins(startupHistogram.l.slice(240))).toBeLessThanOrEqual(sumBins(legacyHistogram.l.slice(240)));
     expect(startupMeans.b / Math.max(startupMeans.r, 1)).toBeLessThan(1.35);
     expect(startupMeans.b / Math.max(startupMeans.g, 1)).toBeLessThan(1.35);

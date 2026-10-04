@@ -366,9 +366,9 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       g = max(g - uniforms.flareFloorG * uniforms.flareStrength, 0.0);
       b = max(b - uniforms.flareFloorB * uniforms.flareStrength, 0.0);
 
-      r = clampF(r / max(uniforms.lightSourceBiasR, 0.05), 0.0, 1.0);
-      g = clampF(g / max(uniforms.lightSourceBiasG, 0.05), 0.0, 1.0);
-      b = clampF(b / max(uniforms.lightSourceBiasB, 0.05), 0.0, 1.0);
+      r = encodeTransfer(decodeTransfer(r, uniforms.outputTransferMode) / max(uniforms.lightSourceBiasR, 0.05), uniforms.outputTransferMode);
+      g = encodeTransfer(decodeTransfer(g, uniforms.outputTransferMode) / max(uniforms.lightSourceBiasG, 0.05), uniforms.outputTransferMode);
+      b = encodeTransfer(decodeTransfer(b, uniforms.outputTransferMode) / max(uniforms.lightSourceBiasB, 0.05), uniforms.outputTransferMode);
 
       if (uniforms.densityInversionEnabled > 0.5) {
         r = applyDensityInversion(r, uniforms.outputTransferMode, uniforms.baseDensityR, uniforms.densityScaleR, uniforms.hdGammaR);
