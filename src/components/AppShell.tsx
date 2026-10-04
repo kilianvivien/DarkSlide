@@ -615,120 +615,120 @@ export function AppShell({
           onSelect={onSelectTool}
           onOpenSettings={onOpenSettingsModal}
         />
-        <AnimatePresence initial={false}>
-          {inspectorVisible && (
-            <motion.div
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 320, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
-              className="flex h-full shrink-0 flex-col overflow-hidden border-r border-zinc-800"
-            >
-              <InspectorHeader tool={sidebarTab} onCollapse={() => onSelectTool(sidebarTab)} />
-              <div className="min-h-0 w-80 flex-1">
-                <ErrorBoundary>
-                  {sidebarTab === 'profiles' ? (
-                    <PresetsPane
-                      activeStockId={documentState?.profileId ?? fallbackProfile.id}
-                      onStockChange={onProfileChange}
-                      onStockPreview={documentState ? onProfilePreview : undefined}
-                      onStockPreviewEnd={onProfilePreviewEnd}
-                      builtinProfiles={builtinProfiles}
-                      customPresets={customPresets}
-                      presetFolders={presetFolders}
-                      canSavePreset={Boolean(documentState)}
-                      saveTags={savePresetTags}
-                      onSavePreset={onSavePreset}
-                      onImportPreset={onImportPreset}
-                      onDeletePreset={onDeletePreset}
-                      onCreateFolder={onCreateFolder}
-                      onRenameFolder={onRenameFolder}
-                      onDeleteFolder={onDeleteFolder}
-                      onMovePresetToFolder={onMovePresetToFolder}
-                      onError={onSetError}
-                      rolls={rolls}
-                      activeRoll={activeRoll}
-                      activeTabId={activeTabId}
-                      filmstripTabs={filmstripTabs}
-                      onSelectTab={onSelectTab}
-                      onOpenRollInfo={onOpenRollInfo}
-                      onSyncRollSettings={onSyncRollSettings}
-                      onStabilizeRollCrops={onStabilizeRollCrops}
-                      onRemoveFromRoll={onRemoveFromRoll}
-                      onDeleteRoll={onDeleteRoll}
-                      onCreateRollFromTabs={onCreateRollFromTabs}
-                      onToggleScanningSession={onToggleScanningSession}
-                      usesNativeFileDialogs={usesNativeFileDialogs}
-                      tabs={tabs}
-                    />
-                  ) : (
-                    <Sidebar
-                      settings={documentState?.settings ?? fallbackProfile.defaultSettings}
-                      exportOptions={documentState?.exportOptions ?? defaultExportOptions}
-                      quickExportPresets={quickExportPresets}
-                      colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
-                      sourceMetadata={documentState?.source ?? null}
-                      cropImageWidth={cropImageSize.width}
-                      cropImageHeight={cropImageSize.height}
-                      onLevelInteractionChange={onLevelInteractionChange}
-                      straightenActive={straightenActive}
-                      onStraightenActiveChange={onStraightenActiveChange}
-                      onSettingsChange={onSettingsChange}
-                      onExportOptionsChange={onExportOptionsChange}
-                      onColorManagementChange={onColorManagementChange}
-                      onInteractionStart={onInteractionStart}
-                      onInteractionEnd={onInteractionEnd}
-                      activeProfile={documentState ? activeProfile : null}
-                      activeLabStyleId={documentState?.labStyleId ?? null}
-                      labStyleProfiles={labStyleProfiles}
-                      estimatedFlare={documentState?.estimatedFlare ?? null}
-                      lightSourceId={documentState?.lightSourceId ?? null}
-                      cropSource={documentState?.cropSource ?? null}
-                      lightSourceProfiles={lightSourceProfiles}
-                      histogramData={documentState?.histogram ?? null}
-                      isPickingFilmBase={isPickingFilmBase}
-                      isReanalyzingFilmBase={isReanalyzingFilmBase}
-                      estimatedFilmBase={documentState?.estimatedFilmBase ?? null}
-                      filmBaseSampleSource={documentState?.settings.filmBaseSampleSource ?? null}
-                      onTogglePicker={onToggleFilmBasePicker}
-                      onReanalyzeFilmBase={onReanalyzeFilmBase}
-                      onExport={onExportClick}
-                      onQuickExport={onQuickExport}
-                      onSaveQuickExportPreset={onSaveQuickExportPreset}
-                      onDeleteQuickExportPreset={onDeleteQuickExportPreset}
-                      onOpenBatchExport={onOpenBatchExport}
-                      frameSelectionCount={filmstripSelectedIds.length}
-                      frameCount={tabs.length}
-                      frameExportProgress={frameExportProgress}
-                      onExportFrames={onExportFramesInScope}
-                      onCancelFrameExport={onCancelFrameExport}
-                      isExporting={isExporting}
-                      contentScrollTop={activeTab?.sidebarScrollTop ?? 0}
-                      onContentScrollTopChange={onSidebarScrollTopChange}
-                      activeTab={sidebarTab}
-                      cropTab={cropTab}
-                      onCropTabChange={onCropTabChange}
-                      onRedetectFrame={onRedetectFrame}
-                      onCropDone={onCropDone}
-                      onResetCrop={onResetCrop}
-                      onDustRemovalChange={onDustRemovalChange}
-                      onDetectDust={onDetectDust}
-                      isDetectingDust={isDetectingDust}
-                      dustBrushActive={dustBrushActive}
-                      onDustBrushActiveChange={onDustBrushActiveChange}
-                      activePointPicker={activePointPicker}
-                      onSetPointPicker={onSetActivePointPicker}
-                      onLightSourceChange={onLightSourceChange}
-                      onLabStyleChange={onLabStyleChange}
-                      onAutoAdjust={onAutoAdjust}
-                      onAutoWhiteBalance={onAutoWhiteBalance}
-                    />
-                  )}
-                </ErrorBoundary>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* The panel takes its width at once and only its contents animate
+            (opacity and transform, which stay on the compositor). Animating
+            the width relaid out and refit the preview on every frame. */}
+        {inspectorVisible && (
+          <motion.div
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            className="flex h-full w-80 shrink-0 flex-col overflow-hidden border-r border-zinc-800"
+          >
+            <InspectorHeader tool={sidebarTab} onCollapse={() => onSelectTool(sidebarTab)} />
+            <div className="min-h-0 w-80 flex-1">
+              <ErrorBoundary>
+                {sidebarTab === 'profiles' ? (
+                  <PresetsPane
+                    activeStockId={documentState?.profileId ?? fallbackProfile.id}
+                    onStockChange={onProfileChange}
+                    onStockPreview={documentState ? onProfilePreview : undefined}
+                    onStockPreviewEnd={onProfilePreviewEnd}
+                    builtinProfiles={builtinProfiles}
+                    customPresets={customPresets}
+                    presetFolders={presetFolders}
+                    canSavePreset={Boolean(documentState)}
+                    saveTags={savePresetTags}
+                    onSavePreset={onSavePreset}
+                    onImportPreset={onImportPreset}
+                    onDeletePreset={onDeletePreset}
+                    onCreateFolder={onCreateFolder}
+                    onRenameFolder={onRenameFolder}
+                    onDeleteFolder={onDeleteFolder}
+                    onMovePresetToFolder={onMovePresetToFolder}
+                    onError={onSetError}
+                    rolls={rolls}
+                    activeRoll={activeRoll}
+                    activeTabId={activeTabId}
+                    filmstripTabs={filmstripTabs}
+                    onSelectTab={onSelectTab}
+                    onOpenRollInfo={onOpenRollInfo}
+                    onSyncRollSettings={onSyncRollSettings}
+                    onStabilizeRollCrops={onStabilizeRollCrops}
+                    onRemoveFromRoll={onRemoveFromRoll}
+                    onDeleteRoll={onDeleteRoll}
+                    onCreateRollFromTabs={onCreateRollFromTabs}
+                    onToggleScanningSession={onToggleScanningSession}
+                    usesNativeFileDialogs={usesNativeFileDialogs}
+                    tabs={tabs}
+                  />
+                ) : (
+                  <Sidebar
+                    settings={documentState?.settings ?? fallbackProfile.defaultSettings}
+                    exportOptions={documentState?.exportOptions ?? defaultExportOptions}
+                    quickExportPresets={quickExportPresets}
+                    colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
+                    sourceMetadata={documentState?.source ?? null}
+                    cropImageWidth={cropImageSize.width}
+                    cropImageHeight={cropImageSize.height}
+                    onLevelInteractionChange={onLevelInteractionChange}
+                    straightenActive={straightenActive}
+                    onStraightenActiveChange={onStraightenActiveChange}
+                    onSettingsChange={onSettingsChange}
+                    onExportOptionsChange={onExportOptionsChange}
+                    onColorManagementChange={onColorManagementChange}
+                    onInteractionStart={onInteractionStart}
+                    onInteractionEnd={onInteractionEnd}
+                    activeProfile={documentState ? activeProfile : null}
+                    activeLabStyleId={documentState?.labStyleId ?? null}
+                    labStyleProfiles={labStyleProfiles}
+                    estimatedFlare={documentState?.estimatedFlare ?? null}
+                    lightSourceId={documentState?.lightSourceId ?? null}
+                    cropSource={documentState?.cropSource ?? null}
+                    lightSourceProfiles={lightSourceProfiles}
+                    histogramData={documentState?.histogram ?? null}
+                    isPickingFilmBase={isPickingFilmBase}
+                    isReanalyzingFilmBase={isReanalyzingFilmBase}
+                    estimatedFilmBase={documentState?.estimatedFilmBase ?? null}
+                    filmBaseSampleSource={documentState?.settings.filmBaseSampleSource ?? null}
+                    onTogglePicker={onToggleFilmBasePicker}
+                    onReanalyzeFilmBase={onReanalyzeFilmBase}
+                    onExport={onExportClick}
+                    onQuickExport={onQuickExport}
+                    onSaveQuickExportPreset={onSaveQuickExportPreset}
+                    onDeleteQuickExportPreset={onDeleteQuickExportPreset}
+                    onOpenBatchExport={onOpenBatchExport}
+                    frameSelectionCount={filmstripSelectedIds.length}
+                    frameCount={tabs.length}
+                    frameExportProgress={frameExportProgress}
+                    onExportFrames={onExportFramesInScope}
+                    onCancelFrameExport={onCancelFrameExport}
+                    isExporting={isExporting}
+                    contentScrollTop={activeTab?.sidebarScrollTop ?? 0}
+                    onContentScrollTopChange={onSidebarScrollTopChange}
+                    activeTab={sidebarTab}
+                    cropTab={cropTab}
+                    onCropTabChange={onCropTabChange}
+                    onRedetectFrame={onRedetectFrame}
+                    onCropDone={onCropDone}
+                    onResetCrop={onResetCrop}
+                    onDustRemovalChange={onDustRemovalChange}
+                    onDetectDust={onDetectDust}
+                    isDetectingDust={isDetectingDust}
+                    dustBrushActive={dustBrushActive}
+                    onDustBrushActiveChange={onDustBrushActiveChange}
+                    activePointPicker={activePointPicker}
+                    onSetPointPicker={onSetActivePointPicker}
+                    onLightSourceChange={onLightSourceChange}
+                    onLabStyleChange={onLabStyleChange}
+                    onAutoAdjust={onAutoAdjust}
+                    onAutoWhiteBalance={onAutoWhiteBalance}
+                  />
+                )}
+              </ErrorBoundary>
+            </div>
+          </motion.div>
+        )}
 
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-zinc-900/30">
           <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-4 border-b border-zinc-800 bg-zinc-950/50 px-4 backdrop-blur-xl">
