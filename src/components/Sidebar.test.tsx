@@ -67,14 +67,12 @@ describe('Sidebar', () => {
         onOpenBatchExport={vi.fn()}
         isExporting={false}
         activeTab="adjust"
-        onTabChange={vi.fn()}
         cropTab="Film"
         onCropTabChange={vi.fn()}
         onCropDone={vi.fn()}
         onResetCrop={vi.fn()}
         activePointPicker={null}
         onSetPointPicker={vi.fn()}
-        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -115,14 +113,12 @@ describe('Sidebar', () => {
         onOpenBatchExport={vi.fn()}
         isExporting={false}
         activeTab="adjust"
-        onTabChange={vi.fn()}
         cropTab="Film"
         onCropTabChange={vi.fn()}
         onCropDone={vi.fn()}
         onResetCrop={vi.fn()}
         activePointPicker={null}
         onSetPointPicker={vi.fn()}
-        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -168,14 +164,12 @@ describe('Sidebar', () => {
         onOpenBatchExport={vi.fn()}
         isExporting={false}
         activeTab="adjust"
-        onTabChange={vi.fn()}
         cropTab="Film"
         onCropTabChange={vi.fn()}
         onCropDone={vi.fn()}
         onResetCrop={vi.fn()}
         activePointPicker={null}
         onSetPointPicker={vi.fn()}
-        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -183,7 +177,7 @@ describe('Sidebar', () => {
     expect(screen.getByText('Red')).toBeInTheDocument();
     expect(screen.getByText('Green')).toBeInTheDocument();
     expect(screen.getByText('Blue')).toBeInTheDocument();
-    expect(screen.getByText('Tone')).toBeInTheDocument();
+    expect(screen.getAllByTestId('slider').find((slider) => slider.textContent === 'Tone')).toBeInTheDocument();
   });
 
   it('shows and forwards bit-depth controls for TIFF exports', () => {
@@ -213,14 +207,12 @@ describe('Sidebar', () => {
         onOpenBatchExport={vi.fn()}
         isExporting={false}
         activeTab="export"
-        onTabChange={vi.fn()}
         cropTab="Film"
         onCropTabChange={vi.fn()}
         onCropDone={vi.fn()}
         onResetCrop={vi.fn()}
         activePointPicker={null}
         onSetPointPicker={vi.fn()}
-        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -228,4 +220,78 @@ describe('Sidebar', () => {
     expect(onExportOptionsChange).toHaveBeenCalledWith({ bitDepth: 8 });
   });
 
+});
+
+describe('Sidebar adjustment groups', () => {
+  function renderDevelop(settings = createDefaultSettings(), onSettingsChange = vi.fn()) {
+    const colorProfile = FILM_PROFILES.find((profile) => profile.type === 'color') ?? null;
+    render(
+      <Sidebar
+        settings={settings}
+        exportOptions={{ ...DEFAULT_EXPORT_OPTIONS, filenameBase: 'test' }}
+        quickExportPresets={[]}
+        colorManagement={DEFAULT_COLOR_MANAGEMENT}
+        sourceMetadata={null}
+        cropImageWidth={4032}
+        cropImageHeight={6048}
+        onLevelInteractionChange={vi.fn()}
+        onSettingsChange={onSettingsChange}
+        onExportOptionsChange={vi.fn()}
+        onColorManagementChange={vi.fn()}
+        activeProfile={colorProfile}
+        histogramData={null}
+        isPickingFilmBase={false}
+        onTogglePicker={vi.fn()}
+        onExport={vi.fn()}
+        onQuickExport={vi.fn()}
+        onSaveQuickExportPreset={vi.fn()}
+        onDeleteQuickExportPreset={vi.fn()}
+        onOpenBatchExport={vi.fn()}
+        isExporting={false}
+        activeTab="adjust"
+        cropTab="Film"
+        onCropTabChange={vi.fn()}
+        onCropDone={vi.fn()}
+        onResetCrop={vi.fn()}
+        activePointPicker={null}
+        onSetPointPicker={vi.fn()}
+      />,
+    );
+    return onSettingsChange;
+  }
+
+  it('switches each group off and back on through the normal settings path', () => {
+    const onSettingsChange = renderDevelop();
+
+    for (const [label, key] of [
+      ['Tone', 'toneEnabled'],
+      ['Range', 'toneRangeEnabled'],
+      ['White Balance', 'whiteBalanceEnabled'],
+      ['Color', 'colorControlsEnabled'],
+    ] as const) {
+      const toggle = screen.getByRole('switch', { name: `${label} adjustments` });
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
+      fireEvent.click(toggle);
+      expect(onSettingsChange).toHaveBeenLastCalledWith({ [key]: false });
+    }
+  });
+
+  it('shows a switched-off group as off while keeping its sliders available', () => {
+    const onSettingsChange = renderDevelop(createDefaultSettings({ toneEnabled: false }));
+    const toggle = screen.getByRole('switch', { name: 'Tone adjustments' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByText('Exposure')).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(onSettingsChange).toHaveBeenLastCalledWith({ toneEnabled: true });
+  });
+
+  it('puts black and white point in Range and the RGB balance in Color', () => {
+    renderDevelop();
+    const range = screen.getByRole('switch', { name: 'Range adjustments' }).closest('section')!;
+    const color = screen.getByRole('switch', { name: 'Color adjustments' }).closest('section')!;
+    expect(range).toHaveTextContent('Black Point');
+    expect(range).toHaveTextContent('White Point');
+    expect(color).toHaveTextContent('Saturation');
+    expect(color).toHaveTextContent('Red Balance');
+  });
 });

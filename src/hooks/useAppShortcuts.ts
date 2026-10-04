@@ -1,5 +1,5 @@
 import { Dispatch, SetStateAction, useEffect } from 'react';
-import { DocumentTab, QuickExportPreset } from '../types';
+import { DocumentTab, EditorTool, QuickExportPreset } from '../types';
 import { openImageFileByPath } from '../utils/fileBridge';
 import { clearRecentFiles } from '../utils/recentFilesStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -37,7 +37,8 @@ type UseAppShortcutsOptions = {
   onDeactivateDustBrush: () => void;
   onToggleLeftPane: () => void;
   onToggleRightPane: () => void;
-onToggleScanningSession: () => void;
+  onSelectTool: (tool: EditorTool) => void;
+  onToggleScanningSession: () => void;
   onCheckForUpdates: () => void;
   zoomToFit: () => void;
   zoomTo100: () => void;
@@ -78,7 +79,8 @@ export function useAppShortcuts({
   onDeactivateDustBrush,
   onToggleLeftPane,
   onToggleRightPane,
-onToggleScanningSession,
+  onSelectTool,
+  onToggleScanningSession,
   onCheckForUpdates,
   zoomToFit,
   zoomTo100,
@@ -133,6 +135,31 @@ previousTab: {
         },
       },
       settings: { key: ',', meta: true, handler: () => setShowSettingsModal((current) => !current) },
+      toolDevelop: { key: '1', handler: () => onSelectTool('adjust') },
+      toolCurves: { key: '2', handler: () => onSelectTool('curves') },
+      toolProfiles: { key: '3', handler: () => onSelectTool('profiles') },
+      toggleProfiles: { key: 'p', handler: onToggleRightPane },
+      toolCrop: { key: '4', when: () => documentStatePresent, handler: () => onSelectTool('crop') },
+      toolDust: { key: '5', when: () => documentStatePresent, handler: () => onSelectTool('dust') },
+      toolExport: { key: '6', handler: () => onSelectTool('export') },
+      toggleCropOverlay: { key: 'c', when: () => documentStatePresent && !dustBrushActive, handler: onToggleCropOverlay },
+      toggleComparison: { key: '\\', when: () => documentStatePresent, handler: onToggleComparison },
+      previousFrame: {
+        key: 'arrowleft',
+        when: () => tabs.length > 1 && !isCropOverlayVisible,
+        handler: () => {
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+          if (currentIndex > 0) setActiveTabId(tabs[currentIndex - 1].id);
+        },
+      },
+      nextFrame: {
+        key: 'arrowright',
+        when: () => tabs.length > 1 && !isCropOverlayVisible,
+        handler: () => {
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+          if (currentIndex >= 0 && currentIndex < tabs.length - 1) setActiveTabId(tabs[currentIndex + 1].id);
+        },
+      },
       holdPan: { key: ' ', handler: () => setIsSpaceHeld(true), when: () => !documentStatePresent || !isCropOverlayVisible },
     },
     onMenuAction: (action) => {

@@ -13,7 +13,6 @@ import {
   Pipette,
   Plus,
   RefreshCw,
-  Settings,
   Settings2,
   SlidersHorizontal,
   Thermometer,
@@ -21,13 +20,16 @@ import {
   Wand2,
   Zap,
 } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmBaseEstimate, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, PointPickerMode, QuickExportPreset, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, EditorTool, ExportFormat, ExportOptions, FilmBaseEstimate, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, PointPickerMode, QuickExportPreset, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
 import { Slider } from './Slider';
+import { GroupSwitch } from './GroupSwitch';
+
+// A switched-off group stays editable but reads as inactive.
+const GROUP_DISABLED_CLASS = 'opacity-45 transition-opacity hover:opacity-80';
 import { DustPane } from './DustPane';
-import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { DEFAULT_DUST_REMOVAL, FILM_BASE_CONFIDENCE, resolveDustRemovalSettings } from '../constants';
 
@@ -157,8 +159,7 @@ interface SidebarProps {
   isExporting: boolean;
   contentScrollTop?: number;
   onContentScrollTopChange?: (scrollTop: number) => void;
-  activeTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
-  onTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => void;
+  activeTab: EditorTool;
   cropTab: CropTab;
   onCropTabChange: (tab: CropTab) => void;
   onRedetectFrame?: () => void;
@@ -166,7 +167,6 @@ interface SidebarProps {
   onResetCrop: () => void;
   activePointPicker: PointPickerMode | null;
   onSetPointPicker: (mode: PointPickerMode | null) => void;
-  onOpenSettings: () => void;
   onLightSourceChange?: (lightSourceId: string | null) => void;
   onLabStyleChange?: (labStyleId: string | null) => void;
   onAutoAdjust?: () => void;
@@ -214,7 +214,6 @@ export const Sidebar = memo(function Sidebar({
   onDeleteQuickExportPreset,
   isExporting,
   activeTab,
-  onTabChange,
   cropTab,
   onCropTabChange,
   onRedetectFrame,
@@ -222,7 +221,6 @@ export const Sidebar = memo(function Sidebar({
   onResetCrop,
   activePointPicker,
   onSetPointPicker,
-  onOpenSettings,
   onLightSourceChange,
   onLabStyleChange,
   onAutoAdjust,
@@ -419,6 +417,11 @@ export const Sidebar = memo(function Sidebar({
     [settings.dustRemoval],
   );
 
+  const toneEnabled = settings.toneEnabled !== false;
+  const toneRangeEnabled = settings.toneRangeEnabled !== false;
+  const whiteBalanceEnabled = settings.whiteBalanceEnabled !== false;
+  const colorControlsEnabled = settings.colorControlsEnabled !== false;
+
   const isWebpExport = exportOptions.format === 'image/webp';
   const showQualityControl = exportOptions.format !== 'image/png' && exportOptions.format !== 'image/tiff';
   const showBitDepthControl = exportOptions.format === 'image/png' || exportOptions.format === 'image/tiff';
@@ -432,19 +435,6 @@ export const Sidebar = memo(function Sidebar({
         <Histogram data={histogramData} variant={isColor && !settings.blackAndWhite.enabled ? 'color' : 'neutral'} />
       </div>
 
-      <div className="flex px-6 pt-4 justify-between shrink-0">
-        {(['adjust', 'curves', 'crop', 'dust', 'export'] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => onTabChange(tab)}
-            className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all shrink-0 ${
-              activeTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
-            }`}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
 
       <div
         ref={contentRef}
@@ -560,9 +550,10 @@ export const Sidebar = memo(function Sidebar({
 
                 </section>
 
-                <section>
+                <section className={toneEnabled ? undefined : GROUP_DISABLED_CLASS}>
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
-                    <SlidersHorizontal size={12} /> Basic Adjustments
+                    <GroupSwitch label="Tone" enabled={toneEnabled} onChange={(enabled) => onSettingsChange({ toneEnabled: enabled })} />
+                    <SlidersHorizontal size={12} /> Tone
                     {histogramData && (
                       <button
                         type="button"
@@ -578,8 +569,6 @@ export const Sidebar = memo(function Sidebar({
 
                   <Slider label="Exposure" fineStep={1} value={settings.exposure} min={-100} max={100} onChange={scalarSliderHandlers.exposure} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   <Slider label="Contrast" fineStep={1} value={settings.contrast} min={-100} max={100} onChange={scalarSliderHandlers.contrast} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  <Slider label="Black Point" fineStep={1} value={settings.blackPoint} min={0} max={80} onChange={scalarSliderHandlers.blackPoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  <Slider label="White Point" fineStep={1} value={settings.whitePoint} min={180} max={255} onChange={scalarSliderHandlers.whitePoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   <Slider
                     label="Highlight Protection"
                     value={settings.highlightProtection}
@@ -609,15 +598,21 @@ export const Sidebar = memo(function Sidebar({
                     onInteractionStart={onInteractionStart}
                     onInteractionEnd={onInteractionEnd}
                   />
+                </section>
 
-                  {isColor && !settings.blackAndWhite.enabled && (
-                    <Slider label="Saturation" fineStep={1} value={settings.saturation} min={0} max={200} onChange={scalarSliderHandlers.saturation} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  )}
+                <section className={toneRangeEnabled ? undefined : GROUP_DISABLED_CLASS}>
+                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                    <GroupSwitch label="Range" enabled={toneRangeEnabled} onChange={(enabled) => onSettingsChange({ toneRangeEnabled: enabled })} />
+                    <BarChart3 size={12} /> Range
+                  </h2>
+                  <Slider label="Black Point" fineStep={1} value={settings.blackPoint} min={0} max={80} onChange={scalarSliderHandlers.blackPoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="White Point" fineStep={1} value={settings.whitePoint} min={180} max={255} onChange={scalarSliderHandlers.whitePoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                 </section>
 
                 {isColor && !settings.blackAndWhite.enabled && (
-                  <section>
+                  <section className={whiteBalanceEnabled ? undefined : GROUP_DISABLED_CLASS}>
                     <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                      <GroupSwitch label="White Balance" enabled={whiteBalanceEnabled} onChange={(enabled) => onSettingsChange({ whiteBalanceEnabled: enabled })} />
                       <Thermometer size={12} /> White Balance
                       {onAutoWhiteBalance && histogramData && (
                         <button
@@ -637,10 +632,14 @@ export const Sidebar = memo(function Sidebar({
                 )}
 
                 {isColor && (
-                  <section>
+                  <section className={colorControlsEnabled ? undefined : GROUP_DISABLED_CLASS}>
                     <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
-                      <Settings2 size={12} /> Color Balance
+                      <GroupSwitch label="Color" enabled={colorControlsEnabled} onChange={(enabled) => onSettingsChange({ colorControlsEnabled: enabled })} />
+                      <Settings2 size={12} /> Color
                     </h2>
+                    {!settings.blackAndWhite.enabled && (
+                      <Slider label="Saturation" fineStep={1} value={settings.saturation} min={0} max={200} onChange={scalarSliderHandlers.saturation} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    )}
                     <Slider label="Red Balance" fineStep={0.01} value={settings.redBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.redBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                     <Slider label="Green Balance" fineStep={0.01} value={settings.greenBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.greenBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                     <Slider label="Blue Balance" fineStep={0.01} value={settings.blueBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.blueBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
@@ -1031,19 +1030,6 @@ export const Sidebar = memo(function Sidebar({
         </div>
       </div>
 
-      <div className="shrink-0 px-6 py-3 border-t border-zinc-800/50 flex items-center justify-between gap-3">
-        <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-600">
-          {APP_VERSION_LABEL}
-        </span>
-        <button
-          onClick={onOpenSettings}
-          data-tip="Settings (⌘,)"
-          aria-label="Open settings"
-          className="p-1.5 text-zinc-700 hover:text-zinc-400 hover:bg-zinc-800 rounded-lg transition-all"
-        >
-          <Settings size={16} />
-        </button>
-      </div>
     </div>
   );
 });

@@ -28,6 +28,8 @@ export type InputProfileSpec = ColorProfileId | ParsedInputProfile;
 export type FilmProfileType = 'negative' | 'slide';
 export type FilmProfileCategory = 'Kodak' | 'Fuji' | 'Ilford' | 'CineStill' | 'Lomography' | 'Harman' | 'Kentmere' | 'Foma' | 'Rollei' | 'Generic';
 export type CropSource = 'auto' | 'manual';
+/** Panels the tool rail switches between in the single inspector. */
+export type EditorTool = 'adjust' | 'curves' | 'profiles' | 'crop' | 'dust' | 'export';
 export type DustMarkSource = 'auto' | 'manual';
 export type DustAutoDetectMode = 'spots' | 'scratches' | 'both';
 export type DustMarkKind = 'spot' | 'path';

@@ -48,6 +48,7 @@ import {
   WorkspaceDocument,
   QuickExportPreset,
   Roll,
+  EditorTool,
 } from '../types';
 import { buildSidecarFile, getSidecarPathForExport, serializeSidecar } from '../utils/sidecarSettings';
 import { sanitizeFilenameBase } from '../utils/imagePipeline';
@@ -119,7 +120,7 @@ type UseWorkspaceCommandsOptions = {
   savePresetTags: string[];
   notificationSettings: NotificationSettings;
   renderBackendDiagnostics: RenderBackendDiagnostics;
-  setSidebarTab: SetState<'adjust' | 'curves' | 'crop' | 'dust' | 'export'>;
+  setSidebarTab: SetState<EditorTool>;
   setCropTab: SetState<CropTab>;
   isPickingFilmBase: boolean;
   activePointPicker: PointPickerMode | null;
@@ -453,17 +454,21 @@ export function useWorkspaceCommands({
     }));
   }, [updateDocument]);
 
-  const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => {
+  const handleSidebarTabChange = useCallback((tab: EditorTool) => {
     setSidebarTab(tab);
     setIsCropOverlayVisible((current) => {
-      if (tab !== 'crop' && current) {
+      // The crop tool shows its overlay; leaving it hides the overlay.
+      if (tab === 'crop') {
+        return Boolean(documentState) || current;
+      }
+      if (current) {
         setIsAdjustingCrop(false);
         return false;
       }
       return current;
     });
     savePreferences({ ...prefsSnapshotRef.current, sidebarTab: tab });
-  }, [prefsSnapshotRef, setIsAdjustingCrop, setIsCropOverlayVisible, setSidebarTab]);
+  }, [documentState, prefsSnapshotRef, setIsAdjustingCrop, setIsCropOverlayVisible, setSidebarTab]);
 
   const handleCropDone = useCallback(() => {
     setSidebarTab('adjust');

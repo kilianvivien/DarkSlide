@@ -5,10 +5,11 @@ import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
 import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
 import { UpdateBanner } from './components/UpdateBanner';
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, ExportOptions, FilmProfile, HistogramMode, InputProfileSpec, InteractionQuality, LabStyleProfile, MaskTuning, NotificationSettings, PointPickerMode, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
+import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, EditorTool, ExportOptions, FilmProfile, HistogramMode, InputProfileSpec, InteractionQuality, LabStyleProfile, MaskTuning, NotificationSettings, PointPickerMode, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
+import { isEditorTool } from './components/ToolRail';
 import { useRenderQueue } from './hooks/useRenderQueue';
 import { useWorkspaceCommands } from './hooks/useWorkspaceCommands';
 import { useCustomLightSources } from './hooks/useCustomLightSources';
@@ -85,7 +86,6 @@ export default function App() {
   } = useDocumentTabs();
   const [error, setError] = useState<string | null>(null);
   const [isLeftPaneOpen, setIsLeftPaneOpen] = useState(true);
-  const [isRightPaneOpen, setIsRightPaneOpen] = useState(true);
   const [isPickingFilmBase, setIsPickingFilmBase] = useState(false);
   const [isReanalyzingFilmBase, setIsReanalyzingFilmBase] = useState(false);
   const [activePointPicker, setActivePointPicker] = useState<PointPickerMode | null>(null);
@@ -104,7 +104,7 @@ export default function App() {
   const [renderedPreviewAngle, setRenderedPreviewAngle] = useState(0);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanDragging, setIsPanDragging] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'adjust' | 'curves' | 'crop' | 'dust' | 'export'>('adjust');
+  const [sidebarTab, setSidebarTab] = useState<EditorTool>('adjust');
   const [dustBrushActive, setDustBrushActive] = useState(false);
   const [selectedDustMarkId, setSelectedDustMarkId] = useState<string | null>(null);
   const [isDetectingDust, setIsDetectingDust] = useState(false);
@@ -482,7 +482,8 @@ export default function App() {
     sidebarTab,
     cropTab,
     isLeftPaneOpen,
-    isRightPaneOpen,
+    // Kept for older builds reading these preferences; 1.3.0 has one inspector.
+    isRightPaneOpen: true,
     gpuRendering: gpuRenderingEnabled,
     ultraSmoothDrag: ultraSmoothDragEnabled,
     externalEditorPath,
@@ -915,12 +916,11 @@ export default function App() {
   useEffect(() => {
     const prefs = initialPreferences;
     if (!prefs) return;
-    if (['adjust', 'curves', 'crop', 'dust', 'export'].includes(prefs.sidebarTab)) {
+    if (isEditorTool(prefs.sidebarTab)) {
       setSidebarTab(prefs.sidebarTab);
     }
     setCropTab(prefs.cropTab ?? 'Film');
     setIsLeftPaneOpen(prefs.isLeftPaneOpen);
-    setIsRightPaneOpen(prefs.isRightPaneOpen);
     setGPURenderingEnabled(prefs.gpuRendering);
     setUltraSmoothDragEnabled(prefs.ultraSmoothDrag);
   }, [initialPreferences]);
@@ -2417,13 +2417,22 @@ export default function App() {
     });
   }, []);
 
-  const handleToggleRightPane = useCallback(() => {
-    setIsRightPaneOpen((current) => {
-      const next = !current;
-      savePreferences({ ...prefsSnapshotRef.current, isRightPaneOpen: next });
-      return next;
-    });
-  }, []);
+  // Rail behaviour: choosing a tool opens its panel; choosing the open tool
+  // again collapses the inspector.
+  const handleSelectTool = useCallback((tool: EditorTool) => {
+    if (tool === sidebarTab && isLeftPaneOpen) {
+      handleToggleLeftPane();
+      return;
+    }
+    if (!isLeftPaneOpen) {
+      handleToggleLeftPane();
+    }
+    handleSidebarTabChange(tool);
+  }, [handleSidebarTabChange, handleToggleLeftPane, isLeftPaneOpen, sidebarTab]);
+
+  const handleToggleProfilesTool = useCallback(() => {
+    handleSelectTool('profiles');
+  }, [handleSelectTool]);
 
   const runAutoAnalysis = useCallback(async (mode: 'full' | 'whiteBalance') => {
     const worker = workerClientRef.current;
@@ -2986,7 +2995,8 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onRemoveLastDustMark: handleRemoveLastDustMark,
     onDeactivateDustBrush: () => handleDustBrushActiveChange(false),
     onToggleLeftPane: handleToggleLeftPane,
-    onToggleRightPane: handleToggleRightPane,
+    onToggleRightPane: handleToggleProfilesTool,
+    onSelectTool: handleSelectTool,
 onToggleScanningSession: toggleScanningWindow,
     onCheckForUpdates: () => { void checkForUpdatesNow(); },
     zoomToFit: zoomToFitWithDraft,
@@ -3031,7 +3041,6 @@ onToggleScanningSession: toggleScanningWindow,
       cropTab={cropTab}
       comparisonMode={comparisonMode}
       isLeftPaneOpen={isLeftPaneOpen}
-      isRightPaneOpen={isRightPaneOpen}
       isPickingFilmBase={isPickingFilmBase}
       isReanalyzingFilmBase={isReanalyzingFilmBase}
       activePointPicker={activePointPicker}
@@ -3112,8 +3121,7 @@ onToggleScanningSession: toggleScanningWindow,
       onCloseImage={handleCloseImage}
       onUndo={handleUndo}
       onRedo={handleRedo}
-      onToggleLeftPane={handleToggleLeftPane}
-      onToggleRightPane={handleToggleRightPane}
+      onSelectTool={handleSelectTool}
       onReset={handleReset}
       onOpenInEditor={() => { void handleOpenInEditor(); }}
       onDownload={() => { void handleDownload(); }}
@@ -3149,7 +3157,6 @@ onToggleScanningSession: toggleScanningWindow,
       onDeleteQuickExportPreset={handleDeleteQuickExportPreset}
       onOpenBatchExport={handleOpenBatchExport}
       onSidebarScrollTopChange={handleSidebarScrollTopChange}
-      onSidebarTabChange={handleSidebarTabChange}
       onCropTabChange={handleCropTabChange}
       onRedetectFrame={handleRedetectFrame}
       onCropDone={handleCropDone}

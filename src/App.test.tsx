@@ -667,6 +667,22 @@ function createRenderImageData(
   return new ImageData(data, width, height);
 }
 
+// The profiles panel lives in the inspector behind the "Film profiles" rail
+// tool; the Develop sidebar is behind "Develop".
+function openProfiles() {
+  if (!screen.queryByTestId('presets')) {
+    fireEvent.click(screen.getByRole('button', { name: 'Film profiles' }));
+  }
+  return screen.getByTestId('presets');
+}
+
+function openDevelop() {
+  if (!screen.queryByTestId('sidebar')) {
+    fireEvent.click(screen.getByRole('button', { name: 'Develop' }));
+  }
+  return screen.getByTestId('sidebar');
+}
+
 async function uploadFile(file: File) {
   const input = document.querySelector('input[type="file"]') as HTMLInputElement;
   expect(input).toBeTruthy();
@@ -821,6 +837,25 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
   });
 
+  it('switches inspector panels from the tool rail and its shortcuts', async () => {
+    render(<App />);
+
+    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+    expect(screen.queryByTestId('presets')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: '3' });
+    expect(screen.getByTestId('presets')).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+
+    // Choosing the open tool again collapses the inspector.
+    fireEvent.click(screen.getByRole('button', { name: 'Film profiles' }));
+    expect(screen.queryByTestId('presets')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: '1' });
+    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+  });
+
   it('keeps single-image imports full-frame and does not auto-run frame detection', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(4032, 6048));
     workerState.detectFrame.mockResolvedValue({
@@ -876,7 +911,7 @@ describe('App import and preview pipeline', () => {
     await act(async () => { vi.runAllTimers(); });
     await flushMicrotasks();
     expect(workerState.render.mock.calls.at(-1)?.[0].settings.filmBaseSample).toBeNull();
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic Color' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic Color' }));
     await flushMicrotasks();
     await act(async () => { vi.runAllTimers(); });
     await flushMicrotasks();
@@ -1180,10 +1215,10 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
+    expect(within(openProfiles()).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
 
     const renderCallsAfterImport = workerState.render.mock.calls.length;
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic Color' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic Color' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1205,7 +1240,7 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.rotation).toBe(0);
 
     const renderCallsAfterGeneric = workerState.render.mock.calls.length;
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Raw Import Result' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1557,7 +1592,7 @@ describe('App import and preview pipeline', () => {
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'CineStill 400D' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'CineStill 400D' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -1782,9 +1817,9 @@ describe('App import and preview pipeline', () => {
     expect(importRenderCall.settings.saturation).toBe(0);
     expect(importRenderCall.settings.filmBaseSample).toBeNull();
     expect(importRenderCall.settings.rotation).toBe(90);
-    expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
+    expect(within(openProfiles()).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Raw Import Result' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -1942,7 +1977,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1981,7 +2016,7 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.lightSourceBias).toEqual([0.82, 0.87, 1]);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1993,7 +2028,7 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.94, 0.88]);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Fuji Provia 100F' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Fuji Provia 100F' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2022,9 +2057,9 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(screen.getByText('Current Light Source: cs-lite-cool')).toBeInTheDocument();
+    expect(within(openDevelop()).getByText('Current Light Source: cs-lite-cool')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select Auto Light Source' }));
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Select Auto Light Source' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2035,7 +2070,7 @@ describe('App import and preview pipeline', () => {
       lightSourceBias: [number, number, number];
     };
     expect(latestRenderCall.lightSourceBias).toEqual([1, 1, 1]);
-    expect(screen.getByText('Current Light Source: auto')).toBeInTheDocument();
+    expect(within(openDevelop()).getByText('Current Light Source: auto')).toBeInTheDocument();
     expect(localStorage.getItem('darkslide_default_light_source')).toBe('cs-lite');
   });
 
@@ -2063,21 +2098,21 @@ describe('App import and preview pipeline', () => {
 
     const renderCountBeforeSave = workerState.render.mock.calls.length;
     const renderBeforeSave = structuredClone(workerState.render.mock.calls.at(-1)?.[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
     await act(async () => { vi.runAllTimers(); });
     await flushMicrotasks();
     expect(workerState.render).toHaveBeenCalledTimes(renderCountBeforeSave);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select Auto Light Source' }));
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Select Auto Light Source' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
     });
     await flushMicrotasks();
-    expect(screen.getByText('Current Light Source: auto')).toBeInTheDocument();
+    expect(within(openDevelop()).getByText('Current Light Source: auto')).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Saved Custom Preset' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2090,7 +2125,7 @@ describe('App import and preview pipeline', () => {
       tonalCharacter: unknown;
       settings: ConversionSettings;
     };
-    expect(screen.getByText('Current Light Source: daylight')).toBeInTheDocument();
+    expect(within(openDevelop()).getByText('Current Light Source: daylight')).toBeInTheDocument();
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.98, 0.95]);
     expect(latestRenderCall.colorMatrix).toEqual(renderBeforeSave.colorMatrix);
     expect(latestRenderCall.tonalCharacter).toEqual(renderBeforeSave.tonalCharacter);
@@ -2130,7 +2165,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Phoenix LUT' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Phoenix LUT' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2141,7 +2176,7 @@ describe('App import and preview pipeline', () => {
     const lutRenderCall = workerState.render.mock.calls.at(-1)?.[0] as { cubeLut?: { size: number } | null };
     expect(lutRenderCall.cubeLut?.size).toBe(2);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
 
     const saved = customPresetState.presets.find((preset) => preset.name === 'Saved Custom Preset') as
@@ -2188,10 +2223,10 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Square Crop' }));
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Apply Square Crop' }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply Half Rotation' }));
     await flushMicrotasks();
     await act(async () => {
@@ -2199,7 +2234,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Saved Custom Preset' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2386,7 +2421,7 @@ describe('App import and preview pipeline', () => {
 
     expect(screen.getByText('This scan looks monochrome. Convert it to black and white?')).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
 
     expect(screen.queryByText('This scan looks monochrome. Convert it to black and white?')).not.toBeInTheDocument();
@@ -2654,7 +2689,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByText('Toggle Film Base Picker'));
+    fireEvent.click(within(openDevelop()).getByText('Toggle Film Base Picker'));
 
     const canvas = document.querySelector('canvas');
     expect(canvas).toBeTruthy();
@@ -2789,7 +2824,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Kodak Gold 200' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Kodak Gold 200' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2806,7 +2841,7 @@ describe('App import and preview pipeline', () => {
       };
     };
 
-    fireEvent.click(screen.getByText('Toggle Film Base Picker'));
+    fireEvent.click(within(openDevelop()).getByText('Toggle Film Base Picker'));
 
     const canvas = document.querySelector('canvas');
     expect(canvas).toBeTruthy();
@@ -3306,7 +3341,7 @@ describe('App import and preview pipeline', () => {
     render(<App />);
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Open Settings'));
+      fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     });
 
     await act(async () => {

@@ -1,5 +1,5 @@
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
-import { CropTab, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
+import { CropTab, EditorTool, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
 import { normalizeExportOptions } from './exportOptions';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
@@ -11,7 +11,7 @@ export interface UserPreferences {
   autoApplyPresetId: string | null;
   exportOptions: ExportOptions;
   notificationSettings: NotificationSettings;
-  sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
+  sidebarTab: EditorTool;
   cropTab?: CropTab;
   isLeftPaneOpen: boolean;
   isRightPaneOpen: boolean;
