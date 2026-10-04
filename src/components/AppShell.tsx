@@ -2,9 +2,10 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
+  AlertTriangle,
+  CheckCircle2,
   Download,
   ExternalLink,
-  FileWarning,
   Image as ImageIcon,
   Info,
   Loader2,
@@ -62,6 +63,20 @@ import { rotateCropClockwise } from '../utils/imagePipeline';
 import { Filmstrip } from './Filmstrip';
 import { FrameExportProgress } from './ExportFramesControl';
 import { FilmstripThumbnail } from '../utils/filmstripThumbnails';
+
+/** Export and Import share one size so the header actions line up. */
+const HEADER_BUTTON = 'inline-flex h-9 min-w-[8.5rem] items-center justify-center gap-2 rounded-lg border px-4 text-sm font-medium transition-colors';
+
+// Notices about the open frame drop in at the top of the canvas, clear of the
+// floating toolbar, as one compact glass card per notice.
+const NOTICE_CARD = 'pointer-events-auto flex w-full max-w-[32rem] items-center gap-3 rounded-xl border border-zinc-700/60 bg-zinc-900/85 py-2 pl-3.5 pr-2 text-[13px] text-zinc-200 shadow-xl shadow-black/40 backdrop-blur-xl';
+const NOTICE_DISMISS = 'grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200';
+const NOTICE_MOTION = {
+  initial: { opacity: 0, y: -10, scale: 0.98 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: -8, scale: 0.98, transition: { duration: 0.15 } },
+  transition: { type: 'spring' as const, bounce: 0.15, duration: 0.35 },
+};
 
 const TOOLS_NEEDING_A_FRAME: EditorTool[] = ['adjust', 'curves', 'crop', 'dust', 'export'];
 
@@ -801,7 +816,7 @@ export function AppShell({
                   <button
                     onClick={onDownload}
                     disabled={Boolean(isExporting)}
-                    className="grid min-w-[8.75rem] grid-cols-[1rem_auto] items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-1.5 text-sm font-medium text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50"
+                    className={`${HEADER_BUTTON} border-zinc-100 bg-zinc-100 text-zinc-950 shadow-lg shadow-black/20 hover:bg-white disabled:opacity-50`}
                     aria-busy={isExporting}
                   >
                     {isExporting ? <Loader2 size={16} className="shrink-0 animate-spin" /> : <Download size={16} className="shrink-0" />}
@@ -813,9 +828,10 @@ export function AppShell({
               )}
               <button
                 onClick={() => void onOpenImage()}
-                className="flex items-center gap-2 rounded-lg border border-zinc-700/50 bg-zinc-800 px-4 py-1.5 text-sm font-medium text-zinc-200 transition-all hover:bg-zinc-700"
+                className={`${HEADER_BUTTON} border-zinc-700/60 bg-zinc-800 text-zinc-200 hover:border-zinc-600 hover:bg-zinc-700`}
               >
-                <Upload size={16} /> Import
+                <Upload size={16} className="shrink-0" />
+                <span className="whitespace-nowrap">Import</span>
               </button>
               {!usesNativeFileDialogs && (
                 <input
@@ -1084,29 +1100,26 @@ export function AppShell({
 
               <div
                 data-testid="notification-stack"
-                className="pointer-events-none absolute bottom-8 right-8 z-50 flex w-[min(28rem,calc(100%-4rem))] flex-col items-stretch gap-3"
+                className="pointer-events-none absolute inset-x-4 top-4 z-50 flex flex-col items-center gap-2"
               >
                 <AnimatePresence initial={false}>
                   {transientNotice && (
                     <motion.div
                       key="transient-notice"
                       layout
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 12 }}
-                      className={`pointer-events-auto flex items-center gap-3 rounded-xl px-4 py-3 text-sm shadow-2xl backdrop-blur-xl ${
-                        transientNotice.tone === 'success'
-                          ? 'border border-emerald-800/60 bg-emerald-950/55 text-emerald-100'
-                          : transientNotice.tone === 'info'
-                            ? 'border border-zinc-700/70 bg-zinc-900/90 text-zinc-200'
-                            : 'border border-amber-800/60 bg-amber-950/55 text-amber-100'
-                      }`}
+                      {...NOTICE_MOTION}
+                      role={transientNotice.tone === 'warning' ? 'alert' : 'status'}
+                      className={NOTICE_CARD}
                     >
                       {transientNotice.tone === 'info'
-                        ? <Info size={18} className="shrink-0 text-zinc-400" />
-                        : <FileWarning size={18} className={`shrink-0 ${transientNotice.tone === 'success' ? 'text-emerald-300' : 'text-amber-300'}`} />}
-                      <span className="min-w-0 flex-1">{transientNotice.message}</span>
-                      <button type="button" onClick={() => onSetTransientNotice(null)} aria-label="Dismiss notification" className="shrink-0 opacity-50 hover:opacity-100">✕</button>
+                        ? <Info size={16} className="shrink-0 text-zinc-400" />
+                        : transientNotice.tone === 'success'
+                          ? <CheckCircle2 size={16} className="shrink-0 text-emerald-400" />
+                          : <AlertTriangle size={16} className="shrink-0 text-amber-400" />}
+                      <span className="min-w-0 flex-1 leading-snug">{transientNotice.message}</span>
+                      <button type="button" onClick={() => onSetTransientNotice(null)} aria-label="Dismiss notification" className={NOTICE_DISMISS}>
+                        <X size={14} />
+                      </button>
                     </motion.div>
                   )}
 
@@ -1114,14 +1127,15 @@ export function AppShell({
                     <motion.div
                       key="error-notice"
                       layout
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 12 }}
-                      className="pointer-events-auto flex items-center gap-3 rounded-xl border border-red-900/50 bg-red-950/50 px-4 py-3 text-sm text-red-200 shadow-2xl backdrop-blur-xl"
+                      {...NOTICE_MOTION}
+                      role="alert"
+                      className={`${NOTICE_CARD} border-red-900/60`}
                     >
-                      <FileWarning size={18} className="shrink-0 text-red-400" />
-                      <span className="min-w-0 flex-1">{error}</span>
-                      <button type="button" onClick={() => onSetError(null)} aria-label="Dismiss error" className="shrink-0 opacity-50 hover:opacity-100">✕</button>
+                      <AlertTriangle size={16} className="shrink-0 text-red-400" />
+                      <span className="min-w-0 flex-1 leading-snug">{error}</span>
+                      <button type="button" onClick={() => onSetError(null)} aria-label="Dismiss error" className={NOTICE_DISMISS}>
+                        <X size={14} />
+                      </button>
                     </motion.div>
                   )}
 
@@ -1129,31 +1143,28 @@ export function AppShell({
                     <motion.div
                       key="suggestion-notice"
                       layout
-                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                      transition={{ type: 'spring', bounce: 0.2, duration: 0.35 }}
-                      className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-zinc-700/70 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-200 shadow-2xl shadow-black/50 backdrop-blur-xl"
+                      {...NOTICE_MOTION}
+                      className={NOTICE_CARD}
                     >
-                      <ImageIcon size={16} className="shrink-0 text-zinc-400" />
-                      <span className="min-w-0 flex-1 leading-snug text-zinc-300">{suggestionNotice.message}</span>
+                      <ImageIcon size={16} className="shrink-0 text-accent-400" />
+                      <span className="min-w-0 flex-1 leading-snug">{suggestionNotice.message}</span>
                       <button
                         type="button"
                         onClick={() => {
                           suggestionNotice.onAction();
                           onSetSuggestionNotice(null);
                         }}
-                        className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
+                        className="shrink-0 rounded-md bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
                       >
                         {suggestionNotice.actionLabel}
                       </button>
                       <button
                         type="button"
                         onClick={() => onSetSuggestionNotice(null)}
-                        className="shrink-0 text-zinc-600 transition-colors hover:text-zinc-300"
+                        className={NOTICE_DISMISS}
                         aria-label="Dismiss suggestion"
                       >
-                        <X size={13} />
+                        <X size={14} />
                       </button>
                     </motion.div>
                   )}

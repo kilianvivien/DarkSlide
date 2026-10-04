@@ -259,12 +259,21 @@ export const Sidebar = memo(function Sidebar({
     && estimatedFilmBase !== null
     && (estimatedFilmBase.confidence < FILM_BASE_CONFIDENCE.accept || estimatedFilmBase.source === 'low-confidence');
   const filmBaseStatus = filmBaseSampleSource === 'manual'
-    ? 'Manual sample'
+    ? 'Sampled on this frame'
     : filmBaseSampleSource === 'roll'
-      ? 'Roll sample'
+      ? 'Sampled for the roll'
       : estimatedFilmBase
-        ? `${estimatedFilmBase.source === 'frame-rebate' ? 'Frame rebate' : estimatedFilmBase.source === 'in-frame' ? 'In-frame estimate' : estimatedFilmBase.source === 'low-confidence' ? 'Conservative fallback' : 'Automatic estimate'} · ${Math.round(estimatedFilmBase.confidence * 100)}%`
-        : 'No base reference';
+        ? estimatedFilmBase.source === 'frame-rebate'
+          ? 'Found in the frame edge'
+          : estimatedFilmBase.source === 'in-frame'
+            ? 'In-frame estimate'
+            : estimatedFilmBase.source === 'low-confidence'
+              ? 'Not found, using a fallback'
+              : 'Automatic estimate'
+        : 'Not measured yet';
+  const filmBaseConfidence = filmBaseSampleSource === null && estimatedFilmBase
+    ? Math.round(estimatedFilmBase.confidence * 100)
+    : null;
 
   useEffect(() => {
     const element = contentRef.current;
@@ -487,29 +496,38 @@ export const Sidebar = memo(function Sidebar({
                     <Pipette size={14} className={isPickingFilmBase ? 'animate-pulse' : ''} />
                     <span>{filmBaseInstruction}</span>
                   </button>
-                  <div className="mt-2 flex min-w-0 items-center gap-2 px-0.5">
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${filmBaseLowConfidence ? 'bg-amber-500/70' : 'bg-zinc-600'}`} />
-                    <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Base</span>
-                    <span role="status" className={`min-w-0 flex-1 truncate text-[11px] ${filmBaseLowConfidence ? 'text-amber-300/80' : 'text-zinc-500'}`}>{filmBaseStatus}</span>
-                    {onReanalyzeFilmBase && filmBaseSampleSource === null && (
-                      <button
-                        type="button"
-                        onClick={onReanalyzeFilmBase}
-                        disabled={isReanalyzingFilmBase}
-                        className="inline-flex shrink-0 items-center gap-1 py-1 text-[10px] font-medium text-zinc-600 transition-colors hover:text-zinc-300 disabled:cursor-wait disabled:opacity-50"
-                        aria-label="Re-analyze film base outside the current crop"
-                        data-tip="Look for clear film base outside the current crop. Large changes require confirmation."
-                      >
-                        {isReanalyzingFilmBase ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-                        {isReanalyzingFilmBase ? 'Analyzing…' : 'Re-analyze'}
-                      </button>
+                  <div
+                    className={`mt-2 rounded-lg border px-3 py-2 ${
+                      filmBaseLowConfidence ? 'border-amber-500/20 bg-amber-500/[0.04]' : 'border-zinc-800/80 bg-zinc-900/30'
+                    }`}
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${filmBaseLowConfidence ? 'bg-amber-400' : filmBaseSampleSource !== null || estimatedFilmBase ? 'bg-accent-400' : 'bg-zinc-600'}`} />
+                      <span role="status" className="min-w-0 flex-1 truncate text-[12px] text-zinc-300">{filmBaseStatus}</span>
+                      {filmBaseConfidence !== null && (
+                        <span className={`shrink-0 font-mono text-[11px] tabular-nums ${filmBaseLowConfidence ? 'text-amber-300/90' : 'text-zinc-500'}`}>
+                          {filmBaseConfidence}%
+                        </span>
+                      )}
+                      {onReanalyzeFilmBase && filmBaseSampleSource === null && (
+                        <button
+                          type="button"
+                          onClick={onReanalyzeFilmBase}
+                          disabled={isReanalyzingFilmBase}
+                          className="-mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50"
+                          aria-label="Re-analyze film base outside the current crop"
+                          data-tip="Look for clear film base outside the current crop. Large changes require confirmation."
+                        >
+                          {isReanalyzingFilmBase ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                        </button>
+                      )}
+                    </div>
+                    {filmBaseLowConfidence && (
+                      <p className="mt-1 pl-3.5 text-[11px] leading-snug text-zinc-400">
+                        Low confidence. Sample clear film, such as the strip edge or the gap between frames.
+                      </p>
                     )}
                   </div>
-                  {filmBaseLowConfidence && (
-                    <p className="mt-1.5 pl-5 text-[10px] leading-relaxed text-amber-300/55">
-                      Low confidence — sample a clear area if the conversion looks wrong.
-                    </p>
-                  )}
                 </section>
 
                 <section>
