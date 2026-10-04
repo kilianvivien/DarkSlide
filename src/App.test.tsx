@@ -2717,7 +2717,7 @@ describe('App import and preview pipeline', () => {
       await flushMicrotasks();
       await act(async () => { vi.runOnlyPendingTimers(); });
       await flushMicrotasks();
-      expect(workerState.render.mock.calls.at(-1)?.[0].settings).toMatchObject({ temperature: 12, tint: 0 });
+      expect(workerState.render.mock.calls.at(-1)?.[0].settings).toMatchObject({ temperature: 11, tint: 0 });
     }
     expect(workerState.sampleFilmBase).toHaveBeenCalledWith(expect.objectContaining({
       sampleMode: 'white-balance', filmType: 'negative', profileId: 'generic-color', isColor: true,

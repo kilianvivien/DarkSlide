@@ -1010,3 +1010,50 @@ describe('getTransformedDimensions', () => {
     expect(transformed.height).toBeGreaterThan(6048);
   });
 });
+
+describe('linear-light exposure and white balance', () => {
+  const srgbDecode = (v: number) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  const positiveSettings = (overrides: Parameters<typeof createDefaultSettings>[0] = {}) => createDefaultSettings({
+    ...neutralSettings,
+    filmBaseSample: { r: 255, g: 255, b: 255 },
+    residualBaseCorrection: false,
+    flareCorrection: 0,
+    ...overrides,
+  });
+  const renderSlide = (pixels: Array<[number, number, number]>, overrides: Parameters<typeof createDefaultSettings>[0]) => {
+    const raster = createFloatGrid(2, pixels);
+    processFloatRaster(raster, positiveSettings(overrides), true, 'processed', undefined, undefined, undefined, undefined, undefined, undefined, 0, 0, 0, 'srgb', 'srgb', null, 'slide');
+    return raster.data;
+  };
+
+  it('keeps black neutral when warming or tinting', () => {
+    const data = renderSlide([[0, 0, 0], [128, 128, 128]], { temperature: 40, tint: -30 });
+    expect(Array.from(data.slice(0, 3))).toEqual([0, 0, 0]);
+    expect(data[3]).toBeGreaterThan(data[5]);
+  });
+
+  it('applies temperature as opposite stops on red and blue in linear light', () => {
+    const data = renderSlide([[128, 128, 128]], { temperature: 40 });
+    // 40 units = one stop: red/blue differ by two stops whatever the grey level.
+    expect(srgbDecode(data[0]) / srgbDecode(data[2])).toBeCloseTo(4, 2);
+  });
+
+  it('keeps the brightness of a neutral when only the cast changes', () => {
+    const [r, g, b] = Array.from(renderSlide([[128, 128, 128]], { temperature: 30, tint: 20 }).slice(0, 3)).map(srgbDecode);
+    const reference = srgbDecode(128 / 255);
+    expect(0.2126 * r + 0.7152 * g + 0.0722 * b).toBeCloseTo(reference, 3);
+  });
+
+  it('treats 25 exposure units as one stop of linear light', () => {
+    const base = renderSlide([[90, 90, 90]], {})[0];
+    const brighter = renderSlide([[90, 90, 90]], { exposure: 25 })[0];
+    expect(srgbDecode(brighter) / srgbDecode(base)).toBeCloseTo(2, 2);
+  });
+
+  it('puts exposure and white balance gains in the GPU uniforms', () => {
+    const uniforms = buildProcessingUniforms(positiveSettings({ exposure: 25, temperature: 40 }), true, 'processed');
+    const [gainR, gainG, gainB] = [uniforms[16], uniforms[7], uniforms[17]];
+    expect(gainR / gainB).toBeCloseTo(4, 5);
+    expect(0.2126 * gainR + 0.7152 * gainG + 0.0722 * gainB).toBeCloseTo(2, 5);
+  });
+});

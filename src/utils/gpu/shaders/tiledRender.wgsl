@@ -8,10 +8,11 @@ struct Uniforms {
   bwEnabled: f32,
   isSlide: f32,
 
-  exposureFactor: f32,
+  _pad1: f32,
   contrastFactor: f32,
   saturationFactor: f32,
-  _pad2: f32,
+  // Exposure × white balance, as linear-light gains (see whiteBalance.ts).
+  gainG: f32,
 
   filmBaseR: f32,
   filmBaseG: f32,
@@ -23,8 +24,8 @@ struct Uniforms {
   chanBalB: f32,
   _pad4: f32,
 
-  tempShift: f32,
-  tintShift: f32,
+  gainR: f32,
+  gainB: f32,
   blackPoint: f32,
   whitePoint: f32,
 
@@ -179,6 +180,41 @@ fn encodeTransfer(value: f32, mode: f32) -> f32 {
     return normalized * 12.92;
   }
   return 1.055 * pow(normalized, 1.0 / 2.4) - 0.055;
+}
+
+// Unclamped, sign-symmetric variants for the gain stage, which must keep
+// over-white and negative values. Mirrors getExtendedTransferFunctions.
+fn decodeTransferExtended(value: f32, mode: f32) -> f32 {
+  let magnitude = abs(value);
+  var decoded: f32;
+  if (mode > 0.0) {
+    decoded = pow(magnitude, mode);
+  } else if (magnitude <= 0.04045) {
+    decoded = magnitude / 12.92;
+  } else {
+    decoded = pow((magnitude + 0.055) / 1.055, 2.4);
+  }
+  return select(decoded, -decoded, value < 0.0);
+}
+
+fn encodeTransferExtended(value: f32, mode: f32) -> f32 {
+  let magnitude = abs(value);
+  var encoded: f32;
+  if (mode > 0.0) {
+    encoded = pow(magnitude, 1.0 / mode);
+  } else if (magnitude <= 0.0031308) {
+    encoded = magnitude * 12.92;
+  } else {
+    encoded = 1.055 * pow(magnitude, 1.0 / 2.4) - 0.055;
+  }
+  return select(encoded, -encoded, value < 0.0);
+}
+
+fn applyLinearGain(value: f32, gain: f32, mode: f32) -> f32 {
+  if (gain == 1.0) {
+    return value;
+  }
+  return encodeTransferExtended(decodeTransferExtended(value, mode) * gain, mode);
 }
 
 fn convertInputToOutput(r: f32, g: f32, b: f32, uniforms: Uniforms) -> vec3<f32> {
@@ -407,11 +443,6 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       r *= uniforms.chanBalR;
       g *= uniforms.chanBalG;
       b *= uniforms.chanBalB;
-      if (uniforms.bwEnabled <= 0.5) {
-        r += uniforms.tempShift;
-        b -= uniforms.tempShift;
-        g += uniforms.tintShift;
-      }
     }
 
     if (uniforms.isColor <= 0.5 || uniforms.bwEnabled > 0.5) {
@@ -425,9 +456,9 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       b = gray;
     }
 
-    r *= uniforms.exposureFactor;
-    g *= uniforms.exposureFactor;
-    b *= uniforms.exposureFactor;
+    r = applyLinearGain(r, uniforms.gainR, uniforms.outputTransferMode);
+    g = applyLinearGain(g, uniforms.gainG, uniforms.outputTransferMode);
+    b = applyLinearGain(b, uniforms.gainB, uniforms.outputTransferMode);
 
     r = applyWhiteBlackPoint(r, uniforms.blackPoint, uniforms.whitePoint);
     g = applyWhiteBlackPoint(g, uniforms.blackPoint, uniforms.whitePoint);

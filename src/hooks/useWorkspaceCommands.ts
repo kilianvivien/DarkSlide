@@ -1404,7 +1404,11 @@ export function useWorkspaceCommands({
           const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
           handleSettingsChange({ whitePoint: clamp(luminance, 180, 255) });
         } else if (activePointPicker === 'grey') {
-          handleSettingsChange(neutralWhiteBalance(sample, activeLabStyle?.temperatureBias ?? 0));
+          handleSettingsChange(neutralWhiteBalance(
+            sample,
+            activeLabStyle?.temperatureBias ?? 0,
+            documentState.colorManagement.outputProfileId,
+          ));
         }
 
         setActivePointPicker(null);

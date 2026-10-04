@@ -21,6 +21,7 @@ import { DENSITY_TO_POSITIVE_GAMMA, FILM_BASE_CONFIDENCE, FILM_STOCK_DENSITY_PRE
 import { convertRgbBetweenProfiles, decodeProfileChannel, encodeProfileChannel, getLinearTransformMatrix, getTransferMode } from './colorProfiles';
 import { sampleCubeLut } from './cubeLut';
 import { clamp } from './math';
+import { createLinearGainApplier, isIdentityGains, resolveExposureGain, resolveWhiteBalanceGains, type RgbGains } from './whiteBalance';
 
 const LUMA_R = 0.299;
 const LUMA_G = 0.587;
@@ -967,6 +968,18 @@ export function computeHighlightDensity(histogram: HistogramData) {
   return highlightCount / total;
 }
 
+// Exposure and white balance combined into one set of linear-light gains.
+// White balance only applies to colour output; monochrome gets exposure alone
+// (applied after the channel mix, where the image is already grey).
+function resolveLinearGains(settings: ConversionSettings, isColor: boolean, labTemperatureBias: number): RgbGains {
+  const exposureGain = resolveExposureGain(settings.exposure);
+  if (!isColor || settings.blackAndWhite.enabled) {
+    return [exposureGain, exposureGain, exposureGain];
+  }
+  const [red, green, blue] = resolveWhiteBalanceGains(settings.temperature + labTemperatureBias, settings.tint);
+  return [red * exposureGain, green * exposureGain, blue * exposureGain];
+}
+
 export function buildProcessingUniforms(
   settings: ConversionSettings,
   isColor: boolean,
@@ -998,6 +1011,7 @@ export function buildProcessingUniforms(
       highlightRolloff: labTonalCharacterOverride.highlightRolloff ?? 0.5,
     } : undefined);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
+  const linearGains = resolveLinearGains(effectiveSettings, isColor, labTemperatureBias);
   const profileTransform = getLinearTransformMatrix(inputProfileId, outputProfileId);
   const flareCorrection = effectiveSettings.flareCorrection ?? 50;
   const normalizedFlareFloor: [number, number, number] = flareFloor
@@ -1023,10 +1037,10 @@ export function buildProcessingUniforms(
     effectiveSettings.blackAndWhite.enabled ? 1 : 0,
     filmType === 'slide' ? 1 : 0,
 
-    Math.pow(2, effectiveSettings.exposure / 50),
+    0,
     (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast)),
     clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2),
-    0,
+    linearGains[1],
 
     filmBaseBalance.red,
     filmBaseBalance.green,
@@ -1038,8 +1052,8 @@ export function buildProcessingUniforms(
     effectiveSettings.blueBalance,
     0,
 
-    clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1),
-    effectiveSettings.tint / 255,
+    linearGains[0],
+    linearGains[2],
     effectiveSettings.blackPoint / 255,
     effectiveSettings.whitePoint / 255,
 
@@ -1405,15 +1419,14 @@ export function processImageData(
   const data = imageData.data;
   const curveTables = buildFloatCurveTables(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
   const histogram = buildEmptyHistogram();
-  const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
   const safeContrast = clamp(effectiveSettings.contrast, -255, 258);
   const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
   const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;
-  const temperatureShift = clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1);
-  const tintShift = clamp(effectiveSettings.tint / 255, -1, 1);
+  const linearGains = resolveLinearGains(effectiveSettings, isColor, labTemperatureBias);
+  const applyLinearGains = createLinearGainApplier(outputProfileId);
   const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
   const flareStrength = (effectiveSettings.flareCorrection ?? 50) / 100;
   const flareFloorNormalized: [number, number, number] = flareFloor
@@ -1469,11 +1482,6 @@ export function processImageData(
         r *= effectiveSettings.redBalance;
         g *= effectiveSettings.greenBalance;
         b *= effectiveSettings.blueBalance;
-        if (!effectiveSettings.blackAndWhite.enabled) {
-          r += temperatureShift;
-          b -= temperatureShift;
-          g += tintShift;
-        }
       }
 
       if (shouldUseBlackAndWhite) {
@@ -1492,9 +1500,9 @@ export function processImageData(
         b = gray;
       }
 
-      r *= exposureFactor;
-      g *= exposureFactor;
-      b *= exposureFactor;
+      if (!isIdentityGains(linearGains)) {
+        [r, g, b] = applyLinearGains(r, g, b, linearGains);
+      }
 
       r = applyWhiteBlackPoint(r, blackPoint, whitePoint);
       g = applyWhiteBlackPoint(g, blackPoint, whitePoint);
@@ -1608,15 +1616,14 @@ export function processFloatRaster(
   const data = raster.data;
   const channels = raster.channels ?? 3;
   const curveTables = buildFloatCurveTables(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
-  const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
   const safeContrast = clamp(effectiveSettings.contrast, -255, 258);
   const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
   const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
   const blackPoint = effectiveSettings.blackPoint / 255;
   const whitePoint = effectiveSettings.whitePoint / 255;
-  const temperatureShift = clamp((effectiveSettings.temperature + labTemperatureBias) / 255, -1, 1);
-  const tintShift = clamp(effectiveSettings.tint / 255, -1, 1);
+  const linearGains = resolveLinearGains(effectiveSettings, isColor, labTemperatureBias);
+  const applyLinearGains = createLinearGainApplier(outputProfileId);
   const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
   const flareStrength = (effectiveSettings.flareCorrection ?? 50) / 100;
   const flareFloorNormalized: [number, number, number] = flareFloor
@@ -1673,11 +1680,6 @@ export function processFloatRaster(
         r *= effectiveSettings.redBalance;
         g *= effectiveSettings.greenBalance;
         b *= effectiveSettings.blueBalance;
-        if (!effectiveSettings.blackAndWhite.enabled) {
-          r += temperatureShift;
-          b -= temperatureShift;
-          g += tintShift;
-        }
       }
 
       if (shouldUseBlackAndWhite) {
@@ -1696,9 +1698,9 @@ export function processFloatRaster(
         b = gray;
       }
 
-      r *= exposureFactor;
-      g *= exposureFactor;
-      b *= exposureFactor;
+      if (!isIdentityGains(linearGains)) {
+        [r, g, b] = applyLinearGains(r, g, b, linearGains);
+      }
 
       r = applyWhiteBlackPoint(r, blackPoint, whitePoint);
       g = applyWhiteBlackPoint(g, blackPoint, whitePoint);
