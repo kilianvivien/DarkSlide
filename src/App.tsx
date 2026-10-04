@@ -40,6 +40,7 @@ import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPrese
 import { usesColorChannelPipeline } from './utils/pipelineIntent';
 import { resolveDocumentProfile, resolveProfileApplication } from './utils/presetRecipe';
 import { useContactSheet } from './hooks/useContactSheet';
+import { loadFilmstripCollapsed, saveFilmstripCollapsed } from './utils/filmstripVisibility';
 import { normalizeExportOptions } from './utils/exportOptions';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
@@ -3122,6 +3123,14 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     frameExportCancelledRef.current = true;
   }, []);
 
+  const [filmstripCollapsed, setFilmstripCollapsed] = useState(loadFilmstripCollapsed);
+  const handleToggleFilmstrip = useCallback(() => {
+    setFilmstripCollapsed((current) => {
+      saveFilmstripCollapsed(!current);
+      return !current;
+    });
+  }, []);
+
   const handleContactSheetSaved = useCallback((message: string) => showTransientNotice(message, 'success'), [showTransientNotice]);
   const contactSheet = useContactSheet({
     workerClientRef,
@@ -3275,6 +3284,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onDeactivateDustBrush: () => handleDustBrushActiveChange(false),
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleProfilesTool,
+    onToggleFilmstrip: handleToggleFilmstrip,
     onSelectTool: handleSelectTool,
     hasFrameSelection: filmstripSelection.ids.length > 1,
     onClearFrameSelection: handleClearFilmstripSelection,
@@ -3360,6 +3370,8 @@ onToggleScanningSession: toggleScanningWindow,
       batchOutputPath={batchOutputPath}
       contactSheetOutputPath={contactSheetOutputPath}
       contactSheet={contactSheet}
+      filmstripCollapsed={filmstripCollapsed}
+      onToggleFilmstrip={handleToggleFilmstrip}
       customPresetCount={customPresets.length}
       presetFolderCount={presetFolders.length}
       quickExportPresets={quickExportPresets}

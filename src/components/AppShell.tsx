@@ -145,6 +145,8 @@ type AppShellProps = {
   batchOutputPath: string | null;
   contactSheetOutputPath: string | null;
   contactSheet: ContactSheetController;
+  filmstripCollapsed: boolean;
+  onToggleFilmstrip: () => void;
   customPresetCount: number;
   presetFolderCount: number;
   quickExportPresets: QuickExportPreset[];
@@ -373,6 +375,8 @@ export function AppShell({
   batchOutputPath,
   contactSheetOutputPath,
   contactSheet,
+  filmstripCollapsed,
+  onToggleFilmstrip,
   customPresetCount,
   presetFolderCount,
   quickExportPresets,
@@ -1184,6 +1188,8 @@ export function AppShell({
                 onApplyRollFilmBase={onApplyRollFilmBase}
                 onRemoveFromRoll={onRemoveFromRoll}
                 onOpenRollInfo={onOpenRollInfo}
+                collapsed={filmstripCollapsed}
+                onToggleCollapsed={onToggleFilmstrip}
               />
             </ErrorBoundary>
           )}

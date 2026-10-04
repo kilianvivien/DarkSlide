@@ -131,6 +131,19 @@ describe('Filmstrip', () => {
     expect(within(frame).getByTitle('Unsaved edits')).toBeInTheDocument();
   });
 
+  it('hides the thumbnails but keeps the header when collapsed', () => {
+    const onToggleCollapsed = vi.fn();
+    renderStrip({ collapsed: true, onToggleCollapsed, selectedIds: ['a', 'b'] });
+
+    expect(screen.queryByRole('list', { name: 'Frames' })).not.toBeInTheDocument();
+    // Selection actions stay reachable from the header row.
+    expect(screen.getByRole('toolbar', { name: 'Selected frames' })).toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Show filmstrip' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(onToggleCollapsed).toHaveBeenCalledOnce();
+  });
+
   it('closes a frame and adds images', () => {
     const handlers = renderStrip();
     fireEvent.click(screen.getByRole('button', { name: 'Close b.tiff' }));

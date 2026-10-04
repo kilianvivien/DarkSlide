@@ -36,6 +36,7 @@ type UseAppShortcutsOptions = {
   onDeactivateDustBrush: () => void;
   onToggleLeftPane: () => void;
   onToggleRightPane: () => void;
+  onToggleFilmstrip: () => void;
   onSelectTool: (tool: EditorTool) => void;
   hasFrameSelection: boolean;
   onClearFrameSelection: () => void;
@@ -79,6 +80,7 @@ export function useAppShortcuts({
   onDeactivateDustBrush,
   onToggleLeftPane,
   onToggleRightPane,
+  onToggleFilmstrip,
   onSelectTool,
   hasFrameSelection,
   onClearFrameSelection,
@@ -143,6 +145,7 @@ previousTab: {
       toolCurves: { key: '2', handler: () => onSelectTool('curves') },
       toolProfiles: { key: '3', handler: () => onSelectTool('profiles') },
       toggleProfiles: { key: 'p', handler: onToggleRightPane },
+      toggleFilmstrip: { key: 'f', when: () => tabs.length > 0, handler: onToggleFilmstrip },
       toolCrop: { key: '4', when: () => documentStatePresent, handler: () => onSelectTool('crop') },
       toolDust: { key: '5', when: () => documentStatePresent, handler: () => onSelectTool('dust') },
       toolExport: { key: '6', handler: () => onSelectTool('export') },
