@@ -1,5 +1,4 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertTriangle,
@@ -21,15 +20,11 @@ import { CropOverlay } from './CropOverlay';
 import { DustOverlay } from './DustOverlay';
 import { SettingsModal } from './SettingsModal';
 import { BatchModal } from './BatchModal';
-import { ContactSheetModal } from './ContactSheetModal';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ToastHost } from './ToastHost';
 import { DEFAULT_COLOR_MANAGEMENT } from '../constants';
-import {
-  BatchJobEntry,
-} from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import {
   BlockingOverlayState,
@@ -61,6 +56,9 @@ import { InspectorHeader } from './InspectorHeader';
 import { CanvasToolbar } from './CanvasToolbar';
 import { rotateCropClockwise } from '../utils/imagePipeline';
 import { Filmstrip } from './Filmstrip';
+import { ContactSheetPane } from './ContactSheetPane';
+import { ContactSheetPreview } from './ContactSheetPreview';
+import { ContactSheetController } from '../hooks/useContactSheet';
 import { FrameExportProgress } from './ExportFramesControl';
 import { FilmstripThumbnail } from '../utils/filmstripThumbnails';
 
@@ -78,7 +76,7 @@ const NOTICE_MOTION = {
   transition: { type: 'spring' as const, bounce: 0.15, duration: 0.35 },
 };
 
-const TOOLS_NEEDING_A_FRAME: EditorTool[] = ['adjust', 'curves', 'crop', 'dust', 'export'];
+const TOOLS_NEEDING_A_FRAME: EditorTool[] = ['adjust', 'curves', 'crop', 'dust', 'export', 'contact'];
 
 type AppShellProps = {
   usesNativeFileDialogs: boolean;
@@ -119,7 +117,6 @@ type AppShellProps = {
   isDragActive: boolean;
   showSettingsModal: boolean;
   showBatchModal: boolean;
-  showContactSheetModal: boolean;
   showTabSwitchOverlay: boolean;
   tabSwitchOverlayKey: number;
   showMagnifier: boolean;
@@ -147,6 +144,7 @@ type AppShellProps = {
   defaultExportPath: string | null;
   batchOutputPath: string | null;
   contactSheetOutputPath: string | null;
+  contactSheet: ContactSheetController;
   customPresetCount: number;
   presetFolderCount: number;
   quickExportPresets: QuickExportPreset[];
@@ -169,19 +167,12 @@ type AppShellProps = {
   previewTransformAngle: number;
   logicalPreviewSize: { width: number; height: number };
   cropImageSize: { width: number; height: number };
-  contactSheetEntries: BatchJobEntry[];
-  contactSheetSharedSettings: ConversionSettings | null;
-  contactSheetSharedProfile: FilmProfile | null;
-  contactSheetSharedLabStyle: LabStyleProfile | null;
-  contactSheetSharedColorManagement: ColorManagementSettings | null;
-  contactSheetSharedLightSourceBias: [number, number, number] | null;
   onSetIsPanDragging: React.Dispatch<React.SetStateAction<boolean>>;
   onSetIsDragActive: React.Dispatch<React.SetStateAction<boolean>>;
   onSetComparisonMode: React.Dispatch<React.SetStateAction<'processed' | 'original'>>;
   onSetIsCropOverlayVisible: React.Dispatch<React.SetStateAction<boolean>>;
   onSetShowSettingsModal: React.Dispatch<React.SetStateAction<boolean>>;
   onSetShowBatchModal: React.Dispatch<React.SetStateAction<boolean>>;
-  onSetShowContactSheetModal: React.Dispatch<React.SetStateAction<boolean>>;
   onSetSuggestionNotice: React.Dispatch<React.SetStateAction<SuggestionNoticeState | null>>;
   onSetTransientNotice: React.Dispatch<React.SetStateAction<TransientNoticeState | null>>;
   onSetError: React.Dispatch<React.SetStateAction<string | null>>;
@@ -216,14 +207,6 @@ type AppShellProps = {
   onDeleteRoll: (rollId: string) => void;
   onCreateRollFromTabs: () => void;
   onToggleScanningSession: () => void;
-  onOpenContactSheet: (payload: {
-    entries: BatchJobEntry[];
-    sharedSettings: ConversionSettings;
-    sharedProfile: FilmProfile;
-    sharedLabStyle: LabStyleProfile | null;
-    sharedColorManagement: ColorManagementSettings;
-    sharedLightSourceBias: [number, number, number] | null;
-  }) => void;
   defaultExportOptions: WorkspaceDocument['exportOptions'];
   onSettingsChange: (newSettings: Partial<ConversionSettings>) => void;
   onDustRemovalChange: (dustRemoval: ConversionSettings['dustRemoval']) => void;
@@ -362,7 +345,6 @@ export function AppShell({
   isDragActive,
   showSettingsModal,
   showBatchModal,
-  showContactSheetModal,
   showTabSwitchOverlay,
   tabSwitchOverlayKey,
   showMagnifier,
@@ -390,6 +372,7 @@ export function AppShell({
   defaultExportPath,
   batchOutputPath,
   contactSheetOutputPath,
+  contactSheet,
   customPresetCount,
   presetFolderCount,
   quickExportPresets,
@@ -412,19 +395,12 @@ export function AppShell({
   previewTransformAngle,
   logicalPreviewSize,
   cropImageSize,
-  contactSheetEntries,
-  contactSheetSharedSettings,
-  contactSheetSharedProfile,
-  contactSheetSharedLabStyle,
-  contactSheetSharedColorManagement,
-  contactSheetSharedLightSourceBias,
   onSetIsPanDragging,
   onSetIsDragActive,
   onSetComparisonMode,
   onSetIsCropOverlayVisible,
   onSetShowSettingsModal,
   onSetShowBatchModal,
-  onSetShowContactSheetModal,
   onSetSuggestionNotice,
   onSetTransientNotice,
   onSetError,
@@ -459,7 +435,6 @@ export function AppShell({
   onDeleteRoll,
   onCreateRollFromTabs,
   onToggleScanningSession,
-  onOpenContactSheet,
   defaultExportOptions,
   onSettingsChange,
   onDustRemovalChange,
@@ -612,6 +587,13 @@ export function AppShell({
   // the whole window.
   const inspectorVisible = isLeftPaneOpen && (Boolean(documentState) || sidebarTab === 'profiles');
 
+  // The Contact sheet tool swaps the image for a live preview of the sheet.
+  const showContactSheetPreview = inspectorVisible && sidebarTab === 'contact' && Boolean(documentState);
+  const contactSheetCells = useMemo(() => contactSheet.cells.map((cell) => ({
+    ...cell,
+    thumbnailUrl: cell.thumbnailUrl ?? filmstripThumbnails[cell.id]?.url ?? null,
+  })), [contactSheet.cells, filmstripThumbnails]);
+
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-zinc-950 font-sans text-zinc-100">
       {usesNativeFileDialogs && (
@@ -643,7 +625,9 @@ export function AppShell({
             <InspectorHeader tool={sidebarTab} onCollapse={() => onSelectTool(sidebarTab)} />
             <div className="min-h-0 w-80 flex-1">
               <ErrorBoundary>
-                {sidebarTab === 'profiles' ? (
+                {sidebarTab === 'contact' ? (
+                  <ContactSheetPane sheet={contactSheet} />
+                ) : sidebarTab === 'profiles' ? (
                   <PresetsPane
                     activeStockId={documentState?.profileId ?? fallbackProfile.id}
                     onStockChange={onProfileChange}
@@ -1081,6 +1065,12 @@ export function AppShell({
                 )}
               </AnimatePresence>
 
+              {showContactSheetPreview && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center bg-zinc-950 px-8 pb-6 pt-8">
+                  <ContactSheetPreview cells={contactSheetCells} layout={contactSheet.layout} />
+                </div>
+              )}
+
               {overlayContent && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-zinc-950/55 backdrop-blur-sm">
                   <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-950/95 px-6 py-5 shadow-2xl shadow-black/60">
@@ -1275,10 +1265,6 @@ export function AppShell({
         <BatchModal
           isOpen={showBatchModal}
           onClose={() => onSetShowBatchModal(false)}
-          onOpenContactSheet={(payload) => {
-            flushSync(() => onSetShowBatchModal(false));
-            onOpenContactSheet(payload);
-          }}
           workerClient={workerClient}
           currentSettings={documentState?.settings ?? null}
           currentProfile={documentState ? activeProfile : null}
@@ -1290,21 +1276,6 @@ export function AppShell({
           customProfiles={customPresets}
           openTabs={tabs}
           defaultOutputPath={batchOutputPath}
-        />
-      </ErrorBoundary>
-      <ErrorBoundary>
-        <ContactSheetModal
-          isOpen={showContactSheetModal}
-          onClose={() => onSetShowContactSheetModal(false)}
-          entries={contactSheetEntries}
-          sharedSettings={contactSheetSharedSettings}
-          sharedProfile={contactSheetSharedProfile}
-          sharedLabStyle={contactSheetSharedLabStyle}
-          sharedColorManagement={contactSheetSharedColorManagement}
-          sharedLightSourceBias={contactSheetSharedLightSourceBias}
-          notificationSettings={notificationSettings}
-          workerClient={workerClient}
-          defaultOutputPath={contactSheetOutputPath}
         />
       </ErrorBoundary>
       <ToastHost />

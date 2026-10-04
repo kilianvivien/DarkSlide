@@ -21,6 +21,7 @@ export const SHORTCUTS: ShortcutReference[] = [
   { action: 'Dust panel', keys: ['5'] },
   { action: 'Dust brush', keys: ['D'] },
   { action: 'Export panel', keys: ['6'] },
+  { action: 'Contact sheet', keys: ['7'] },
   { action: 'Previous / next frame', keys: ['←', '→'] },
   { action: 'Clear frame selection', keys: ['Esc'] },
   { action: 'Collapse the panel', keys: ['Click the active tool'] },

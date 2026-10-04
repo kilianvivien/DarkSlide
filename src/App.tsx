@@ -5,7 +5,7 @@ import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
 import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
 import { UpdateBanner } from './components/UpdateBanner';
-import { ColorManagementSettings, ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, EditorTool, ExportOptions, FilmProfile, HistogramMode, InputProfileSpec, InteractionQuality, LabStyleProfile, MaskTuning, NotificationSettings, PointPickerMode, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
+import { ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, EditorTool, ExportOptions, FilmProfile, HistogramMode, InputProfileSpec, InteractionQuality, MaskTuning, NotificationSettings, PointPickerMode, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
 import { useAppShortcuts } from './hooks/useAppShortcuts';
 import { useDocumentTabs } from './hooks/useDocumentTabs';
@@ -33,13 +33,13 @@ import { appendDocumentHistory } from './hooks/useDocumentTabs';
 import { analyzeMonochromeSuggestion } from './utils/autoAnalysis';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
-import { BatchJobEntry } from './utils/batchProcessor';
 import { syncRecentFilesToMenu } from './utils/recentFilesStore';
 import { BlockingOverlayState, createDocumentColorManagement, formatError, getCanvas2dContext, getErrorCode, getPresetTags, getResolvedInputProfileId, isIgnorableRenderError, isRawFile, isSupportedFile, normalizePreviewImageData, QueuedPreviewRender, SuggestionNoticeState, TransientNoticeState } from './utils/appHelpers';
 import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore';
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
 import { usesColorChannelPipeline } from './utils/pipelineIntent';
 import { resolveDocumentProfile, resolveProfileApplication } from './utils/presetRecipe';
+import { useContactSheet } from './hooks/useContactSheet';
 import { normalizeExportOptions } from './utils/exportOptions';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
@@ -126,14 +126,7 @@ export default function App() {
   const [cropTab, setCropTab] = useState<CropTab>(() => initialPreferences?.cropTab ?? 'Film');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
-  const [showContactSheetModal, setShowContactSheetModal] = useState(false);
   const [activeRollInfoId, setActiveRollInfoId] = useState<string | null>(null);
-  const [contactSheetEntries, setContactSheetEntries] = useState<BatchJobEntry[]>([]);
-  const [contactSheetSharedSettings, setContactSheetSharedSettings] = useState<ConversionSettings | null>(null);
-  const [contactSheetSharedProfile, setContactSheetSharedProfile] = useState<FilmProfile | null>(null);
-  const [contactSheetSharedLabStyle, setContactSheetSharedLabStyle] = useState<LabStyleProfile | null>(null);
-  const [contactSheetSharedColorManagement, setContactSheetSharedColorManagement] = useState<ColorManagementSettings | null>(null);
-  const [contactSheetSharedLightSourceBias, setContactSheetSharedLightSourceBias] = useState<[number, number, number] | null>(null);
   const [gpuRenderingEnabled, setGPURenderingEnabled] = useState(() => initialPreferences?.gpuRendering ?? true);
   const [ultraSmoothDragEnabled, setUltraSmoothDragEnabled] = useState(() => initialPreferences?.ultraSmoothDrag ?? false);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => initialPreferences?.notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS);
@@ -1862,7 +1855,6 @@ export default function App() {
     handleFileChange,
     handleOpenImage,
     handleOpenBatchExport,
-    handleOpenContactSheet,
     handleGPURenderingChange,
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
@@ -1964,13 +1956,6 @@ export default function App() {
     setIsAdjustingCrop,
     setShowSettingsModal,
     setShowBatchModal,
-    setShowContactSheetModal,
-    setContactSheetEntries,
-    setContactSheetSharedSettings,
-    setContactSheetSharedProfile,
-    setContactSheetSharedLabStyle,
-    setContactSheetSharedColorManagement,
-    setContactSheetSharedLightSourceBias,
     setGPURenderingEnabled,
     setUltraSmoothDragEnabled,
     setNotificationSettings,
@@ -3137,6 +3122,21 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     frameExportCancelledRef.current = true;
   }, []);
 
+  const handleContactSheetSaved = useCallback((message: string) => showTransientNotice(message, 'success'), [showTransientNotice]);
+  const contactSheet = useContactSheet({
+    workerClientRef,
+    tabs,
+    tabsRef,
+    activeTabId,
+    selectedIds: filmstripSelection.ids,
+    profilesById,
+    fallbackProfile,
+    lightSourceProfilesById,
+    notificationSettings,
+    outputPath: contactSheetOutputPath,
+    onSaved: handleContactSheetSaved,
+  });
+
   const processScannedFile = useCallback(async (path: string, options: { autoExport: boolean; autoExportPath: string | null }) => {
     const result = await openImageFileByPath(path);
     if (!result) {
@@ -3332,7 +3332,6 @@ onToggleScanningSession: toggleScanningWindow,
       isDragActive={isDragActive}
       showSettingsModal={showSettingsModal}
       showBatchModal={showBatchModal}
-      showContactSheetModal={showContactSheetModal}
       showTabSwitchOverlay={showTabSwitchOverlay}
       tabSwitchOverlayKey={tabSwitchOverlayKey}
       showMagnifier={showMagnifier}
@@ -3360,6 +3359,7 @@ onToggleScanningSession: toggleScanningWindow,
       defaultExportPath={defaultExportPath}
       batchOutputPath={batchOutputPath}
       contactSheetOutputPath={contactSheetOutputPath}
+      contactSheet={contactSheet}
       customPresetCount={customPresets.length}
       presetFolderCount={presetFolders.length}
       quickExportPresets={quickExportPresets}
@@ -3382,19 +3382,12 @@ onToggleScanningSession: toggleScanningWindow,
       previewTransformAngle={previewTransformAngle}
       logicalPreviewSize={logicalPreviewSize}
       cropImageSize={cropImageSize}
-      contactSheetEntries={contactSheetEntries}
-      contactSheetSharedSettings={contactSheetSharedSettings}
-      contactSheetSharedProfile={contactSheetSharedProfile}
-      contactSheetSharedLabStyle={contactSheetSharedLabStyle}
-      contactSheetSharedColorManagement={contactSheetSharedColorManagement}
-      contactSheetSharedLightSourceBias={contactSheetSharedLightSourceBias}
       onSetIsPanDragging={setIsPanDragging}
       onSetIsDragActive={setIsDragActive}
       onSetComparisonMode={setComparisonMode}
       onSetIsCropOverlayVisible={setIsCropOverlayVisible}
       onSetShowSettingsModal={setShowSettingsModal}
       onSetShowBatchModal={setShowBatchModal}
-      onSetShowContactSheetModal={setShowContactSheetModal}
       onSetSuggestionNotice={setSuggestionNotice}
       onSetTransientNotice={setTransientNotice}
       onSetError={setError}
@@ -3429,7 +3422,6 @@ onToggleScanningSession: toggleScanningWindow,
       onDeleteRoll={handleDeleteRoll}
       onCreateRollFromTabs={handleCreateRollFromTabs}
       onToggleScanningSession={toggleScanningWindow}
-      onOpenContactSheet={handleOpenContactSheet}
       onSettingsChange={handleSettingsChange}
       onDustRemovalChange={handleDustRemovalChange}
       defaultExportOptions={defaultExportOptions}

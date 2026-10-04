@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Check, ChevronDown, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Download, FolderOpen, Plus, Trash2, X } from 'lucide-react';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings } from '../types';
 import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFolder, openMultipleImageFiles } from '../utils/fileBridge';
@@ -18,14 +18,6 @@ type SettingsSourceMode = 'current' | 'builtin' | 'custom';
 interface BatchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onOpenContactSheet: (payload: {
-    entries: BatchJobEntry[];
-    sharedSettings: ConversionSettings;
-    sharedProfile: FilmProfile;
-    sharedLabStyle: LabStyleProfile | null;
-    sharedColorManagement: ColorManagementSettings;
-    sharedLightSourceBias: [number, number, number] | null;
-  }) => void;
   workerClient: ImageWorkerClient | null;
   currentSettings: ConversionSettings | null;
   currentProfile: FilmProfile | null;
@@ -98,7 +90,6 @@ function CheckOption({
 export function BatchModal({
   isOpen,
   onClose,
-  onOpenContactSheet,
   workerClient,
   currentSettings,
   currentProfile,
@@ -301,7 +292,6 @@ export function BatchModal({
       : null);
   const selectedCustomProfileHasEmbeddedTransforms = settingsSource === 'custom'
     && customProfileHasEmbeddedCropOrRotation(selectedCustomProfile);
-  const canOpenContactSheet = entries.length > 0 && Boolean(sharedSettings && sharedProfile);
 
   const handleStart = async () => {
     if (!workerClient || !sharedSettings || !sharedProfile) {
@@ -465,8 +455,8 @@ export function BatchModal({
               {/* Header */}
               <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-4">
                 <div>
-                  <h2 id={titleId} className="text-base font-semibold text-zinc-100">Convert Files &amp; Contact Sheets</h2>
-                  <p className="mt-0.5 text-xs text-zinc-500">Apply one shared recipe to scans without opening them, or lay out a contact sheet. To export open frames with their own edits, use the Export panel. RAW files supported on desktop.</p>
+                  <h2 id={titleId} className="text-base font-semibold text-zinc-100">Convert Files</h2>
+                  <p className="mt-0.5 text-xs text-zinc-500">Apply one shared recipe to scans without opening them. To export open frames with their own edits, use the Export panel. RAW files supported on desktop.</p>
                 </div>
                 <button type="button" onClick={onClose} aria-label="Close convert files" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
                   <X size={16} />
@@ -858,34 +848,7 @@ export function BatchModal({
               )}
 
               <div className="flex items-center justify-between gap-2.5 border-t border-zinc-800/80 px-6 py-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!sharedSettings || !sharedProfile) {
-                      setError('Choose a settings source before opening the contact sheet.');
-                      return;
-                    }
-
-                    onOpenContactSheet({
-                      entries,
-                      sharedSettings: structuredClone(sharedSettings),
-                      sharedProfile,
-                      sharedLabStyle,
-                      sharedColorManagement: {
-                        ...colorManagement,
-                        outputProfileId: exportOptions.outputProfileId,
-                        embedOutputProfile: exportOptions.embedOutputProfile,
-                      },
-                      sharedLightSourceBias,
-                    });
-                  }}
-                  disabled={!canOpenContactSheet || isRunning}
-                  title={canOpenContactSheet ? 'Create a contact sheet from the current batch list' : 'Add batch items and choose a settings source first'}
-                  className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
-                >
-                  <LayoutGrid size={13} />
-                  Contact Sheet…
-                </button>
+                <p className="text-[11px] text-zinc-600">Contact sheets now have their own tool in the rail (7).</p>
                 <div className="flex items-center gap-2.5">
                   <button
                     type="button"

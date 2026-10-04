@@ -1017,11 +1017,11 @@ export const Sidebar = memo(function Sidebar({
                 <button
                   type="button"
                   onClick={onOpenBatchExport}
-                  data-tip="Apply one shared recipe to files that aren't open, or build a contact sheet"
+                  data-tip="Apply one shared recipe to files that aren't open"
                   className={PANEL_BUTTON}
                 >
                   <FolderOutput size={13} />
-                  Convert Files &amp; Contact Sheets…
+                  Convert Files…
                 </button>
               </motion.div>
             )}

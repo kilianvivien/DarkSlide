@@ -146,6 +146,7 @@ previousTab: {
       toolCrop: { key: '4', when: () => documentStatePresent, handler: () => onSelectTool('crop') },
       toolDust: { key: '5', when: () => documentStatePresent, handler: () => onSelectTool('dust') },
       toolExport: { key: '6', handler: () => onSelectTool('export') },
+      toolContactSheet: { key: '7', when: () => documentStatePresent, handler: () => onSelectTool('contact') },
       toggleCropOverlay: { key: 'c', when: () => documentStatePresent && !dustBrushActive, handler: onToggleCropOverlay },
       toggleComparison: { key: '\\', when: () => documentStatePresent, handler: onToggleComparison },
       previousFrame: {

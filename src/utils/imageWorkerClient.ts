@@ -1755,6 +1755,9 @@ export class ImageWorkerClient {
   async contactSheet(payload: ContactSheetRequest) {
     this.noteExportStateChange(1);
     try {
+      for (const cell of payload.cells) {
+        await this.ensureDocumentLoaded(cell.documentId);
+      }
       const result = await this.request<ContactSheetResult>('contact-sheet', payload);
       return finalizeExportBlob(result, payload.exportOptions);
     } finally {

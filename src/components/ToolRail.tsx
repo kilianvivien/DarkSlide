@@ -1,5 +1,5 @@
 import { memo, ReactNode } from 'react';
-import { Activity, Crop, Download, Eraser, Film, Settings, SlidersHorizontal } from 'lucide-react';
+import { Activity, Crop, Download, Eraser, Film, LayoutGrid, Settings, SlidersHorizontal } from 'lucide-react';
 import { EditorTool } from '../types';
 
 export const EDITOR_TOOLS: Array<{
@@ -16,6 +16,7 @@ export const EDITOR_TOOLS: Array<{
   { id: 'crop', label: 'Crop & straighten', description: 'Crop, rotate and level', shortcut: '4', icon: <Crop size={18} strokeWidth={1.8} /> },
   { id: 'dust', label: 'Dust & scratches', description: 'Repair dust, hairs and scratches', shortcut: '5', icon: <Eraser size={18} strokeWidth={1.8} /> },
   { id: 'export', label: 'Export', description: 'Format, size and quick exports', shortcut: '6', icon: <Download size={18} strokeWidth={1.8} />, separated: true },
+  { id: 'contact', label: 'Contact sheet', description: 'Lay out frames on one proof sheet', shortcut: '7', icon: <LayoutGrid size={18} strokeWidth={1.8} /> },
 ];
 
 export function isEditorTool(value: unknown): value is EditorTool {

@@ -382,10 +382,6 @@ vi.mock('./components/BatchModal', () => ({
   BatchModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="batch-modal" /> : null),
 }));
 
-vi.mock('./components/ContactSheetModal', () => ({
-  ContactSheetModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="contact-sheet-modal" /> : null),
-}));
-
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: coreState.invoke,
 }));
@@ -857,6 +853,42 @@ describe('App import and preview pipeline', () => {
 
     fireEvent.keyDown(window, { key: '1' });
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+  });
+
+  it('builds a contact sheet of the open frames from its own rail tool', async () => {
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(300, 200))
+      .mockResolvedValueOnce(createDecodedImage(320, 200));
+    workerState.contactSheet.mockResolvedValue({
+      blob: new Blob(['sheet'], { type: 'image/jpeg' }),
+      width: 1000,
+      height: 600,
+      filename: 'contact_sheet.jpg',
+    });
+    render(<App />);
+    await uploadFile(createFile('frame-a.tiff', 'image/tiff'));
+    await uploadFile(createFile('frame-b.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.keyDown(window, { key: '7' });
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /Contact sheet preview, 2 frames in 2 columns/ })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Export sheet of 2 frames' }));
+    });
+    await flushMicrotasks();
+
+    expect(workerState.contactSheet).toHaveBeenCalledTimes(1);
+    const request = workerState.contactSheet.mock.calls[0]?.[0] as { cells: Array<{ label: string }>; settingsPerCell: unknown[]; columns: number };
+    expect(request.cells.map((cell) => cell.label)).toEqual(['scan-300x200.tiff', 'scan-320x200.tiff']);
+    expect(request.settingsPerCell).toHaveLength(2);
+    expect(request.columns).toBe(2);
+    expect(fileBridgeState.saveExportBlob).toHaveBeenCalledWith(expect.any(Blob), 'contact_sheet.jpg', 'image/jpeg');
   });
 
   it('syncs the current look to frames selected in the filmstrip', async () => {

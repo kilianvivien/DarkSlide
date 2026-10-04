@@ -27,9 +27,6 @@ import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
 import { buildProfileSettingsForDocument, createPresetRecipe, resolveProfileApplication } from '../utils/presetRecipe';
 import { neutralWhiteBalance } from '../utils/autoAnalysis';
 import { rendersMonochrome, usesColorChannelPipeline } from '../utils/pipelineIntent';
-import {
-  BatchJobEntry,
-} from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import {
   ColorManagementSettings,
@@ -38,7 +35,6 @@ import {
   DocumentHistoryEntry,
   DocumentTab,
   FilmProfile,
-  LabStyleProfile,
   LightSourceProfile,
   NotificationSettings,
   PointPickerMode,
@@ -181,13 +177,6 @@ type UseWorkspaceCommandsOptions = {
   setIsAdjustingCrop: SetState<boolean>;
   setShowSettingsModal: SetState<boolean>;
   setShowBatchModal: SetState<boolean>;
-  setShowContactSheetModal: SetState<boolean>;
-  setContactSheetEntries: SetState<BatchJobEntry[]>;
-  setContactSheetSharedSettings: SetState<ConversionSettings | null>;
-  setContactSheetSharedProfile: SetState<FilmProfile | null>;
-  setContactSheetSharedLabStyle: SetState<LabStyleProfile | null>;
-  setContactSheetSharedColorManagement: SetState<ColorManagementSettings | null>;
-  setContactSheetSharedLightSourceBias: SetState<[number, number, number] | null>;
   setGPURenderingEnabled: SetState<boolean>;
   setUltraSmoothDragEnabled: SetState<boolean>;
   setNotificationSettings: SetState<NotificationSettings>;
@@ -282,13 +271,6 @@ export function useWorkspaceCommands({
   setIsAdjustingCrop,
   setShowSettingsModal,
   setShowBatchModal,
-  setShowContactSheetModal,
-  setContactSheetEntries,
-  setContactSheetSharedSettings,
-  setContactSheetSharedProfile,
-  setContactSheetSharedLabStyle,
-  setContactSheetSharedColorManagement,
-  setContactSheetSharedLightSourceBias,
   setGPURenderingEnabled,
   setUltraSmoothDragEnabled,
   setNotificationSettings,
@@ -790,31 +772,6 @@ export function useWorkspaceCommands({
   const handleOpenBatchExport = useCallback(() => {
     setShowBatchModal(true);
   }, [setShowBatchModal]);
-
-  const handleOpenContactSheet = useCallback((payload: {
-    entries: BatchJobEntry[];
-    sharedSettings: ConversionSettings;
-    sharedProfile: FilmProfile;
-    sharedLabStyle: LabStyleProfile | null;
-    sharedColorManagement: ColorManagementSettings;
-    sharedLightSourceBias: [number, number, number] | null;
-  }) => {
-    setContactSheetEntries(payload.entries);
-    setContactSheetSharedSettings(payload.sharedSettings);
-    setContactSheetSharedProfile(payload.sharedProfile);
-    setContactSheetSharedLabStyle(payload.sharedLabStyle);
-    setContactSheetSharedColorManagement(payload.sharedColorManagement);
-    setContactSheetSharedLightSourceBias(payload.sharedLightSourceBias);
-    setShowContactSheetModal(true);
-  }, [
-    setContactSheetEntries,
-    setContactSheetSharedColorManagement,
-    setContactSheetSharedLabStyle,
-    setContactSheetSharedLightSourceBias,
-    setContactSheetSharedProfile,
-    setContactSheetSharedSettings,
-    setShowContactSheetModal,
-  ]);
 
   const handleGPURenderingChange = useCallback((enabled: boolean) => {
     setGPURenderingEnabled(enabled);
@@ -1554,7 +1511,6 @@ export function useWorkspaceCommands({
     handleFileChange,
     handleOpenImage,
     handleOpenBatchExport,
-    handleOpenContactSheet,
     handleGPURenderingChange,
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
