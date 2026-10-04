@@ -49,6 +49,10 @@ function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings'
   };
 }
 
+// How long the viewport must hold still before the preview is re-rendered at
+// its new resolution.
+const VIEWPORT_RESIZE_SETTLE_MS = 160;
+
 export default function App() {
   const RENDER_INDICATOR_DELAY_MS = 450;
   const LARGE_SETTLED_PREVIEW_BITMAP_PIXELS = 8_000_000;
@@ -108,6 +112,7 @@ export default function App() {
   const [isZooming, setIsZooming] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [targetMaxDimension, setTargetMaxDimension] = useState(1024);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [hasVisiblePreview, setHasVisiblePreview] = useState(false);
   const [renderedPreviewAngle, setRenderedPreviewAngle] = useState(0);
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
@@ -700,10 +705,8 @@ export default function App() {
 
   const fitScale = useMemo(() => {
     if (!documentState || !displaySettings) return 1;
-    const viewport = viewportRef.current;
-    if (!viewport) return 1;
-    const vw = viewport.clientWidth;
-    const vh = viewport.clientHeight - 48;
+    const vw = viewportSize.width;
+    const vh = viewportSize.height - 48;
     const rotatedSize = getTransformedDimensions(
       documentState.source.width,
       documentState.source.height,
@@ -723,6 +726,7 @@ export default function App() {
     displaySettings,
     documentState,
     isCropOverlayVisible,
+    viewportSize,
   ]);
 
   const effectiveZoom = zoom === 'fit' ? fitScale : zoom;
@@ -1110,8 +1114,11 @@ export default function App() {
     if (!canvas) return null;
 
     const startedAt = performance.now();
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
+    // Resizing a canvas reallocates its backing store even to the same size.
+    if (canvas.width !== imageData.width || canvas.height !== imageData.height) {
+      canvas.width = imageData.width;
+      canvas.height = imageData.height;
+    }
     const ctx = getCanvas2dContext(canvas);
     if (!ctx) return null;
     ctx.imageSmoothingQuality = 'high';
@@ -1123,7 +1130,11 @@ export default function App() {
       ctx.putImageData(imageData, 0, 0);
     }
     currentPreviewImageDataRef.current = imageData;
-    setCanvasSize({ width: imageData.width, height: imageData.height });
+    setCanvasSize((current) => (
+      current.width === imageData.width && current.height === imageData.height
+        ? current
+        : { width: imageData.width, height: imageData.height }
+    ));
     return Math.max(0, Math.round(performance.now() - startedAt));
   }, []);
 
@@ -1218,25 +1229,57 @@ export default function App() {
   }, [displayScaleFactor]);
 
   useEffect(() => {
+    let sizeFrame: number | null = null;
+    let targetTimeout: number | null = null;
+
+    const updateViewportSize = () => {
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      const width = viewport.clientWidth;
+      const height = viewport.clientHeight;
+      setViewportSize((current) => (
+        current.width === width && current.height === height ? current : { width, height }
+      ));
+    };
     const updateTargetMaxDimension = () => {
       const nextValue = calculateTargetMaxDimension();
       setTargetMaxDimension((current) => (current === nextValue ? current : nextValue));
     };
+    // The fit follows the viewport every frame, but a new render resolution is
+    // only requested once resizing settles: each one is a full preview job.
+    const handleResize = () => {
+      if (sizeFrame === null) {
+        sizeFrame = window.requestAnimationFrame(() => {
+          sizeFrame = null;
+          updateViewportSize();
+        });
+      }
+      if (targetTimeout !== null) {
+        window.clearTimeout(targetTimeout);
+      }
+      targetTimeout = window.setTimeout(() => {
+        targetTimeout = null;
+        updateTargetMaxDimension();
+      }, VIEWPORT_RESIZE_SETTLE_MS);
+    };
 
+    updateViewportSize();
     updateTargetMaxDimension();
-    window.addEventListener('resize', updateTargetMaxDimension);
+    window.addEventListener('resize', handleResize);
 
     const viewport = viewportRef.current;
     const resizeObserver = typeof ResizeObserver === 'undefined'
       ? null
-      : new ResizeObserver(updateTargetMaxDimension);
+      : new ResizeObserver(handleResize);
     if (viewport && resizeObserver) {
       resizeObserver.observe(viewport);
     }
 
     return () => {
-      window.removeEventListener('resize', updateTargetMaxDimension);
+      window.removeEventListener('resize', handleResize);
       resizeObserver?.disconnect();
+      if (sizeFrame !== null) window.cancelAnimationFrame(sizeFrame);
+      if (targetTimeout !== null) window.clearTimeout(targetTimeout);
     };
   }, [calculateTargetMaxDimension]);
 

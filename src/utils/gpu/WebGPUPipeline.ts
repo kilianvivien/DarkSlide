@@ -75,6 +75,44 @@ export function hashFloat32Array(data: Float32Array) {
   return hash >>> 0;
 }
 
+interface WebGPURenderPipelines {
+  conversion: GPURenderPipeline;
+  blur: GPURenderPipeline;
+  sharpen: GPURenderPipeline;
+  noiseReduction: GPURenderPipeline;
+  copy: GPURenderPipeline;
+}
+
+// Compiles every pipeline up front and off the main thread where the
+// browser supports it. Synchronous creation defers shader compilation to the
+// first draw, which made the first preview after launch take over a second.
+async function createRenderPipelines(device: GPUDevice, module: GPUShaderModule): Promise<WebGPURenderPipelines> {
+  const create = (entryPoint: string, format: GPUTextureFormat) => {
+    const descriptor: GPURenderPipelineDescriptor = {
+      layout: 'auto',
+      vertex: { module, entryPoint: 'fullscreenVertex' },
+      fragment: {
+        module,
+        entryPoint,
+        targets: [{ format }],
+      },
+      primitive: { topology: 'triangle-list' },
+    };
+    return typeof device.createRenderPipelineAsync === 'function'
+      ? device.createRenderPipelineAsync(descriptor)
+      : Promise.resolve(device.createRenderPipeline(descriptor));
+  };
+
+  const [conversion, blur, sharpen, noiseReduction, copy] = await Promise.all([
+    create('conversionFragment', INTERMEDIATE_FORMAT),
+    create('blurFragment', INTERMEDIATE_FORMAT),
+    create('sharpenFragment', INTERMEDIATE_FORMAT),
+    create('noiseReductionFragment', INTERMEDIATE_FORMAT),
+    create('copyFragment', 'rgba8unorm'),
+  ]);
+  return { conversion, blur, sharpen, noiseReduction, copy };
+}
+
 export class WebGPUPipeline {
   readonly adapterName: string | null;
 
@@ -155,7 +193,7 @@ export class WebGPUPipeline {
 
   private destroyed = false;
 
-  private constructor(device: GPUDevice, adapterName: string | null, module: GPUShaderModule) {
+  private constructor(device: GPUDevice, adapterName: string | null, pipelines: WebGPURenderPipelines) {
     this.device = device;
     this.adapterName = adapterName;
     this.limits = {
@@ -183,60 +221,11 @@ export class WebGPUPipeline {
       size: FILTER_UNIFORM_STRIDE + EFFECT_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.conversionPipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module, entryPoint: 'fullscreenVertex' },
-      fragment: {
-        module,
-        entryPoint: 'conversionFragment',
-        targets: [{ format: INTERMEDIATE_FORMAT }],
-      },
-      primitive: { topology: 'triangle-list' },
-    });
-
-    this.blurPipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module, entryPoint: 'fullscreenVertex' },
-      fragment: {
-        module,
-        entryPoint: 'blurFragment',
-        targets: [{ format: INTERMEDIATE_FORMAT }],
-      },
-      primitive: { topology: 'triangle-list' },
-    });
-
-    this.sharpenPipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module, entryPoint: 'fullscreenVertex' },
-      fragment: {
-        module,
-        entryPoint: 'sharpenFragment',
-        targets: [{ format: INTERMEDIATE_FORMAT }],
-      },
-      primitive: { topology: 'triangle-list' },
-    });
-
-    this.noiseReductionPipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module, entryPoint: 'fullscreenVertex' },
-      fragment: {
-        module,
-        entryPoint: 'noiseReductionFragment',
-        targets: [{ format: INTERMEDIATE_FORMAT }],
-      },
-      primitive: { topology: 'triangle-list' },
-    });
-
-    this.copyPipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module, entryPoint: 'fullscreenVertex' },
-      fragment: {
-        module,
-        entryPoint: 'copyFragment',
-        targets: [{ format: 'rgba8unorm' }],
-      },
-      primitive: { topology: 'triangle-list' },
-    });
+    this.conversionPipeline = pipelines.conversion;
+    this.blurPipeline = pipelines.blur;
+    this.sharpenPipeline = pipelines.sharpen;
+    this.noiseReductionPipeline = pipelines.noiseReduction;
+    this.copyPipeline = pipelines.copy;
 
     void this.device.lost.then((info) => {
       this.lost = true;
@@ -267,7 +256,8 @@ export class WebGPUPipeline {
       const device = await adapter.requestDevice();
       const adapterName = await WebGPUPipeline.readAdapterName(adapter);
       const module = device.createShaderModule({ code: tiledRenderShader });
-      return new WebGPUPipeline(device, adapterName, module);
+      const pipelines = await createRenderPipelines(device, module);
+      return new WebGPUPipeline(device, adapterName, pipelines);
     } catch {
       return null;
     }
@@ -478,6 +468,12 @@ export class WebGPUPipeline {
     const paddedBytesPerRow = alignTo256(width * 4);
     const mapped = new Uint8Array(this.readbackBuffer.getMappedRange());
     const result = new Uint8ClampedArray(width * height * 4);
+
+    if (paddedBytesPerRow === width * 4) {
+      result.set(mapped.subarray(0, result.length));
+      this.readbackBuffer.unmap();
+      return result;
+    }
 
     for (let row = 0; row < height; row += 1) {
       const sourceStart = row * paddedBytesPerRow;
@@ -695,8 +691,8 @@ export class WebGPUPipeline {
     this.device.queue.submit([encoder.finish()]);
     await this.readbackBuffer.mapAsync(GPUMapMode.READ);
 
-    const pixels = this.extractPixels(expandedWidth, expandedHeight);
-    return copyWholeImage(pixels, expandedWidth, expandedHeight);
+    // extractPixels already returns a fresh array; no second copy needed.
+    return new ImageData(this.extractPixels(expandedWidth, expandedHeight), expandedWidth, expandedHeight);
   }
 
   private async processImageData(

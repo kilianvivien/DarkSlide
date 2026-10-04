@@ -97,6 +97,8 @@ import {
 interface StoredPreview {
   level: PreviewLevel;
   canvas: OffscreenCanvas;
+  // Built on demand to match the viewport rather than one of PREVIEW_LEVELS.
+  fitted?: boolean;
 }
 
 interface HighDepthRawSource {
@@ -127,6 +129,11 @@ interface StoredDocument {
 const ANALYSIS_CACHE_LIMIT = 16;
 const RESIDUAL_ANALYSIS_MAX_DIMENSION = 1024;
 const HIGHLIGHT_ANALYSIS_MAX_DIMENSION = 512;
+// A fixed preview level this much larger than the requested size (by long
+// edge) is wasteful: a 2128px target would otherwise render the 4096 level,
+// almost four times the pixels, on every frame.
+const FITTED_PREVIEW_MIN_OVERSIZE = 1.3;
+const FITTED_PREVIEW_STEP = 256;
 
 interface StoredTileJob {
   documentId: string;
@@ -371,6 +378,48 @@ function getOrCreatePreviewByMaxDimension(document: StoredDocument, maxDimension
   document.previews.push(preview);
   document.previews.sort((left, right) => left.level.maxDimension - right.level.maxDimension);
   return preview;
+}
+
+// Keeps at most one fitted level per document; the previous one is dropped
+// when the viewport asks for a different size.
+function getFittedPreview(document: StoredDocument, selected: PreviewLevel, targetMaxDimension: number) {
+  const sourceMax = Math.max(document.sourceCanvas.width, document.sourceCanvas.height);
+  const fittedMaxDimension = Math.ceil(targetMaxDimension / FITTED_PREVIEW_STEP) * FITTED_PREVIEW_STEP;
+  if (
+    selected.maxDimension < targetMaxDimension * FITTED_PREVIEW_MIN_OVERSIZE
+    || fittedMaxDimension >= sourceMax
+    || fittedMaxDimension >= selected.maxDimension
+  ) {
+    return null;
+  }
+
+  const existing = document.previews.find((preview) => preview.level.maxDimension === fittedMaxDimension);
+  if (existing) {
+    return existing;
+  }
+
+  const stale = document.previews.filter((preview) => preview.fitted);
+  document.previews = document.previews.filter((preview) => !preview.fitted);
+  stale.forEach((preview) => releaseCanvas(preview.canvas));
+
+  // Downscale from the nearest larger level: cheaper than the full source and
+  // just as sharp at this size.
+  const base = document.previews.find((preview) => preview.level.maxDimension === selected.maxDimension)?.canvas
+    ?? document.sourceCanvas;
+  const canvas = buildPreviewCanvas(base, fittedMaxDimension);
+  const fitted = {
+    level: {
+      id: `preview-fit-${fittedMaxDimension}`,
+      width: canvas.width,
+      height: canvas.height,
+      maxDimension: fittedMaxDimension,
+    },
+    canvas,
+    fitted: true,
+  } satisfies StoredPreview;
+  document.previews.push(fitted);
+  document.previews.sort((left, right) => left.level.maxDimension - right.level.maxDimension);
+  return fitted;
 }
 
 function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
@@ -785,11 +834,14 @@ function getTileSource(document: StoredDocument, payload: PrepareTileJobRequest)
     };
   }
 
+  const targetMaxDimension = payload.targetMaxDimension ?? Math.max(document.metadata.width, document.metadata.height);
   const level = selectPreviewLevel(
     document.previews.map((preview) => preview.level),
-    payload.targetMaxDimension ?? Math.max(document.metadata.width, document.metadata.height),
+    targetMaxDimension,
   );
-  const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
+  const preview = getFittedPreview(document, level, targetMaxDimension)
+    ?? document.previews.find((candidate) => candidate.level.id === level.id)
+    ?? document.previews[document.previews.length - 1];
   return {
     canvas: preview.canvas,
     previewLevelId: preview.level.id,

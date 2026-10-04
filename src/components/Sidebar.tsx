@@ -37,15 +37,20 @@ import { DustPane } from './DustPane';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { DEFAULT_DUST_REMOVAL, FILM_BASE_CONFIDENCE, resolveDustRemovalSettings } from '../constants';
 
-const ADJUST_PANE_INITIAL = { opacity: 0, x: -10 };
-const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0 };
-const ADJUST_PANE_EXIT = { opacity: 0, x: 10 };
-const CURVES_PANE_INITIAL = { opacity: 0, x: 10 };
-const CURVES_PANE_ANIMATE = { opacity: 1, x: 0 };
-const CURVES_PANE_EXIT = { opacity: 0, x: -10 };
-const VERTICAL_PANE_INITIAL = { opacity: 0, y: 10 };
-const VERTICAL_PANE_ANIMATE = { opacity: 1, y: 0 };
-const VERTICAL_PANE_EXIT = { opacity: 0, y: -10 };
+// Pane switches wait for the old pane to leave, so both halves stay short and
+// use tweens: motion's default spring on x took several hundred ms to settle
+// and made every tool switch feel slow.
+const PANE_ENTER_TRANSITION = { duration: 0.16, ease: [0.22, 1, 0.36, 1] as const };
+const PANE_EXIT_TRANSITION = { duration: 0.08, ease: 'easeIn' as const };
+const ADJUST_PANE_INITIAL = { opacity: 0, x: -8 };
+const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0, transition: PANE_ENTER_TRANSITION };
+const ADJUST_PANE_EXIT = { opacity: 0, x: 8, transition: PANE_EXIT_TRANSITION };
+const CURVES_PANE_INITIAL = { opacity: 0, x: 8 };
+const CURVES_PANE_ANIMATE = { opacity: 1, x: 0, transition: PANE_ENTER_TRANSITION };
+const CURVES_PANE_EXIT = { opacity: 0, x: -8, transition: PANE_EXIT_TRANSITION };
+const VERTICAL_PANE_INITIAL = { opacity: 0, y: 8 };
+const VERTICAL_PANE_ANIMATE = { opacity: 1, y: 0, transition: PANE_ENTER_TRANSITION };
+const VERTICAL_PANE_EXIT = { opacity: 0, y: -8, transition: PANE_EXIT_TRANSITION };
 
 const POINT_PICKERS = [
   { mode: 'black' as const, label: 'Black', swatchClass: 'bg-zinc-950 border-zinc-700' },

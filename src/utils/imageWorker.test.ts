@@ -190,4 +190,21 @@ describe('worker conversion analysis consistency', () => {
     } });
     expect(result.halo).toBe(5);
   });
+
+  it('renders previews from a level sized to the target instead of a far larger fixed level', async () => {
+    await decode('large', [120, 130, 140], 2400);
+    const prepare = (jobId: string, targetMaxDimension: number) => request<PreparedTileJobResult>({ type: 'prepare-tile-job', payload: {
+      documentId: 'large', jobId, sourceKind: 'preview', comparisonMode: 'processed',
+      settings: createDefaultSettings(), targetMaxDimension,
+    } });
+
+    // 1100px would otherwise render the 2048 level, three times the pixels.
+    const fitted = await prepare('fit', 1100);
+    expect(fitted.previewLevelId).toBe('preview-fit-1280');
+    expect(Math.max(fitted.width, fitted.height)).toBe(1280);
+
+    // Close enough to a fixed level: that level is used as is.
+    const fixed = await prepare('fixed', 1800);
+    expect(fixed.previewLevelId).toBe('preview-2048');
+  });
 });
