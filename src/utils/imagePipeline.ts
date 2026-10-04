@@ -232,6 +232,8 @@ function applyColorMatrix(
   ];
 }
 
+// Over-white values are kept (only negatives are clamped) so the highlight
+// shoulder below can compress them instead of clipping each channel.
 function applyTonalCharacter(value: number, character?: TonalCharacter) {
   let next = value;
 
@@ -245,26 +247,142 @@ function applyTonalCharacter(value: number, character?: TonalCharacter) {
     next += character.midtoneAnchor;
   }
 
-  return clamp(next, 0, 1);
+  return Math.max(0, next);
 }
 
-function applyAdaptiveHighlightRecovery(
-  value: number,
-  highlightProtection: number,
-  highlightDensityEstimate = 0,
-  character?: TonalCharacter,
-) {
-  const toned = applyTonalCharacter(value, character);
-  const threshold = 200 / 255;
-  const effectiveRolloff = (character?.highlightRolloff ?? 0.5) * (1 + clamp(highlightDensityEstimate, 0, 1) * 0.5);
-  if (highlightProtection <= 0 || toned <= threshold) {
-    return clamp(toned, 0, 1);
+// Contrast keeps its straight stretch around mid-grey, but where the stretch
+// used to push shadows below black and clip them, a toe now eases that range
+// into [0, toe] so deep shadow detail survives. The toe is C1-continuous with
+// the stretch and only exists when contrast is raised (k > 1). Highlights are
+// left to the shoulder in applyToneStage. Mirrors applyContrast in
+// tiledRender.wgsl.
+export function applyContrast(value: number, k: number) {
+  const stretched = k * (value - 0.5) + 0.5;
+  if (k <= 1) {
+    return stretched;
+  }
+  const floor = 0.5 - 0.5 * k;
+  const toe = Math.min(0.5, -2 * floor);
+  if (stretched >= toe) {
+    return stretched;
+  }
+  if (stretched <= floor) {
+    return 0;
+  }
+  const exponent = (toe - floor) / toe;
+  return toe * Math.pow((stretched - floor) / (toe - floor), exponent);
+}
+
+const HIGHLIGHT_SHOULDER_THRESHOLD = 200 / 255;
+
+// Highlight shoulder on a single brightness value. Inside [threshold, 1] it is
+// the existing protection curve; above 1 it continues with its (non-negative)
+// end slope and saturates at white.
+function applyHighlightShoulder(value: number, protection: number, rolloff: number) {
+  const threshold = HIGHLIGHT_SHOULDER_THRESHOLD;
+  if (value <= threshold) {
+    return value;
+  }
+  if (protection <= 0) {
+    return Math.min(value, 1);
+  }
+  const shoulder = (value - threshold) / (1 - threshold);
+  if (shoulder <= 1) {
+    return threshold + shoulder * (1 - threshold) * (1 - protection * Math.pow(shoulder, rolloff));
+  }
+  const top = threshold + (1 - threshold) * (1 - protection);
+  const endSlope = Math.max(0, (1 - threshold) * (1 - protection * (1 + rolloff)));
+  return Math.min(1, top + endSlope * (shoulder - 1));
+}
+
+export interface ToneStageParams {
+  blackPoint: number;
+  whitePoint: number;
+  contrastFactor: number;
+  shadowRecovery: number;
+  midtoneContrast: number;
+  highlightProtection: number;
+  highlightRolloff: number;
+  tonalCharacter?: TonalCharacter;
+}
+
+export function resolveToneStageParams(
+  settings: ConversionSettings,
+  highlightDensityEstimate: number,
+  tonalCharacter?: TonalCharacter,
+): ToneStageParams {
+  const safeContrast = clamp(settings.contrast, -255, 258);
+  return {
+    blackPoint: settings.blackPoint / 255,
+    whitePoint: settings.whitePoint / 255,
+    contrastFactor: clamp((259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast)), 0.05, 20),
+    shadowRecovery: settings.shadowRecovery ?? 0,
+    midtoneContrast: settings.midtoneContrast ?? 0,
+    highlightProtection: clamp(settings.highlightProtection / 100, 0, 0.95),
+    highlightRolloff: Math.max((tonalCharacter?.highlightRolloff ?? 0.5) * (1 + clamp(highlightDensityEstimate, 0, 1) * 0.5), 0.05),
+    tonalCharacter,
+  };
+}
+
+function toneChannel(value: number, params: ToneStageParams) {
+  let next = applyWhiteBlackPoint(value, params.blackPoint, params.whitePoint);
+  next = applyContrast(next, params.contrastFactor);
+  next = applyShadowRecovery(next, params.shadowRecovery);
+  next = applyMidtoneContrast(next, params.midtoneContrast);
+  return applyTonalCharacter(next, params.tonalCharacter);
+}
+
+// Levels, contrast and shadow/midtone shaping per channel, then the highlight
+// shoulder. Compressing each channel on its own shifted hue as one channel
+// neared white (skies drifting cyan, skin and redscale highlights yellow).
+// The shoulder still runs per channel to decide how bright and how saturated
+// a highlight ends up, as before, but the hue now comes from scaling all three
+// channels by the brightest one's compression. Mirrors applyToneStage in
+// tiledRender.wgsl.
+export function applyToneStage(r: number, g: number, b: number, params: ToneStageParams): [number, number, number] {
+  const tr = toneChannel(r, params);
+  const tg = toneChannel(g, params);
+  const tb = toneChannel(b, params);
+  const peak = Math.max(tr, tg, tb);
+  if (peak <= HIGHLIGHT_SHOULDER_THRESHOLD) {
+    return [tr, tg, tb];
+  }
+  const { highlightProtection: protection, highlightRolloff: rolloff } = params;
+
+  // Brightness and chroma targets from independent compression.
+  const sr = applyHighlightShoulder(tr, protection, rolloff);
+  const sg = applyHighlightShoulder(tg, protection, rolloff);
+  const sb = applyHighlightShoulder(tb, protection, rolloff);
+  const targetGray = LUMA_R * sr + LUMA_G * sg + LUMA_B * sb;
+  const targetChroma = Math.max(sr, sg, sb) - Math.min(sr, sg, sb);
+
+  // Hue from shared scaling.
+  const scale = applyHighlightShoulder(peak, protection, rolloff) / peak;
+  const hr = tr * scale;
+  const hg = tg * scale;
+  const hb = tb * scale;
+  const hueGray = LUMA_R * hr + LUMA_G * hg + LUMA_B * hb;
+  const dr = hr - hueGray;
+  const dg = hg - hueGray;
+  const db = hb - hueGray;
+  const chroma = Math.max(dr, dg, db) - Math.min(dr, dg, db);
+  if (chroma <= 0) {
+    return [targetGray, targetGray, targetGray];
   }
 
-  const protection = clamp(highlightProtection / 100, 0, 0.95);
-  const shoulder = (toned - threshold) / (1 - threshold);
-  const softness = 1 - protection * Math.pow(clamp(shoulder, 0, 1), Math.max(effectiveRolloff, 0.05));
-  return clamp(threshold + shoulder * (1 - threshold) * softness, 0, 1);
+  // Rebuild around the target brightness, giving up chroma rather than
+  // leaving [0, 1].
+  let keep = targetChroma / chroma;
+  const maxOffset = Math.max(dr, dg, db);
+  const minOffset = Math.min(dr, dg, db);
+  if (maxOffset > 0) {
+    keep = Math.min(keep, (1 - targetGray) / maxOffset);
+  }
+  if (minOffset < 0) {
+    keep = Math.min(keep, targetGray / -minOffset);
+  }
+  keep = Math.max(0, keep);
+  return [targetGray + dr * keep, targetGray + dg * keep, targetGray + db * keep];
 }
 
 function applyShadowRecovery(value: number, strength: number) {
@@ -1038,7 +1156,7 @@ export function buildProcessingUniforms(
     filmType === 'slide' ? 1 : 0,
 
     0,
-    (259 * (effectiveSettings.contrast + 255)) / (255 * (259 - effectiveSettings.contrast)),
+    resolveToneStageParams(effectiveSettings, highlightDensityEstimate, effectiveTonalCharacter).contrastFactor,
     clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2),
     linearGains[1],
 
@@ -1419,12 +1537,9 @@ export function processImageData(
   const data = imageData.data;
   const curveTables = buildFloatCurveTables(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
   const histogram = buildEmptyHistogram();
-  const safeContrast = clamp(effectiveSettings.contrast, -255, 258);
-  const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
+  const toneParams = resolveToneStageParams(effectiveSettings, highlightDensityEstimate, effectiveTonalCharacter);
   const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
-  const blackPoint = effectiveSettings.blackPoint / 255;
-  const whitePoint = effectiveSettings.whitePoint / 255;
   const linearGains = resolveLinearGains(effectiveSettings, isColor, labTemperatureBias);
   const applyLinearGains = createLinearGainApplier(outputProfileId);
   const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
@@ -1504,25 +1619,7 @@ export function processImageData(
         [r, g, b] = applyLinearGains(r, g, b, linearGains);
       }
 
-      r = applyWhiteBlackPoint(r, blackPoint, whitePoint);
-      g = applyWhiteBlackPoint(g, blackPoint, whitePoint);
-      b = applyWhiteBlackPoint(b, blackPoint, whitePoint);
-
-      r = contrastFactor * (r - 0.5) + 0.5;
-      g = contrastFactor * (g - 0.5) + 0.5;
-      b = contrastFactor * (b - 0.5) + 0.5;
-
-      r = applyShadowRecovery(r, effectiveSettings.shadowRecovery ?? 0);
-      g = applyShadowRecovery(g, effectiveSettings.shadowRecovery ?? 0);
-      b = applyShadowRecovery(b, effectiveSettings.shadowRecovery ?? 0);
-
-      r = applyMidtoneContrast(r, effectiveSettings.midtoneContrast ?? 0);
-      g = applyMidtoneContrast(g, effectiveSettings.midtoneContrast ?? 0);
-      b = applyMidtoneContrast(b, effectiveSettings.midtoneContrast ?? 0);
-
-      r = applyAdaptiveHighlightRecovery(r, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
-      g = applyAdaptiveHighlightRecovery(g, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
-      b = applyAdaptiveHighlightRecovery(b, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
+      [r, g, b] = applyToneStage(r, g, b, toneParams);
 
       const gray = LUMA_R * r + LUMA_G * g + LUMA_B * b;
       if (isColor && !effectiveSettings.blackAndWhite.enabled) {
@@ -1616,12 +1713,9 @@ export function processFloatRaster(
   const data = raster.data;
   const channels = raster.channels ?? 3;
   const curveTables = buildFloatCurveTables(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
-  const safeContrast = clamp(effectiveSettings.contrast, -255, 258);
-  const contrastFactor = (259 * (safeContrast + 255)) / (255 * Math.max(1, 259 - safeContrast));
+  const toneParams = resolveToneStageParams(effectiveSettings, highlightDensityEstimate, effectiveTonalCharacter);
   const saturationFactor = clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2);
   const filmBaseBalance = getFilmBaseBalance(effectiveSettings.filmBaseSample);
-  const blackPoint = effectiveSettings.blackPoint / 255;
-  const whitePoint = effectiveSettings.whitePoint / 255;
   const linearGains = resolveLinearGains(effectiveSettings, isColor, labTemperatureBias);
   const applyLinearGains = createLinearGainApplier(outputProfileId);
   const shouldUseBlackAndWhite = !isColor || effectiveSettings.blackAndWhite.enabled;
@@ -1702,25 +1796,7 @@ export function processFloatRaster(
         [r, g, b] = applyLinearGains(r, g, b, linearGains);
       }
 
-      r = applyWhiteBlackPoint(r, blackPoint, whitePoint);
-      g = applyWhiteBlackPoint(g, blackPoint, whitePoint);
-      b = applyWhiteBlackPoint(b, blackPoint, whitePoint);
-
-      r = contrastFactor * (r - 0.5) + 0.5;
-      g = contrastFactor * (g - 0.5) + 0.5;
-      b = contrastFactor * (b - 0.5) + 0.5;
-
-      r = applyShadowRecovery(r, effectiveSettings.shadowRecovery ?? 0);
-      g = applyShadowRecovery(g, effectiveSettings.shadowRecovery ?? 0);
-      b = applyShadowRecovery(b, effectiveSettings.shadowRecovery ?? 0);
-
-      r = applyMidtoneContrast(r, effectiveSettings.midtoneContrast ?? 0);
-      g = applyMidtoneContrast(g, effectiveSettings.midtoneContrast ?? 0);
-      b = applyMidtoneContrast(b, effectiveSettings.midtoneContrast ?? 0);
-
-      r = applyAdaptiveHighlightRecovery(r, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
-      g = applyAdaptiveHighlightRecovery(g, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
-      b = applyAdaptiveHighlightRecovery(b, effectiveSettings.highlightProtection, highlightDensityEstimate, effectiveTonalCharacter);
+      [r, g, b] = applyToneStage(r, g, b, toneParams);
 
       const gray = LUMA_R * r + LUMA_G * g + LUMA_B * b;
       if (isColor && !effectiveSettings.blackAndWhite.enabled) {

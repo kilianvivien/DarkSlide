@@ -266,7 +266,99 @@ fn applyTonalCharacter(value: f32, uniforms: Uniforms) -> f32 {
 
   next += uniforms.midtoneAnchor;
 
-  return clampF(next, 0.0, 1.0);
+  // Over-white values survive so the highlight shoulder can compress them.
+  return max(next, 0.0);
+}
+
+// Mirrors applyContrast in imagePipeline.ts: linear stretch with a shadow toe.
+fn applyContrast(value: f32, k: f32) -> f32 {
+  let stretched = k * (value - 0.5) + 0.5;
+  if (k <= 1.0) {
+    return stretched;
+  }
+  let floorValue = 0.5 - 0.5 * k;
+  let toe = min(0.5, -2.0 * floorValue);
+  if (stretched >= toe) {
+    return stretched;
+  }
+  if (stretched <= floorValue) {
+    return 0.0;
+  }
+  let exponent = (toe - floorValue) / toe;
+  return toe * pow((stretched - floorValue) / (toe - floorValue), exponent);
+}
+
+const HIGHLIGHT_SHOULDER_THRESHOLD: f32 = 200.0 / 255.0;
+
+// Mirrors applyHighlightShoulder in imagePipeline.ts.
+fn applyHighlightShoulder(value: f32, protection: f32, rolloff: f32) -> f32 {
+  let threshold = HIGHLIGHT_SHOULDER_THRESHOLD;
+  if (value <= threshold) {
+    return value;
+  }
+  if (protection <= 0.0) {
+    return min(value, 1.0);
+  }
+  let shoulder = (value - threshold) / (1.0 - threshold);
+  if (shoulder <= 1.0) {
+    return threshold + shoulder * (1.0 - threshold) * (1.0 - protection * pow(shoulder, rolloff));
+  }
+  let top = threshold + (1.0 - threshold) * (1.0 - protection);
+  let endSlope = max(0.0, (1.0 - threshold) * (1.0 - protection * (1.0 + rolloff)));
+  return min(1.0, top + endSlope * (shoulder - 1.0));
+}
+
+fn toneChannel(value: f32, uniforms: Uniforms) -> f32 {
+  var next = applyWhiteBlackPoint(value, uniforms.blackPoint, uniforms.whitePoint);
+  next = applyContrast(next, uniforms.contrastFactor);
+  next = applyShadowRecovery(next, uniforms.shadowRecovery);
+  next = applyMidtoneContrast(next, uniforms.midtoneContrast);
+  return applyTonalCharacter(next, uniforms);
+}
+
+// Mirrors applyToneStage in imagePipeline.ts: per-channel levels and shaping;
+// highlight brightness and chroma from per-channel compression, hue from
+// scaling all channels by the brightest one's compression.
+fn applyToneStage(color: vec3<f32>, uniforms: Uniforms) -> vec3<f32> {
+  let toned = vec3<f32>(
+    toneChannel(color.x, uniforms),
+    toneChannel(color.y, uniforms),
+    toneChannel(color.z, uniforms),
+  );
+  let peak = max(toned.x, max(toned.y, toned.z));
+  if (peak <= HIGHLIGHT_SHOULDER_THRESHOLD) {
+    return toned;
+  }
+  let protection = clampF(uniforms.highlightProtection / 100.0, 0.0, 0.95);
+  let rolloff = max(uniforms.highlightRolloff * (1.0 + clampF(uniforms.highlightDensity, 0.0, 1.0) * 0.5), 0.05);
+  let luma = vec3<f32>(0.299, 0.587, 0.114);
+
+  let separate = vec3<f32>(
+    applyHighlightShoulder(toned.x, protection, rolloff),
+    applyHighlightShoulder(toned.y, protection, rolloff),
+    applyHighlightShoulder(toned.z, protection, rolloff),
+  );
+  let targetGray = dot(separate, luma);
+  let targetChroma = max(separate.x, max(separate.y, separate.z)) - min(separate.x, min(separate.y, separate.z));
+
+  let hue = toned * (applyHighlightShoulder(peak, protection, rolloff) / peak);
+  let offset = hue - vec3<f32>(dot(hue, luma));
+  let maxOffset = max(offset.x, max(offset.y, offset.z));
+  let minOffset = min(offset.x, min(offset.y, offset.z));
+  let chroma = maxOffset - minOffset;
+  if (chroma <= 0.0) {
+    return vec3<f32>(targetGray);
+  }
+
+  var keep = targetChroma / chroma;
+  if (maxOffset > 0.0) {
+    keep = min(keep, (1.0 - targetGray) / maxOffset);
+  }
+  if (minOffset < 0.0) {
+    keep = min(keep, targetGray / -minOffset);
+  }
+  keep = max(0.0, keep);
+  return vec3<f32>(targetGray) + offset * keep;
 }
 
 fn applyHighlightRolloff(value: f32, anchor: f32, strength: f32) -> f32 {
@@ -460,46 +552,10 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
     g = applyLinearGain(g, uniforms.gainG, uniforms.outputTransferMode);
     b = applyLinearGain(b, uniforms.gainB, uniforms.outputTransferMode);
 
-    r = applyWhiteBlackPoint(r, uniforms.blackPoint, uniforms.whitePoint);
-    g = applyWhiteBlackPoint(g, uniforms.blackPoint, uniforms.whitePoint);
-    b = applyWhiteBlackPoint(b, uniforms.blackPoint, uniforms.whitePoint);
-
-    r = uniforms.contrastFactor * (r - 0.5) + 0.5;
-    g = uniforms.contrastFactor * (g - 0.5) + 0.5;
-    b = uniforms.contrastFactor * (b - 0.5) + 0.5;
-
-    r = applyShadowRecovery(r, uniforms.shadowRecovery);
-    g = applyShadowRecovery(g, uniforms.shadowRecovery);
-    b = applyShadowRecovery(b, uniforms.shadowRecovery);
-
-    r = applyMidtoneContrast(r, uniforms.midtoneContrast);
-    g = applyMidtoneContrast(g, uniforms.midtoneContrast);
-    b = applyMidtoneContrast(b, uniforms.midtoneContrast);
-
-    r = applyTonalCharacter(r, uniforms);
-    g = applyTonalCharacter(g, uniforms);
-    b = applyTonalCharacter(b, uniforms);
-
-    let threshold = 200.0 / 255.0;
-    let effectiveRolloff = max(uniforms.highlightRolloff, 0.05) * (1.0 + clampF(uniforms.highlightDensity, 0.0, 1.0) * 0.5);
-    let protection = clampF(uniforms.highlightProtection / 100.0, 0.0, 0.95);
-    if (protection > 0.0) {
-      if (r > threshold) {
-        let shoulder = (r - threshold) / (1.0 - threshold);
-        let softness = 1.0 - protection * pow(clampF(shoulder, 0.0, 1.0), effectiveRolloff);
-        r = threshold + shoulder * (1.0 - threshold) * softness;
-      }
-      if (g > threshold) {
-        let shoulder = (g - threshold) / (1.0 - threshold);
-        let softness = 1.0 - protection * pow(clampF(shoulder, 0.0, 1.0), effectiveRolloff);
-        g = threshold + shoulder * (1.0 - threshold) * softness;
-      }
-      if (b > threshold) {
-        let shoulder = (b - threshold) / (1.0 - threshold);
-        let softness = 1.0 - protection * pow(clampF(shoulder, 0.0, 1.0), effectiveRolloff);
-        b = threshold + shoulder * (1.0 - threshold) * softness;
-      }
-    }
+    let toned = applyToneStage(vec3<f32>(r, g, b), uniforms);
+    r = toned.x;
+    g = toned.y;
+    b = toned.z;
 
     if (uniforms.isColor > 0.5 && uniforms.bwEnabled <= 0.5) {
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { FilmBaseEstimate } from '../types';
 
 function createPixel(r: number, g: number, b: number) {
@@ -1055,5 +1055,42 @@ describe('linear-light exposure and white balance', () => {
     const [gainR, gainG, gainB] = [uniforms[16], uniforms[7], uniforms[17]];
     expect(gainR / gainB).toBeCloseTo(4, 5);
     expect(0.2126 * gainR + 0.7152 * gainG + 0.0722 * gainB).toBeCloseTo(2, 5);
+  });
+});
+
+describe('tone stage', () => {
+  it('keeps the contrast stretch but eases clipped shadows into a toe', () => {
+    expect(applyContrast(0.3, 1)).toBeCloseTo(0.3);
+    expect(applyContrast(0.3, 0.8)).toBeCloseTo(0.34);
+    const k = 1.4;
+    // Mid and upper tones follow the plain stretch.
+    expect(applyContrast(0.7, k)).toBeCloseTo(k * 0.2 + 0.5);
+    // Black stays black, and shadows the stretch used to clip keep separation.
+    expect(applyContrast(0, k)).toBe(0);
+    expect(applyContrast(0.1, k)).toBeGreaterThan(0);
+    let previous = -Infinity;
+    for (let x = 0; x <= 1; x += 0.01) {
+      const value = applyContrast(x, k);
+      expect(value).toBeGreaterThanOrEqual(previous);
+      previous = value;
+    }
+  });
+
+  it('compresses an over-range highlight without changing its hue', () => {
+    const params = resolveToneStageParams(createDefaultSettings({
+      ...neutralSettings, contrast: 0, highlightProtection: 30,
+    }), 0);
+    const [r, g, b] = applyToneStage(1.4, 0.9, 0.5, params);
+    expect(Math.max(r, g, b)).toBeLessThanOrEqual(1);
+    expect(Math.min(r, g, b)).toBeGreaterThanOrEqual(0);
+    // Same position between the strongest and weakest channel as the input.
+    expect((g - b) / (r - b)).toBeCloseTo((0.9 - 0.5) / (1.4 - 0.5), 5);
+  });
+
+  it('keeps a neutral highlight neutral', () => {
+    const params = resolveToneStageParams(createDefaultSettings({ ...neutralSettings, highlightProtection: 40 }), 0);
+    const [r, g, b] = applyToneStage(1.2, 1.2, 1.2, params);
+    expect(r).toBeCloseTo(g, 6);
+    expect(g).toBeCloseTo(b, 6);
   });
 });
