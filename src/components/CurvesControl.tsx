@@ -8,6 +8,8 @@ interface CurvesControlProps {
   isColor: boolean;
   onInteractionStart?: () => void;
   onInteractionEnd?: () => void;
+  compact?: boolean;
+  rgbAccent?: string;
 }
 
 type Channel = keyof Curves;
@@ -32,14 +34,65 @@ export const CurvesControl = memo(function CurvesControl({
   isColor,
   onInteractionStart,
   onInteractionEnd,
+  compact = false,
+  rgbAccent = 'white',
 }: CurvesControlProps) {
   const [activeChannel, setActiveChannel] = useState<Channel>('rgb');
   const [draggingPoint, setDraggingPoint] = useState<number | null>(null);
+  const [draftCurves, setDraftCurves] = useState(curves);
   const svgRef = useRef<SVGSVGElement>(null);
+  const draftCurvesRef = useRef(curves);
+  const onChangeRef = useRef(onChange);
+  const onInteractionEndRef = useRef(onInteractionEnd);
+  const draggingPointRef = useRef<number | null>(null);
+  const pendingCurvesRef = useRef<Curves | null>(null);
+  const changeFrameRef = useRef<number | null>(null);
 
-  const points = curves[activeChannel];
+  onChangeRef.current = onChange;
+  onInteractionEndRef.current = onInteractionEnd;
+  draggingPointRef.current = draggingPoint;
+
+  const points = draftCurves[activeChannel];
   const size = 200;
   const gridPositions = useMemo(() => [size / 4, size / 2, (size * 3) / 4], [size]);
+
+  useEffect(() => {
+    if (draggingPoint === null && pendingCurvesRef.current === null) {
+      draftCurvesRef.current = curves;
+      setDraftCurves(curves);
+    }
+  }, [curves, draggingPoint]);
+
+  const flushPendingChange = useCallback(() => {
+    if (changeFrameRef.current !== null) {
+      window.cancelAnimationFrame(changeFrameRef.current);
+      changeFrameRef.current = null;
+    }
+    const pendingCurves = pendingCurvesRef.current;
+    pendingCurvesRef.current = null;
+    if (pendingCurves) onChangeRef.current(pendingCurves);
+  }, []);
+
+  const scheduleChange = useCallback((nextCurves: Curves) => {
+    draftCurvesRef.current = nextCurves;
+    setDraftCurves(nextCurves);
+    pendingCurvesRef.current = nextCurves;
+    if (changeFrameRef.current !== null) return;
+
+    changeFrameRef.current = window.requestAnimationFrame(() => {
+      changeFrameRef.current = null;
+      const pendingCurves = pendingCurvesRef.current;
+      pendingCurvesRef.current = null;
+      if (pendingCurves) onChangeRef.current(pendingCurves);
+    });
+  }, []);
+
+  const commitChange = useCallback((nextCurves: Curves) => {
+    pendingCurvesRef.current = nextCurves;
+    draftCurvesRef.current = nextCurves;
+    setDraftCurves(nextCurves);
+    flushPendingChange();
+  }, [flushPendingChange]);
 
   const handleMouseDown = (index: number) => {
     onInteractionStart?.();
@@ -56,31 +109,63 @@ export const CurvesControl = memo(function CurvesControl({
       y = clamp(Math.round(y / 16) * 16, 0, 255);
     }
 
-    const newPoints = [...points];
+    const currentCurves = draftCurvesRef.current;
+    const currentPoints = currentCurves[activeChannel];
+    const newPoints = [...currentPoints];
 
     if (draggingPoint === 0) {
       newPoints[0] = {
         x: clamp(x, 0, newPoints[1].x - 1),
         y,
       };
-    } else if (draggingPoint === points.length - 1) {
-      newPoints[points.length - 1] = {
+    } else if (draggingPoint === currentPoints.length - 1) {
+      newPoints[currentPoints.length - 1] = {
         x: clamp(x, newPoints[draggingPoint - 1].x + 1, 255),
         y,
       };
     } else {
-      const prevX = points[draggingPoint - 1].x;
-      const nextX = points[draggingPoint + 1].x;
+      const prevX = currentPoints[draggingPoint - 1].x;
+      const nextX = currentPoints[draggingPoint + 1].x;
       newPoints[draggingPoint] = { x: clamp(x, prevX + 1, nextX - 1), y };
     }
 
-    onChange({ ...curves, [activeChannel]: newPoints });
-  }, [draggingPoint, points, activeChannel, curves, onChange, svgRef]);
+    scheduleChange({ ...currentCurves, [activeChannel]: newPoints });
+  }, [activeChannel, draggingPoint, scheduleChange]);
+
+  // The parent commits history from its current render, so after flushing
+  // the last coalesced change the interaction must end once that change has
+  // rendered. Ending it immediately would record the previous frame.
+  const pendingEndRef = useRef(false);
+  const endTimerRef = useRef<number | null>(null);
+  const finishInteraction = useCallback(() => {
+    if (!pendingEndRef.current) return;
+    pendingEndRef.current = false;
+    if (endTimerRef.current !== null) {
+      window.clearTimeout(endTimerRef.current);
+      endTimerRef.current = null;
+    }
+    onInteractionEndRef.current?.();
+  }, []);
+
+  useEffect(() => {
+    finishInteraction();
+  }, [curves, finishInteraction]);
 
   const handleMouseUp = useCallback(() => {
+    const hadPendingChange = pendingCurvesRef.current !== null;
+    pendingEndRef.current = true;
+    flushPendingChange();
     setDraggingPoint(null);
-    onInteractionEnd?.();
-  }, [onInteractionEnd]);
+    if (!hadPendingChange) {
+      finishInteraction();
+      return;
+    }
+    // Fallback if the parent ignores the change and never re-renders.
+    endTimerRef.current = window.setTimeout(() => {
+      endTimerRef.current = null;
+      finishInteraction();
+    }, 0);
+  }, [finishInteraction, flushPendingChange]);
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     if (!svgRef.current) return;
@@ -100,7 +185,7 @@ export const CurvesControl = memo(function CurvesControl({
     if (insertIndex !== -1) {
       const newPoints = [...points];
       newPoints.splice(insertIndex, 0, { x, y });
-      onChange({ ...curves, [activeChannel]: newPoints });
+      commitChange({ ...draftCurvesRef.current, [activeChannel]: newPoints });
     }
   };
 
@@ -108,7 +193,7 @@ export const CurvesControl = memo(function CurvesControl({
     if (index === 0 || index === points.length - 1) return;
     const newPoints = [...points];
     newPoints.splice(index, 1);
-    onChange({ ...curves, [activeChannel]: newPoints });
+    commitChange({ ...draftCurvesRef.current, [activeChannel]: newPoints });
   };
 
   useEffect(() => {
@@ -119,23 +204,36 @@ export const CurvesControl = memo(function CurvesControl({
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
-      if (draggingPoint !== null) onInteractionEnd?.();
     };
-  }, [draggingPoint, handleMouseMove, handleMouseUp, onInteractionEnd]);
+  }, [draggingPoint, handleMouseMove, handleMouseUp]);
+
+  useEffect(() => () => {
+    if (endTimerRef.current !== null) {
+      window.clearTimeout(endTimerRef.current);
+    }
+    if (changeFrameRef.current !== null) {
+      window.cancelAnimationFrame(changeFrameRef.current);
+      changeFrameRef.current = null;
+    }
+    pendingCurvesRef.current = null;
+    if (draggingPointRef.current !== null) onInteractionEndRef.current?.();
+  }, []);
 
   const pathData = useMemo(() => buildPath(points, size), [points, size]);
 
+  const activeColor = activeChannel === 'rgb' ? rgbAccent : CHANNEL_COLORS[activeChannel];
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex gap-1 bg-zinc-900/50 p-1 rounded-lg border border-zinc-800">
+    <div className={`flex flex-col ${compact ? 'gap-1.5' : 'gap-4'}`}>
+      <div className={`flex gap-1 ${compact ? '' : 'rounded-lg border border-zinc-800 bg-zinc-900/50 p-1'}`}>
         {(['rgb', 'red', 'green', 'blue'] as Channel[]).map((ch) => {
           if (!isColor && ch !== 'rgb') return null;
           return (
             <button
               key={ch}
               onClick={() => setActiveChannel(ch)}
-              className={`flex-1 py-1 text-[10px] uppercase tracking-widest rounded transition-all ${
-                activeChannel === ch ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'
+              className={`flex-1 rounded-md ${compact ? 'py-1' : 'py-1.5'} text-[10px] uppercase tracking-widest transition-all ${
+                activeChannel === ch ? (compact ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-800 text-white') : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300'
               }`}
             >
               {ch}
@@ -144,10 +242,11 @@ export const CurvesControl = memo(function CurvesControl({
         })}
       </div>
 
-      <div className="relative w-full aspect-square bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden group select-none">
+      <div className={`group relative w-full select-none overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 ${compact ? 'aspect-[2.15/1]' : 'aspect-square'}`}>
         <svg
           ref={svgRef}
           viewBox={`0 0 ${size} ${size}`}
+          preserveAspectRatio={compact ? 'none' : undefined}
           className="w-full h-full cursor-crosshair select-none"
           onDoubleClick={handleDoubleClick}
         >
@@ -163,12 +262,12 @@ export const CurvesControl = memo(function CurvesControl({
           <path
             d={pathData}
             fill="none"
-            stroke={CHANNEL_COLORS[activeChannel]}
+            stroke={activeColor}
             strokeWidth="2"
             className="transition-colors duration-300"
           />
 
-          {activeChannel !== 'rgb' && (Object.entries(curves) as [Channel, CurvePoint[]][]).map(([channel, channelPoints]) => {
+          {activeChannel !== 'rgb' && (Object.entries(draftCurves) as [Channel, CurvePoint[]][]).map(([channel, channelPoints]) => {
             if (channel === 'rgb' || channel === activeChannel) {
               return null;
             }
@@ -207,7 +306,7 @@ export const CurvesControl = memo(function CurvesControl({
                 cx={(p.x / 255) * size}
                 cy={size - (p.y / 255) * size}
                 r={draggingPoint === i ? 7 : 5}
-                fill={CHANNEL_COLORS[activeChannel]}
+                fill={activeColor}
                 stroke="#09090b"
                 strokeWidth="2"
                 className="pointer-events-none transition-all"
