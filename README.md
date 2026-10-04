@@ -3,7 +3,7 @@
 <div align="center">
   <p>Turn your film negatives into beautiful positives — right in your browser or as a desktop app.</p>
   <p><strong><a href="https://darkslide.vercel.app">Try the live demo →</a></strong> — no install required</p>
-  <p><a href="https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.4">Download DarkSlide 1.2.4 for macOS, Windows, or Linux</a></p>
+  <p><a href="https://github.com/kilianvivien/DarkSlide/releases/tag/v1.3.0">Download DarkSlide 1.3.0 for macOS, Windows, or Linux</a></p>
   <img src="./.github/assets/screenshot.png" alt="DarkSlide Screenshot" width="800" />
 </div>
 
@@ -11,7 +11,20 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v1.2.4
+## What's New in v1.3.0
+
+A redesigned editor built around rolls of film, using ideas from Durieux's ([@tdurieux](https://github.com/tdurieux)) fork.
+
+- **Tool rail and one inspector** — Develop, Curves, Film profiles, Crop, Dust and Export open in a single panel from a rail on the left (shortcuts 1–6); film profiles no longer need their own side panel
+- **Filmstrip** — open frames appear as numbered thumbnails with film-base, crop and unsaved-edit status; use ← and → to move between them
+- **Multi-frame selection** — ⌘/Ctrl- or Shift-click frames to sync the current look to them (each keeps its own crop and repairs), stabilize their crops, or export them
+- **Export frames with their own edits** — the Export panel exports this frame, the selection or every open frame, each with its own look and file name
+- **Switchable adjustment groups** — turn Tone, Range, White Balance or Color off to compare, without losing their values
+- **Image toolbar** — converted/negative comparison, rotate, crop and zoom in one floating toolbar
+
+See the [full v1.3.0 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.3.0).
+
+### Earlier in v1.2.4
 
 DarkSlide 1.2.4 brings in the best ideas from [tdurieux](https://github.com/tdurieux)'s fork, reworked to fit DarkSlide's existing editor and conversion pipeline.
 
@@ -24,7 +37,7 @@ DarkSlide 1.2.4 brings in the best ideas from [tdurieux](https://github.com/tdur
 - **Faster RAW imports** — decoded RAW pixels move from the native decoder to the editor as compact binary data, decoded off the main thread; opening many scans for a batch no longer loads them all into memory first
 - **Color-accuracy tooling** — a CIEDE2000 evaluator for measured chart captures, so accuracy changes can be checked against real targets
 
-See the [full v1.2.4 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.4) for details.
+See the [v1.2.4 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.4).
 
 ### Earlier in v1.2.3
 
@@ -114,10 +127,11 @@ See the [v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/release
 - **Sharpening & noise reduction** to clean up your scans
 
 ### Organize & Export
-- **Roll management** — group frames into rolls with film stock metadata and a sidebar filmstrip
+- **Roll management** — group frames into rolls with film stock metadata, sync settings or the film base across a roll, and stabilize crops
 - **Scanning sessions** — live folder watch that imports frames as your scanner writes them (desktop only)
-- **Work on multiple images at once** with tabbed documents
-- **Batch export** — convert a whole roll with one click, optionally applying a preset to every frame
+- **Filmstrip** — all open frames with status at a glance; select several to sync their look, stabilize crops or export them together
+- **Export frames** — export the current frame, a selection or every open frame, each with its own edits
+- **Convert files** — apply one shared recipe to scans you haven't opened
 - **Contact sheet generation** — create a grid overview of your scans
 - **High-bit-depth output** — export 16-bit PNG or TIFF files with float precision preserved through curves, sharpening, and noise reduction
 - **Save and share presets** — create custom looks with film-stock calibration, light-source settings, and lab style; organize them in folders and export/import as `.darkslide` files
@@ -163,7 +177,7 @@ Pre-built macOS binaries are currently **not notarized**. macOS will block the a
 
 ### Install the desktop app
 
-Download an installer from the [DarkSlide v1.2.4 release](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.4) — no build step required:
+Download an installer from the [DarkSlide v1.3.0 release](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.3.0) — no build step required:
 
 - **macOS:** universal `.dmg` for Apple Silicon and Intel Macs
 - **Windows:** `.msi` or NSIS `.exe`
