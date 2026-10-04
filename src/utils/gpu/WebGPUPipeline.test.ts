@@ -102,3 +102,63 @@ describe('GPU spatial filter submission', () => {
     pipeline!.destroy();
   });
 });
+
+describe('GPU job serialization', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('runs overlapping preview jobs one after another so a newer job never aborts an in-flight readback', async () => {
+    const pendingMaps: Array<() => void> = [];
+    class Buffer {
+      bytes: ArrayBuffer;
+      mapState = 'unmapped';
+      private rejectMap: ((error: Error) => void) | null = null;
+      constructor(size: number) { this.bytes = new ArrayBuffer(size); }
+      mapAsync() {
+        this.mapState = 'pending';
+        return new Promise<void>((resolve, reject) => {
+          this.rejectMap = reject;
+          pendingMaps.push(() => { this.mapState = 'mapped'; this.rejectMap = null; resolve(); });
+        });
+      }
+      getMappedRange() { return this.bytes; }
+      unmap() {
+        // Unmapping a pending map aborts it, as WebGPU does.
+        this.rejectMap?.(new Error('The operation was aborted.'));
+        this.rejectMap = null;
+        this.mapState = 'unmapped';
+      }
+      destroy() {}
+    }
+    const device = {
+      destroy() {},
+      limits: { maxStorageBufferBindingSize: 128 * 1024 * 1024, maxBufferSize: 256 * 1024 * 1024 },
+      lost: new Promise(() => {}),
+      createBuffer: ({ size }: { size: number }) => new Buffer(size),
+      createTexture: () => ({ createView: () => ({}), destroy() {} }),
+      createShaderModule: () => ({}),
+      createRenderPipeline: () => ({ getBindGroupLayout: () => ({}) }),
+      createBindGroup: () => ({}),
+      createCommandEncoder: () => ({
+        beginRenderPass: () => ({ setPipeline() {}, setBindGroup() {}, draw() {}, end() {} }),
+        copyTextureToBuffer() {}, finish: () => ({}),
+      }),
+      queue: { writeTexture() {}, writeBuffer() {}, submit() {} },
+    };
+    vi.stubGlobal('GPUBufferUsage', { UNIFORM: 1, COPY_DST: 2, STORAGE: 4, COPY_SRC: 8, MAP_READ: 16 });
+    vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, RENDER_ATTACHMENT: 4, COPY_SRC: 8 });
+    vi.stubGlobal('GPUMapMode', { READ: 1 });
+    vi.stubGlobal('navigator', { gpu: { requestAdapter: async () => ({ requestDevice: async () => device, info: {} }) } });
+    const pipeline = (await WebGPUPipeline.create())!;
+    const image = () => new ImageData(new Uint8ClampedArray([128, 128, 128, 255]), 1, 1);
+
+    const first = pipeline.processPreviewImage(image(), createDefaultSettings(), true, 'processed');
+    const second = pipeline.processPreviewImage(image(), createDefaultSettings(), true, 'processed');
+    await vi.waitFor(() => expect(pendingMaps).toHaveLength(1));
+    pendingMaps[0]();
+    await expect(first).resolves.toBeInstanceOf(ImageData);
+    await vi.waitFor(() => expect(pendingMaps).toHaveLength(2));
+    pendingMaps[1]();
+    await expect(second).resolves.toBeInstanceOf(ImageData);
+    pipeline.destroy();
+  });
+});

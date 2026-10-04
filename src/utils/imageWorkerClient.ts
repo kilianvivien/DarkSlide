@@ -109,9 +109,11 @@ const WORKER_REQUEST_TIMEOUT_MS: Record<WorkerRequest['type'], number> = {
 // timeouts stay fatal — they remain the liveness check while they run.
 const BLOCKING_REQUEST_TYPES = new Set<WorkerRequest['type']>(['export', 'contact-sheet']);
 
-// Cancellation is advisory: callers already ignore its failures. A late reply
-// must never take the worker down with every other job riding on it.
-const NON_FATAL_TIMEOUT_REQUEST_TYPES = new Set<WorkerRequest['type']>(['cancel-job']);
+// Cancellation, memory eviction and diagnostics are advisory: callers already
+// ignore their failures. They queue behind whatever render is running, so a
+// late reply must never take the worker down with every other job riding on
+// it (a queued evict-previews used to restart the worker mid-session).
+const NON_FATAL_TIMEOUT_REQUEST_TYPES = new Set<WorkerRequest['type']>(['cancel-job', 'evict-previews', 'diagnostics']);
 
 function trimTileImageData(tile: ReadTileResult) {
   const { imageData, haloLeft, haloTop, haloRight, haloBottom } = tile;

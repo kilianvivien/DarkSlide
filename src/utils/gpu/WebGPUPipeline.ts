@@ -193,6 +193,8 @@ export class WebGPUPipeline {
 
   private destroyed = false;
 
+  private pipelineQueue: Promise<unknown> = Promise.resolve();
+
   private constructor(device: GPUDevice, adapterName: string | null, pipelines: WebGPURenderPipelines) {
     this.device = device;
     this.adapterName = adapterName;
@@ -485,7 +487,17 @@ export class WebGPUPipeline {
     return result;
   }
 
-  private async runImagePipeline(
+  // Every job shares one set of textures and one readback buffer, so jobs
+  // must not overlap. Two previews in flight at once (switching frames
+  // quickly) used to unmap the buffer under the first job's mapAsync, which
+  // aborted it, reset the GPU and dropped rendering to the CPU worker.
+  private runImagePipeline(...args: Parameters<WebGPUPipeline['runImagePipelineExclusive']>) {
+    const run = this.pipelineQueue.then(() => this.runImagePipelineExclusive(...args));
+    this.pipelineQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runImagePipelineExclusive(
     imageData: ImageData,
     settings: ConversionSettings,
     isColor: boolean,
