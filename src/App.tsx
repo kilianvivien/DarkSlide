@@ -1462,8 +1462,10 @@ export default function App() {
     render: async (next) => {
       await executePreviewRender(next);
     },
-    cancelActive: (next) => {
-      void workerClientRef.current?.cancelActivePreviewRender(next.documentId);
+    // Receives the render still running, which may belong to a different
+    // document than the request that superseded it.
+    cancelActive: (active) => {
+      void workerClientRef.current?.cancelActivePreviewRender(active.documentId);
     },
     onCoalesced: () => {
       workerClientRef.current?.noteCoalescedPreviewRequest();
