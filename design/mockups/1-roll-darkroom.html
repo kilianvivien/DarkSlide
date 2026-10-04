@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>DarkSlide mockup 1: Roll Darkroom</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+
+.app { display: grid; grid-template-rows: 56px 1fr 44px; height: 900px; }
+.top { display: flex; align-items: center; gap: 18px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.brand { font-weight: 700; font-size: 15px; } .brand span { color: var(--text-3); font-weight: 500; }
+.roll { display: flex; flex-direction: column; line-height: 1.25; padding-left: 16px; border-left: 1px solid var(--line); }
+.roll b { font-size: 13px; } .roll small { color: var(--text-3); font-size: 11px; }
+.stages { display: flex; align-items: center; gap: 4px; margin: 0 auto; }
+.stage { display: flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border-radius: 9px; color: var(--text-3); }
+.stage .n { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font-size: 10px; font-family: var(--mono); }
+.stage.done .n { background: #1f3a2a; border-color: #2f6b45; color: var(--ok); }
+.stage.on { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px rgba(251,191,36,.35); }
+.stage.on .n { background: var(--accent); border-color: var(--accent); color: #111; }
+.stage em { font-style: normal; font-family: var(--mono); font-size: 10px; color: var(--text-3); }
+.stage.on em { color: var(--accent); }
+.sep { width: 18px; height: 1px; background: var(--line); }
+.main { display: grid; grid-template-columns: 200px 1fr 340px; min-height: 0; }
+.strip { border-right: 1px solid var(--line); background: var(--panel); overflow: hidden; display: flex; flex-direction: column; }
+.strip-head { padding: 14px 14px 8px; display: flex; justify-content: space-between; align-items: center; }
+.frames { padding: 0 10px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.frame { position: relative; border-radius: 8px; padding: 6px; border: 1px solid transparent; display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: center; }
+.frame.on { border-color: rgba(251,191,36,.6); background: var(--accent-soft); }
+.frame .num { font-family: var(--mono); font-size: 10px; color: var(--text-3); text-align: center; }
+.frame .th { height: 82px; border-radius: 5px; overflow: hidden; position: relative; background: #000; }
+.frame .flags { position: absolute; left: 6px; bottom: 5px; display: flex; gap: 4px; }
+.frame .flags span { font-size: 8px; font-family: var(--mono); padding: 1px 4px; border-radius: 3px; background: rgba(9,9,11,.75); color: var(--text-2); }
+.frame .flags span.ok { color: var(--ok); } .frame .flags span.todo { color: var(--warn); }
+.canvas { position: relative; display: grid; place-items: center; background: #050506; }
+.canvas .img { width: 760px; height: 507px; box-shadow: 0 20px 60px rgba(0,0,0,.6); outline: 1px solid #222; }
+.split { position: absolute; top: 0; bottom: 0; left: 50%; width: 0; }
+.ctool { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 4px; border-radius: 12px; background: rgba(20,20,24,.9); border: 1px solid var(--line); }
+.ctool button { padding: 7px 11px; border-radius: 8px; color: var(--text-2); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.ctool button.on { background: #27272a; color: var(--text); }
+.hint { position: absolute; top: 16px; left: 18px; display: flex; gap: 8px; }
+.panel { border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.panel-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--line-soft); }
+.panel-head h2 { margin: 6px 0 4px; font-size: 17px; }
+.panel-head p { margin: 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+.panel-body { padding: 14px 18px; overflow: hidden; flex: 1; }
+.histo-box { height: 70px; border-radius: 8px; border: 1px solid var(--line); background: #070708; overflow: hidden; margin-bottom: 6px; }
+.prof { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); margin: 8px 0 4px; }
+.prof b { font-size: 13px; } .prof small { display: block; color: var(--text-3); font-size: 11px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+.group { margin-top: 14px; }
+.group-h { display: flex; justify-content: space-between; align-items: center; }
+.scope { margin-top: 16px; padding: 12px; border-radius: 10px; border: 1px dashed #3f3f46; }
+.scope-row { display: flex; gap: 6px; margin-top: 8px; }
+.scope-row button { flex: 1; padding: 7px; border-radius: 7px; border: 1px solid var(--line); color: var(--text-2); font-size: 11px; }
+.scope-row button.on { background: var(--text); color: #111; border-color: var(--text); }
+.panel-foot { padding: 12px 18px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+.status { display: flex; align-items: center; gap: 18px; padding: 0 18px; border-top: 1px solid var(--line); background: var(--panel); color: var(--text-3); font-size: 11px; }
+.status .bar { width: 160px; height: 4px; border-radius: 4px; background: #222; overflow: hidden; }
+.status .bar i { display: block; height: 100%; width: 66%; background: var(--accent); }
+.note { position: absolute; right: 14px; top: 14px; width: 250px; padding: 10px 12px; border-radius: 9px; background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.3); color: #fde68a; font-size: 11px; line-height: 1.5; }
+
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5d86b0"/><stop offset="0.55" stop-color="#e3a173"/><stop offset="1" stop-color="#f5c98f"/>
+    </linearGradient>
+    <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d8a173"/><stop offset="1" stop-color="#34506a"/>
+    </linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="table" tableValues="0 0.08"/></feComponentTransfer><feBlend in2="SourceGraphic" mode="overlay"/></filter>
+    <symbol id="scene" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid slice">
+      <rect width="600" height="400" fill="url(#sky)"/>
+      <circle cx="420" cy="205" r="34" fill="#f6d39a" opacity="0.9"/>
+      <path d="M0 250 L70 185 L120 215 L190 150 L250 205 L320 165 L390 220 L460 175 L540 215 L600 190 L600 270 L0 270Z" fill="#7a6170" opacity="0.9"/>
+      <path d="M0 265 L60 232 L140 255 L210 222 L300 258 L380 236 L470 262 L540 240 L600 256 L600 285 L0 285Z" fill="#4b3f4c"/>
+      <rect y="280" width="600" height="120" fill="url(#lake)"/>
+      <path d="M0 280 Q150 290 300 281 T600 282" stroke="#f3c993" stroke-width="2" fill="none" opacity="0.5"/>
+      <ellipse cx="420" cy="300" rx="40" ry="5" fill="#f6d39a" opacity="0.35"/>
+      <g fill="#1f2328">
+        <path d="M40 300 l14 -60 l14 60z"/><path d="M62 302 l10 -44 l10 44z"/><path d="M520 300 l16 -70 l16 70z"/><path d="M548 302 l10 -40 l10 40z"/>
+      </g>
+    </symbol>
+    <symbol id="histogram" viewBox="0 0 256 60" preserveAspectRatio="none">
+      <path d="M 0 60 L 0 58.4 L 4 58.0 L 8 57.2 L 12 56.8 L 16 55.7 L 20 54.9 L 24 54.1 L 28 52.3 L 32 51.5 L 36 49.1 L 40 48.0 L 44 45.9 L 48 42.8 L 52 39.0 L 56 38.7 L 60 35.6 L 64 31.0 L 68 26.3 L 72 25.2 L 76 23.3 L 80 16.8 L 84 20.4 L 88 12.2 L 92 14.4 L 96 13.8 L 100 12.8 L 104 10.3 L 108 5.6 L 112 10.9 L 116 8.0 L 120 8.5 L 124 12.0 L 128 12.4 L 132 18.0 L 136 20.3 L 140 21.7 L 144 21.5 L 148 25.8 L 152 29.2 L 156 30.5 L 160 33.4 L 164 36.0 L 168 35.5 L 172 36.5 L 176 38.1 L 180 35.9 L 184 34.5 L 188 30.9 L 192 29.2 L 196 29.6 L 200 24.8 L 204 29.3 L 208 28.9 L 212 29.7 L 216 35.7 L 220 38.2 L 224 43.7 L 228 46.0 L 232 49.6 L 236 52.9 L 240 55.0 L 244 57.0 L 248 58.1 L 252 58.9 L 256 59.4 L 256 60 Z" fill="rgba(255,255,255,0.12)"/>
+      <path d="M 0 60 L 0 59.8 L 4 59.7 L 8 59.6 L 12 59.5 L 16 59.3 L 20 59.2 L 24 58.7 L 28 58.3 L 32 57.7 L 36 57.1 L 40 56.6 L 44 55.6 L 48 54.2 L 52 53.5 L 56 51.4 L 60 50.1 L 64 48.2 L 68 46.2 L 72 41.8 L 76 40.9 L 80 37.6 L 84 34.0 L 88 28.4 L 92 29.2 L 96 24.0 L 100 20.2 L 104 14.9 L 108 12.6 L 112 9.8 L 116 12.5 L 120 10.0 L 124 9.7 L 128 5.0 L 132 4.7 L 136 12.2 L 140 13.3 L 144 14.7 L 148 16.8 L 152 17.7 L 156 19.9 L 160 25.0 L 164 29.6 L 168 30.5 L 172 33.8 L 176 35.8 L 180 36.7 L 184 39.2 L 188 40.2 L 192 39.0 L 196 36.5 L 200 35.8 L 204 28.2 L 208 25.4 L 212 23.0 L 216 23.8 L 220 28.6 L 224 33.0 L 228 39.6 L 232 43.6 L 236 49.8 L 240 53.5 L 244 56.1 L 248 57.8 L 252 58.8 L 256 59.4 L 256 60 Z" fill="rgba(239,68,68,0.32)" style="mix-blend-mode:screen"/>
+      <path d="M 0 60 L 0 59.1 L 4 58.7 L 8 58.4 L 12 57.8 L 16 57.3 L 20 56.1 L 24 55.3 L 28 54.6 L 32 53.3 L 36 51.7 L 40 50.0 L 44 48.5 L 48 44.8 L 52 41.8 L 56 40.7 L 60 37.8 L 64 36.5 L 68 33.5 L 72 29.4 L 76 26.8 L 80 20.4 L 84 21.7 L 88 20.1 L 92 10.9 L 96 12.0 L 100 13.3 L 104 8.9 L 108 12.4 L 112 8.0 L 116 4.5 L 120 6.2 L 124 8.9 L 128 14.0 L 132 15.3 L 136 19.1 L 140 17.6 L 144 22.1 L 148 23.7 L 152 29.2 L 156 32.4 L 160 32.3 L 164 33.8 L 168 35.7 L 172 36.5 L 176 36.0 L 180 35.0 L 184 35.2 L 188 31.8 L 192 30.8 L 196 31.5 L 200 31.8 L 204 32.2 L 208 35.2 L 212 37.5 L 216 41.2 L 220 46.9 L 224 49.9 L 228 53.1 L 232 55.6 L 236 57.6 L 240 58.6 L 244 59.2 L 248 59.6 L 252 59.8 L 256 59.9 L 256 60 Z" fill="rgba(34,197,94,0.30)" style="mix-blend-mode:screen"/>
+      <path d="M 0 60 L 0 56.8 L 4 55.9 L 8 55.1 L 12 53.6 L 16 51.8 L 20 51.0 L 24 47.9 L 28 44.9 L 32 42.4 L 36 39.5 L 40 37.2 L 44 35.1 L 48 28.9 L 52 27.7 L 56 21.6 L 60 17.0 L 64 17.7 L 68 15.0 L 72 8.5 L 76 8.3 L 80 11.6 L 84 11.4 L 88 11.2 L 92 5.5 L 96 7.7 L 100 14.7 L 104 11.8 L 108 13.5 L 112 18.7 L 116 23.7 L 120 25.5 L 124 30.5 L 128 33.5 L 132 31.2 L 136 34.1 L 140 35.5 L 144 34.1 L 148 35.8 L 152 33.3 L 156 32.6 L 160 34.4 L 164 33.9 L 168 33.8 L 172 34.9 L 176 35.1 L 180 38.6 L 184 40.7 L 188 44.5 L 192 45.7 L 196 49.7 L 200 52.1 L 204 54.2 L 208 55.7 L 212 57.4 L 216 58.2 L 220 58.9 L 224 59.4 L 228 59.6 L 232 59.8 L 236 59.9 L 240 59.9 L 244 60.0 L 248 60.0 L 252 60.0 L 256 60.0 L 256 60 Z" fill="rgba(59,130,246,0.32)" style="mix-blend-mode:screen"/>
+    </symbol>
+  </defs>
+</svg>
+
+
+<div class="app">
+  <header class="top">
+    <div class="brand">Dark<span>Slide</span></div>
+    <div class="roll"><b>Roll 14 · Portra 400</b><small>36 frames · Nikon Z6 + 60mm · scanned 4 Oct</small></div>
+    <nav class="stages" aria-label="Roll workflow">
+      <div class="stage done"><span class="n">✓</span>Import<em>36</em></div><span class="sep"></span>
+      <div class="stage done"><span class="n">✓</span>Film base<em>roll</em></div><span class="sep"></span>
+      <div class="stage on"><span class="n">3</span>Convert<em>11/36</em></div><span class="sep"></span>
+      <div class="stage"><span class="n">4</span>Frame<em>4/36</em></div><span class="sep"></span>
+      <div class="stage"><span class="n">5</span>Clean<em>0/36</em></div><span class="sep"></span>
+      <div class="stage"><span class="n">6</span>Export</div>
+    </nav>
+    <button class="btn">⌘K</button>
+  </header>
+
+  <div class="main">
+    <aside class="strip">
+      <div class="strip-head"><span class="eyebrow">Frames</span><span class="kbd">J / K</span></div>
+      <div class="frames"><div class="frame"><div class="num">12</div><div class="th"><svg class="photo" style="filter:none"><use href="#scene"/></svg><div class="flags"><span class="ok">BASE</span><span class="ok">CONV</span><span class="ok">CROP</span></div></div></div><div class="frame"><div class="num">13</div><div class="th"><svg class="photo" style="filter:hue-rotate(-20deg) saturate(1.1)"><use href="#scene"/></svg><div class="flags"><span class="ok">BASE</span><span class="ok">CONV</span><span class="ok">CROP</span></div></div></div><div class="frame"><div class="num">14</div><div class="th"><svg class="photo" style="filter:hue-rotate(160deg) saturate(0.7) brightness(1.1)"><use href="#scene"/></svg><div class="flags"><span class="ok">BASE</span><span class="ok">CONV</span><span class="todo">CROP?</span></div></div></div><div class="frame"><div class="num">15</div><div class="th"><svg class="photo" style="filter:grayscale(0.4) brightness(0.9)"><use href="#scene"/></svg><div class="flags"><span class="ok">BASE</span><span class="ok">CONV</span><span class="todo">CROP?</span></div></div></div><div class="frame on"><div class="num">16</div><div class="th"><svg class="photo" style="filter:hue-rotate(30deg)"><use href="#scene"/></svg><div class="flags"><span class="ok">BASE</span></div></div></div><div class="frame"><div class="num">17</div><div class="th"><svg class="photo" style="filter:saturate(1.4) brightness(1.05)"><use href="#scene"/></svg><div class="flags"><span class="ok">BASE</span></div></div></div><div class="frame"><div class="num">18</div><div class="th"><svg class="photo" style="filter:hue-rotate(200deg) brightness(0.85)"><use href="#scene"/></svg><div class="flags"><span class="ok">BASE</span></div></div></div><div class="frame"><div class="num">19</div><div class="th"><svg class="photo" style="filter:sepia(0.4)"><use href="#scene"/></svg><div class="flags"><span class="ok">BASE</span></div></div></div></div>
+    </aside>
+
+    <section class="canvas">
+      <div class="hint"><span class="chip">Frame 16 of 36</span><span class="chip">6000 × 4000 · 3:2</span><span class="chip on">● Edited, not synced</span></div>
+      <div class="img"><svg class="photo" style=""><use href="#scene"/></svg></div>
+      <div class="ctool">
+        <button class="on">Converted</button><button>Split</button><button>Negative</button>
+        <span style="width:1px;background:var(--line);margin:4px 2px"></span>
+        <button>Fit</button><button>100%</button>
+      </div>
+      <div class="note"><b>Why stages?</b> A roll is converted the same way every time: base → look → framing → cleanup → export. Each stage only shows its own tools and tracks progress across all 36 frames.</div>
+    </section>
+
+    <aside class="panel">
+      <div class="panel-head">
+        <span class="eyebrow">Stage 3 · Convert</span>
+        <h2>Set the look for the roll</h2>
+        <p>Tune one frame, then apply it to the frames you choose. Per-frame tweaks stay on top.</p>
+      </div>
+      <div class="panel-body">
+        <div class="histo-box"><svg class="histo"><use href="#histogram"/></svg></div>
+        <div class="mono muted" style="font-size:10px;display:flex;justify-content:space-between"><span>P1 6</span><span>Median 112</span><span>P99 238</span><span style="color:var(--warn)">R clips 0.4% ▶</span></div>
+
+        <div class="prof"><div><b>Kodak Portra 400</b><small>From roll info · Negative · Color</small></div><span class="kbd">P</span></div>
+        <div class="chips"><span class="chip on">Neutral</span><span class="chip">Warm lab</span><span class="chip">Frontier</span><span class="chip">+ Look</span></div>
+
+        <div class="group"><div class="group-h"><span class="eyebrow">Tone</span><button class="chip">Auto</button></div>
+          <div class="slider"><label>Exposure</label><div class="track"><i style="left:56%"></i></div><output>+0.24</output></div>
+          <div class="slider"><label>Contrast</label><div class="track"><i style="left:62%"></i></div><output>+18</output></div>
+          <div class="slider"><label>Black point</label><div class="track"><i style="left:14%"></i></div><output>8</output></div>
+          <div class="slider"><label>White point</label><div class="track"><i style="left:88%"></i></div><output>246</output></div>
+        </div>
+        <div class="group"><div class="group-h"><span class="eyebrow">Color</span><button class="chip">Pick grey</button></div>
+          <div class="slider"><label>Temperature</label><div class="track"><i style="left:47%"></i></div><output>−6</output></div>
+          <div class="slider"><label>Tint</label><div class="track"><i style="left:53%"></i></div><output>+4</output></div>
+          <div class="slider"><label>Saturation</label><div class="track"><i style="left:54%"></i></div><output>108%</output></div>
+        </div>
+
+        <div class="scope">
+          <span class="eyebrow">Apply to</span>
+          <div class="scope-row"><button>This frame</button><button class="on">Unedited (24)</button><button>Whole roll</button></div>
+        </div>
+      </div>
+      <div class="panel-foot"><span class="muted" style="font-size:11px">Changes apply live · undo per frame</span><button class="btn accent">Next: Frame →</button></div>
+    </aside>
+  </div>
+
+  <footer class="status">
+    <span>Roll progress</span><span class="bar"><i></i></span><span class="mono">2 of 6 stages · 11 frames converted</span>
+    <span style="margin-left:auto" class="mono">GPU · preview 2048px</span>
+  </footer>
+</div>
+
+</body>
+</html>

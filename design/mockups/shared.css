@@ -1,0 +1,49 @@
+/* Shared look for the DarkSlide redesign mockups. Static HTML only. */
+:root {
+  --bg: #09090b;
+  --panel: #0f0f12;
+  --panel-2: #141418;
+  --line: #27272a;
+  --line-soft: #1c1c20;
+  --text: #f4f4f5;
+  --text-2: #a1a1aa;
+  --text-3: #71717a;
+  --text-4: #52525b;
+  --accent: #fbbf24;
+  --accent-soft: rgba(251, 191, 36, 0.12);
+  --ok: #4ade80;
+  --warn: #f87171;
+  --blue: #60a5fa;
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+button, .chip, .btn { white-space: nowrap; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+body { width: 1440px; height: 900px; overflow: hidden; font-size: 13px; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-3); }
+.muted { color: var(--text-3); }
+.kbd { font-family: var(--mono); font-size: 9px; color: var(--text-3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--text-2); font-size: 11px; }
+.chip.on { border-color: rgba(251, 191, 36, 0.5); background: var(--accent-soft); color: var(--accent); }
+.btn { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text-2); font-size: 12px; font-weight: 500; }
+.btn.primary { background: var(--text); color: #09090b; border-color: var(--text); }
+.btn.accent { background: var(--accent); color: #09090b; border-color: var(--accent); }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--text-4); }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.acc { background: var(--accent); }
+
+/* Slider row */
+.slider { display: grid; grid-template-columns: 96px 1fr 44px; align-items: center; gap: 10px; margin: 11px 0; }
+.slider label { color: var(--text-2); font-size: 12px; }
+.slider .track { position: relative; height: 3px; border-radius: 3px; background: #26262b; }
+.slider .track i { position: absolute; top: 50%; width: 11px; height: 11px; border-radius: 50%; background: #fafafa; transform: translate(-50%, -50%); box-shadow: 0 0 0 3px rgba(0,0,0,.35); }
+.slider .track b { position: absolute; top: 0; bottom: 0; background: #52525b; border-radius: 3px; }
+.slider output { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--text-2); }
+
+/* Placeholder photograph (inline SVG <use href="#scene">) */
+.photo { display: block; width: 100%; height: 100%; }
+.histo { display: block; width: 100%; height: 100%; }

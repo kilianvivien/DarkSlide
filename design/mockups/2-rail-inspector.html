@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>DarkSlide mockup 2: Rail & Inspector</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+
+.app { display: grid; grid-template-columns: 56px 320px 1fr; grid-template-rows: 44px 1fr 160px; height: 900px; }
+.rail { grid-row: 1 / 4; background: #0b0b0d; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 4px; }
+.rail .logo { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, #fbbf24, #f97316); margin-bottom: 10px; }
+.rail button { position: relative; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; color: var(--text-3); }
+.rail button.on { background: #1d1d22; color: var(--text); }
+.rail button.on::before { content: ""; position: absolute; left: -8px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--accent); }
+.rail button small { position: absolute; right: 3px; bottom: 2px; font-family: var(--mono); font-size: 8px; color: var(--text-4); }
+.rail .div { width: 24px; height: 1px; background: var(--line); margin: 6px 0; }
+.rail .grow { flex: 1; }
+.tip { position: absolute; left: 64px; top: 64px; z-index: 5; padding: 5px 8px; border-radius: 6px; background: #27272a; color: var(--text); font-size: 11px; white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,.4); }
+.insp { grid-row: 1 / 3; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.insp-top { padding: 14px 18px 10px; border-bottom: 1px solid var(--line-soft); }
+.histo-box { height: 76px; border-radius: 8px; border: 1px solid var(--line); background: #070708; overflow: hidden; position: relative; }
+.histo-meta { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; color: var(--text-3); margin-top: 6px; }
+.insp-body { padding: 14px 18px; flex: 1; overflow: hidden; }
+.select { display: flex; justify-content: space-between; align-items: center; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); margin: 8px 0 6px; }
+.recent { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.sect { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.sect-h { display: flex; justify-content: space-between; align-items: center; }
+.sect-h .eyebrow { display: flex; align-items: center; gap: 8px; }
+.toggle { width: 26px; height: 15px; border-radius: 9px; background: var(--accent); position: relative; }
+.toggle::after { content: ""; position: absolute; right: 2px; top: 2px; width: 11px; height: 11px; border-radius: 50%; background: #111; }
+.toggle.off { background: #3f3f46; } .toggle.off::after { right: auto; left: 2px; background: #a1a1aa; }
+.titlebar { grid-column: 3; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.titlebar .name { font-weight: 600; } .titlebar .meta { color: var(--text-3); font-size: 11px; font-family: var(--mono); }
+.titlebar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.canvas { grid-column: 3; position: relative; display: grid; place-items: center; background: #050506; }
+.canvas .img { width: 840px; height: 560px; position: relative; overflow: hidden; outline: 1px solid #222; }
+.canvas .img .before { position: absolute; inset: 0; width: 50%; overflow: hidden; border-right: 2px solid #fafafa; }
+.canvas .img .before > svg { width: 840px; height: 560px; filter: invert(1) hue-rotate(180deg) sepia(.5) saturate(1.8) brightness(.85); }
+.canvas .lbl { position: absolute; top: 12px; padding: 3px 8px; border-radius: 6px; background: rgba(9,9,11,.75); font-size: 10px; font-family: var(--mono); letter-spacing: .08em; }
+.float { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px; background: rgba(20,20,24,.92); border: 1px solid var(--line); }
+.float button { padding: 6px 10px; border-radius: 8px; font-size: 12px; color: var(--text-2); }
+.float button.on { background: #27272a; color: var(--text); }
+.float .s { width: 1px; height: 18px; background: var(--line); margin: 0 3px; }
+.strip { grid-column: 2 / 4; border-top: 1px solid var(--line); background: var(--panel); display: grid; grid-template-rows: 38px 1fr; }
+.strip-bar { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line-soft); }
+.selbar { display: flex; align-items: center; gap: 8px; margin-left: 16px; padding: 3px 4px 3px 12px; border-radius: 9px; background: var(--accent-soft); border: 1px solid rgba(251,191,36,.35); color: #fde68a; font-size: 12px; }
+.selbar .btn { padding: 4px 9px; font-size: 11px; }
+.thumbs { display: flex; gap: 10px; padding: 10px 16px; overflow: hidden; }
+.thumb { flex: none; width: 126px; }
+.thumb .t { position: relative; height: 84px; border-radius: 7px; overflow: hidden; outline: 1px solid #222; }
+.thumb.sel .t { outline: 2px solid var(--accent); }
+.thumb.cur .t { outline: 2px solid #fafafa; }
+.thumb .check { position: absolute; left: 5px; top: 5px; width: 16px; height: 16px; border-radius: 4px; background: var(--accent); color: #111; font-size: 11px; display: grid; place-items: center; font-weight: 700; }
+.thumb .badges { position: absolute; right: 5px; bottom: 5px; display: flex; gap: 3px; }
+.thumb .badges span { width: 6px; height: 6px; border-radius: 50%; }
+.thumb p { margin: 5px 0 0; font-size: 10px; font-family: var(--mono); color: var(--text-3); display: flex; justify-content: space-between; }
+
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5d86b0"/><stop offset="0.55" stop-color="#e3a173"/><stop offset="1" stop-color="#f5c98f"/>
+    </linearGradient>
+    <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d8a173"/><stop offset="1" stop-color="#34506a"/>
+    </linearGradient>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="table" tableValues="0 0.08"/></feComponentTransfer><feBlend in2="SourceGraphic" mode="overlay"/></filter>
+    <symbol id="scene" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid slice">
+      <rect width="600" height="400" fill="url(#sky)"/>
+      <circle cx="420" cy="205" r="34" fill="#f6d39a" opacity="0.9"/>
+      <path d="M0 250 L70 185 L120 215 L190 150 L250 205 L320 165 L390 220 L460 175 L540 215 L600 190 L600 270 L0 270Z" fill="#7a6170" opacity="0.9"/>
+      <path d="M0 265 L60 232 L140 255 L210 222 L300 258 L380 236 L470 262 L540 240 L600 256 L600 285 L0 285Z" fill="#4b3f4c"/>
+      <rect y="280" width="600" height="120" fill="url(#lake)"/>
+      <path d="M0 280 Q150 290 300 281 T600 282" stroke="#f3c993" stroke-width="2" fill="none" opacity="0.5"/>
+      <ellipse cx="420" cy="300" rx="40" ry="5" fill="#f6d39a" opacity="0.35"/>
+      <g fill="#1f2328">
+        <path d="M40 300 l14 -60 l14 60z"/><path d="M62 302 l10 -44 l10 44z"/><path d="M520 300 l16 -70 l16 70z"/><path d="M548 302 l10 -40 l10 40z"/>
+      </g>
+    </symbol>
+    <symbol id="histogram" viewBox="0 0 256 60" preserveAspectRatio="none">
+      <path d="M 0 60 L 0 58.4 L 4 58.0 L 8 57.2 L 12 56.8 L 16 55.7 L 20 54.9 L 24 54.1 L 28 52.3 L 32 51.5 L 36 49.1 L 40 48.0 L 44 45.9 L 48 42.8 L 52 39.0 L 56 38.7 L 60 35.6 L 64 31.0 L 68 26.3 L 72 25.2 L 76 23.3 L 80 16.8 L 84 20.4 L 88 12.2 L 92 14.4 L 96 13.8 L 100 12.8 L 104 10.3 L 108 5.6 L 112 10.9 L 116 8.0 L 120 8.5 L 124 12.0 L 128 12.4 L 132 18.0 L 136 20.3 L 140 21.7 L 144 21.5 L 148 25.8 L 152 29.2 L 156 30.5 L 160 33.4 L 164 36.0 L 168 35.5 L 172 36.5 L 176 38.1 L 180 35.9 L 184 34.5 L 188 30.9 L 192 29.2 L 196 29.6 L 200 24.8 L 204 29.3 L 208 28.9 L 212 29.7 L 216 35.7 L 220 38.2 L 224 43.7 L 228 46.0 L 232 49.6 L 236 52.9 L 240 55.0 L 244 57.0 L 248 58.1 L 252 58.9 L 256 59.4 L 256 60 Z" fill="rgba(255,255,255,0.12)"/>
+      <path d="M 0 60 L 0 59.8 L 4 59.7 L 8 59.6 L 12 59.5 L 16 59.3 L 20 59.2 L 24 58.7 L 28 58.3 L 32 57.7 L 36 57.1 L 40 56.6 L 44 55.6 L 48 54.2 L 52 53.5 L 56 51.4 L 60 50.1 L 64 48.2 L 68 46.2 L 72 41.8 L 76 40.9 L 80 37.6 L 84 34.0 L 88 28.4 L 92 29.2 L 96 24.0 L 100 20.2 L 104 14.9 L 108 12.6 L 112 9.8 L 116 12.5 L 120 10.0 L 124 9.7 L 128 5.0 L 132 4.7 L 136 12.2 L 140 13.3 L 144 14.7 L 148 16.8 L 152 17.7 L 156 19.9 L 160 25.0 L 164 29.6 L 168 30.5 L 172 33.8 L 176 35.8 L 180 36.7 L 184 39.2 L 188 40.2 L 192 39.0 L 196 36.5 L 200 35.8 L 204 28.2 L 208 25.4 L 212 23.0 L 216 23.8 L 220 28.6 L 224 33.0 L 228 39.6 L 232 43.6 L 236 49.8 L 240 53.5 L 244 56.1 L 248 57.8 L 252 58.8 L 256 59.4 L 256 60 Z" fill="rgba(239,68,68,0.32)" style="mix-blend-mode:screen"/>
+      <path d="M 0 60 L 0 59.1 L 4 58.7 L 8 58.4 L 12 57.8 L 16 57.3 L 20 56.1 L 24 55.3 L 28 54.6 L 32 53.3 L 36 51.7 L 40 50.0 L 44 48.5 L 48 44.8 L 52 41.8 L 56 40.7 L 60 37.8 L 64 36.5 L 68 33.5 L 72 29.4 L 76 26.8 L 80 20.4 L 84 21.7 L 88 20.1 L 92 10.9 L 96 12.0 L 100 13.3 L 104 8.9 L 108 12.4 L 112 8.0 L 116 4.5 L 120 6.2 L 124 8.9 L 128 14.0 L 132 15.3 L 136 19.1 L 140 17.6 L 144 22.1 L 148 23.7 L 152 29.2 L 156 32.4 L 160 32.3 L 164 33.8 L 168 35.7 L 172 36.5 L 176 36.0 L 180 35.0 L 184 35.2 L 188 31.8 L 192 30.8 L 196 31.5 L 200 31.8 L 204 32.2 L 208 35.2 L 212 37.5 L 216 41.2 L 220 46.9 L 224 49.9 L 228 53.1 L 232 55.6 L 236 57.6 L 240 58.6 L 244 59.2 L 248 59.6 L 252 59.8 L 256 59.9 L 256 60 Z" fill="rgba(34,197,94,0.30)" style="mix-blend-mode:screen"/>
+      <path d="M 0 60 L 0 56.8 L 4 55.9 L 8 55.1 L 12 53.6 L 16 51.8 L 20 51.0 L 24 47.9 L 28 44.9 L 32 42.4 L 36 39.5 L 40 37.2 L 44 35.1 L 48 28.9 L 52 27.7 L 56 21.6 L 60 17.0 L 64 17.7 L 68 15.0 L 72 8.5 L 76 8.3 L 80 11.6 L 84 11.4 L 88 11.2 L 92 5.5 L 96 7.7 L 100 14.7 L 104 11.8 L 108 13.5 L 112 18.7 L 116 23.7 L 120 25.5 L 124 30.5 L 128 33.5 L 132 31.2 L 136 34.1 L 140 35.5 L 144 34.1 L 148 35.8 L 152 33.3 L 156 32.6 L 160 34.4 L 164 33.9 L 168 33.8 L 172 34.9 L 176 35.1 L 180 38.6 L 184 40.7 L 188 44.5 L 192 45.7 L 196 49.7 L 200 52.1 L 204 54.2 L 208 55.7 L 212 57.4 L 216 58.2 L 220 58.9 L 224 59.4 L 228 59.6 L 232 59.8 L 236 59.9 L 240 59.9 L 244 60.0 L 248 60.0 L 252 60.0 L 256 60.0 L 256 60 Z" fill="rgba(59,130,246,0.32)" style="mix-blend-mode:screen"/>
+    </symbol>
+  </defs>
+</svg>
+
+
+<div class="app">
+  <nav class="rail" aria-label="Tools">
+    <div class="logo"></div>
+    <button class="on" aria-label="develop"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><small>D</small></button><button class="" aria-label="color"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5"/><circle cx="8.5" cy="15" r="5"/><circle cx="15.5" cy="15" r="5"/></svg><small>W</small></button><button class="" aria-label="curves"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20C10 20 9 4 20 4"/><path d="M4 4v16h16"/></svg><small>U</small></button><button class="" aria-label="profiles"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 4v16M16 4v16M4 9h4M4 15h4M16 9h4M16 15h4"/></svg><small>P</small></button><button class="" aria-label="crop"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v16h16"/><path d="M2 6h16v16"/></svg><small>C</small></button><button class="" aria-label="dust"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 21h10"/><path d="M5 15l8-8 4 4-8 8H5z"/></svg><small>R</small></button>
+    <div class="div"></div>
+    <button aria-label="Roll"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 6v12M17 6v12"/></svg><small>L</small></button>
+    <button aria-label="Export"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><small>E</small></button>
+    <div class="grow"></div>
+    <button aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg></button>
+  </nav>
+  <div class="tip">Develop — tone, profile and film base (D)</div>
+
+  <aside class="insp">
+    <div class="insp-top">
+      <div class="histo-box"><svg class="histo"><use href="#histogram"/></svg></div>
+      <div class="histo-meta"><span>P1 6</span><span>Median 112</span><span>P99 238</span><span style="color:var(--warn)">◀ 0% · R 0.4% ▶</span></div>
+    </div>
+    <div class="insp-body">
+      <span class="eyebrow">Film profile</span>
+      <div class="select"><span><b>Kodak Portra 400</b> <span class="muted">· color negative</span></span><span class="kbd">P</span></div>
+      <div class="recent"><span class="chip on">Portra 400</span><span class="chip">Gold 200</span><span class="chip">HP5</span><span class="chip">★ My Frontier</span></div>
+
+      <div class="sect">
+        <div class="sect-h"><span class="eyebrow"><span class="toggle"></span>Film base</span><span class="chip">Roll sample · 92%</span></div>
+      </div>
+      <div class="sect">
+        <div class="sect-h"><span class="eyebrow"><span class="toggle"></span>Tone</span><button class="chip">Auto <span class="kbd">A</span></button></div>
+        <div class="slider"><label>Exposure</label><div class="track"><i style="left:56%"></i></div><output>+0.24</output></div>
+        <div class="slider"><label>Contrast</label><div class="track"><i style="left:62%"></i></div><output>+18</output></div>
+        <div class="slider"><label>Highlights</label><div class="track"><i style="left:40%"></i></div><output>−12</output></div>
+        <div class="slider"><label>Shadows</label><div class="track"><i style="left:58%"></i></div><output>+9</output></div>
+        <div class="slider"><label>Black point</label><div class="track"><i style="left:14%"></i></div><output>8</output></div>
+        <div class="slider"><label>White point</label><div class="track"><i style="left:88%"></i></div><output>246</output></div>
+      </div>
+      <div class="sect">
+        <div class="sect-h"><span class="eyebrow"><span class="toggle"></span>White balance</span><button class="chip">Pick grey <span class="kbd">G</span></button></div>
+        <div class="slider"><label>Temperature</label><div class="track"><i style="left:47%"></i></div><output>−6</output></div>
+        <div class="slider"><label>Tint</label><div class="track"><i style="left:53%"></i></div><output>+4</output></div>
+      </div>
+      <div class="sect">
+        <div class="sect-h"><span class="eyebrow"><span class="toggle off"></span>Detail</span><span class="muted" style="font-size:11px">Sharpen · Noise</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <header class="titlebar">
+    <span class="name">PORTRA400_R14_016.dng</span>
+    <span class="meta">16 / 36 · 6000×4000 · 3:2 · Roll 14</span>
+    <div class="right">
+      <button class="btn">↶</button><button class="btn">↷</button>
+      <button class="btn primary">Export…</button>
+    </div>
+  </header>
+
+  <section class="canvas">
+    <div class="img">
+      <svg class="photo" style=""><use href="#scene"/></svg>
+      <div class="before"><svg><use href="#scene"/></svg></div>
+      <span class="lbl" style="left:12px">NEGATIVE</span><span class="lbl" style="right:12px">CONVERTED</span>
+    </div>
+    <div class="float">
+      <button>Converted</button><button class="on">Split ⇆</button><button>Side by side</button>
+      <span class="s"></span><button>↻ 90°</button><button>Crop</button>
+      <span class="s"></span><button>Fit</button><button>100%</button><button>200%</button>
+    </div>
+  </section>
+
+  <footer class="strip">
+    <div class="strip-bar">
+      <span class="eyebrow">Roll 14 · Portra 400</span><span class="muted mono" style="font-size:11px">36 frames</span>
+      <div class="selbar">3 selected
+        <button class="btn">Sync settings</button><button class="btn">Stabilize crops</button><button class="btn">Auto dust</button><button class="btn accent">Export 3</button>
+      </div>
+      <span style="margin-left:auto;font-size:11px" class="muted"><span class="dot ok"></span> base &nbsp;<span class="dot" style="background:var(--blue)"></span> edited &nbsp;<span class="dot warn"></span> needs crop</span>
+    </div>
+    <div class="thumbs"><div class="thumb"><div class="t"><svg class="photo" style="filter:none"><use href="#scene"/></svg><div class="badges"><span style="background:var(--ok)"></span><span style="background:var(--blue)"></span></div></div><p><span>12</span><span>edited</span></p></div><div class="thumb"><div class="t"><svg class="photo" style="filter:hue-rotate(-20deg) saturate(1.1)"><use href="#scene"/></svg><div class="badges"><span style="background:var(--ok)"></span><span style="background:var(--blue)"></span></div></div><p><span>13</span><span>edited</span></p></div><div class="thumb"><div class="t"><svg class="photo" style="filter:hue-rotate(160deg) saturate(0.7) brightness(1.1)"><use href="#scene"/></svg><div class="badges"><span style="background:var(--ok)"></span><span style="background:var(--blue)"></span><span style="background:var(--warn)"></span></div></div><p><span>14</span><span>edited</span></p></div><div class="thumb sel"><div class="t"><svg class="photo" style="filter:grayscale(0.4) brightness(0.9)"><use href="#scene"/></svg><span class="check">✓</span><div class="badges"><span style="background:var(--ok)"></span><span style="background:var(--blue)"></span></div></div><p><span>15</span><span>edited</span></p></div><div class="thumb sel cur"><div class="t"><svg class="photo" style="filter:hue-rotate(30deg)"><use href="#scene"/></svg><span class="check">✓</span><div class="badges"><span style="background:var(--ok)"></span><span style="background:var(--blue)"></span></div></div><p><span>16</span><span>edited</span></p></div><div class="thumb sel"><div class="t"><svg class="photo" style="filter:saturate(1.4) brightness(1.05)"><use href="#scene"/></svg><span class="check">✓</span><div class="badges"><span style="background:var(--ok)"></span></div></div><p><span>17</span><span></span></p></div><div class="thumb"><div class="t"><svg class="photo" style="filter:hue-rotate(200deg) brightness(0.85)"><use href="#scene"/></svg><div class="badges"><span style="background:var(--ok)"></span></div></div><p><span>18</span><span></span></p></div><div class="thumb"><div class="t"><svg class="photo" style="filter:sepia(0.4)"><use href="#scene"/></svg><div class="badges"><span style="background:var(--ok)"></span><span style="background:var(--warn)"></span></div></div><p><span>19</span><span></span></p></div><div class="thumb"><div class="t"><svg class="photo" style="filter:hue-rotate(-60deg) saturate(0.8)"><use href="#scene"/></svg><div class="badges"><span style="background:var(--ok)"></span></div></div><p><span>20</span><span></span></p></div></div>
+  </footer>
+</div>
+
+</body>
+</html>
