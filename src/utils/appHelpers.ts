@@ -195,6 +195,8 @@ export type QueuedPreviewRender = {
   highlightDensityEstimate?: number;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
+  // Rendered for a hovered film profile rather than the document's own look.
+  isProfilePreview?: boolean;
 };
 
 export type BlockingOverlayState = {

@@ -6,6 +6,8 @@ import type { ZoomLevel } from '../types';
 interface CanvasToolbarProps {
   profileName: string;
   labStyleName: string | null;
+  // The profile chip names a hovered profile shown on the image but not applied.
+  isProfilePreview?: boolean;
   comparisonMode: 'processed' | 'original';
   isCropOverlayVisible: boolean;
   zoom: ZoomLevel;
@@ -70,6 +72,7 @@ function SegmentButton({
 export const CanvasToolbar = memo(function CanvasToolbar({
   profileName,
   labStyleName,
+  isProfilePreview = false,
   comparisonMode,
   isCropOverlayVisible,
   zoom,
@@ -94,9 +97,13 @@ export const CanvasToolbar = memo(function CanvasToolbar({
     >
       <span
         className="hidden min-w-0 max-w-[220px] items-center gap-2 pl-3 pr-1.5 text-[11px] text-zinc-300 xl:flex"
-        title={labStyleName ? `${profileName} · ${labStyleName}` : profileName}
+        title={`${isProfilePreview ? 'Previewing ' : ''}${labStyleName ? `${profileName} · ${labStyleName}` : profileName}`}
       >
-        <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-400" />
+        <span
+          aria-hidden="true"
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${isProfilePreview ? 'border border-accent-400' : 'bg-accent-400'}`}
+        />
+        {isProfilePreview && <span className="shrink-0 text-zinc-500">Preview</span>}
         <span className="truncate font-medium">{profileName}</span>
         {labStyleName && (
           <span className="flex min-w-0 items-center gap-1 text-zinc-500">

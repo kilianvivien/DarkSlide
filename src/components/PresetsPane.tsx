@@ -133,11 +133,17 @@ function formatBuiltInProfileLabel(profile: FilmProfile) {
   return `${filmTypeLabel} · ${processLabel}`;
 }
 
+const STOCK_PREVIEW_DELAY_MS = 120;
+
 const CATEGORY_ORDER: FilmProfileCategory[] = ['Generic', 'Kodak', 'Fuji', 'Ilford', 'CineStill', 'Lomography', 'Harman', 'Kentmere', 'Foma', 'Rollei'];
 
 interface PresetsPaneProps {
   activeStockId: string;
   onStockChange: (stock: FilmProfile) => void;
+  // Shows a profile on the image without applying it, while the pointer or
+  // keyboard focus rests on it. onStockPreviewEnd restores the current look.
+  onStockPreview?: (stock: FilmProfile) => void;
+  onStockPreviewEnd?: () => void;
   builtinProfiles?: FilmProfile[];
   customPresets: FilmProfile[];
   presetFolders?: PresetFolder[];
@@ -175,6 +181,8 @@ interface PresetsPaneProps {
 export const PresetsPane: React.FC<PresetsPaneProps> = ({
   activeStockId,
   onStockChange,
+  onStockPreview,
+  onStockPreviewEnd,
   builtinProfiles = FILM_PROFILES,
   customPresets,
   presetFolders = [],
@@ -257,6 +265,56 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewTimerRef = useRef<number | null>(null);
+  const previewedStockIdRef = useRef<string | null>(null);
+
+  // stockId limits the stop to that profile, so leaving one row after the
+  // pointer already entered the next does not cancel the newer preview.
+  const stopStockPreview = useCallback((stockId?: string) => {
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    if (previewedStockIdRef.current && (!stockId || previewedStockIdRef.current === stockId)) {
+      previewedStockIdRef.current = null;
+      onStockPreviewEnd?.();
+    }
+  }, [onStockPreviewEnd]);
+
+  // A short delay keeps a pointer sweeping across the list from queueing a
+  // render for every row it crosses.
+  const scheduleStockPreview = useCallback((stock: FilmProfile) => {
+    if (!onStockPreview) return;
+    if (previewTimerRef.current !== null) window.clearTimeout(previewTimerRef.current);
+    if (stock.id === activeStockId) {
+      previewTimerRef.current = null;
+      if (previewedStockIdRef.current) {
+        previewedStockIdRef.current = null;
+        onStockPreviewEnd?.();
+      }
+      return;
+    }
+    previewTimerRef.current = window.setTimeout(() => {
+      previewTimerRef.current = null;
+      previewedStockIdRef.current = stock.id;
+      onStockPreview(stock);
+    }, STOCK_PREVIEW_DELAY_MS);
+  }, [activeStockId, onStockPreview, onStockPreviewEnd]);
+
+  const selectStock = useCallback((stock: FilmProfile) => {
+    stopStockPreview();
+    onStockChange(stock);
+  }, [onStockChange, stopStockPreview]);
+
+  useEffect(() => () => stopStockPreview(), [stopStockPreview]);
+
+  const stockButtonHandlers = (stock: FilmProfile) => ({
+    onClick: () => selectStock(stock),
+    onMouseEnter: () => scheduleStockPreview(stock),
+    onMouseLeave: () => stopStockPreview(stock.id),
+    onFocus: () => scheduleStockPreview(stock),
+    onBlur: () => stopStockPreview(stock.id),
+  });
   const genericProfiles = useMemo(
     () => builtinProfiles.filter(isGenericProfile),
     [builtinProfiles],
@@ -618,7 +676,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     return (
       <div key={stock.id} className="relative">
         <button
-          onClick={() => onStockChange(stock)}
+          {...stockButtonHandlers(stock)}
           className={`group w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex flex-col gap-1 ${
             isExpanded
               ? 'bg-zinc-100 text-zinc-950 shadow-lg'
@@ -1577,7 +1635,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                   {filteredGenericProfiles.map((stock) => (
                     <button
                       key={stock.id}
-                      onClick={() => onStockChange(stock)}
+                      {...stockButtonHandlers(stock)}
                       className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
                         activeStockId === stock.id
                           ? 'bg-zinc-100 text-zinc-950 shadow-lg'
@@ -1622,7 +1680,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                       {group.profiles.map((stock) => (
                         <button
                           key={stock.id}
-                          onClick={() => onStockChange(stock)}
+                          {...stockButtonHandlers(stock)}
                           className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
                             activeStockId === stock.id
                               ? 'bg-zinc-100 text-zinc-950 shadow-lg'

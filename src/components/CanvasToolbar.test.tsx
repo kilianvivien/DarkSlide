@@ -29,6 +29,11 @@ function setup(props: Partial<React.ComponentProps<typeof CanvasToolbar>> = {}) 
 }
 
 describe('CanvasToolbar', () => {
+  it('marks a hovered profile as a preview', () => {
+    setup({ profileName: 'Generic B&W', isProfilePreview: true });
+    expect(screen.getByTitle('Previewing Generic B&W')).toHaveTextContent('PreviewGeneric B&W');
+  });
+
   it('switches between the converted image and the negative', () => {
     const handlers = setup();
     expect(screen.getByRole('button', { name: 'Converted' })).toHaveAttribute('aria-pressed', 'true');

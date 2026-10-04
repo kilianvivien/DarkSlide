@@ -245,6 +245,11 @@ type AppShellProps = {
   onAutoAdjust: () => void;
   onAutoWhiteBalance: () => void;
   onProfileChange: (profile: FilmProfile) => void;
+  onProfilePreview: (profile: FilmProfile) => void;
+  onProfilePreviewEnd: () => void;
+  // The hovered profile shown on the image, if any.
+  previewProfile: FilmProfile | null;
+  previewLabStyle: LabStyleProfile | null;
   onSavePreset: (name: string, metadata?: {
     filmStock?: string;
     scannerType?: ScannerType | null;
@@ -476,6 +481,10 @@ export function AppShell({
   onAutoAdjust,
   onAutoWhiteBalance,
   onProfileChange,
+  onProfilePreview,
+  onProfilePreviewEnd,
+  previewProfile,
+  previewLabStyle,
   onSavePreset,
   onImportPreset,
   onDeletePreset,
@@ -622,6 +631,8 @@ export function AppShell({
                     <PresetsPane
                       activeStockId={documentState?.profileId ?? fallbackProfile.id}
                       onStockChange={onProfileChange}
+                      onStockPreview={documentState ? onProfilePreview : undefined}
+                      onStockPreviewEnd={onProfilePreviewEnd}
                       builtinProfiles={builtinProfiles}
                       customPresets={customPresets}
                       presetFolders={presetFolders}
@@ -1014,8 +1025,9 @@ export function AppShell({
 
                   <div className="relative flex w-full shrink-0 items-center justify-center">
                     <CanvasToolbar
-                      profileName={`${activeProfile.name}${activeProfile.lut ? ' (LUT)' : ''}`}
-                      labStyleName={activeLabStyle?.name ?? null}
+                      profileName={`${(previewProfile ?? activeProfile).name}${(previewProfile ?? activeProfile).lut ? ' (LUT)' : ''}`}
+                      labStyleName={(previewProfile ? previewLabStyle : activeLabStyle)?.name ?? null}
+                      isProfilePreview={previewProfile !== null}
                       comparisonMode={comparisonMode}
                       isCropOverlayVisible={isCropOverlayVisible}
                       zoom={zoom}

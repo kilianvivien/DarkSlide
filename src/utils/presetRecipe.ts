@@ -1,4 +1,4 @@
-import { createDefaultSettings, FILM_STOCK_DENSITY_PRESETS } from '../constants';
+import { createDefaultSettings, FILM_STOCK_DENSITY_PRESETS, resolveLightSourceIdForProfile } from '../constants';
 import type { ConversionSettings, FilmProfile, ScannerType, WorkspaceDocument } from '../types';
 import { isRawWorkspaceDocument } from './pipelineIntent';
 
@@ -41,6 +41,22 @@ export function buildProfileSettingsForDocument(profile: FilmProfile, document: 
     next.dustRemoval.marks = structuredClone(document.settings.dustRemoval?.marks ?? []);
   }
   return next;
+}
+
+// Everything applying a profile changes on a document. A profile that names a
+// light source or lab style sets it (null clears it); one that leaves the key
+// out keeps the document's, adapting a CS-Lite light source to the film type.
+export function resolveProfileApplication(profile: FilmProfile, document: WorkspaceDocument | null) {
+  const hasOwn = (key: 'lightSourceId' | 'labStyleId') => Object.prototype.hasOwnProperty.call(profile, key);
+  return {
+    settings: buildProfileSettingsForDocument(profile, document),
+    lightSourceId: hasOwn('lightSourceId')
+      ? (profile.lightSourceId ?? null)
+      : resolveLightSourceIdForProfile(profile, document?.lightSourceId),
+    labStyleId: hasOwn('labStyleId')
+      ? (profile.labStyleId ?? null)
+      : (document?.labStyleId ?? null),
+  };
 }
 
 export function createPresetRecipe(

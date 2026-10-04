@@ -24,7 +24,7 @@ import { clamp } from '../utils/math';
 import { computeHighlightDensity, resolveDensityInversionParams } from '../utils/imagePipeline';
 import { getAutoFrameCrop } from '../utils/frameDetection';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
-import { buildProfileSettingsForDocument, createPresetRecipe } from '../utils/presetRecipe';
+import { buildProfileSettingsForDocument, createPresetRecipe, resolveProfileApplication } from '../utils/presetRecipe';
 import { neutralWhiteBalance } from '../utils/autoAnalysis';
 import { rendersMonochrome, usesColorChannelPipeline } from '../utils/pipelineIntent';
 import {
@@ -839,15 +839,7 @@ export function useWorkspaceCommands({
   }, [activeTabId, refreshRenderBackendDiagnostics, setMaxResidentDocs, workerClientRef]);
 
   const handleProfileChange = useCallback((profile: FilmProfile) => {
-    const nextLightSourceId = Object.prototype.hasOwnProperty.call(profile, 'lightSourceId')
-      ? (profile.lightSourceId ?? null)
-      : undefined;
-
-    const nextLabStyleId = Object.prototype.hasOwnProperty.call(profile, 'labStyleId')
-      ? (profile.labStyleId ?? null)
-      : undefined;
-
-    const nextSettings = buildProfileSettingsForDocument(profile, documentState);
+    const { settings: nextSettings, lightSourceId, labStyleId } = resolveProfileApplication(profile, documentState);
     appendDiagnostic({
       level: 'info',
       code: 'PRESET_APPLIED',
@@ -866,15 +858,12 @@ export function useWorkspaceCommands({
     updateDocument((current) => ({
       ...current,
       profileId: profile.id,
-      lightSourceId: nextLightSourceId !== undefined
-        ? nextLightSourceId
-        : resolveLightSourceIdForProfile(profile, current.lightSourceId),
+      lightSourceId,
       settings: nextSettings,
-      ...(nextLabStyleId !== undefined ? { labStyleId: nextLabStyleId } : {}),
+      labStyleId,
       dirty: true,
     }));
-    const resolvedLabStyleId = nextLabStyleId !== undefined ? nextLabStyleId : (documentState?.labStyleId ?? null);
-    resetHistory(createHistoryEntry(nextSettings, resolvedLabStyleId));
+    resetHistory(createHistoryEntry(nextSettings, labStyleId));
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [documentState, prefsSnapshotRef, resetHistory, updateDocument]);
 

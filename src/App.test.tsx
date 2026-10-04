@@ -341,11 +341,15 @@ vi.mock('./components/PresetsPane', () => ({
     builtinProfiles = [],
     customPresets = [],
     onStockChange,
+    onStockPreview,
+    onStockPreviewEnd,
     onSavePreset,
   }: {
     builtinProfiles?: Array<{ id: string; name: string }>;
     customPresets?: Array<{ id: string; name: string }>;
     onStockChange: (profile: { id: string; name: string }) => void;
+    onStockPreview?: (profile: { id: string; name: string }) => void;
+    onStockPreviewEnd?: () => void;
     onSavePreset?: (name: string, metadata?: { saveFraming?: boolean }) => void;
   }) => (
     <div data-testid="presets">
@@ -360,6 +364,8 @@ vi.mock('./components/PresetsPane', () => ({
           key={profile.id}
           type="button"
           onClick={() => onStockChange(profile)}
+          onMouseEnter={() => onStockPreview?.(profile)}
+          onMouseLeave={() => onStockPreviewEnd?.()}
         >
           {profile.name}
         </button>
@@ -2344,6 +2350,40 @@ describe('App import and preview pipeline', () => {
     });
     expect(latestRenderCall.settings.rotation).toBe(180);
     expect(latestRenderCall.settings.levelAngle).toBe(-3);
+  });
+
+  it('previews a hovered film profile with the current framing and restores the look afterwards', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    const settle = async () => {
+      await flushMicrotasks();
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      await flushMicrotasks();
+    };
+
+    render(<App />);
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await settle();
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Apply Wide Crop' }));
+    await settle();
+    const applied = workerState.render.mock.calls.at(-1)?.[0] as { profileId: string; settings: ConversionSettings };
+    expect(applied.profileId).not.toBe('generic-bw');
+
+    fireEvent.mouseEnter(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
+    await settle();
+    const previewed = workerState.render.mock.calls.at(-1)?.[0] as { profileId: string; isColor: boolean; settings: ConversionSettings };
+    expect(previewed).toMatchObject({ profileId: 'generic-bw', isColor: false });
+    expect(previewed.settings.crop).toEqual(applied.settings.crop);
+    expect(screen.getByText('Preview')).toBeInTheDocument();
+
+    fireEvent.mouseLeave(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
+    await settle();
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({ profileId: applied.profileId, settings: applied.settings });
+    expect(screen.queryByText('Preview')).not.toBeInTheDocument();
   });
 
   it('switches CS-LITE to the white mode when black-and-white conversion is enabled', async () => {

@@ -39,7 +39,7 @@ import { BlockingOverlayState, createDocumentColorManagement, formatError, getCa
 import { loadMaxResidentDocs, MaxResidentDocs } from './utils/residentDocsStore';
 import { createFromCurrentSettings, loadQuickExportPresets, saveQuickExportPresets } from './utils/quickExportStore';
 import { usesColorChannelPipeline } from './utils/pipelineIntent';
-import { resolveDocumentProfile } from './utils/presetRecipe';
+import { resolveDocumentProfile, resolveProfileApplication } from './utils/presetRecipe';
 import { normalizeExportOptions } from './utils/exportOptions';
 
 function createDocumentHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labStyleId'>): DocumentHistoryEntry {
@@ -113,6 +113,8 @@ export default function App() {
   const [isSpaceHeld, setIsSpaceHeld] = useState(false);
   const [isPanDragging, setIsPanDragging] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<EditorTool>('adjust');
+  // A film profile shown on the image while hovered in the profile list, not applied.
+  const [previewProfileId, setPreviewProfileId] = useState<string | null>(null);
   const [dustBrushActive, setDustBrushActive] = useState(false);
   const [selectedDustMarkId, setSelectedDustMarkId] = useState<string | null>(null);
   const [isDetectingDust, setIsDetectingDust] = useState(false);
@@ -557,6 +559,32 @@ export default function App() {
     () => (documentState?.labStyleId ? LAB_STYLE_PROFILES_MAP[documentState.labStyleId] ?? null : null),
     [documentState?.labStyleId],
   );
+  const previewProfile = documentState && previewProfileId && previewProfileId !== documentState.profileId
+    ? profilesById.get(previewProfileId) ?? null
+    : null;
+  // What the preview renders: the document as it would be with the hovered
+  // profile applied, keeping the current framing and dust repairs so the image
+  // does not jump while browsing.
+  const profilePreviewState = useMemo(() => {
+    if (!documentState || !previewProfile) return null;
+    const applied = resolveProfileApplication(previewProfile, documentState);
+    const settings: ConversionSettings = {
+      ...applied.settings,
+      crop: structuredClone(documentState.settings.crop),
+      rotation: documentState.settings.rotation,
+      levelAngle: documentState.settings.levelAngle,
+      dustRemoval: applied.settings.dustRemoval && documentState.settings.dustRemoval
+        ? { ...applied.settings.dustRemoval, marks: documentState.settings.dustRemoval.marks }
+        : applied.settings.dustRemoval,
+    };
+    return {
+      profile: previewProfile,
+      settings,
+      labStyle: applied.labStyleId ? LAB_STYLE_PROFILES_MAP[applied.labStyleId] ?? null : null,
+      lightSourceId: applied.lightSourceId,
+    };
+  }, [documentState, previewProfile]);
+  const renderProfile = profilePreviewState?.profile ?? activeProfile;
   const savePresetTags = useMemo(() => (
     documentState
       ? getPresetTags(documentState.settings, activeProfile.type, documentState.source.extension)
@@ -1242,6 +1270,7 @@ export default function App() {
       highlightDensityEstimate,
       flareFloor,
       lightSourceBias,
+      isProfilePreview = false,
     } = request;
     const activeTabDocument = tabsRef.current.find((tab) => tab.id === documentId)?.document ?? null;
     const revision = (activeTabDocument?.renderRevision ?? 0) + 1;
@@ -1397,6 +1426,7 @@ export default function App() {
         imageData: normalizedImageData,
         imageBitmap,
         captureThumbnail: previewMode === 'settled'
+          && !isProfilePreview
           && nextComparisonMode === 'processed'
           && !isCropOverlayVisibleRef.current,
       };
@@ -1426,22 +1456,28 @@ export default function App() {
           status: 'ready',
         };
       });
-      maybeSuggestBlackAndWhiteConversion(result.documentId, normalizedImageData, {
-        comparisonMode: nextComparisonMode,
-        previewMode,
-        interactionQuality,
-        isColor,
-        blackAndWhiteEnabled: settings.blackAndWhite.enabled,
-      });
-      maybeNotifyLowConfidenceFilmBase(result.documentId, {
-        comparisonMode: nextComparisonMode,
-        previewMode,
-        interactionQuality,
-        lowConfidence: result.lowConfidence,
-        hasManualSample: settings.filmBaseSample !== null,
-      });
+      // A hovered profile is not the document's look: it must not prompt
+      // suggestions or seed the document's adaptive analysis.
+      if (!isProfilePreview) {
+        maybeSuggestBlackAndWhiteConversion(result.documentId, normalizedImageData, {
+          comparisonMode: nextComparisonMode,
+          previewMode,
+          interactionQuality,
+          isColor,
+          blackAndWhiteEnabled: settings.blackAndWhite.enabled,
+        });
+        maybeNotifyLowConfidenceFilmBase(result.documentId, {
+          comparisonMode: nextComparisonMode,
+          previewMode,
+          interactionQuality,
+          lowConfidence: result.lowConfidence,
+          hasManualSample: settings.filmBaseSample !== null,
+        });
+      }
       if (shouldTrackHeavyRenderIndicator) {
         lastCompletedSettledRenderKeyRef.current = renderKey;
+      }
+      if (shouldTrackHeavyRenderIndicator && !isProfilePreview) {
         // Settled frames (GPU and CPU worker alike) are already rendered with
         // the freshly pinned analysis, so no silent follow-up re-render is
         // needed — the committed value only seeds draft-frame estimates.
@@ -1537,15 +1573,21 @@ export default function App() {
     if (!documentState || !displaySettings || documentState.previewLevels.length === 0) return;
 
     const documentId = documentState.id;
-    const settings = displaySettings;
-    const isColor = usesColorChannelPipeline({ type: activeProfile.type });
-    const profileMaskTuning = activeProfile.maskTuning;
-    const profileColorMatrix = activeProfile.colorMatrix;
-    const profileCubeLut = activeProfile.lut ?? null;
-    const profileTonalCharacter = activeProfile.tonalCharacter;
-    const profileFilmType = activeProfile.filmType ?? 'negative';
+    const isProfilePreview = profilePreviewState !== null;
+    const renderLabStyle = profilePreviewState ? profilePreviewState.labStyle : activeLabStyle;
+    const settings = profilePreviewState
+      ? (isCropOverlayVisible
+        ? { ...profilePreviewState.settings, crop: { ...profilePreviewState.settings.crop, x: 0, y: 0, width: 1, height: 1 } }
+        : profilePreviewState.settings)
+      : displaySettings;
+    const isColor = usesColorChannelPipeline({ type: renderProfile.type });
+    const profileMaskTuning = renderProfile.maskTuning;
+    const profileColorMatrix = renderProfile.colorMatrix;
+    const profileCubeLut = renderProfile.lut ?? null;
+    const profileTonalCharacter = renderProfile.tonalCharacter;
+    const profileFilmType = renderProfile.filmType ?? 'negative';
     const highlightDensityEstimate = getSettledAdaptiveState(documentId).committedHighlightDensity;
-    const lightSourceBias = lightSourceProfilesById.get(documentState.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
+    const lightSourceBias = lightSourceProfilesById.get((profilePreviewState ? profilePreviewState.lightSourceId : documentState.lightSourceId) ?? 'auto')?.spectralBias ?? [1, 1, 1];
     const flareFloor = documentState.estimatedFlare;
     const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
     const outputProfileId = documentState.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
@@ -1568,7 +1610,7 @@ export default function App() {
       documentId,
       settings,
       isColor,
-      profileId: activeProfile.id,
+      profileId: renderProfile.id,
       filmType: profileFilmType,
       estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
       comparisonMode,
@@ -1582,21 +1624,22 @@ export default function App() {
       colorMatrix: profileColorMatrix,
       tonalCharacter: profileTonalCharacter,
       cubeLut: profileCubeLut,
-      labStyleToneCurve: activeLabStyle?.toneCurve,
-      labStyleChannelCurves: activeLabStyle?.channelCurves,
-      labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
-      labSaturationBias: activeLabStyle?.saturationBias ?? 0,
-      labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+      labStyleToneCurve: renderLabStyle?.toneCurve,
+      labStyleChannelCurves: renderLabStyle?.channelCurves,
+      labTonalCharacterOverride: renderLabStyle?.tonalCharacterOverride,
+      labSaturationBias: renderLabStyle?.saturationBias ?? 0,
+      labTemperatureBias: renderLabStyle?.temperatureBias ?? 0,
       highlightDensityEstimate,
       flareFloor,
       lightSourceBias,
+      isProfilePreview,
     } satisfies QueuedPreviewRender;
     const queuedSettledRenderKey = previewMode === 'settled' && interactionQuality === null
       ? createPreviewRenderKey({
         documentId,
         settings,
         isColor,
-        profileId: activeProfile.id,
+        profileId: renderProfile.id,
         filmType: profileFilmType,
         comparisonMode,
         targetMaxDimension: renderTargetDimension,
@@ -1606,11 +1649,11 @@ export default function App() {
         colorMatrix: profileColorMatrix,
         tonalCharacter: profileTonalCharacter,
         cubeLutKey: profileCubeLut ? cubeLutSignature(profileCubeLut) : null,
-        labStyleToneCurve: activeLabStyle?.toneCurve,
-        labStyleChannelCurves: activeLabStyle?.channelCurves,
-        labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
-        labSaturationBias: activeLabStyle?.saturationBias ?? 0,
-        labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+        labStyleToneCurve: renderLabStyle?.toneCurve,
+        labStyleChannelCurves: renderLabStyle?.channelCurves,
+        labTonalCharacterOverride: renderLabStyle?.tonalCharacterOverride,
+        labSaturationBias: renderLabStyle?.saturationBias ?? 0,
+        labTemperatureBias: renderLabStyle?.temperatureBias ?? 0,
         flareFloor,
         lightSourceBias,
       })
@@ -1629,7 +1672,7 @@ export default function App() {
         documentId,
         settings,
         isColor,
-        profileId: activeProfile.id,
+        profileId: renderProfile.id,
         filmType: profileFilmType,
         estimatedDensityBalance: documentState.estimatedDensityBalance ?? null,
         comparisonMode,
@@ -1643,14 +1686,15 @@ export default function App() {
         colorMatrix: profileColorMatrix,
         tonalCharacter: profileTonalCharacter,
         cubeLut: profileCubeLut,
-        labStyleToneCurve: activeLabStyle?.toneCurve,
-        labStyleChannelCurves: activeLabStyle?.channelCurves,
-        labTonalCharacterOverride: activeLabStyle?.tonalCharacterOverride,
-        labSaturationBias: activeLabStyle?.saturationBias ?? 0,
-        labTemperatureBias: activeLabStyle?.temperatureBias ?? 0,
+        labStyleToneCurve: renderLabStyle?.toneCurve,
+        labStyleChannelCurves: renderLabStyle?.channelCurves,
+        labTonalCharacterOverride: renderLabStyle?.tonalCharacterOverride,
+        labSaturationBias: renderLabStyle?.saturationBias ?? 0,
+        labTemperatureBias: renderLabStyle?.temperatureBias ?? 0,
         highlightDensityEstimate,
         flareFloor,
         lightSourceBias,
+        isProfilePreview,
       }).finally(() => {
         if (activeDocumentIdRef.current !== documentId) {
           return;
@@ -1721,17 +1765,19 @@ export default function App() {
 
     return () => window.clearTimeout(timer);
   }, [
-    activeProfile.colorMatrix,
-    activeProfile.filmType,
-    activeProfile.id,
-    activeProfile.lut,
-    activeProfile.maskTuning,
-    activeProfile.tonalCharacter,
-    activeProfile.type,
+    renderProfile.colorMatrix,
+    renderProfile.filmType,
+    renderProfile.id,
+    renderProfile.lut,
+    renderProfile.maskTuning,
+    renderProfile.tonalCharacter,
+    renderProfile.type,
     activeLabStyle,
     cancelScheduledInteractivePreview,
     comparisonMode,
     displaySettings,
+    isCropOverlayVisible,
+    profilePreviewState,
     documentState,
     enqueuePreviewRender,
     executePreviewRender,
@@ -2130,11 +2176,25 @@ export default function App() {
   }, [documentState?.settings.dustRemoval, handleSettingsChange, selectedDustMarkId]);
 
   const handlePresetSelection = useCallback((profile: FilmProfile) => {
+    setPreviewProfileId(null);
     if (documentState) {
       setSuggestionNotice((current) => current?.documentId === documentState.id ? null : current);
     }
     handleProfileChange(profile);
   }, [documentState, handleProfileChange]);
+
+  const handleProfilePreview = useCallback((profile: FilmProfile) => {
+    setPreviewProfileId(profile.id);
+  }, []);
+
+  const handleProfilePreviewEnd = useCallback(() => {
+    setPreviewProfileId(null);
+  }, []);
+
+  // A preview belongs to the frame and panel it started in.
+  useEffect(() => {
+    setPreviewProfileId(null);
+  }, [activeTabId, sidebarTab]);
 
   const handleDustBrushActiveChange = useCallback((active: boolean) => {
     setDustBrushActive(active);
@@ -3362,6 +3422,10 @@ onToggleScanningSession: toggleScanningWindow,
       onAutoAdjust={() => { void handleAutoAdjust(); }}
       onAutoWhiteBalance={() => { void handleAutoWhiteBalance(); }}
       onProfileChange={handlePresetSelection}
+      onProfilePreview={handleProfilePreview}
+      onProfilePreviewEnd={handleProfilePreviewEnd}
+      previewProfile={profilePreviewState?.profile ?? null}
+      previewLabStyle={profilePreviewState?.labStyle ?? null}
       onSavePreset={handleSavePreset}
       onImportPreset={handleImportPreset}
       onDeletePreset={handleDeletePreset}
