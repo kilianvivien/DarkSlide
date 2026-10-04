@@ -59,7 +59,7 @@ export const CanvasToolbar = memo(function CanvasToolbar({
           type="button"
           aria-pressed={!showingOriginal}
           onClick={() => onSetComparisonMode('processed')}
-          className={`${SEGMENT} ${!showingOriginal ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'}`}
+          className={`${SEGMENT} ${!showingOriginal ? 'bg-zinc-100 text-zinc-950' : 'text-zinc-500 hover:text-zinc-300'}`}
         >
           Converted
         </button>
@@ -111,7 +111,7 @@ export const CanvasToolbar = memo(function CanvasToolbar({
           onClick={() => (level === 1 ? onZoomTo100() : onSetZoom(level))}
           aria-label={`Zoom to ${level * 100}%`}
           aria-pressed={zoom === level}
-          className={`${ICON_BUTTON} font-mono text-[10px] ${zoom === level ? 'bg-zinc-800 text-zinc-100' : ''}`}
+          className={`${ICON_BUTTON} font-mono text-[10px] ${zoom === level ? 'bg-zinc-100 text-zinc-950 hover:bg-white hover:text-zinc-950' : ''}`}
         >
           {level * 100}%
         </button>

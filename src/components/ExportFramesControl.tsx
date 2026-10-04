@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import { Download, Loader2, X } from 'lucide-react';
+import { SEGMENT_TRACK, segmentItem } from './ui';
 
 export type ExportScope = 'current' | 'selected' | 'all';
 
@@ -58,7 +59,7 @@ export const ExportFramesControl = memo(function ExportFramesControl({
 
   return (
     <section aria-label="Export frames" className="space-y-2.5">
-      <div role="radiogroup" aria-label="Frames to export" className="grid grid-cols-3 gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-1">
+      <div role="radiogroup" aria-label="Frames to export" className={`${SEGMENT_TRACK} grid-cols-3`}>
         {options.map((option) => (
           <button
             key={option.id}
@@ -67,11 +68,7 @@ export const ExportFramesControl = memo(function ExportFramesControl({
             aria-checked={scope === option.id}
             disabled={option.disabled || busy}
             onClick={() => setScope(option.id)}
-            className={`rounded-lg px-1.5 py-1.5 text-[11px] font-medium transition-colors ${
-              scope === option.id
-                ? 'bg-zinc-100 text-zinc-950'
-                : 'text-zinc-400 hover:text-zinc-200 disabled:cursor-not-allowed disabled:text-zinc-700'
-            }`}
+            className={segmentItem(scope === option.id)}
           >
             {option.label}
           </button>
@@ -79,7 +76,7 @@ export const ExportFramesControl = memo(function ExportFramesControl({
       </div>
 
       {progress ? (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3" aria-live="polite">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3" aria-live="polite">
           <div className="flex items-center justify-between gap-2 text-[11px]">
             <span className="flex min-w-0 items-center gap-2 text-zinc-300">
               <Loader2 size={12} className="shrink-0 animate-spin" />
@@ -106,7 +103,7 @@ export const ExportFramesControl = memo(function ExportFramesControl({
           onClick={() => (scope === 'current' ? onExportCurrent() : onExportFrames(scope))}
           disabled={busy}
           aria-busy={isExporting}
-          className="grid w-full grid-cols-[1rem_auto] items-center justify-center gap-2 rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50"
+          className="grid w-full grid-cols-[1rem_auto] items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50"
         >
           {isExporting ? <Loader2 size={15} className="shrink-0 animate-spin" /> : <Download size={15} className="shrink-0" />}
           <span className="whitespace-nowrap">

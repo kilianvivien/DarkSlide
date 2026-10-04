@@ -174,13 +174,11 @@ function Toggle({
   checked,
   onChange,
   label,
-  color = 'green',
   disabled = false,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
-  color?: 'green' | 'amber';
   disabled?: boolean;
 }) {
   return (
@@ -191,17 +189,13 @@ function Toggle({
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative shrink-0 overflow-hidden h-7 w-12 rounded-full border transition-all disabled:opacity-40 ${
-        checked
-          ? color === 'amber'
-            ? 'border-amber-400/70 bg-amber-500/20'
-            : 'border-emerald-400/70 bg-emerald-500/25'
-          : 'border-zinc-700 bg-zinc-950'
+      className={`relative h-6 w-10 shrink-0 overflow-hidden rounded-full transition-colors disabled:opacity-40 ${
+        checked ? 'bg-amber-400' : 'bg-zinc-700'
       }`}
     >
       <span
-        className={`absolute top-0.5 h-[22px] w-[22px] rounded-full bg-zinc-100 transition-all ${
-          checked ? 'left-[22px]' : 'left-0.5'
+        className={`absolute top-[3px] h-[18px] w-[18px] rounded-full transition-all ${
+          checked ? 'left-[19px] bg-zinc-950' : 'left-[3px] bg-zinc-300'
         }`}
       />
     </button>
@@ -533,7 +527,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               checked={ultraSmoothDragEnabled}
                               onChange={onToggleUltraSmoothDrag}
                               label="Smoother Dragging"
-                              color="amber"
                             />
                           </div>
                         </div>
@@ -558,7 +551,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   onClick={() => onMaxResidentDocsChange(value)}
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     isActive
-                                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                      ? 'border-amber-400/50 bg-amber-400/10 text-amber-100'
                                       : 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
                                   }`}
                                 >
@@ -599,7 +592,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 onClick={() => onExportOptionsChange({ format: value })}
                                 className={`flex-1 rounded-lg border py-2 text-[13px] font-medium transition-all ${
                                   exportOptions.format === value
-                                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                    ? 'border-amber-400/50 bg-amber-400/10 text-amber-100'
                                     : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-300'
                                 }`}
                               >
@@ -625,7 +618,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   onClick={() => onExportOptionsChange({ bitDepth })}
                                   className={`rounded-md px-3 py-2 text-[13px] font-medium transition-all ${
                                     exportOptions.bitDepth === bitDepth
-                                      ? 'bg-emerald-500/15 text-emerald-200'
+                                      ? 'bg-zinc-100 text-zinc-950'
                                       : 'text-zinc-500 hover:text-zinc-300'
                                   }`}
                                 >
@@ -657,7 +650,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               step={1}
                               value={qualityPct}
                               onChange={(e) => onExportOptionsChange({ quality: Number(e.target.value) / 100 })}
-                              className="w-full accent-emerald-400"
+                              className="w-full accent-amber-400"
                               aria-label="Export quality"
                             />
                             <div className="flex justify-between text-[10px] text-zinc-700">
@@ -743,7 +736,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     openInEditorOutputPath
                                       ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                      : 'border-amber-400/50 bg-amber-400/10 text-amber-100'
                                   }`}
                                 >
                                   Use Downloads
@@ -769,7 +762,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     batchOutputPath
                                       ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                      : 'border-amber-400/50 bg-amber-400/10 text-amber-100'
                                   }`}
                                 >
                                   Use Downloads
@@ -795,7 +788,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     defaultExportPath
                                       ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                      : 'border-amber-400/50 bg-amber-400/10 text-amber-100'
                                   }`}
                                 >
                                   Use Save Dialog
@@ -821,7 +814,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     contactSheetOutputPath
                                       ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                                      : 'border-amber-400/50 bg-amber-400/10 text-amber-100'
                                   }`}
                                 >
                                   Use Downloads
@@ -1116,7 +1109,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => { void handleLightSourceFormSave(); }}
-                                  className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[12px] text-emerald-200 transition-all hover:bg-emerald-500/20"
+                                  className="rounded-md bg-zinc-100 px-3 py-1.5 text-[12px] font-medium text-zinc-950 transition-colors hover:bg-white"
                                 >
                                   Save
                                 </button>

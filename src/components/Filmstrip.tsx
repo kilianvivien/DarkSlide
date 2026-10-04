@@ -86,7 +86,7 @@ export const Filmstrip = memo(function Filmstrip({
 
   return (
     <section aria-label="Filmstrip" className="shrink-0 border-t border-zinc-800 bg-zinc-950">
-      <div className="flex h-9 items-center gap-3 border-b border-zinc-900 px-4">
+      <div className="flex h-8 items-center gap-3 border-b border-zinc-900 px-4">
         <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">
           {activeRoll ? activeRoll.name : 'Open frames'}
         </span>
@@ -150,7 +150,7 @@ export const Filmstrip = memo(function Filmstrip({
         </button>
       </div>
 
-      <ol className="custom-scrollbar flex gap-2.5 overflow-x-auto px-4 py-2.5" aria-label="Frames">
+      <ol className="custom-scrollbar flex gap-2.5 overflow-x-auto px-4 py-2" aria-label="Frames">
         {tabs.map((tab, index) => {
           const isActive = tab.id === activeTabId;
           const isSelected = selected.has(tab.id);

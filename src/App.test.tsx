@@ -819,8 +819,23 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
   });
 
-  it('switches inspector panels from the tool rail and its shortcuts', async () => {
+  it('keeps frame tools closed until a scan is open', () => {
     render(<App />);
+
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Develop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Film profiles' })).toBeEnabled();
+  });
+
+  it('switches inspector panels from the tool rail and its shortcuts', async () => {
+    workerState.decode.mockResolvedValueOnce(createDecodedImage(300, 200));
+    render(<App />);
+    await uploadFile(createFile('frame-a.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
 
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
     expect(screen.queryByTestId('presets')).not.toBeInTheDocument();

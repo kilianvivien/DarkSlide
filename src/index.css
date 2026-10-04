@@ -8,6 +8,15 @@
 :root {
   background-color: #09090b;
   color: #fafafa;
+  color-scheme: dark;
+}
+
+/* Native checkboxes and radios share the app's amber accent. */
+@layer base {
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--color-amber-400);
+  }
 }
 
 body {

@@ -25,6 +25,8 @@ export function isEditorTool(value: unknown): value is EditorTool {
 interface ToolRailProps {
   activeTool: EditorTool;
   panelOpen: boolean;
+  /** Tools that have nothing to work on yet, such as Develop before a frame is open. */
+  disabledTools?: EditorTool[];
   onSelect: (tool: EditorTool) => void;
   onOpenSettings: () => void;
 }
@@ -33,30 +35,36 @@ interface ToolRailProps {
  * Vertical tool switcher. Each tool opens its panel in the inspector;
  * choosing the open tool again collapses the inspector.
  */
-export const ToolRail = memo(function ToolRail({ activeTool, panelOpen, onSelect, onOpenSettings }: ToolRailProps) {
+export const ToolRail = memo(function ToolRail({ activeTool, panelOpen, disabledTools, onSelect, onOpenSettings }: ToolRailProps) {
   return (
     <nav aria-label="Editing tools" className="flex h-full w-14 shrink-0 flex-col items-center border-r border-zinc-800 bg-zinc-950 py-3">
       {EDITOR_TOOLS.map((tool) => {
         const active = activeTool === tool.id;
-        const highlighted = active && panelOpen;
+        const disabled = disabledTools?.includes(tool.id) ?? false;
+        const highlighted = active && panelOpen && !disabled;
         return (
           <div key={tool.id} className={tool.separated ? 'mt-2 border-t border-zinc-800 pt-2' : 'mb-1'}>
             <button
               type="button"
               aria-label={tool.label}
               aria-pressed={highlighted}
-              data-tip={`${highlighted ? `Collapse ${tool.label}` : `${tool.label} — ${tool.description}`} (${tool.shortcut})`}
+              disabled={disabled}
+              data-tip={disabled
+                ? `${tool.label} — open a scan first`
+                : `${highlighted ? `Collapse ${tool.label}` : `${tool.label} — ${tool.description}`} (${tool.shortcut})`}
               onClick={() => onSelect(tool.id)}
               className={`relative flex h-10 w-10 items-center justify-center rounded-lg transition-colors ${
                 highlighted
                   ? 'bg-zinc-800 text-zinc-100 before:absolute before:-left-2 before:inset-y-2 before:w-[3px] before:rounded-full before:bg-amber-400'
-                  : active
-                    ? 'text-zinc-300 hover:bg-zinc-900'
-                    : 'text-zinc-600 hover:bg-zinc-900 hover:text-zinc-300'
+                  : disabled
+                    ? 'cursor-default text-zinc-700'
+                    : active
+                      ? 'text-zinc-300 hover:bg-zinc-900'
+                      : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200'
               }`}
             >
               {tool.icon}
-              <kbd className="pointer-events-none absolute bottom-0.5 right-1 font-mono text-[8px] leading-none text-zinc-600">
+              <kbd className="pointer-events-none absolute bottom-0.5 right-1 font-mono text-[8px] leading-none text-zinc-700">
                 {tool.shortcut}
               </kbd>
             </button>
@@ -69,7 +77,7 @@ export const ToolRail = memo(function ToolRail({ activeTool, panelOpen, onSelect
           onClick={onOpenSettings}
           aria-label="Settings"
           data-tip="Settings (⌘,)"
-          className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300"
+          className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
         >
           <Settings size={18} strokeWidth={1.8} />
         </button>

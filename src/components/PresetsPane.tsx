@@ -788,7 +788,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   };
 
   return (
-    <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden select-none">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-zinc-950 select-none">
       <input
         ref={fileInputRef}
         type="file"
@@ -803,12 +803,20 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         }}
       />
 
-      <div className={`px-6 pt-6 ${isSearching ? 'pb-4' : 'pb-0'} border-b border-zinc-800 shrink-0`}>
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] flex items-center gap-2">
-            <Layers size={12} /> Film Profiles
-          </h2>
-          <div className="flex items-center gap-1">
+      <div className={`px-5 pt-3 ${isSearching ? 'pb-4' : 'pb-0'} border-b border-zinc-800 shrink-0`}>
+        <div className="flex items-end gap-4">
+          {(['builtin', 'custom', 'rolls'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setPresetTab(tab)}
+              className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all ${
+                presetTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
+              }`}
+            >
+              {tab === 'builtin' ? 'Built-in' : tab === 'custom' ? 'Custom' : 'Rolls'}
+            </button>
+          ))}
+          <div className="ml-auto flex items-center gap-1 pb-1">
             <button
               onClick={() => {
                 setImportConflict(null);
@@ -840,19 +848,6 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
               <Search size={14} />
             </button>
           </div>
-        </div>
-        <div className="flex gap-4">
-          {(['builtin', 'custom', 'rolls'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setPresetTab(tab)}
-              className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all ${
-                presetTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
-              }`}
-            >
-              {tab === 'builtin' ? 'Built-in' : tab === 'custom' ? 'Custom' : 'Rolls'}
-            </button>
-          ))}
         </div>
 
         {isSearching && (
@@ -890,7 +885,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 px-5 py-5">
         {isSaving && (
           <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-4 shadow-lg">
             <div className="space-y-3">

@@ -173,7 +173,7 @@ describe('Sidebar', () => {
       />,
     );
 
-    expect(screen.getByText('Convert to Black and White')).toBeInTheDocument();
+    expect(screen.getByText('Black & White')).toBeInTheDocument();
     expect(screen.getByText('Red')).toBeInTheDocument();
     expect(screen.getByText('Green')).toBeInTheDocument();
     expect(screen.getByText('Blue')).toBeInTheDocument();

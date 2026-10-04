@@ -225,7 +225,7 @@ export const CurvesControl = memo(function CurvesControl({
 
   return (
     <div className={`flex flex-col ${compact ? 'gap-1.5' : 'gap-4'}`}>
-      <div className={`flex gap-1 ${compact ? '' : 'rounded-lg border border-zinc-800 bg-zinc-900/50 p-1'}`}>
+      <div className={`flex gap-1 ${compact ? '' : 'rounded-lg border border-zinc-800 bg-zinc-900/40 p-1'}`}>
         {(['rgb', 'red', 'green', 'blue'] as Channel[]).map((ch) => {
           if (!isColor && ch !== 'rgb') return null;
           return (
@@ -233,7 +233,7 @@ export const CurvesControl = memo(function CurvesControl({
               key={ch}
               onClick={() => setActiveChannel(ch)}
               className={`flex-1 rounded-md ${compact ? 'py-1' : 'py-1.5'} text-[10px] uppercase tracking-widest transition-all ${
-                activeChannel === ch ? (compact ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-800 text-white') : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300'
+                activeChannel === ch ? (compact ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-100 text-zinc-950') : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
               }`}
             >
               {ch}
