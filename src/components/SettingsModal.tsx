@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Keyboard, Activity, Download, RefreshCw, Grid3x3, Trash2, Upload } from 'lucide-react';
+import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Paintbrush, Keyboard, Activity, Download, RefreshCw, Grid3x3, Trash2, Upload } from 'lucide-react';
+import { ACCENT_COLORS, useAccentColor } from '../utils/accentColor';
 import { ColorManagementSettings, ColorProfileId, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription, getInputProfileLabel } from '../utils/colorProfiles';
@@ -88,6 +89,7 @@ type DiagnosticCardItem = {
 
 const TABS = [
   { id: 'performance' as const, label: 'Performance', icon: Settings2, disabled: false },
+  { id: 'appearance' as const, label: 'Appearance', icon: Paintbrush, disabled: false },
   { id: 'export' as const, label: 'Export', icon: Download, disabled: false },
   { id: 'notifications' as const, label: 'Notifications', icon: Bell, disabled: false },
   { id: 'color' as const, label: 'Color', icon: Palette, disabled: false },
@@ -190,7 +192,7 @@ function Toggle({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={`relative h-6 w-10 shrink-0 overflow-hidden rounded-full transition-colors disabled:opacity-40 ${
-        checked ? 'bg-amber-400' : 'bg-zinc-700'
+        checked ? 'bg-accent-400' : 'bg-zinc-700'
       }`}
     >
       <span
@@ -261,7 +263,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdateChannelChange,
   onCheckForUpdates,
 }) => {
-  const [tab, setTab] = useState<'performance' | 'export' | 'notifications' | 'color' | 'calibration' | 'backup' | 'shortcuts' | 'diagnostics' | 'update'>('performance');
+  const [tab, setTab] = useState<'performance' | 'appearance' | 'export' | 'notifications' | 'color' | 'calibration' | 'backup' | 'shortcuts' | 'diagnostics' | 'update'>('performance');
+  const [accentColor, setAccentColor] = useAccentColor();
   const [folderTab, setFolderTab] = useState<'editor' | 'quick' | 'batch' | 'contact'>('editor');
   const [copied, setCopied] = useState(false);
   const [showLightSourceForm, setShowLightSourceForm] = useState(false);
@@ -551,7 +554,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   onClick={() => onMaxResidentDocsChange(value)}
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     isActive
-                                      ? 'border-amber-400/50 bg-amber-400/10 text-amber-100'
+                                      ? 'border-accent-400/50 bg-accent-400/10 text-accent-100'
                                       : 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
                                   }`}
                                 >
@@ -563,6 +566,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <p className="text-[11px] text-zinc-600">
                             Current: {maxResidentDocs === null ? 'Unlimited' : `${maxResidentDocs} images`}
                           </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Appearance ── */}
+                    {tab === 'appearance' && (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-4">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-100">Accent Color</p>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+                              Highlights the active tool, switches, selections and tools waiting for a click on the image. Warnings keep their own colors.
+                            </p>
+                          </div>
+                          <div role="radiogroup" aria-label="Accent color" className="grid grid-cols-3 gap-2">
+                            {ACCENT_COLORS.map(({ id, label, swatch }) => {
+                              const isActive = accentColor === id;
+                              return (
+                                <button
+                                  key={id}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={isActive}
+                                  onClick={() => setAccentColor(id)}
+                                  className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-[13px] transition-colors ${
+                                    isActive
+                                      ? 'border-zinc-500 bg-zinc-800/80 text-zinc-100'
+                                      : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                                  }`}
+                                >
+                                  <span
+                                    aria-hidden="true"
+                                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full shadow-[inset_0_0_0_1px_rgba(0,0,0,0.25)]"
+                                    style={{ backgroundColor: swatch }}
+                                  >
+                                    {isActive && <Check size={12} strokeWidth={3} className="text-zinc-950" />}
+                                  </span>
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5">
+                            <span className="text-[11px] uppercase tracking-wider text-zinc-500">Preview</span>
+                            <span aria-hidden="true" className="relative h-[15px] w-[26px] rounded-full bg-accent-400">
+                              <span className="absolute left-[13px] top-[2px] h-[11px] w-[11px] rounded-full bg-zinc-950" />
+                            </span>
+                            <span className="rounded-md border border-accent-400/70 bg-accent-400/10 px-2 py-0.5 text-[11px] text-accent-200">Picking</span>
+                            <span className="h-1 flex-1 overflow-hidden rounded-full bg-zinc-800">
+                              <span className="block h-full w-2/3 rounded-full bg-accent-400" />
+                            </span>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -592,7 +647,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 onClick={() => onExportOptionsChange({ format: value })}
                                 className={`flex-1 rounded-lg border py-2 text-[13px] font-medium transition-all ${
                                   exportOptions.format === value
-                                    ? 'border-amber-400/50 bg-amber-400/10 text-amber-100'
+                                    ? 'border-accent-400/50 bg-accent-400/10 text-accent-100'
                                     : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-300'
                                 }`}
                               >
@@ -650,7 +705,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               step={1}
                               value={qualityPct}
                               onChange={(e) => onExportOptionsChange({ quality: Number(e.target.value) / 100 })}
-                              className="w-full accent-amber-400"
+                              className="w-full accent-accent-400"
                               aria-label="Export quality"
                             />
                             <div className="flex justify-between text-[10px] text-zinc-700">
@@ -736,7 +791,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     openInEditorOutputPath
                                       ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                      : 'border-amber-400/50 bg-amber-400/10 text-amber-100'
+                                      : 'border-accent-400/50 bg-accent-400/10 text-accent-100'
                                   }`}
                                 >
                                   Use Downloads
@@ -762,7 +817,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     batchOutputPath
                                       ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                      : 'border-amber-400/50 bg-amber-400/10 text-amber-100'
+                                      : 'border-accent-400/50 bg-accent-400/10 text-accent-100'
                                   }`}
                                 >
                                   Use Downloads
@@ -788,7 +843,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     defaultExportPath
                                       ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                      : 'border-amber-400/50 bg-amber-400/10 text-amber-100'
+                                      : 'border-accent-400/50 bg-accent-400/10 text-accent-100'
                                   }`}
                                 >
                                   Use Save Dialog
@@ -814,7 +869,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   className={`rounded-lg border px-3 py-2 text-[13px] transition-all ${
                                     contactSheetOutputPath
                                       ? 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
-                                      : 'border-amber-400/50 bg-amber-400/10 text-amber-100'
+                                      : 'border-accent-400/50 bg-accent-400/10 text-accent-100'
                                   }`}
                                 >
                                   Use Downloads

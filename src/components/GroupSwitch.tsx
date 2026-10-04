@@ -16,7 +16,7 @@ export const GroupSwitch = memo(function GroupSwitch({ label, enabled, onChange 
       aria-label={`${label} adjustments`}
       data-tip={enabled ? `Turn off ${label} to compare` : `Turn on ${label}`}
       onClick={() => onChange(!enabled)}
-      className={`relative h-[15px] w-[26px] shrink-0 rounded-full transition-colors ${enabled ? 'bg-amber-400' : 'bg-zinc-700'}`}
+      className={`relative h-[15px] w-[26px] shrink-0 rounded-full transition-colors ${enabled ? 'bg-accent-400' : 'bg-zinc-700'}`}
     >
       <span
         className={`absolute top-[2px] h-[11px] w-[11px] rounded-full transition-all ${enabled ? 'left-[13px] bg-zinc-950' : 'left-[2px] bg-zinc-400'}`}

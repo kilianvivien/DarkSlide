@@ -94,7 +94,7 @@ export const ExportFramesControl = memo(function ExportFramesControl({
             </button>
           </div>
           <div className="mt-2 h-1 overflow-hidden rounded-full bg-zinc-800">
-            <div className="h-full rounded-full bg-amber-400 transition-all duration-300" style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }} />
+            <div className="h-full rounded-full bg-accent-400 transition-all duration-300" style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }} />
           </div>
         </div>
       ) : (

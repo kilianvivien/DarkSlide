@@ -2,7 +2,7 @@ import { memo, useCallback, useMemo } from 'react';
 import { Eraser, FlaskConical, Paintbrush, Sparkles } from 'lucide-react';
 import { DustRemovalSettings } from '../types';
 import { Slider } from './Slider';
-import { ARMED, PANEL_BUTTON, SECTION_TITLE, SEGMENT_TRACK, segmentItem } from './ui';
+import { PANEL_BUTTON, panelToggleButton, SECTION_TITLE, SEGMENT_TRACK, segmentItem } from './ui';
 
 interface DustPaneProps {
   dustRemoval: DustRemovalSettings;
@@ -58,7 +58,7 @@ export const DustPane = memo(function DustPane({
           type="button"
           onClick={() => onBrushActiveChange(!brushActive)}
           aria-pressed={brushActive}
-          className={`mb-4 ${PANEL_BUTTON} ${brushActive ? ARMED : ''}`}
+          className={`mb-4 ${panelToggleButton(brushActive)}`}
         >
           <Paintbrush size={13} />
           {brushActive ? 'Brush Active — click to deactivate' : 'Activate Brush'}
@@ -80,7 +80,7 @@ export const DustPane = memo(function DustPane({
           <button
             type="button"
             onClick={() => updateDustRemoval({ marks: dustRemoval.marks.filter((mark) => mark.source !== 'manual') })}
-            className="mt-3 flex items-center gap-2 rounded-lg px-2 py-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-500 transition-all hover:text-zinc-300"
+            className="mt-3 flex items-center gap-2 rounded-md px-1 py-0.5 text-[11px] text-zinc-500 transition-colors hover:text-zinc-200"
           >
             <Eraser size={11} />
             Clear {manualCount} manual {manualCount === 1 ? 'mark' : 'marks'}

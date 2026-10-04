@@ -453,7 +453,7 @@ export const CropOverlay = memo(function CropOverlay({
           type="button"
           tabIndex={straightenActive ? -1 : 0}
           aria-label="Crop area. Drag to move, or use the arrow keys for precise positioning."
-          className={`absolute inset-0 z-0 border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 ${straightenActive ? 'pointer-events-none cursor-crosshair' : dragState?.mode === 'move' ? 'cursor-grabbing' : 'cursor-grab'}`}
+          className={`absolute inset-0 z-0 border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 ${straightenActive ? 'pointer-events-none cursor-crosshair' : dragState?.mode === 'move' ? 'cursor-grabbing' : 'cursor-grab'}`}
           onKeyDown={handleKeyboardMove}
           onPointerDown={beginDrag('move')}
         />
@@ -473,7 +473,7 @@ export const CropOverlay = memo(function CropOverlay({
         {dragState && (
           <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-zinc-950/85 px-2.5 py-1.5 font-mono text-[13px] font-medium tabular-nums text-zinc-100 shadow-lg" aria-live="polite">
             {Math.round(crop.width * imageWidth)} × {Math.round(crop.height * imageHeight)} px
-            <span className="ml-2 text-amber-300">
+            <span className="ml-2 text-accent-300">
               {formatAspectRatio(crop.width * imageWidth, crop.height * imageHeight)}
             </span>
           </div>
@@ -484,7 +484,7 @@ export const CropOverlay = memo(function CropOverlay({
             key={handle.mode}
             type="button"
             aria-label={handle.label}
-            className={`absolute z-10 border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${straightenActive ? 'pointer-events-none opacity-0' : ''} ${handle.hitAreaClass}`}
+            className={`absolute z-10 border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-accent-400 ${straightenActive ? 'pointer-events-none opacity-0' : ''} ${handle.hitAreaClass}`}
             onPointerDown={beginDrag(handle.mode)}
           >
             <span className={`pointer-events-none absolute border-zinc-50 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)] ${handle.gripClass}`} />
@@ -496,8 +496,8 @@ export const CropOverlay = memo(function CropOverlay({
         <div className="pointer-events-none absolute inset-0" aria-hidden="true">
           {[25, 50, 75].map((position) => (
             <React.Fragment key={position}>
-              <span className="absolute inset-y-0 w-px bg-amber-300/25" style={{ left: `${position}%` }} />
-              <span className="absolute inset-x-0 h-px bg-amber-300/25" style={{ top: `${position}%` }} />
+              <span className="absolute inset-y-0 w-px bg-accent-300/25" style={{ left: `${position}%` }} />
+              <span className="absolute inset-x-0 h-px bg-accent-300/25" style={{ top: `${position}%` }} />
             </React.Fragment>
           ))}
         </div>
@@ -506,7 +506,7 @@ export const CropOverlay = memo(function CropOverlay({
       {straightenLine && createPortal(
         <div
           data-testid="straighten-line"
-          className="pointer-events-none fixed z-[100] h-0.5 origin-left bg-amber-300 shadow-[0_0_0_1px_rgba(0,0,0,0.65),0_0_12px_rgba(252,211,77,0.65)]"
+          className="pointer-events-none fixed z-[100] h-0.5 origin-left bg-accent-300 shadow-[0_0_0_1px_rgba(0,0,0,0.65),0_0_12px_var(--accent-300)]"
           style={{
             left: straightenLine.startX,
             top: straightenLine.startY,
@@ -514,7 +514,7 @@ export const CropOverlay = memo(function CropOverlay({
             transform: `rotate(${Math.atan2(straightenLine.endY - straightenLine.startY, straightenLine.endX - straightenLine.startX)}rad)`,
           }}
         >
-          <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded bg-zinc-950/90 px-2 py-1 font-mono text-[10px] text-amber-200 shadow-lg">
+          <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded bg-zinc-950/90 px-2 py-1 font-mono text-[10px] text-accent-200 shadow-lg">
             {straightenDeviation > 0 ? '+' : ''}{straightenDeviation.toFixed(1)}°
           </span>
         </div>,

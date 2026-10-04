@@ -18,7 +18,7 @@ import { CropSettings, CropTab } from '../types';
 import { formatAspectRatio } from '../utils/aspectRatio';
 import { createCenteredAspectCrop, rotateCropClockwise } from '../utils/imagePipeline';
 import { Slider } from './Slider';
-import { ARMED, PANEL_BUTTON, SECTION_TITLE } from './ui';
+import { ARMED, SECTION_TITLE } from './ui';
 
 type Orientation = 'landscape' | 'portrait';
 
@@ -317,7 +317,7 @@ export const CropPane = memo(function CropPane({
         </h2>
         <button
           onClick={handleRotate}
-          className={`${PANEL_BUTTON} justify-start`}
+          className="flex w-full items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-[13px] font-medium text-zinc-200 transition-[color,background-color,border-color,transform] duration-150 hover:border-zinc-700 hover:bg-zinc-800 active:scale-[0.99]"
         >
           <RotateCw size={14} className="text-zinc-400" />
           <span>Rotate 90° Clockwise</span>
@@ -338,7 +338,7 @@ export const CropPane = memo(function CropPane({
                 type="button"
                 aria-pressed={straightenActive}
                 onClick={() => onStraightenActiveChange(!straightenActive)}
-                className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
                   straightenActive
                     ? ARMED
                     : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-200'
@@ -364,7 +364,7 @@ export const CropPane = memo(function CropPane({
             type="button"
             onClick={() => onLevelAngleChange(0)}
             disabled={Math.abs(levelAngle) < 0.05}
-            className="mt-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 transition-colors hover:text-zinc-300 disabled:cursor-default disabled:text-zinc-700"
+            className="mt-0.5 rounded-md px-1 py-0.5 text-[11px] text-zinc-500 transition-colors hover:text-zinc-200 disabled:cursor-default disabled:text-zinc-700"
           >
             Reset Level
           </button>

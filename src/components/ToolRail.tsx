@@ -53,9 +53,9 @@ export const ToolRail = memo(function ToolRail({ activeTool, panelOpen, disabled
                 ? `${tool.label} — open a scan first`
                 : `${highlighted ? `Collapse ${tool.label}` : `${tool.label} — ${tool.description}`} (${tool.shortcut})`}
               onClick={() => onSelect(tool.id)}
-              className={`relative flex h-10 w-10 items-center justify-center rounded-lg transition-colors ${
+              className={`relative flex h-10 w-10 items-center justify-center rounded-lg transition-[color,background-color,transform] duration-150 active:scale-95 ${
                 highlighted
-                  ? 'bg-zinc-800 text-zinc-100 before:absolute before:-left-2 before:inset-y-2 before:w-[3px] before:rounded-full before:bg-amber-400'
+                  ? 'bg-zinc-800 text-zinc-100 before:absolute before:-left-2 before:inset-y-2 before:w-[3px] before:rounded-full before:bg-accent-400'
                   : disabled
                     ? 'cursor-default text-zinc-700'
                     : active

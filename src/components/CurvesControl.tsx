@@ -233,7 +233,7 @@ export const CurvesControl = memo(function CurvesControl({
               key={ch}
               onClick={() => setActiveChannel(ch)}
               className={`flex-1 rounded-md ${compact ? 'py-1' : 'py-1.5'} text-[10px] uppercase tracking-widest transition-all ${
-                activeChannel === ch ? (compact ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-100 text-zinc-950') : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
+                activeChannel === ch ? (compact ? 'bg-accent-400 text-zinc-950' : 'bg-zinc-100 text-zinc-950') : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
               }`}
             >
               {ch}

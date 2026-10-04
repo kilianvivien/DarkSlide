@@ -45,7 +45,7 @@ function FrameStatus({ tab }: { tab: DocumentTab }) {
           <Crop size={9} />
         </span>
       )}
-      {dirty && <span title="Unsaved edits" className="h-1.5 w-1.5 rounded-full bg-amber-400 shadow-[0_0_0_2px_rgba(9,9,11,0.8)]" />}
+      {dirty && <span title="Unsaved edits" className="h-1.5 w-1.5 rounded-full bg-accent-400 shadow-[0_0_0_2px_rgba(9,9,11,0.8)]" />}
     </span>
   );
 }
@@ -95,8 +95,8 @@ export const Filmstrip = memo(function Filmstrip({
         </span>
 
         {multiSelect && (
-          <div role="toolbar" aria-label="Selected frames" className="flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 py-0.5 pl-2.5 pr-1">
-            <span className="mr-1 text-[11px] font-medium text-amber-200">{selectedIds.length} selected</span>
+          <div role="toolbar" aria-label="Selected frames" className="flex items-center gap-1.5 rounded-lg border border-accent-400/30 bg-accent-400/10 py-0.5 pl-2.5 pr-1">
+            <span className="mr-1 text-[11px] font-medium text-accent-200">{selectedIds.length} selected</span>
             <button
               type="button"
               className={ACTION_CLASS}
@@ -129,7 +129,7 @@ export const Filmstrip = memo(function Filmstrip({
               onClick={onClearSelection}
               aria-label="Clear selection"
               data-tip="Clear selection (Esc)"
-              className="flex h-6 w-6 items-center justify-center rounded-md text-amber-200/70 transition-colors hover:bg-amber-400/10 hover:text-amber-100"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-accent-200/70 transition-colors hover:bg-accent-400/10 hover:text-accent-100"
             >
               <X size={12} />
             </button>
@@ -194,7 +194,7 @@ export const Filmstrip = memo(function Filmstrip({
                   isActive
                     ? 'ring-2 ring-zinc-100'
                     : isSelected
-                      ? 'ring-2 ring-amber-400'
+                      ? 'ring-2 ring-accent-400'
                       : 'ring-1 ring-zinc-800 hover:ring-zinc-600'
                 }`}
               >
@@ -207,7 +207,7 @@ export const Filmstrip = memo(function Filmstrip({
                 )}
                 {tab.rollId && <span className={`absolute inset-x-0 top-0 h-[3px] ${accent.dot}`} aria-hidden="true" />}
                 {multiSelect && isSelected && (
-                  <span className="absolute left-1 top-1.5 flex h-4 w-4 items-center justify-center rounded bg-amber-400 text-[10px] font-bold text-zinc-950" aria-hidden="true">✓</span>
+                  <span className="absolute left-1 top-1.5 flex h-4 w-4 items-center justify-center rounded bg-accent-400 text-[10px] font-bold text-zinc-950" aria-hidden="true">✓</span>
                 )}
                 {isStale && (
                   <span title="Edited in the background; open the frame to refresh" className="absolute left-1 bottom-1 rounded bg-zinc-950/80 px-1 font-mono text-[8px] text-zinc-400">

@@ -2731,7 +2731,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Toggle Before/After"]') as Element);
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle before and after' }));
     });
     await act(async () => {
       vi.advanceTimersByTime(120);
@@ -2752,7 +2752,7 @@ describe('App import and preview pipeline', () => {
 
     expect(drawImage).toHaveBeenCalledTimes(2);
     expect((drawImage.mock.calls.at(-1)?.[0] as { width: number }).width).toBe(77);
-    expect(document.querySelector('[data-tip="Showing Original — click to return"]')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Return to processed view' })).toBeInTheDocument();
   });
 
   it('applies film-base sampling directly to the negative density stage without changing exposure', async () => {
@@ -3790,7 +3790,7 @@ describe('App import and preview pipeline', () => {
     expect(context.drawImage).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Toggle Before/After"]') as Element);
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle before and after' }));
     });
     await flushMicrotasks();
 

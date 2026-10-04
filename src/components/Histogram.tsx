@@ -117,7 +117,7 @@ export const Histogram = memo(function Histogram({ data, variant = 'color' }: Hi
             aria-pressed={scale === 'log'}
             data-tip={scale === 'log' ? 'Logarithmic height scale: small counts are exaggerated. Click for linear.' : 'Linear height scale. Click for logarithmic, which reveals small counts.'}
             onClick={() => setScale((current) => (current === 'log' ? 'linear' : 'log'))}
-            className={`ml-1 flex h-4 items-center justify-center rounded border px-1 font-mono text-[9px] transition-colors ${scale === 'log' ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-zinc-900 text-zinc-600 hover:text-zinc-400'}`}
+            className={`ml-1 flex h-4 items-center justify-center rounded border px-1 font-mono text-[9px] transition-colors ${scale === 'log' ? 'border-accent-500/40 bg-accent-500/10 text-accent-300' : 'border-zinc-900 text-zinc-600 hover:text-zinc-400'}`}
           >
             LOG
           </button>

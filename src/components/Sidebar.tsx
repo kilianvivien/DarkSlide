@@ -27,7 +27,7 @@ import { Histogram } from './Histogram';
 import { Slider } from './Slider';
 import { GroupSwitch } from './GroupSwitch';
 import { ExportFramesControl, FrameExportProgress } from './ExportFramesControl';
-import { ARMED, FIELD_LABEL, HEADER_ACTION, PANEL_BUTTON, SECTION_TITLE, SEGMENT_TRACK, SELECT_INPUT, segmentItem } from './ui';
+import { ARMED, FIELD_LABEL, HEADER_ACTION, PANEL_BUTTON, panelToggleButton, SECTION_TITLE, SEGMENT_TRACK, SELECT_INPUT, segmentItem } from './ui';
 
 const noop = () => undefined;
 
@@ -253,7 +253,7 @@ export const Sidebar = memo(function Sidebar({
   void sourceMetadata;
   void estimatedFlare;
   const filmBaseInstruction = isPickingFilmBase
-    ? 'Click an unexposed film-base area…'
+    ? 'Click a clear film-base area…'
     : 'Sample Film Base';
   const filmBaseLowConfidence = filmBaseSampleSource === null
     && estimatedFilmBase !== null
@@ -482,7 +482,7 @@ export const Sidebar = memo(function Sidebar({
                   <button
                     onClick={onTogglePicker}
                     aria-pressed={isPickingFilmBase}
-                    className={`${PANEL_BUTTON} ${isPickingFilmBase ? ARMED : ''}`}
+                    className={panelToggleButton(isPickingFilmBase)}
                   >
                     <Pipette size={14} className={isPickingFilmBase ? 'animate-pulse' : ''} />
                     <span>{filmBaseInstruction}</span>

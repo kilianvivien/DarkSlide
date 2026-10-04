@@ -31,14 +31,24 @@ export const Slider = memo(function Slider({
 }: SliderProps) {
   const inputId = useId();
 
+  // The filled part of the track runs from zero for bipolar sliders
+  // (exposure, tint…) and from the minimum otherwise.
+  const span = max - min || 1;
+  const toPercent = (input: number) => `${Math.min(100, Math.max(0, ((input - min) / span) * 100))}%`;
+  const origin = min < 0 && max > 0 ? 0 : min;
+  const fillStyle = {
+    '--fill-from': toPercent(Math.min(origin, value)),
+    '--fill-to': toPercent(Math.max(origin, value)),
+  } as React.CSSProperties;
+
   const handleChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     onChange(parseFloat(event.target.value));
   }, [onChange]);
 
   return (
-    <div className="flex flex-col gap-1.5 mb-4">
-      <div className="flex justify-between items-center px-1">
-        <label htmlFor={inputId} className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">{label}</label>
+    <div className="mb-2.5 flex flex-col gap-1">
+      <div className="flex min-h-6 items-center justify-between px-0.5">
+        <label htmlFor={inputId} className="text-[12px] text-zinc-300">{label}</label>
         {fineStep !== undefined ? (
           <StepButtons
             label={label}
@@ -53,7 +63,7 @@ export const Slider = memo(function Slider({
             onInteractionEnd={onInteractionEnd}
           />
         ) : (
-          <span className="text-[11px] font-mono text-zinc-500">{valueLabel ?? `${value}${unit}`}</span>
+          <span className="font-mono text-[11px] tabular-nums text-zinc-500">{valueLabel ?? `${value}${unit}`}</span>
         )}
       </div>
       <input
@@ -70,7 +80,8 @@ export const Slider = memo(function Slider({
         onKeyDown={onInteractionStart}
         onKeyUp={onInteractionEnd}
         onBlur={onInteractionEnd}
-        className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-zinc-200 hover:accent-white transition-all"
+        style={fillStyle}
+        className="slider-track w-full cursor-pointer appearance-none bg-transparent"
       />
     </div>
   );
