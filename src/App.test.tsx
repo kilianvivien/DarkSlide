@@ -1,7 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDefaultSettings, MAX_FILE_SIZE_BYTES } from './constants';
+import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from './constants';
 import type { ConversionSettings } from './types';
 
 type Deferred<T> = {
@@ -112,6 +112,8 @@ const fileBridgeState = vi.hoisted(() => ({
   confirmDiscard: vi.fn(),
   confirmFilmBaseReanalysis: vi.fn(),
   confirmReplacePresetLibrary: vi.fn(),
+  confirmRestoreSidecar: vi.fn(),
+  readTextFileByPath: vi.fn(),
   saveToDirectory: vi.fn(),
   saveExportBlob: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
   savePresetBackupFile: vi.fn<(...args: unknown[]) => Promise<'saved' | 'cancelled'>>(),
@@ -184,6 +186,7 @@ vi.mock('./components/Sidebar', () => ({
     onExport,
     onTogglePicker,
     onReanalyzeFilmBase,
+    onSetPointPicker,
   }: {
     exportOptions: { filenameBase: string };
     lightSourceId?: string | null;
@@ -199,6 +202,7 @@ vi.mock('./components/Sidebar', () => ({
     onExport: () => void;
     onTogglePicker: () => void;
     onReanalyzeFilmBase?: () => void;
+    onSetPointPicker?: (mode: 'black' | 'white' | 'grey' | null) => void;
   }) => {
     const [, setExposure] = React.useState(0);
     const [, setBlackAndWhiteEnabled] = React.useState(false);
@@ -219,6 +223,8 @@ vi.mock('./components/Sidebar', () => ({
         <button type="button" onClick={onTogglePicker}>
           Toggle Film Base Picker
         </button>
+        <button type="button" onClick={() => onSetPointPicker?.('grey')}>Pick Grey Point</button>
+        <button type="button" onClick={() => onSettingsChange({ temperature: 41, tint: -27 })}>Set Manual WB</button>
         <button type="button" onClick={onReanalyzeFilmBase}>
           Re-analyze Film Base
         </button>
@@ -549,6 +555,8 @@ vi.mock('./utils/fileBridge', () => ({
   confirmDiscard: fileBridgeState.confirmDiscard,
   confirmFilmBaseReanalysis: fileBridgeState.confirmFilmBaseReanalysis,
   confirmReplacePresetLibrary: fileBridgeState.confirmReplacePresetLibrary,
+  confirmRestoreSidecar: fileBridgeState.confirmRestoreSidecar,
+  readTextFileByPath: fileBridgeState.readTextFileByPath,
   saveToDirectory: fileBridgeState.saveToDirectory,
   saveExportBlob: fileBridgeState.saveExportBlob,
   savePresetBackupFile: fileBridgeState.savePresetBackupFile,
@@ -720,6 +728,8 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.confirmDiscard.mockReset();
     fileBridgeState.confirmFilmBaseReanalysis.mockReset();
     fileBridgeState.confirmReplacePresetLibrary.mockReset();
+    fileBridgeState.confirmRestoreSidecar.mockReset();
+    fileBridgeState.readTextFileByPath.mockReset();
     fileBridgeState.saveToDirectory.mockReset();
     fileBridgeState.saveExportBlob.mockReset();
     fileBridgeState.savePresetBackupFile.mockReset();
@@ -843,6 +853,55 @@ describe('App import and preview pipeline', () => {
     }));
     expect(screen.queryByText(/Auto-crop skipped/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Frame detected and crop applied/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps raster film-base estimates automatic when importing and reapplying a preset', async () => {
+    workerState.decode.mockResolvedValue({
+      ...createDecodedImage(300, 200),
+      estimatedFilmBaseSample: { r: 150, g: 130, b: 90 },
+      estimatedFilmBase: { sample: { r: 150, g: 130, b: 90 }, source: 'low-confidence', confidence: 0, rejectedCandidates: 4, clamped: true },
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    render(<App />);
+    await uploadFile(createFile('scan.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runAllTimers(); });
+    await flushMicrotasks();
+    expect(workerState.render.mock.calls.at(-1)?.[0].settings.filmBaseSample).toBeNull();
+    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic Color' }));
+    await flushMicrotasks();
+    await act(async () => { vi.runAllTimers(); });
+    await flushMicrotasks();
+    expect(workerState.render.mock.calls.at(-1)?.[0].settings.filmBaseSample).toBeNull();
+  });
+
+  it('restores sidecar monochrome and explicit neutral look settings instead of current import defaults', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({ file: createFile('restored.tiff', 'image/tiff'), path: '/scans/restored.tiff', size: 12 });
+    fileBridgeState.confirmRestoreSidecar.mockResolvedValue(true);
+    fileBridgeState.readTextFileByPath.mockResolvedValue(JSON.stringify({
+      version: 1, generator: 'DarkSlide', createdAt: '2026-10-04T00:00:00Z',
+      sourceFile: { name: 'restored.tiff', size: 12, dimensions: { width: 300, height: 200 } },
+      settings: createDefaultSettings({ temperature: 12, tint: -5 }),
+      profileId: 'generic-bw', profileName: 'Generic B&W', isColor: false,
+      colorManagement: DEFAULT_COLOR_MANAGEMENT, exportOptions: DEFAULT_EXPORT_OPTIONS,
+      lightSourceProfileId: null, labStyleId: null,
+    }));
+    localStorage.setItem('darkslide_default_light_source', 'cs-lite');
+    localStorage.setItem('darkslide_default_lab_style', 'frontier');
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => createRenderResult(payload.documentId, payload.revision, 300, 200));
+    render(<App />);
+    await act(async () => { fireEvent.click(screen.getByText('Select Files')); });
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({
+      profileId: 'generic-bw', isColor: false, lightSourceBias: [1, 1, 1], labTemperatureBias: 0,
+      settings: { temperature: 12, tint: -5 },
+    });
   });
 
   it('shows the desktop-only RAW error in the browser build', async () => {
@@ -2547,6 +2606,58 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.blueBalance).toBe(0.9);
   });
 
+  it('uses a calibrated positive grey point to set absolute white balance consistently on repeated picks', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.sampleFilmBase.mockResolvedValue({ r: 120, g: 132, b: 144 });
+    render(<App />);
+    await uploadFile(createFile('gray.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    fireEvent.click(screen.getByText('Set Manual WB'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      fireEvent.click(screen.getByText('Pick Grey Point'));
+      await act(async () => { fireEvent.click(document.querySelector('canvas')!, { clientX: 100, clientY: 50 }); });
+      await flushMicrotasks();
+      await act(async () => { vi.runOnlyPendingTimers(); });
+      await flushMicrotasks();
+      expect(workerState.render.mock.calls.at(-1)?.[0].settings).toMatchObject({ temperature: 12, tint: 0 });
+    }
+    expect(workerState.sampleFilmBase).toHaveBeenCalledWith(expect.objectContaining({
+      sampleMode: 'white-balance', filmType: 'negative', profileId: 'generic-color', isColor: true,
+      colorMatrix: expect.any(Array), lightSourceBias: expect.any(Array),
+    }));
+  });
+
+  it('discards a pending grey-point sample if white balance is edited while sampling', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    const sample = deferred<{ r: number; g: number; b: number }>();
+    workerState.sampleFilmBase.mockReturnValue(sample.promise);
+    render(<App />);
+    await uploadFile(createFile('pending-gray.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    fireEvent.click(screen.getByText('Pick Grey Point'));
+    fireEvent.click(document.querySelector('canvas')!, { clientX: 100, clientY: 50 });
+    fireEvent.click(screen.getByText('Set Manual WB'));
+    await flushMicrotasks();
+    await act(async () => { sample.resolve({ r: 120, g: 132, b: 144 }); });
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    expect(workerState.render.mock.calls.at(-1)?.[0].settings).toMatchObject({ temperature: 41, tint: -27 });
+  });
+
   it('uses film-base sampling to rerun standard RAW color-negative conversion with the sampled base', async () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
     fileBridgeState.openImageFile.mockResolvedValue({
@@ -2903,6 +3014,27 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.whitePoint).toBe(beforeCall.settings.whitePoint);
     expect(latestRenderCall.settings.contrast).toBe(beforeCall.settings.contrast);
     expect(latestRenderCall.settings.curves).toEqual(beforeCall.settings.curves);
+  });
+
+  it('discards delayed auto WB when manual settings change before the next render starts', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => createRenderResult(payload.documentId, payload.revision, 300, 200));
+    const analysis = deferred<Record<string, unknown>>();
+    workerState.autoAnalyze.mockReturnValue(analysis.promise);
+    render(<App />);
+    await uploadFile(createFile('pending-wb.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    fireEvent.click(screen.getByRole('button', { name: 'Auto WB' }));
+    expect(workerState.autoAnalyze).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByText('Set Manual WB'));
+    await flushMicrotasks();
+    await act(async () => { analysis.resolve({ temperature: 12, tint: 0 }); });
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    expect(workerState.render.mock.calls.at(-1)?.[0].settings).toMatchObject({ temperature: 41, tint: -27 });
   });
 
   it('preserves white balance and shows a notice when auto-analysis finds no neutral candidates', async () => {

@@ -1,4 +1,4 @@
-import React, { Dispatch, MutableRefObject, SetStateAction, useCallback, useEffect } from 'react';
+import React, { Dispatch, MutableRefObject, SetStateAction, useCallback, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { MAX_OPEN_TABS, resolveLightSourceIdForProfile } from '../constants';
 import { useFileImport } from './useFileImport';
@@ -24,6 +24,7 @@ import { clamp } from '../utils/math';
 import { computeHighlightDensity, resolveDensityInversionParams } from '../utils/imagePipeline';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
 import { buildProfileSettingsForDocument, createPresetRecipe } from '../utils/presetRecipe';
+import { neutralWhiteBalance } from '../utils/autoAnalysis';
 import { rendersMonochrome, usesColorChannelPipeline } from '../utils/pipelineIntent';
 import {
   BatchJobEntry,
@@ -314,6 +315,8 @@ export function useWorkspaceCommands({
   isPickingFilmBase,
   activePointPicker,
 }: UseWorkspaceCommandsOptions) {
+  const currentDocumentRef = useRef(documentState);
+  currentDocumentRef.current = documentState;
   void tabs;
   void transientNoticeTimeoutRef;
   const getLightSourceProfile = useCallback((lightSourceId: string | null) => (
@@ -423,6 +426,10 @@ export function useWorkspaceCommands({
         ...current.settings,
         ...newSettings,
       };
+      if (newSettings.filmBaseSample === null) {
+        delete nextSettings.filmBaseSampleSource;
+        delete nextSettings.filmBaseSampleProfileId;
+      }
       const nextLightSourceId = blackAndWhiteEnabled === undefined
         ? current.lightSourceId
         : resolveLightSourceIdForProfile(activeProfile, current.lightSourceId, { blackAndWhiteEnabled });
@@ -1014,8 +1021,8 @@ export function useWorkspaceCommands({
               date: roll.date,
               notes: roll.notes,
             } : undefined,
-            lightSourceProfileId: documentState.lightSourceId ?? undefined,
-            labStyleId: documentState.labStyleId ?? undefined,
+            lightSourceProfileId: documentState.lightSourceId ?? null,
+            labStyleId: documentState.labStyleId ?? null,
           });
           await writeTextFileByPath(getSidecarPathForExport(saved.path), serializeSidecar(sidecar));
         }
@@ -1314,6 +1321,14 @@ export function useWorkspaceCommands({
 
     const x = clamp((event.clientX - rect.left) / rect.width, 0, 1);
     const y = clamp((event.clientY - rect.top) / rect.height, 0, 1);
+    const sampleIsCurrent = () => {
+      const current = currentDocumentRef.current;
+      return current?.id === documentState.id
+        && current.settings === documentState.settings
+        && current.labStyleId === documentState.labStyleId
+        && current.lightSourceId === documentState.lightSourceId
+        && current.colorManagement === documentState.colorManagement;
+    };
 
     if (isPickingFilmBase) {
       try {
@@ -1327,6 +1342,7 @@ export function useWorkspaceCommands({
           x,
           y,
         });
+        if (!sampleIsCurrent()) return;
 
         // Negatives run the density inversion, and a manual sample is the
         // strongest base evidence there is — feed it to the density stage even
@@ -1367,7 +1383,16 @@ export function useWorkspaceCommands({
           targetMaxDimension,
           x,
           y,
+          sampleMode: activePointPicker === 'grey' ? 'white-balance' : 'source',
+          isColor: usesColorChannelPipeline(activeProfile),
+          profileId: activeProfile.id,
+          filmType: activeProfile.filmType,
+          colorMatrix: activeProfile.colorMatrix,
+          cubeLut: activeProfile.lut ?? null,
+          flareFloor: documentState.estimatedFlare,
+          lightSourceBias: getLightSourceProfile(documentState.lightSourceId ?? null).spectralBias,
         });
+        if (!sampleIsCurrent()) return;
 
         if (activePointPicker === 'black') {
           const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
@@ -1376,16 +1401,7 @@ export function useWorkspaceCommands({
           const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
           handleSettingsChange({ whitePoint: clamp(luminance, 180, 255) });
         } else if (activePointPicker === 'grey') {
-          const safeR = Math.max(sample.r, 1);
-          const safeG = Math.max(sample.g, 1);
-          const safeB = Math.max(sample.b, 1);
-          const rbAvg = (safeR + safeB) / 2;
-          const temperatureOffset = clamp(Math.round((safeB - safeR) * 0.4), -100, 100);
-          const tintOffset = clamp(Math.round((rbAvg - safeG) * 0.4), -100, 100);
-          handleSettingsChange({
-            temperature: clamp(documentState.settings.temperature + temperatureOffset, -100, 100),
-            tint: clamp(documentState.settings.tint + tintOffset, -100, 100),
-          });
+          handleSettingsChange(neutralWhiteBalance(sample, activeLabStyle?.temperatureBias ?? 0));
         }
 
         setActivePointPicker(null);
@@ -1410,6 +1426,8 @@ export function useWorkspaceCommands({
     handleSettingsChange,
     isPickingFilmBase,
     activeProfile,
+    activeLabStyle?.temperatureBias,
+    getLightSourceProfile,
     setActivePointPicker,
     setError,
     setIsPickingFilmBase,

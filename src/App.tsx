@@ -2475,6 +2475,11 @@ export default function App() {
       activeDocumentIdRef.current !== requestDocumentId
       || !latestDocument
       || latestDocument.renderRevision !== requestRevision
+      || latestDocument.settings !== documentState.settings
+      || latestDocument.profileId !== documentState.profileId
+      || latestDocument.labStyleId !== documentState.labStyleId
+      || latestDocument.lightSourceId !== documentState.lightSourceId
+      || latestDocument.colorManagement !== documentState.colorManagement
     ) {
       return;
     }
@@ -2662,6 +2667,11 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     });
 
     updateTabById(documentId, (currentTab) => {
+      if (currentTab.document.settings !== tab.document.settings
+        || currentTab.document.profileId !== tab.document.profileId
+        || currentTab.document.labStyleId !== tab.document.labStyleId
+        || currentTab.document.lightSourceId !== tab.document.lightSourceId
+        || currentTab.document.colorManagement !== tab.document.colorManagement) return currentTab;
       const curveOverrides: Partial<ConversionSettings> = {};
       if (result.suggestedCurves || result.midtoneBoostPoint) {
         const currentCurves = currentTab.document.settings.curves;

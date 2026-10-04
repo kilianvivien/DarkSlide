@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, DENSITY_TO_POSITIVE_GAMMA } from '../constants';
-import type { ColorProfileId, ConversionSettings } from '../types';
+import type { ColorProfileId, ConversionSettings, InputProfileSpec } from '../types';
 import { decodeProfileChannel, encodeProfileChannel } from './colorProfiles';
 import { applyLightSourceCorrection, buildProcessingUniforms, computeDensityBalance, computeRawDensityBalance, processFloatRaster, resolveDensityInversionParams } from './imagePipeline';
 import { rgb16ToRgba8 } from './rawImport';
@@ -92,5 +92,26 @@ describe('RAW radiometric accuracy', () => {
     expect(raw.source).toBe('auto-histogram');
     expect(error(raw.scaleR, raw.scaleB)).toBeLessThan(0.0001);
     expect(error(raw.scaleR, raw.scaleB)).toBeLessThan(error(preview.scaleR, preview.scaleB));
+  });
+
+  it.each<InputProfileSpec>(['srgb', 'adobe-rgb', 'linear', {
+    kind: 'parsed-icc', name: 'Scanner gamma 1.8', colorSpace: 'rgb',
+    trc: { type: 'gamma', gamma: 1.8 }, toXyzD65: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+  }])('measures dye contrast using the source transfer curve %j', (profile) => {
+    const reference = { r: 200, g: 180, b: 150 };
+    const expected = [0.83, 1, 1.12];
+    const bases = [reference.r, reference.g, reference.b];
+    const data = new Uint16Array(40 * 40 * 3);
+    for (let pixel = 0; pixel < 1600; pixel += 1) {
+      const density = 0.12 + (pixel % 40) / 120;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const transmittance = decodeProfileChannel(profile, bases[channel] / 255) * 10 ** (-density / expected[channel]);
+        data[pixel * 3 + channel] = Math.round(encodeProfileChannel(profile, transmittance) * 65535);
+      }
+    }
+    const measured = computeRawDensityBalance(data, 40, 40, reference, profile);
+    expect(measured.source).toBe('auto-histogram');
+    expect(measured.scaleR).toBeCloseTo(expected[0], 3);
+    expect(measured.scaleB).toBeCloseTo(expected[2], 3);
   });
 });

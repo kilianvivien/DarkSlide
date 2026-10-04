@@ -460,13 +460,6 @@ export function useFileImport({
         return null;
       }
 
-      if (!rawImport && !initialSettings.filmBaseSample && decoded.estimatedFilmBaseSample) {
-        initialSettings = {
-          ...initialSettings,
-          filmBaseSample: structuredClone(decoded.estimatedFilmBaseSample),
-        };
-      }
-
       const savedExportOptions = parsedPrefs?.exportOptions;
       const savedLightSourceId = typeof window !== 'undefined'
         ? window.localStorage.getItem('darkslide_default_light_source')
@@ -498,6 +491,13 @@ export function useFileImport({
         ? await confirmRestoreSidecar(file.name)
         : false;
       const activeSidecar = shouldRestoreSidecar ? restoredSidecar : null;
+      const restoredProfile = activeSidecar
+        ? [rawImportProfile, ...persistedProfilesRef.current, ...FILM_PROFILES]
+          .find((profile) => profile?.id === activeSidecar.profileId) ?? resolvedProfile
+        : resolvedProfile;
+      const restoredSettings = activeSidecar
+        ? createDefaultSettings(structuredClone(activeSidecar.settings))
+        : initialSettings;
 
       if (restoredSidecar && !shouldRestoreSidecar && nativePath) {
         ignoredSidecarsRef.current.add(nativePath);
@@ -511,9 +511,7 @@ export function useFileImport({
           nativePath: nativePath ?? null,
         },
         previewLevels: decoded.previewLevels,
-        settings: activeSidecar
-          ? createDefaultSettings(structuredClone(activeSidecar.settings))
-          : initialSettings,
+        settings: restoredSettings,
         colorManagement: createDocumentColorManagement(decoded.metadata, {
           ...DEFAULT_EXPORT_OPTIONS,
           ...(activeSidecar?.exportOptions ?? savedExportOptions),
@@ -523,14 +521,18 @@ export function useFileImport({
         estimatedFilmBase: decoded.estimatedFilmBase ?? null,
         estimatedDensityBalance: decoded.estimatedDensityBalance ?? null,
         lightSourceId: resolveLightSourceIdForProfile(
-          resolvedProfile,
-          activeSidecar?.lightSourceProfileId ?? resolvedProfile.lightSourceId ?? savedLightSourceId,
-          { blackAndWhiteEnabled: initialSettings.blackAndWhite.enabled },
+          restoredProfile,
+          activeSidecar && activeSidecar.lightSourceProfileId !== undefined
+            ? activeSidecar.lightSourceProfileId
+            : restoredProfile.lightSourceId ?? savedLightSourceId,
+          { blackAndWhiteEnabled: restoredSettings.blackAndWhite.enabled },
         ),
         cropSource: null,
         rawImportProfile,
         profileId: activeSidecar?.profileId ?? resolvedProfile.id,
-        labStyleId: activeSidecar?.labStyleId ?? resolvedProfile.labStyleId ?? savedLabStyleId ?? null,
+        labStyleId: activeSidecar && activeSidecar.labStyleId !== undefined
+          ? activeSidecar.labStyleId
+          : restoredProfile.labStyleId ?? savedLabStyleId ?? null,
         rollId,
         exportOptions: {
           ...DEFAULT_EXPORT_OPTIONS,
@@ -548,8 +550,10 @@ export function useFileImport({
           ...nextDocument.colorManagement,
           ...activeSidecar.colorManagement,
         };
-        if (roll?.filmBaseSample && !nextDocument.settings.filmBaseSample) {
+        if ((restoredProfile.filmType ?? 'negative') === 'negative' && roll?.filmBaseSample && !nextDocument.settings.filmBaseSample) {
           nextDocument.settings.filmBaseSample = structuredClone(roll.filmBaseSample);
+          nextDocument.settings.filmBaseSampleSource = 'roll';
+          nextDocument.settings.filmBaseSampleProfileId = roll.filmBaseSampleProfileId;
         }
       }
 

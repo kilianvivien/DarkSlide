@@ -1,4 +1,5 @@
-import type { AutoAnalyzeResult, HistogramData } from '../types';
+import type { AutoAnalyzeResult, ColorProfileId, HistogramData } from '../types';
+import { decodeProfileChannel, encodeProfileChannel } from './colorProfiles';
 import { clamp } from './math';
 
 const WB_MARGIN_RATIO = 0.04;
@@ -18,7 +19,6 @@ const FLOOR_PERCENTILE = 0.01;
 const MIDTONE_COMPRESSION_THRESHOLD = 0.35;
 const MIDTONE_MAX_BOOST = 25;
 const WB_MAX_CHROMA_RELAXED = 56;
-const WB_WARM_NUDGE = 5;
 const MONO_MARGIN_RATIO = 0.05;
 const MONO_MARGIN_MIN = 8;
 const MONO_MARGIN_MAX = 64;
@@ -151,6 +151,8 @@ function sampleColorBalance(
   width: number,
   height: number,
   maxChroma: number,
+  profile: ColorProfileId,
+  labTemperatureBias: number,
 ): { temperature: number; tint: number; sampleCount: number } | null {
   const margin = clamp(
     Math.round(Math.min(width, height) * WB_MARGIN_RATIO),
@@ -174,22 +176,27 @@ function sampleColorBalance(
       const r = data[index];
       const g = data[index + 1];
       const b = data[index + 2];
+      // Candidate thresholds describe visible midtones. Apply them in sRGB
+      // transfer coordinates even when slider math uses a linear/gamma space.
+      const displayR = profile === 'srgb' ? r : encodeProfileChannel('srgb', decodeProfileChannel(profile, r / 255)) * 255;
+      const displayG = profile === 'srgb' ? g : encodeProfileChannel('srgb', decodeProfileChannel(profile, g / 255)) * 255;
+      const displayB = profile === 'srgb' ? b : encodeProfileChannel('srgb', decodeProfileChannel(profile, b / 255)) * 255;
 
       if (
-        r <= WB_CHANNEL_MIN || g <= WB_CHANNEL_MIN || b <= WB_CHANNEL_MIN
-        || r >= WB_CHANNEL_MAX || g >= WB_CHANNEL_MAX || b >= WB_CHANNEL_MAX
+        displayR <= WB_CHANNEL_MIN || displayG <= WB_CHANNEL_MIN || displayB <= WB_CHANNEL_MIN
+        || displayR >= WB_CHANNEL_MAX || displayG >= WB_CHANNEL_MAX || displayB >= WB_CHANNEL_MAX
       ) {
         continue;
       }
 
-      const maxChannel = Math.max(r, g, b);
-      const minChannel = Math.min(r, g, b);
+      const maxChannel = Math.max(displayR, displayG, displayB);
+      const minChannel = Math.min(displayR, displayG, displayB);
       const chroma = maxChannel - minChannel;
       if (chroma > maxChroma) {
         continue;
       }
 
-      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      const luma = 0.299 * displayR + 0.587 * displayG + 0.114 * displayB;
       if (luma < WB_LUMA_MIN || luma > WB_LUMA_MAX) {
         continue;
       }
@@ -220,33 +227,38 @@ function sampleColorBalance(
   const meanR = weightedR / weightSum;
   const meanG = weightedG / weightSum;
   const meanB = weightedB / weightSum;
-  const rbAvg = (meanR + meanB) / 2;
-
   return {
-    temperature: clamp(Math.round((meanB - meanR) * 0.4), -100, 100),
-    tint: clamp(Math.round((rbAvg - meanG) * 0.4), -100, 100),
+    ...neutralWhiteBalance({ r: meanR, g: meanG, b: meanB }, labTemperatureBias),
     sampleCount,
   };
 }
 
-export function analyzeColorBalance(imageData: ImageData, isColorNegative = false): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
+export function neutralWhiteBalance(sample: { r: number; g: number; b: number }, labTemperatureBias = 0) {
+  // Temperature moves red/blue equally in opposite directions; tint changes
+  // green only. These units match the manual sliders in every render backend.
+  // Weighted sums can put an exact half-step infinitesimally below its value.
+  // Keep rounding deterministic between a uniform frame and a picked patch.
+  const rounded = (value: number) => clamp(Math.round(value + 1e-9), -100, 100) || 0;
+  return {
+    temperature: rounded((sample.b - sample.r) / 2 - labTemperatureBias),
+    tint: rounded((sample.r + sample.b) / 2 - sample.g),
+  };
+}
+
+export function analyzeColorBalance(imageData: ImageData, _isColorNegative = false, profile: ColorProfileId = 'srgb', labTemperatureBias = 0): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
   const { data, width, height } = imageData;
   if (width <= 0 || height <= 0) {
     return { temperature: null, tint: null };
   }
 
-  const firstPass = sampleColorBalance(data, width, height, WB_MAX_CHROMA);
+  const firstPass = sampleColorBalance(data, width, height, WB_MAX_CHROMA, profile, labTemperatureBias);
 
   if (firstPass && Math.abs(firstPass.temperature) <= 15) {
-    let temperature = firstPass.temperature;
-    if (isColorNegative && temperature < 8) {
-      temperature = clamp(temperature + WB_WARM_NUDGE, -100, 100);
-    }
-    return { temperature, tint: firstPass.tint };
+    return { temperature: firstPass.temperature, tint: firstPass.tint };
   }
 
   const secondPass = firstPass === null || Math.abs(firstPass.temperature) > 15
-    ? sampleColorBalance(data, width, height, WB_MAX_CHROMA_RELAXED)
+    ? sampleColorBalance(data, width, height, WB_MAX_CHROMA_RELAXED, profile, labTemperatureBias)
     : null;
 
   const result = secondPass ?? firstPass;
@@ -254,11 +266,7 @@ export function analyzeColorBalance(imageData: ImageData, isColorNegative = fals
     return { temperature: null, tint: null };
   }
 
-  let temperature = result.temperature;
-  if (isColorNegative && temperature < 8) {
-    temperature = clamp(temperature + WB_WARM_NUDGE, -100, 100);
-  }
-  return { temperature, tint: result.tint };
+  return { temperature: result.temperature, tint: result.tint };
 }
 
 export function analyzeMonochromeSuggestion(imageData: ImageData): MonochromeSuggestionAnalysis {

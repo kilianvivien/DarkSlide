@@ -340,8 +340,11 @@ fn sampleCubeLut(color: vec3<f32>, uniforms: Uniforms) -> vec3<f32> {
 }
 
 fn lookupCurve(channel: u32, value: f32) -> f32 {
-  let idx = clamp(u32(round(clampF(value, 0.0, 1.0) * 255.0)), 0u, 255u);
-  return curveLuts[channel * 256u + idx];
+  let position = clampF(value, 0.0, 1.0) * 4095.0;
+  let lower = u32(floor(position));
+  let upper = min(lower + 1u, 4095u);
+  let offset = channel * 4096u;
+  return mix(curveLuts[offset + lower], curveLuts[offset + upper], position - f32(lower));
 }
 
 @fragment
@@ -484,9 +487,9 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       b = toned.z;
     }
 
-    r = lookupCurve(1u, lookupCurve(0u, r));
-    g = lookupCurve(2u, lookupCurve(0u, g));
-    b = lookupCurve(3u, lookupCurve(0u, b));
+    r = lookupCurve(0u, r);
+    g = lookupCurve(1u, g);
+    b = lookupCurve(2u, b);
   }
 
   return vec4<f32>(clampF(r, 0.0, 1.0), clampF(g, 0.0, 1.0), clampF(b, 0.0, 1.0), source.w);

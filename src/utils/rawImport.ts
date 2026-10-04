@@ -644,6 +644,8 @@ export function buildRawInitialSettings(
   _estimatedFilmBase: FilmBaseSample | FilmBaseEstimate | null = null,
 ) {
   const nextSettings = structuredClone(baseSettings);
+  delete nextSettings.filmBaseSampleSource;
+  delete nextSettings.filmBaseSampleProfileId;
 
   // Film-base color is already removed by density inversion. Applying the
   // legacy complement-derived channel gains here compensates it twice.

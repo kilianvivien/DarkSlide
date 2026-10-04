@@ -74,6 +74,7 @@ async function analyzeBatchHighlightDensity(
     documentId: string;
     settings: ConversionSettings;
     isColor: boolean;
+    profileId: string;
     filmType: FilmProfile['filmType'];
     inputProfileId: InputProfileSpec;
     outputProfileId: ColorProfileId;
@@ -106,6 +107,7 @@ async function analyzeBatchHighlightDensity(
       documentId: params.documentId,
       settings: params.settings,
       isColor: params.isColor,
+      profileId: params.profileId,
       filmType: params.filmType,
       inputProfileId: params.inputProfileId,
       outputProfileId: params.outputProfileId,
@@ -283,6 +285,7 @@ export async function* runBatch(
         documentId,
         settings: entrySettings,
         isColor: usesColorChannelPipeline(sharedProfile),
+        profileId: sharedProfile.id,
         filmType: sharedProfile.filmType,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,
@@ -309,6 +312,7 @@ export async function* runBatch(
             documentId,
             settings: entrySettings,
             isColor: usesColorChannelPipeline(sharedProfile),
+            profileId: sharedProfile.id,
             filmType: sharedProfile.filmType,
             inputProfileId,
             outputProfileId: exportOptions.outputProfileId,
@@ -343,6 +347,7 @@ export async function* runBatch(
           documentId,
           settings: entrySettings,
           isColor: usesColorChannelPipeline(sharedProfile),
+          profileId: sharedProfile.id,
           filmType: sharedProfile.filmType,
           inputProfileId,
           outputProfileId: exportOptions.outputProfileId,
@@ -367,6 +372,7 @@ export async function* runBatch(
         documentId,
         settings: entrySettings,
         isColor: usesColorChannelPipeline(sharedProfile),
+        profileId: sharedProfile.id,
         filmType: sharedProfile.filmType,
         inputProfileId,
         outputProfileId: exportOptions.outputProfileId,

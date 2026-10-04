@@ -16,16 +16,20 @@ import {
 import {
   buildCurveLutBuffer,
   buildProcessingUniforms,
+  FLOAT_CURVE_TABLE_SIZE,
 } from '../imagePipeline';
 import { cubeLutSignature } from '../cubeLut';
 import tiledRenderShader from './shaders/tiledRender.wgsl?raw';
 
 const PROCESSING_UNIFORM_BYTES = 92 * 4;
-const CURVE_LUT_BYTES = 1024 * 4;
+const CURVE_LUT_BYTES = FLOAT_CURVE_TABLE_SIZE * 3 * 4;
 // Minimum storage-buffer binding for the profile LUT when none is active.
 const EMPTY_CUBE_LUT_BYTES = 3 * 4;
 const BLUR_UNIFORM_BYTES = 32;
 const EFFECT_UNIFORM_BYTES = 16;
+// Each encoded pass must read its own values when the queue submits the job.
+// Uniform buffer binding offsets use WebGPU's default 256-byte alignment.
+const FILTER_UNIFORM_STRIDE = 256;
 const TILE_SIZE = 1024;
 const INTERMEDIATE_FORMAT = 'rgba16float';
 
@@ -172,11 +176,11 @@ export class WebGPUPipeline {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
     this.blurUniformBuffer = device.createBuffer({
-      size: BLUR_UNIFORM_BYTES,
+      size: FILTER_UNIFORM_STRIDE * 3 + BLUR_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.effectUniformBuffer = device.createBuffer({
-      size: EFFECT_UNIFORM_BYTES,
+      size: FILTER_UNIFORM_STRIDE + EFFECT_UNIFORM_BYTES,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.conversionPipeline = device.createRenderPipeline({
@@ -240,7 +244,6 @@ export class WebGPUPipeline {
       this.lostMessage = info.message ?? 'GPU device was lost.';
       this.lastProcessingUniformsHash = null;
       this.lastCurveLutHash = null;
-    this.lastCubeLutSignature = null;
       this.lastCubeLutSignature = null;
     });
   }
@@ -440,27 +443,31 @@ export class WebGPUPipeline {
     pass.end();
   }
 
-  private writeBlurParams(radius: number, direction: 0 | 1) {
+  private writeBlurParams(radius: number, direction: 0 | 1, slot: number): GPUBufferBinding {
+    const offset = slot * FILTER_UNIFORM_STRIDE;
     const radiusValue = Math.max(1, Math.round(radius));
     const sigma = radius * 0.65 + 0.35;
     this.device.queue.writeBuffer(
       this.blurUniformBuffer,
-      0,
+      offset,
       new Uint32Array([radiusValue, direction, 0, 0]),
     );
     this.device.queue.writeBuffer(
       this.blurUniformBuffer,
-      16,
+      offset + 16,
       new Float32Array([sigma, 0, 0, 0]),
     );
+    return { buffer: this.blurUniformBuffer, offset, size: BLUR_UNIFORM_BYTES };
   }
 
-  private writeEffectFactor(factor: number) {
+  private writeEffectFactor(factor: number, slot: number): GPUBufferBinding {
+    const offset = slot * FILTER_UNIFORM_STRIDE;
     this.device.queue.writeBuffer(
       this.effectUniformBuffer,
-      0,
+      offset,
       new Float32Array([factor, 0, 0, 0]),
     );
+    return { buffer: this.effectUniformBuffer, offset, size: EFFECT_UNIFORM_BYTES };
   }
 
   private extractPixels(width: number, height: number) {
@@ -604,63 +611,65 @@ export class WebGPUPipeline {
     let currentView = this.workTextureAView;
 
     if (applyProcessing && settings.noiseReduction.enabled && settings.noiseReduction.luminanceStrength > 0) {
-      this.writeBlurParams(1.5, 0);
+      const horizontalNoise = this.writeBlurParams(1.5, 0, 0);
       this.renderSingleInput(
         encoder,
         this.blurPipeline,
         currentView,
         this.workTextureBView,
-        [{ binding: 1, resource: { buffer: this.blurUniformBuffer } }],
+        [{ binding: 1, resource: horizontalNoise }],
       );
 
-      this.writeBlurParams(1.5, 1);
+      const verticalNoise = this.writeBlurParams(1.5, 1, 1);
       this.renderSingleInput(
         encoder,
         this.blurPipeline,
         this.workTextureBView,
         this.workTextureCView,
-        [{ binding: 1, resource: { buffer: this.blurUniformBuffer } }],
+        [{ binding: 1, resource: verticalNoise }],
       );
 
-      this.writeEffectFactor(settings.noiseReduction.luminanceStrength / 100);
+      const noiseFactor = this.writeEffectFactor(settings.noiseReduction.luminanceStrength / 100, 0);
       this.renderDoubleInput(
         encoder,
         this.noiseReductionPipeline,
         currentView,
         this.workTextureCView,
         this.workTextureBView,
-        [{ binding: 2, resource: { buffer: this.effectUniformBuffer } }],
+        [{ binding: 2, resource: noiseFactor }],
       );
       currentView = this.workTextureBView;
     }
 
     if (applyProcessing && settings.sharpen.enabled && settings.sharpen.amount > 0) {
-      this.writeBlurParams(settings.sharpen.radius, 0);
+      // Keep the unblurred input intact for the unsharp-mask subtraction.
+      const sharpenBlurView = currentView === this.workTextureAView ? this.workTextureBView : this.workTextureAView;
+      const horizontalSharpen = this.writeBlurParams(settings.sharpen.radius, 0, 2);
       this.renderSingleInput(
         encoder,
         this.blurPipeline,
         currentView,
         this.workTextureCView,
-        [{ binding: 1, resource: { buffer: this.blurUniformBuffer } }],
+        [{ binding: 1, resource: horizontalSharpen }],
       );
 
-      this.writeBlurParams(settings.sharpen.radius, 1);
+      const verticalSharpen = this.writeBlurParams(settings.sharpen.radius, 1, 3);
       this.renderSingleInput(
         encoder,
         this.blurPipeline,
         this.workTextureCView,
-        this.workTextureAView,
-        [{ binding: 1, resource: { buffer: this.blurUniformBuffer } }],
+        sharpenBlurView,
+        [{ binding: 1, resource: verticalSharpen }],
       );
 
-      this.writeEffectFactor(settings.sharpen.amount / 100);
+      const sharpenFactor = this.writeEffectFactor(settings.sharpen.amount / 100, 1);
       this.renderDoubleInput(
         encoder,
         this.sharpenPipeline,
         currentView,
-        this.workTextureAView,
+        sharpenBlurView,
         this.workTextureCView,
-        [{ binding: 2, resource: { buffer: this.effectUniformBuffer } }],
+        [{ binding: 2, resource: sharpenFactor }],
       );
       currentView = this.workTextureCView;
     }

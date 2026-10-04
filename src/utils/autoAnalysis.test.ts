@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeColorBalance, analyzeExposure, analyzeMonochromeSuggestion, autoAnalyze } from './autoAnalysis';
+import { analyzeColorBalance, analyzeExposure, analyzeMonochromeSuggestion, autoAnalyze, neutralWhiteBalance } from './autoAnalysis';
 import type { HistogramData } from '../types';
 
 function createHistogramData(): HistogramData {
@@ -43,6 +43,21 @@ describe('autoAnalysis', () => {
     const imageData = createImageData(80, 80, () => [118, 122, 148]);
 
     expect(analyzeColorBalance(imageData).temperature).toBeGreaterThan(0);
+  });
+
+  it.each([false, true])('keeps a neutral image neutral (negative=%s)', (negative) => {
+    expect(analyzeColorBalance(createImageData(80, 80, () => [128, 128, 128]), negative))
+      .toEqual({ temperature: 0, tint: 0 });
+  });
+
+  it('uses the manual slider units to neutralize both warm/cool and green/magenta casts', () => {
+    for (const sample of [{ r: 118, g: 122, b: 148 }, { r: 148, g: 154, b: 118 }]) {
+      const wb = neutralWhiteBalance(sample);
+      const corrected = [sample.r + wb.temperature, sample.g + wb.tint, sample.b - wb.temperature];
+      expect(Math.max(...corrected) - Math.min(...corrected)).toBe(0);
+      expect(analyzeColorBalance(createImageData(80, 80, () => [sample.r, sample.g, sample.b])))
+        .toEqual(wb);
+    }
   });
 
   it('does not let blue-dominant scene color drive the frame colder', () => {

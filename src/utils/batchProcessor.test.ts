@@ -105,6 +105,8 @@ describe('runBatch auto-analysis', () => {
     ));
 
     expect(workerClient.autoAnalyze).toHaveBeenCalledTimes(1);
+    expect(workerClient.autoAnalyze).toHaveBeenCalledWith(expect.objectContaining({ profileId: profile.id }));
+    expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({ profileId: profile.id }));
     expect(exportCalls[0]?.settings).toMatchObject({
       exposure: 4,
       blackPoint: 3,
@@ -353,6 +355,7 @@ describe('runBatch auto-analysis', () => {
     ));
 
     expect(workerClient.render).toHaveBeenCalled();
+    expect(workerClient.render).toHaveBeenCalledWith(expect.objectContaining({ profileId: profile.id }));
     expect(workerClient.export).toHaveBeenCalledWith(expect.objectContaining({
       highlightDensityEstimate: expect.closeTo(0.31, 2),
     }));

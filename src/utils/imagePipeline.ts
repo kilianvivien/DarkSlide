@@ -541,7 +541,7 @@ export function resolveDensityInversionParams(
 
 export function applyDensityInversion(
   encodedValue: number,
-  outputProfileId: ColorProfileId,
+  outputProfileId: InputProfileSpec,
   baseDensity: number,
   densityScale: number,
   gamma: number,
@@ -561,7 +561,7 @@ const CRUSH_GUARD_BLACK_THRESHOLD = 8 / 255;
 export function wouldBaseCrushImage(
   imageData: ImageData,
   params: DensityInversionParams,
-  outputProfileId: ColorProfileId,
+  outputProfileId: InputProfileSpec,
 ): boolean {
   if (!params.enabled) {
     return false;
@@ -599,20 +599,20 @@ export function applyCrushGuard(
   imageData: ImageData,
   conservativeSample: FilmBaseSample,
   priorDensityBalance: DensityBalance | null,
-  outputProfileId: ColorProfileId = 'srgb',
+  outputProfileId: InputProfileSpec = 'srgb',
 ): { estimate: FilmBaseEstimate; densityBalance: DensityBalance | null } {
-  const provisional = resolveDensityInversionParams(
-    { filmBaseSample: null, flareCorrection: 50 },
-    true,
-    'negative',
-    null,
-    estimate,
-    priorDensityBalance,
-    outputProfileId,
-    outputProfileId,
-    null,
-    0.5,
-  );
+  // Decode-time analysis is in the source's native color space, including
+  // parsed ICC transfer curves. No working-space transform or flare is applied.
+  const balance = resolveDensityBalance(true, null, priorDensityBalance);
+  const provisional: DensityInversionParams = {
+    ...DISABLED_DENSITY_INVERSION,
+    enabled: true,
+    gamma: [DENSITY_TO_POSITIVE_GAMMA, DENSITY_TO_POSITIVE_GAMMA, DENSITY_TO_POSITIVE_GAMMA],
+    baseDensity: [estimate.sample.r, estimate.sample.g, estimate.sample.b].map((value) => (
+      -Math.log10(clamp(decodeProfileChannel(outputProfileId, clamp(value, 1, 255) / 255), DENSITY_EPSILON, 1))
+    )) as [number, number, number],
+    densityScale: [balance.scaleR, balance.scaleG, balance.scaleB],
+  };
 
   if (!wouldBaseCrushImage(imageData, provisional, outputProfileId)) {
     return { estimate, densityBalance: priorDensityBalance };
@@ -641,7 +641,7 @@ function mean(values: number[], start: number, end: number) {
 export function computeDensityBalance(
   imageData: ImageData,
   filmBaseSample: FilmBaseSample,
-  profileId: ColorProfileId = 'srgb',
+  profileId: InputProfileSpec = 'srgb',
 ): DensityBalance {
   const { data, width, height } = imageData;
   return computeRasterDensityBalance(data, width, height, 4, 255, filmBaseSample, profileId);
@@ -652,7 +652,7 @@ export function computeRawDensityBalance(
   width: number,
   height: number,
   filmBaseSample: FilmBaseSample,
-  profileId: ColorProfileId = 'srgb',
+  profileId: InputProfileSpec = 'srgb',
 ): DensityBalance {
   return computeRasterDensityBalance(rgb, width, height, 3, 65535, filmBaseSample, profileId);
 }
@@ -664,7 +664,7 @@ function computeRasterDensityBalance(
   channels: 3 | 4,
   channelMax: number,
   filmBaseSample: FilmBaseSample,
-  profileId: ColorProfileId,
+  profileId: InputProfileSpec,
 ): DensityBalance {
   const baseR = clamp(decodeProfileChannel(profileId, filmBaseSample.r / 255), DENSITY_EPSILON, 1);
   const baseG = clamp(decodeProfileChannel(profileId, filmBaseSample.g / 255), DENSITY_EPSILON, 1);
@@ -916,45 +916,6 @@ export function resolveEffectiveSettings(
   } : settings;
 }
 
-function composeCurveLut(outer: Uint8Array, inner: Uint8Array) {
-  const result = new Uint8Array(256);
-  for (let index = 0; index < 256; index += 1) {
-    result[index] = outer[inner[index]];
-  }
-  return result;
-}
-
-function createIdentityCurveLut() {
-  const identity = new Uint8Array(256);
-  for (let index = 0; index < 256; index += 1) {
-    identity[index] = index;
-  }
-  return identity;
-}
-
-function buildComposedCurveLuts(
-  settings: ConversionSettings,
-  labStyleToneCurve?: CurvePoint[],
-  labStyleChannelCurves?: CurveChannelOverrides,
-) {
-  const identity = createIdentityCurveLut();
-  const labMaster = labStyleToneCurve ? createCurveLut(labStyleToneCurve) : identity;
-  const labR = labStyleChannelCurves?.r ? createCurveLut(labStyleChannelCurves.r) : identity;
-  const labG = labStyleChannelCurves?.g ? createCurveLut(labStyleChannelCurves.g) : identity;
-  const labB = labStyleChannelCurves?.b ? createCurveLut(labStyleChannelCurves.b) : identity;
-  const userMaster = createCurveLut(settings.curves.rgb);
-  const userR = createCurveLut(settings.curves.red);
-  const userG = createCurveLut(settings.curves.green);
-  const userB = createCurveLut(settings.curves.blue);
-
-  return {
-    master: composeCurveLut(userMaster, labMaster),
-    r: composeCurveLut(userR, labR),
-    g: composeCurveLut(userG, labG),
-    b: composeCurveLut(userB, labB),
-  };
-}
-
 export const FLOAT_CURVE_TABLE_SIZE = 4096;
 
 function evalCurveNormalized(points: CurvePoint[] | undefined, value: number): number {
@@ -962,11 +923,9 @@ function evalCurveNormalized(points: CurvePoint[] | undefined, value: number): n
   return clamp(getCurveValue(points, clamp(value, 0, 1) * 255) / 255, 0, 1);
 }
 
-// High-resolution curve tables for the float (16-bit export) path. Composition
-// order matches the fused 8-bit LUTs used by processImageData/the GPU preview
-// (channel(master(x)) with master = userMaster∘labMaster), but sampled by exact
-// float evaluation with no integer rounding, so deep exports keep full tonal
-// resolution through the curve stage.
+// Preview, CPU render, and deep export share the same composed curves. Only
+// the final output is quantized; rounding intermediate curve stages changes
+// the look, especially when several steep lab/user curves are combined.
 export function buildFloatCurveTables(
   settings: ConversionSettings,
   labStyleToneCurve?: CurvePoint[],
@@ -1180,15 +1139,11 @@ export function buildCurveLutBuffer(
   labStyleToneCurve?: CurvePoint[],
   labStyleChannelCurves?: CurveChannelOverrides,
 ) {
-  const lut = buildComposedCurveLuts(settings, labStyleToneCurve, labStyleChannelCurves);
-  const result = new Float32Array(1024);
-
-  for (let index = 0; index < 256; index += 1) {
-    result[index] = lut.master[index] / 255;
-    result[256 + index] = lut.r[index] / 255;
-    result[512 + index] = lut.g[index] / 255;
-    result[768 + index] = lut.b[index] / 255;
-  }
+  const tables = buildFloatCurveTables(settings, labStyleToneCurve, labStyleChannelCurves);
+  const result = new Float32Array(FLOAT_CURVE_TABLE_SIZE * 3);
+  result.set(tables.r);
+  result.set(tables.g, FLOAT_CURVE_TABLE_SIZE);
+  result.set(tables.b, FLOAT_CURVE_TABLE_SIZE * 2);
 
   return result;
 }
@@ -1447,10 +1402,7 @@ export function processImageData(
     } : undefined);
 
   const data = imageData.data;
-  const lut = buildComposedCurveLuts(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
-  const fusedR = new Float32Array(256);
-  const fusedG = new Float32Array(256);
-  const fusedB = new Float32Array(256);
+  const curveTables = buildFloatCurveTables(effectiveSettings, labStyleToneCurve, labStyleChannelCurves);
   const histogram = buildEmptyHistogram();
   const exposureFactor = Math.pow(2, effectiveSettings.exposure / 50);
   const safeContrast = clamp(effectiveSettings.contrast, -255, 258);
@@ -1479,12 +1431,6 @@ export function processImageData(
     flareStrength,
     lightSourceBias,
   );
-
-  for (let index = 0; index < 256; index += 1) {
-    fusedR[index] = lut.r[lut.master[index]] / 255;
-    fusedG[index] = lut.g[lut.master[index]] / 255;
-    fusedB[index] = lut.b[lut.master[index]] / 255;
-  }
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -1580,13 +1526,9 @@ export function processImageData(
           : [gray, gray, gray];
       }
 
-      const mappedR = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
-      const mappedG = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
-      const mappedB = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
-
-      r = fusedR[mappedR];
-      g = fusedG[mappedG];
-      b = fusedB[mappedB];
+      r = sampleFloatCurveTable(curveTables.r, r);
+      g = sampleFloatCurveTable(curveTables.g, g);
+      b = sampleFloatCurveTable(curveTables.b, b);
     }
 
     const finalR = clamp(Math.round(r * 255), 0, 255);

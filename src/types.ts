@@ -338,8 +338,8 @@ export interface SidecarFile {
     date: string | null;
     notes: string;
   };
-  lightSourceProfileId?: string;
-  labStyleId?: string;
+  lightSourceProfileId?: string | null;
+  labStyleId?: string | null;
 }
 
 /**
@@ -884,7 +884,7 @@ export interface AutoAnalyzeResult {
   } | null;
 }
 
-export interface SampleRequest {
+export interface SampleRequest extends Partial<Omit<ConversionAnalysisRequest, 'documentId' | 'settings'>> {
   documentId: string;
   settings: ConversionSettings;
   inputProfileId?: InputProfileSpec;
@@ -892,6 +892,7 @@ export interface SampleRequest {
   targetMaxDimension: number;
   x: number;
   y: number;
+  sampleMode?: 'source' | 'white-balance';
 }
 
 // Re-run the clear-film-base estimator inside the current rotation + crop.

@@ -8,6 +8,7 @@ import {
   AutoAnalyzeResult,
   ApplyFilmBaseEstimateRequest,
   ColorProfileId,
+  ColorMatrix,
   CancelTileJobRequest,
   ContactSheetRequest,
   ContactSheetResult,
@@ -70,7 +71,7 @@ import {
 import { analyzeChannelFloors, analyzeColorBalance, analyzeExposure, analyzeMidtoneContrast } from './autoAnalysis';
 import { MAX_FILE_SIZE_BYTES, PREVIEW_LEVELS, RAW_EXTENSIONS, resolveDustRemovalSettings } from '../constants';
 import { decodeTiffRaster, TiffDecodeError } from './tiff';
-import { convertImageDataColorProfile, getColorProfileIdFromName, parseInputIccProfile } from './colorProfiles';
+import { convertImageDataColorProfile, convertRgbBetweenProfiles, getColorProfileIdFromName, parseInputIccProfile } from './colorProfiles';
 import { extractExifMetadata, extractRasterColorProfile } from './imageMetadata';
 import { detectDustMarks } from './dustDetection';
 import { detectFrame } from './frameDetection';
@@ -245,7 +246,7 @@ function estimateCanvasFilmBase(canvas: OffscreenCanvas): FilmBaseEstimate | nul
   return estimateFilmBase(imageData.data, canvas.width, canvas.height, 4);
 }
 
-function estimateCanvasDensityBalance(canvas: OffscreenCanvas, filmBaseSample: FilmBaseSample | null) {
+function estimateCanvasDensityBalance(canvas: OffscreenCanvas, filmBaseSample: FilmBaseSample | null, inputProfile: InputProfileSpec = 'srgb') {
   if (!filmBaseSample) {
     return null;
   }
@@ -256,7 +257,7 @@ function estimateCanvasDensityBalance(canvas: OffscreenCanvas, filmBaseSample: F
   }
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  return computeDensityBalance(imageData, filmBaseSample);
+  return computeDensityBalance(imageData, filmBaseSample, inputProfile);
 }
 
 // Catastrophic-base guard (diagnosis §"Clamp catastrophic base choices"). Run
@@ -268,6 +269,7 @@ function guardFilmBaseAgainstCrush(
   estimate: FilmBaseEstimate | null,
   previews: StoredPreview[],
   priorDensityBalance: DensityBalance | null,
+  inputProfile: InputProfileSpec = 'srgb',
 ): { estimate: FilmBaseEstimate | null; densityBalance: DensityBalance | null } {
   if (!estimate || previews.length === 0) {
     return { estimate, densityBalance: priorDensityBalance };
@@ -284,7 +286,7 @@ function guardFilmBaseAgainstCrush(
 
   const imageData = ctx.getImageData(0, 0, smallest.canvas.width, smallest.canvas.height);
   const conservative = computeBrightPercentileSample(imageData.data, smallest.canvas.width, smallest.canvas.height, 4);
-  return applyCrushGuard(estimate, imageData, conservative, priorDensityBalance);
+  return applyCrushGuard(estimate, imageData, conservative, priorDensityBalance, inputProfile);
 }
 
 function decodeTiff(buffer: ArrayBuffer) {
@@ -443,6 +445,7 @@ function getPinnedResidualBaseOffset(
     settings.filmBaseSample,
     settings.filmBaseSampleProfileId ?? null,
     settings.densityBalance ?? null,
+    settings.blackAndWhite.enabled,
     settings.flareCorrection ?? 50,
     isColor,
     filmType,
@@ -517,6 +520,7 @@ function getPinnedHighlightDensity(
     payload.labSaturationBias ?? 0,
     payload.labTemperatureBias ?? 0,
     payload.cubeLut ? cubeLutSignature(payload.cubeLut) : null,
+    residualBaseOffset,
   ]);
   const cached = document.highlightDensityCache.get(cacheKey);
   if (cached !== undefined) {
@@ -540,7 +544,7 @@ function getPinnedHighlightDensity(
     analysisSettings,
     payload.isColor,
     'processed',
-    payload.maskTuning,
+    payload.maskTuning ? { ...payload.maskTuning, highlightProtectionBias: 0 } : undefined,
     payload.colorMatrix,
     payload.tonalCharacter,
     payload.labStyleToneCurve,
@@ -762,13 +766,14 @@ function getHalo(settings: ConversionSettings, comparisonMode: 'processed' | 'or
   }
 
   const sharpenHalo = settings.sharpen.enabled && settings.sharpen.amount > 0
-    ? Math.ceil(settings.sharpen.radius)
+    ? Math.max(1, Math.round(settings.sharpen.radius))
     : 0;
   const noiseHalo = settings.noiseReduction.enabled && settings.noiseReduction.luminanceStrength > 0
     ? 2
     : 0;
 
-  return Math.max(sharpenHalo, noiseHalo);
+  // Sharpen samples the denoised image, so their source neighborhoods add.
+  return sharpenHalo + noiseHalo;
 }
 
 function getTileSource(document: StoredDocument, payload: PrepareTileJobRequest) {
@@ -1080,6 +1085,7 @@ interface AnalysisInversionOptions {
   cubeLut?: CubeLut | null;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
+  colorMatrix?: ColorMatrix;
 }
 
 // Shared front-half of the conversion pipeline for analysis passes (auto
@@ -1093,8 +1099,6 @@ function applyAnalysisInversionStage(
   document: StoredDocument,
   residualBaseOffset: [number, number, number] | null,
 ) {
-  convertImageDataColorProfile(imageData, inputProfileId, outputProfileId);
-
   const { data } = imageData;
   const filmType = options.filmType ?? 'negative';
   const filmBaseBalance = getFilmBaseBalance(options.settings.filmBaseSample);
@@ -1121,6 +1125,7 @@ function applyAnalysisInversionStage(
     let r = data[index] / 255;
     let g = data[index + 1] / 255;
     let b = data[index + 2] / 255;
+    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
 
     // Keep analysis in step with rendering: a profile LUT replaces the whole
     // inversion stage there, so it must replace it here too.
@@ -1140,9 +1145,15 @@ function applyAnalysisInversionStage(
         residualBaseOffset,
       );
 
-    r *= options.settings.redBalance;
-    g *= options.settings.greenBalance;
-    b *= options.settings.blueBalance;
+    if (options.colorMatrix) {
+      const m = options.colorMatrix;
+      [r, g, b] = [m[0] * r + m[1] * g + m[2] * b, m[3] * r + m[4] * g + m[5] * b, m[6] * r + m[7] * g + m[8] * b];
+    }
+    if (options.isColor) {
+      r *= options.settings.redBalance;
+      g *= options.settings.greenBalance;
+      b *= options.settings.blueBalance;
+    }
 
     data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
     data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
@@ -1232,10 +1243,12 @@ async function handleDecode(payload: DecodeRequest) {
     const previewStore = buildPreviewLevels(canvas, payload.displayScaleFactor);
     const rawEstimate = payload.precomputedFilmBase
       ?? normalizeFilmBaseEstimate(payload.precomputedFilmBaseSample ?? estimateCanvasFilmBase(canvas));
+    const decoderColorProfileId = payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName);
+    const sourceProfile = decoderColorProfileId ?? 'srgb';
     const priorDensityBalance = highDepthRawSource && rawEstimate
-      ? computeRawDensityBalance(highDepthRawSource.data, width, height, rawEstimate.sample, payload.declaredColorProfileId ?? 'srgb')
-      : estimateCanvasDensityBalance(canvas, rawEstimate?.sample ?? null);
-    const guarded = guardFilmBaseAgainstCrush(rawEstimate, previewStore, priorDensityBalance);
+      ? computeRawDensityBalance(highDepthRawSource.data, width, height, rawEstimate.sample, sourceProfile)
+      : estimateCanvasDensityBalance(canvas, rawEstimate?.sample ?? null, sourceProfile);
+    const guarded = guardFilmBaseAgainstCrush(rawEstimate, previewStore, priorDensityBalance, sourceProfile);
     const estimatedFilmBase = guarded.estimate;
     const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
     const estimatedDensityBalance = guarded.densityBalance;
@@ -1248,7 +1261,7 @@ async function handleDecode(payload: DecodeRequest) {
       width: canvas.width,
       height: canvas.height,
       decoderColorProfileName: payload.declaredColorProfileName ?? null,
-      decoderColorProfileId: payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName),
+      decoderColorProfileId,
     };
 
     documents.set(payload.documentId, {
@@ -1332,13 +1345,14 @@ async function handleDecode(payload: DecodeRequest) {
   assertSupportedDimensions(decodedCanvas.width, decodedCanvas.height);
 
   const previewStore = buildPreviewLevels(decodedCanvas, payload.displayScaleFactor);
+  const decoderColorProfileId = payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName);
+  const sourceProfile = decoderColorProfileId ?? embeddedColorProfileId ?? embeddedParsedProfile ?? 'srgb';
   const rasterEstimate = normalizeFilmBaseEstimate(estimateCanvasFilmBase(decodedCanvas));
-  const rasterPriorDensityBalance = estimateCanvasDensityBalance(decodedCanvas, rasterEstimate?.sample ?? null);
-  const rasterGuarded = guardFilmBaseAgainstCrush(rasterEstimate, previewStore, rasterPriorDensityBalance);
+  const rasterPriorDensityBalance = estimateCanvasDensityBalance(decodedCanvas, rasterEstimate?.sample ?? null, sourceProfile);
+  const rasterGuarded = guardFilmBaseAgainstCrush(rasterEstimate, previewStore, rasterPriorDensityBalance, sourceProfile);
   const estimatedFilmBase = rasterGuarded.estimate;
   const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
   const estimatedDensityBalance = rasterGuarded.densityBalance;
-  const decoderColorProfileId = payload.declaredColorProfileId ?? getColorProfileIdFromName(payload.declaredColorProfileName);
   const declaredUnsupportedColorProfileName = payload.declaredColorProfileName && !decoderColorProfileId
     ? payload.declaredColorProfileName
     : null;
@@ -1518,11 +1532,20 @@ function handleCancelJob(payload: CancelTileJobRequest) {
 function sampleRegionFromTransformedCanvas(
   transformed: { canvas: OffscreenCanvas; width: number; height: number },
   payload: SampleRequest,
+  document: StoredDocument,
 ) {
   const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not sample image region.');
   const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
+  if (payload.sampleMode === 'white-balance') {
+    const residual = getPinnedResidualBaseOffset(document, payload.settings, payload.isColor ?? true,
+      payload.filmType ?? 'negative', payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb',
+      payload.lightSourceBias ?? [1, 1, 1], payload.flareFloor ?? null, payload.profileId ?? null);
+    applyAnalysisInversionStage(imageData, { ...payload, isColor: payload.isColor ?? true },
+      payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb', document, residual);
+  } else {
+    convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
+  }
   ctx.putImageData(imageData, 0, 0);
 
   const sampleX = clamp(Math.round(payload.x * (transformed.width - 1)), 0, Math.max(transformed.width - 1, 0));
@@ -1574,6 +1597,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.flareFloor ?? null,
     payload.profileId ?? null,
   );
+  const pinnedHighlightDensity = getPinnedHighlightDensity(document, payload, residualBaseOffset);
   const toneHistogram = processImageData(
     toneImageData,
     payload.settings,
@@ -1587,7 +1611,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
     payload.labTonalCharacterOverride,
     payload.labSaturationBias ?? 0,
     payload.labTemperatureBias ?? 0,
-    payload.highlightDensityEstimate ?? 0,
+    pinnedHighlightDensity,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     payload.profileId ?? null,
@@ -1611,6 +1635,9 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   );
 
   const isColorNegative = payload.isColor && (payload.filmType ?? 'negative') === 'negative';
+  const colorBalance = payload.isColor && !payload.settings.blackAndWhite.enabled
+    ? analyzeColorBalance(whiteBalanceImageData, isColorNegative, payload.outputProfileId ?? 'srgb', payload.labTemperatureBias ?? 0)
+    : { temperature: null, tint: null };
   const channelFloors = analyzeChannelFloors(whiteBalanceImageData);
   const hasSuggestedCurves = channelFloors.redFloor !== null
     || channelFloors.greenFloor !== null
@@ -1619,7 +1646,7 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
 
   return {
     ...analyzeExposure(toneHistogram),
-    ...analyzeColorBalance(whiteBalanceImageData, isColorNegative),
+    ...colorBalance,
     contrast: midtone.contrast,
     midtoneBoostPoint: midtone.midtoneBoostPoint,
     suggestedCurves: hasSuggestedCurves ? channelFloors : null,
@@ -1726,7 +1753,7 @@ function handleSampleFilmBase(payload: SampleRequest) {
   // Sample from the source-resolution canvas: preview levels are resampled
   // (anti-aliased), which biases the picked base value (audit 2.8).
   const transformed = renderTransformedCanvas(document.sourceCanvas, payload.settings);
-  return sampleRegionFromTransformedCanvas(transformed, payload);
+  return sampleRegionFromTransformedCanvas(transformed, payload, document);
 }
 
 // Crop-guided film-base re-analysis: preserve the original rotated frame and
@@ -1785,7 +1812,7 @@ function handleReestimateFilmBase(payload: ReestimateFilmBaseRequest): Reestimat
     estimateFilmBase(outsideCrop.data, outsideCrop.width, outsideCrop.height, 4),
   );
   const priorDensityBalance = rawEstimate
-    ? computeDensityBalance(imageData, rawEstimate.sample)
+    ? computeDensityBalance(imageData, rawEstimate.sample, resolveStoredInputProfileId(document, 'auto', 'srgb'))
     : null;
   const guarded = rawEstimate
     ? applyCrushGuard(
@@ -1793,6 +1820,7 @@ function handleReestimateFilmBase(payload: ReestimateFilmBaseRequest): Reestimat
       imageData,
       computeBrightPercentileSample(imageData.data, imageData.width, imageData.height, 4),
       priorDensityBalance,
+      resolveStoredInputProfileId(document, 'auto', 'srgb'),
     )
     : { estimate: null, densityBalance: null };
 
@@ -2010,6 +2038,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       maskTuning: profile.maskTuning,
       colorMatrix: profile.colorMatrix,
       tonalCharacter: profile.tonalCharacter,
+      cubeLut: profile.lut ?? null,
       labStyleToneCurve: payload.labStyleToneCurvePerCell?.[index],
       labStyleChannelCurves: payload.labStyleChannelCurvesPerCell?.[index],
       labTonalCharacterOverride: payload.labTonalCharacterOverridePerCell?.[index],

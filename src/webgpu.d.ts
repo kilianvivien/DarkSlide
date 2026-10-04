@@ -119,6 +119,8 @@ declare global {
 
   interface GPUBufferBinding {
     buffer: GPUBuffer;
+    offset?: number;
+    size?: number;
   }
 
   interface GPUBufferDescriptor {
