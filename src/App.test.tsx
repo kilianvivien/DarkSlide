@@ -187,6 +187,7 @@ vi.mock('./components/Sidebar', () => ({
     onTogglePicker,
     onReanalyzeFilmBase,
     onSetPointPicker,
+    onRedetectFrame,
   }: {
     exportOptions: { filenameBase: string };
     lightSourceId?: string | null;
@@ -203,6 +204,7 @@ vi.mock('./components/Sidebar', () => ({
     onTogglePicker: () => void;
     onReanalyzeFilmBase?: () => void;
     onSetPointPicker?: (mode: 'black' | 'white' | 'grey' | null) => void;
+    onRedetectFrame?: () => void;
   }) => {
     const [, setExposure] = React.useState(0);
     const [, setBlackAndWhiteEnabled] = React.useState(false);
@@ -227,6 +229,9 @@ vi.mock('./components/Sidebar', () => ({
         <button type="button" onClick={() => onSettingsChange({ temperature: 41, tint: -27 })}>Set Manual WB</button>
         <button type="button" onClick={onReanalyzeFilmBase}>
           Re-analyze Film Base
+        </button>
+        <button type="button" onClick={onRedetectFrame}>
+          Redetect Frame
         </button>
         <div>Current Light Source: {lightSourceId ?? 'auto'}</div>
         <button type="button" onClick={() => onLightSourceChange?.(null)}>
@@ -1090,6 +1095,55 @@ describe('App import and preview pipeline', () => {
     };
 
     expect(latestRenderCall.settings.rotation).toBe(90);
+  });
+
+  it('maps an auto-detected frame into the EXIF-rotated view without applying the detected tilt', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200, {
+      exifOrientation: 6,
+      mime: 'image/jpeg',
+      extension: '.jpg',
+    }));
+    // Measured on the unrotated 300x200 source.
+    workerState.detectFrame.mockResolvedValue({
+      left: 0.1,
+      top: 0.2,
+      right: 0.8,
+      bottom: 0.8,
+      angle: -1.5,
+      confidence: 6,
+    });
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 200, 300)
+    ));
+
+    render(<App />);
+
+    await uploadFile(createFile('portrait.jpg', 'image/jpeg'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Redetect Frame' }));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    const latestRenderCall = workerState.render.mock.calls.at(-1)?.[0] as {
+      settings: { rotation: number; levelAngle: number; crop: { x: number; y: number; width: number; height: number } };
+    };
+    expect(latestRenderCall.settings.rotation).toBe(90);
+    expect(latestRenderCall.settings.levelAngle).toBe(0);
+    // A clockwise quarter turn maps (x, y, w, h) to (1 - y - h, x, h, w).
+    expect(latestRenderCall.settings.crop.x).toBeCloseTo(0.2, 6);
+    expect(latestRenderCall.settings.crop.y).toBeCloseTo(0.1, 6);
+    expect(latestRenderCall.settings.crop.width).toBeCloseTo(0.6, 6);
+    expect(latestRenderCall.settings.crop.height).toBeCloseTo(0.7, 6);
   });
 
   it('keeps the RAW import result available as a profile after switching away', async () => {

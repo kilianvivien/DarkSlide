@@ -109,6 +109,8 @@ describe('CropPane', () => {
     fireEvent.click(screen.getByRole('button', { name: /rotate 90° clockwise/i }));
 
     expect(onRotate).toHaveBeenCalledWith(180, expect.objectContaining({
+      x: expect.closeTo(0.3, 5),
+      y: expect.closeTo(0.1, 5),
       aspectRatio: 2 / 3,
       width: 0.5,
       height: 0.7,
@@ -187,5 +189,52 @@ describe('CropPane', () => {
     fireEvent.click(screen.getByRole('button', { name: /auto crop/i }));
 
     expect(onRedetectFrame).toHaveBeenCalledTimes(1);
+  });
+
+  it('activates draw-to-straighten mode', () => {
+    const onStraightenActiveChange = vi.fn();
+
+    renderCropPane({ onStraightenActiveChange });
+    fireEvent.click(screen.getByRole('button', { name: /draw line/i }));
+
+    expect(onStraightenActiveChange).toHaveBeenCalledWith(true);
+  });
+
+  it('highlights the closest current format for an automatic crop', () => {
+    renderCropPane({
+      cropSource: 'auto',
+      crop: { x: 0.1, y: 0.1, width: 0.75, height: 0.75, aspectRatio: null },
+      imageWidth: 1200,
+      imageHeight: 800,
+    });
+
+    const format35mm = screen.getAllByRole('button', { name: /^35mm/i })[0];
+    expect(format35mm.parentElement).toHaveClass('bg-zinc-100');
+    expect(screen.getByRole('button', { name: /^free/i })).not.toHaveClass('bg-zinc-100');
+  });
+
+  it('highlights 35mm for a manually edited 3:2 crop and shows its size', () => {
+    renderCropPane({
+      cropSource: 'manual',
+      crop: { x: 0.2, y: 0.2, width: 742 / 1200, height: 495 / 800, aspectRatio: null },
+      imageWidth: 1200,
+      imageHeight: 800,
+    });
+
+    const format35mm = screen.getAllByRole('button', { name: /^35mm/i })[0];
+    expect(format35mm.parentElement).toHaveClass('bg-zinc-100');
+    expect(screen.getByRole('button', { name: /^free/i })).not.toHaveClass('bg-zinc-100');
+    expect(screen.getByTestId('crop-current-size')).toHaveTextContent('742 × 495 px');
+  });
+
+  it('keeps Free selected for an untouched full-frame crop', () => {
+    renderCropPane({
+      cropSource: null,
+      crop: { x: 0, y: 0, width: 1, height: 1, aspectRatio: null },
+      imageWidth: 1200,
+      imageHeight: 800,
+    });
+
+    expect(screen.getByRole('button', { name: /^free/i })).toHaveClass('bg-zinc-100');
   });
 });

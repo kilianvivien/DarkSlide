@@ -973,8 +973,8 @@ describe('rotateCropClockwise', () => {
       aspectRatio: 4 / 5,
     });
 
-    expect(rotated.x).toBeCloseTo(0.2, 5);
-    expect(rotated.y).toBeCloseTo(0.6, 5);
+    expect(rotated.x).toBeCloseTo(0.3, 5);
+    expect(rotated.y).toBeCloseTo(0.1, 5);
     expect(rotated.width).toBeCloseTo(0.5, 5);
     expect(rotated.height).toBeCloseTo(0.3, 5);
     expect(rotated.aspectRatio).toBeCloseTo(5 / 4, 5);

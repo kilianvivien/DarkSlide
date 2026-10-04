@@ -635,6 +635,23 @@ export async function confirmSyncSettings(sourceName: string, frameCount: number
   return window.confirm(message);
 }
 
+export async function confirmIncludeManualCrops(rollName: string, manualCount: number): Promise<boolean> {
+  const frames = manualCount === 1 ? '1 frame' : `${manualCount} frames`;
+  const message = `${frames} in ${rollName} ${manualCount === 1 ? 'has' : 'have'} a manually adjusted crop. Replace ${manualCount === 1 ? 'it' : 'them'} with the stabilized auto crop too?`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Stabilize Roll Crops',
+      kind: 'info',
+      okLabel: 'Include',
+      cancelLabel: 'Keep Manual Crops',
+    });
+  }
+
+  return window.confirm(message);
+}
+
 export async function confirmSyncFilmBase(rollName: string): Promise<boolean> {
   const message = `Apply sampled film base to all frames in ${rollName}?`;
 

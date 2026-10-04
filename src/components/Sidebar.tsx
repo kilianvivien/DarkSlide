@@ -128,6 +128,8 @@ interface SidebarProps {
   cropImageWidth: number;
   cropImageHeight: number;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
+  straightenActive?: boolean;
+  onStraightenActiveChange?: (active: boolean) => void;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onExportOptionsChange: (options: Partial<ExportOptions>) => void;
   onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
@@ -185,6 +187,8 @@ export const Sidebar = memo(function Sidebar({
   cropImageWidth,
   cropImageHeight,
   onLevelInteractionChange,
+  straightenActive,
+  onStraightenActiveChange,
   onSettingsChange,
   onExportOptionsChange,
   onColorManagementChange,
@@ -777,6 +781,8 @@ export const Sidebar = memo(function Sidebar({
                   onRotate={handleCropRotate}
                   onLevelAngleChange={handleLevelAngleChange}
                   onLevelInteractionChange={onLevelInteractionChange}
+                  straightenActive={straightenActive}
+                  onStraightenActiveChange={onStraightenActiveChange}
                   onRedetectFrame={onRedetectFrame}
                   onDone={onCropDone}
                   onResetCrop={onResetCrop}

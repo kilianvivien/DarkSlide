@@ -184,6 +184,7 @@ type AppShellProps = {
   onSelectTab: (tabId: string) => void;
   onReorderTabs: (sourceId: string, targetId: string) => void;
   onSyncRollSettings: (tabId: string, rollId: string) => void;
+  onStabilizeRollCrops: (rollId: string) => void;
   onApplyRollFilmBase: (rollId: string) => void;
   onRemoveFromRoll: (tabId: string) => void;
   onOpenRollInfo: (rollId: string) => void;
@@ -206,6 +207,9 @@ type AppShellProps = {
   onInteractionStart: () => void;
   onInteractionEnd: () => void;
   onLevelInteractionChange: React.Dispatch<React.SetStateAction<boolean>>;
+  straightenActive: boolean;
+  onStraightenActiveChange: (active: boolean) => void;
+  onLevelAngleChange: (levelAngle: number) => void;
   onToggleFilmBasePicker: () => void;
   onReanalyzeFilmBase: () => void;
   isReanalyzingFilmBase: boolean;
@@ -410,6 +414,7 @@ export function AppShell({
   onSelectTab,
   onReorderTabs,
   onSyncRollSettings,
+  onStabilizeRollCrops,
   onApplyRollFilmBase,
   onRemoveFromRoll,
   onOpenRollInfo,
@@ -425,6 +430,9 @@ export function AppShell({
   onInteractionStart,
   onInteractionEnd,
   onLevelInteractionChange,
+  straightenActive,
+  onStraightenActiveChange,
+  onLevelAngleChange,
   onToggleFilmBasePicker,
   onReanalyzeFilmBase,
   isReanalyzingFilmBase,
@@ -587,6 +595,8 @@ export function AppShell({
                   cropImageWidth={cropImageSize.width}
                   cropImageHeight={cropImageSize.height}
                   onLevelInteractionChange={onLevelInteractionChange}
+                  straightenActive={straightenActive}
+                  onStraightenActiveChange={onStraightenActiveChange}
                   onSettingsChange={onSettingsChange}
                   onExportOptionsChange={onExportOptionsChange}
                   onColorManagementChange={onColorManagementChange}
@@ -954,6 +964,9 @@ export function AppShell({
                               crop={documentState.settings.crop}
                               imageWidth={cropImageSize.width}
                               imageHeight={cropImageSize.height}
+                              levelAngle={documentState.settings.levelAngle}
+                              straightenActive={straightenActive}
+                              onLevelAngleChange={onLevelAngleChange}
                               onInteractionStart={onCropInteractionStart}
                               onInteractionEnd={onCropInteractionEnd}
                               onChange={onCropOverlayChange}
@@ -1160,6 +1173,7 @@ export function AppShell({
                   onSelectTab={onSelectTab}
                   onOpenRollInfo={onOpenRollInfo}
                   onSyncRollSettings={onSyncRollSettings}
+                  onStabilizeRollCrops={onStabilizeRollCrops}
                   onRemoveFromRoll={onRemoveFromRoll}
                   onDeleteRoll={onDeleteRoll}
                   onCreateRollFromTabs={onCreateRollFromTabs}

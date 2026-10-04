@@ -198,9 +198,10 @@ export function rotateCropClockwise(crop: CropSettings): CropSettings {
   const x = clamp(crop.x, 0, 1 - width);
   const y = clamp(crop.y, 0, 1 - height);
 
+  // A clockwise quarter turn maps a normalized point (u, v) to (1 - v, u).
   return {
-    x: y,
-    y: 1 - x - width,
+    x: 1 - y - height,
+    y: x,
     width: height,
     height: width,
     aspectRatio: crop.aspectRatio ? 1 / crop.aspectRatio : null,

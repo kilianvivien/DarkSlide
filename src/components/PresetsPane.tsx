@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowDownUp, Box, Check, ChevronDown, Copy, Download, Film, FolderOpen, FolderPlus, Grid3x3, Info, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Unlink2, Upload, X } from 'lucide-react';
+import { ArrowDownUp, Box, Check, ChevronDown, Copy, Download, Film, FolderOpen, FolderPlus, Grid3x3, Info, Layers, Pencil, Plus, ScanLine, Search, SlidersHorizontal, Trash2, Unlink2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from '../constants';
 import { confirmDeletePreset, isDesktopShell, saveCubeLutFile, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { CubeLutParseError, parseCubeLut, serializeCubeLut } from '../utils/cubeLut';
@@ -163,6 +163,7 @@ interface PresetsPaneProps {
   onSelectTab?: (tabId: string) => void;
   onOpenRollInfo?: (rollId: string) => void;
   onSyncRollSettings?: (tabId: string, rollId: string) => void;
+  onStabilizeRollCrops?: (rollId: string) => void;
   onRemoveFromRoll?: (tabId: string) => void;
   onDeleteRoll?: (rollId: string) => void;
   onCreateRollFromTabs?: () => void;
@@ -194,6 +195,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   onSelectTab,
   onOpenRollInfo,
   onSyncRollSettings,
+  onStabilizeRollCrops,
   onRemoveFromRoll,
   onDeleteRoll,
   onCreateRollFromTabs,
@@ -1177,6 +1179,18 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                       Sync Settings
                     </button>
                   </div>
+                  {onStabilizeRollCrops && (
+                    <button
+                      type="button"
+                      onClick={() => onStabilizeRollCrops(activeRoll.id)}
+                      disabled={filmstripTabs.length === 0}
+                      data-tip="Detects every frame and shares a robust crop size between frames scanned at the same size, keeping each frame's own position. Manual crops are kept unless you choose to include them. Undo restores each frame."
+                      className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <ScanLine size={12} />
+                      Stabilize Crops
+                    </button>
+                  )}
                   {onDeleteRoll && (
                     <div className="mt-2 pt-2 border-t border-zinc-800">
                       <button
