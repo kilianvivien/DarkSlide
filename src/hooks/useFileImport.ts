@@ -550,7 +550,8 @@ export function useFileImport({
           ...nextDocument.colorManagement,
           ...activeSidecar.colorManagement,
         };
-        if ((restoredProfile.filmType ?? 'negative') === 'negative' && roll?.filmBaseSample && !nextDocument.settings.filmBaseSample) {
+        if ((restoredProfile.filmType ?? 'negative') === 'negative' && roll?.filmBaseSample
+          && !Object.prototype.hasOwnProperty.call(activeSidecar.settings, 'filmBaseSample')) {
           nextDocument.settings.filmBaseSample = structuredClone(roll.filmBaseSample);
           nextDocument.settings.filmBaseSampleSource = 'roll';
           nextDocument.settings.filmBaseSampleProfileId = roll.filmBaseSampleProfileId;

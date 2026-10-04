@@ -904,6 +904,41 @@ describe('App import and preview pipeline', () => {
     });
   });
 
+  it.each(['automatic', 'manual', 'legacy'] as const)('restores %s sidecar film base in a roll with a shared sample', async (mode) => {
+    const rollSample = { r: 230, g: 180, b: 120 };
+    const manualSample = { r: 210, g: 170, b: 110 };
+    localStorage.setItem('darkslide_rolls_v2', JSON.stringify({ version: 2, rolls: [{
+      id: 'roll', name: 'Scans', directory: '/scans', profileId: 'generic-color',
+      filmStock: null, date: null, notes: '', createdAt: 1,
+      filmBaseSample: rollSample, filmBaseSampleProfileId: 'adobe-rgb',
+    }] }));
+    const settings = createDefaultSettings({ filmBaseSample: mode === 'manual' ? manualSample : null });
+    if (mode === 'legacy') Reflect.deleteProperty(settings, 'filmBaseSample');
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFile.mockResolvedValue({ file: createFile('restored.tiff', 'image/tiff'), path: '/scans/restored.tiff', size: 12 });
+    fileBridgeState.confirmRestoreSidecar.mockResolvedValue(true);
+    fileBridgeState.readTextFileByPath.mockResolvedValue(JSON.stringify({
+      version: 1, generator: 'DarkSlide', createdAt: '2026-10-04T00:00:00Z',
+      sourceFile: { name: 'restored.tiff', size: 12, dimensions: { width: 300, height: 200 } },
+      settings, profileId: 'generic-color', profileName: 'Generic Color', isColor: true,
+      colorManagement: DEFAULT_COLOR_MANAGEMENT, exportOptions: DEFAULT_EXPORT_OPTIONS,
+      lightSourceProfileId: null, labStyleId: null,
+    }));
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => createRenderResult(payload.documentId, payload.revision, 300, 200));
+    render(<App />);
+    await act(async () => { fireEvent.click(screen.getByText('Select Files')); });
+    await flushMicrotasks();
+    await act(async () => { vi.runOnlyPendingTimers(); });
+    await flushMicrotasks();
+    const restored = workerState.render.mock.calls.at(-1)?.[0].settings;
+    expect(restored.filmBaseSample).toEqual(mode === 'legacy' ? rollSample : mode === 'manual' ? manualSample : null);
+    if (mode === 'legacy') {
+      expect(restored.filmBaseSampleSource).toBe('roll');
+      expect(restored.filmBaseSampleProfileId).toBe('adobe-rgb');
+    }
+  });
+
   it('shows the desktop-only RAW error in the browser build', async () => {
     render(<App />);
 

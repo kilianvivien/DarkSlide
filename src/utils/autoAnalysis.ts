@@ -147,7 +147,7 @@ export function analyzeMidtoneContrast(histogram: HistogramData): {
 }
 
 function sampleColorBalance(
-  data: Uint8ClampedArray,
+  data: ArrayLike<number>,
   width: number,
   height: number,
   maxChroma: number,
@@ -245,7 +245,7 @@ export function neutralWhiteBalance(sample: { r: number; g: number; b: number },
   };
 }
 
-export function analyzeColorBalance(imageData: ImageData, _isColorNegative = false, profile: ColorProfileId = 'srgb', labTemperatureBias = 0): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
+export function analyzeColorBalance(imageData: { data: ArrayLike<number>; width: number; height: number }, _isColorNegative = false, profile: ColorProfileId = 'srgb', labTemperatureBias = 0): Pick<AutoAnalyzeResult, 'temperature' | 'tint'> {
   const { data, width, height } = imageData;
   if (width <= 0 || height <= 0) {
     return { temperature: null, tint: null };

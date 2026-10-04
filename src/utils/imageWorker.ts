@@ -1098,8 +1098,10 @@ function applyAnalysisInversionStage(
   outputProfileId: ColorProfileId,
   document: StoredDocument,
   residualBaseOffset: [number, number, number] | null,
+  preserveRange = false,
 ) {
   const { data } = imageData;
+  const output = preserveRange ? new Float64Array(data.length) : data;
   const filmType = options.filmType ?? 'negative';
   const filmBaseBalance = getFilmBaseBalance(options.settings.filmBaseSample);
   const lightSourceBias = options.lightSourceBias ?? [1, 1, 1];
@@ -1155,10 +1157,12 @@ function applyAnalysisInversionStage(
       b *= options.settings.blueBalance;
     }
 
-    data[index] = clamp(Math.round(clamp(r, 0, 1) * 255), 0, 255);
-    data[index + 1] = clamp(Math.round(clamp(g, 0, 1) * 255), 0, 255);
-    data[index + 2] = clamp(Math.round(clamp(b, 0, 1) * 255), 0, 255);
+    output[index] = preserveRange ? r * 255 : clamp(Math.round(r * 255), 0, 255);
+    output[index + 1] = preserveRange ? g * 255 : clamp(Math.round(g * 255), 0, 255);
+    output[index + 2] = preserveRange ? b * 255 : clamp(Math.round(b * 255), 0, 255);
+    output[index + 3] = data[index + 3];
   }
+  return output;
 }
 
 function handleDustDetect(payload: DustDetectRequest) {
@@ -1536,18 +1540,6 @@ function sampleRegionFromTransformedCanvas(
 ) {
   const ctx = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not sample image region.');
-  const imageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  if (payload.sampleMode === 'white-balance') {
-    const residual = getPinnedResidualBaseOffset(document, payload.settings, payload.isColor ?? true,
-      payload.filmType ?? 'negative', payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb',
-      payload.lightSourceBias ?? [1, 1, 1], payload.flareFloor ?? null, payload.profileId ?? null);
-    applyAnalysisInversionStage(imageData, { ...payload, isColor: payload.isColor ?? true },
-      payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb', document, residual);
-  } else {
-    convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
-  }
-  ctx.putImageData(imageData, 0, 0);
-
   const sampleX = clamp(Math.round(payload.x * (transformed.width - 1)), 0, Math.max(transformed.width - 1, 0));
   const sampleY = clamp(Math.round(payload.y * (transformed.height - 1)), 0, Math.max(transformed.height - 1, 0));
   const radius = clamp(Math.round(Math.min(transformed.width, transformed.height) / 512), 1, 4);
@@ -1555,7 +1547,20 @@ function sampleRegionFromTransformedCanvas(
   const top = clamp(sampleY - radius, 0, Math.max(transformed.height - 1, 0));
   const right = clamp(sampleX + radius, 0, Math.max(transformed.width - 1, 0));
   const bottom = clamp(sampleY + radius, 0, Math.max(transformed.height - 1, 0));
-  const area = ctx.getImageData(left, top, right - left + 1, bottom - top + 1).data;
+  const imageData = ctx.getImageData(left, top, right - left + 1, bottom - top + 1);
+  let area: Uint8ClampedArray | Float64Array;
+  if (payload.sampleMode === 'white-balance') {
+    const residual = getPinnedResidualBaseOffset(document, payload.settings, payload.isColor ?? true,
+      payload.filmType ?? 'negative', payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb',
+      payload.lightSourceBias ?? [1, 1, 1], payload.flareFloor ?? null, payload.profileId ?? null);
+    // Rendering applies WB before clipping matrix/gain output. Keep that same
+    // range in the small sampled patch, including negative and over-white RGB.
+    area = applyAnalysisInversionStage(imageData, { ...payload, isColor: payload.isColor ?? true },
+      payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb', document, residual, true);
+  } else {
+    convertImageDataColorProfile(imageData, payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb');
+    area = imageData.data;
+  }
 
   let totalR = 0;
   let totalG = 0;
@@ -1569,10 +1574,14 @@ function sampleRegionFromTransformedCanvas(
     count += 1;
   }
 
+  const average = (total: number) => {
+    const value = count > 0 ? total / count : 0;
+    return payload.sampleMode === 'white-balance' ? value : Math.round(value);
+  };
   return {
-    r: count > 0 ? Math.round(totalR / count) : 0,
-    g: count > 0 ? Math.round(totalG / count) : 0,
-    b: count > 0 ? Math.round(totalB / count) : 0,
+    r: average(totalR),
+    g: average(totalG),
+    b: average(totalB),
   } satisfies FilmBaseSample;
 }
 
@@ -1625,19 +1634,24 @@ function handleAutoAnalyze(payload: AutoAnalyzeRequest) {
   );
 
   const whiteBalanceImageData = ctx.getImageData(0, 0, transformed.width, transformed.height);
-  applyAnalysisInversionStage(
+  const whiteBalanceData = applyAnalysisInversionStage(
     whiteBalanceImageData,
     payload,
     payload.inputProfileId ?? 'srgb',
     payload.outputProfileId ?? 'srgb',
     document,
     residualBaseOffset,
+    true,
   );
 
   const isColorNegative = payload.isColor && (payload.filmType ?? 'negative') === 'negative';
   const colorBalance = payload.isColor && !payload.settings.blackAndWhite.enabled
-    ? analyzeColorBalance(whiteBalanceImageData, isColorNegative, payload.outputProfileId ?? 'srgb', payload.labTemperatureBias ?? 0)
+    ? analyzeColorBalance({ data: whiteBalanceData, width: whiteBalanceImageData.width, height: whiteBalanceImageData.height }, isColorNegative, payload.outputProfileId ?? 'srgb', payload.labTemperatureBias ?? 0)
     : { temperature: null, tint: null };
+  // Channel-floor analysis continues to use its encoded 8-bit histogram.
+  for (let index = 0; index < whiteBalanceData.length; index += 1) {
+    whiteBalanceImageData.data[index] = Math.round(whiteBalanceData[index]);
+  }
   const channelFloors = analyzeChannelFloors(whiteBalanceImageData);
   const hasSuggestedCurves = channelFloors.redFloor !== null
     || channelFloors.greenFloor !== null

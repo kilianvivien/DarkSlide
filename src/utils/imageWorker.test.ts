@@ -130,6 +130,37 @@ describe('worker conversion analysis consistency', () => {
     expect(Math.max(...pixel) - Math.min(...pixel)).toBeLessThanOrEqual(2);
   });
 
+  it.each(['gain', 'matrix'] as const)('keeps over-range %s values when picking a grey point', async (mode) => {
+    await decode('bright-gray', [200, 220, 220], 96);
+    const settings = createDefaultSettings({
+      redBalance: mode === 'gain' ? 1.5 : 1, greenBalance: 1, blueBalance: 1,
+      exposure: -50, contrast: 0, saturation: 100, blackPoint: 0, whitePoint: 255,
+      highlightProtection: 0, residualBaseCorrection: false,
+    });
+    const payload = {
+      documentId: 'bright-gray', settings, isColor: true, filmType: 'slide' as const,
+      targetMaxDimension: 1024,
+      colorMatrix: mode === 'matrix'
+        ? [1.5, 0, 0, 0, 1, 0, 0, 0, 1] as [number, number, number, number, number, number, number, number, number]
+        : undefined,
+    };
+    const picked = await request<FilmBaseSample>({ type: 'sample-film-base', payload: {
+      ...payload, sampleMode: 'white-balance', x: 0.5, y: 0.5,
+    } });
+    expect(picked.r).toBeCloseTo(300);
+    const correction = neutralWhiteBalance(picked);
+    expect(correction).toEqual({ temperature: -40, tint: 40 });
+    const corrected = { ...settings, ...correction };
+    const result = await request<RenderResult>({ type: 'render', payload: {
+      ...payload, settings: corrected, comparisonMode: 'processed', revision: 1,
+    } });
+    expect(Array.from(result.imageData.data.slice(0, 3))).toEqual([130, 130, 130]);
+    const repeated = await request<FilmBaseSample>({ type: 'sample-film-base', payload: {
+      ...payload, settings: corrected, sampleMode: 'white-balance', x: 0.5, y: 0.5,
+    } });
+    expect(neutralWhiteBalance(repeated)).toEqual(correction);
+  });
+
   it('samples a negative grey point after inversion and preserves source sampling for the film-base picker', async () => {
     await decode('negative', [180, 180, 180]);
     const payload = { documentId: 'negative', settings: createDefaultSettings({ residualBaseCorrection: false }), targetMaxDimension: 1024, x: 0.5, y: 0.5 };
