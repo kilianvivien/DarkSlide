@@ -74,6 +74,84 @@ export function rgb16ToRgba8(rgb: ArrayLike<number>, width: number, height: numb
   return rgba;
 }
 
+// Binary RAW transport; keep in sync with decode_raw_binary in src-tauri/src/lib.rs.
+const RAW_IPC_MAGIC = 'DSRIPC01';
+const RAW_IPC_VERSION = 1;
+const RAW_IPC_HEADER_BYTES = 32;
+// Refuse to allocate for anything larger than any real sensor produces.
+export const MAX_RAW_IPC_PIXELS = 400_000_000;
+
+const IS_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
+function toRawIpcBytes(payload: unknown): Uint8Array {
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+  if (ArrayBuffer.isView(payload)) return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+  if (Array.isArray(payload)) return Uint8Array.from(payload as number[]);
+  throw new Error('RAW decode returned an unexpected payload.');
+}
+
+/**
+ * Validates and unpacks a binary RAW payload. Every field is checked before
+ * any allocation so a truncated or corrupted payload fails cleanly.
+ */
+export function decodeRawIpcPayload(payload: unknown): RawDecodeResult {
+  const bytes = toRawIpcBytes(payload);
+  if (bytes.byteLength < RAW_IPC_HEADER_BYTES) {
+    throw new Error('RAW decode payload is truncated.');
+  }
+  const magic = String.fromCharCode(...bytes.subarray(0, 8));
+  if (magic !== RAW_IPC_MAGIC) {
+    throw new Error('RAW decode payload has an invalid header.');
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const version = view.getUint16(8, true);
+  if (version !== RAW_IPC_VERSION) {
+    throw new Error(`RAW decode payload version ${version} is not supported by this build.`);
+  }
+  const bitDepth = view.getUint16(10, true);
+  const width = view.getUint32(12, true);
+  const height = view.getUint32(16, true);
+  const orientation = view.getUint16(20, true);
+  const transfer = view.getUint8(22);
+  const colorSpace = view.getUint8(23);
+  const sampleCount = Number(view.getBigUint64(24, true));
+
+  if (bitDepth !== 16 || transfer !== 0 || colorSpace !== 0) {
+    throw new Error('RAW decode payload uses an unsupported sample format.');
+  }
+  if (width === 0 || height === 0 || width * height > MAX_RAW_IPC_PIXELS) {
+    throw new Error(`RAW decode payload has invalid dimensions ${width}x${height}.`);
+  }
+  if (sampleCount !== width * height * 3) {
+    throw new Error(`RAW decode payload has ${sampleCount} samples for a ${width}x${height} image.`);
+  }
+  if (bytes.byteLength !== RAW_IPC_HEADER_BYTES + sampleCount * 2) {
+    throw new Error('RAW decode payload length does not match its header.');
+  }
+
+  const dataOffset = bytes.byteOffset + RAW_IPC_HEADER_BYTES;
+  let data: Uint16Array;
+  if (IS_LITTLE_ENDIAN && dataOffset % 2 === 0) {
+    data = new Uint16Array(bytes.buffer, dataOffset, sampleCount);
+  } else {
+    data = new Uint16Array(sampleCount);
+    for (let index = 0; index < sampleCount; index += 1) {
+      data[index] = view.getUint16(RAW_IPC_HEADER_BYTES + index * 2, true);
+    }
+  }
+
+  return {
+    width,
+    height,
+    data,
+    color_space: 'sRGB',
+    bitDepth: 16,
+    transfer: 'srgb',
+    orientation: orientation === 0 ? null : orientation,
+  };
+}
+
 function normalizeRawHighDepthBuffer(rawResult: RawDecodeResult) {
   if (rawResult.width * rawResult.height > MAX_HIGH_DEPTH_RAW_PIXELS) {
     return undefined;
@@ -83,7 +161,10 @@ function normalizeRawHighDepthBuffer(rawResult: RawDecodeResult) {
   if (bitDepth !== 16) {
     return undefined;
   }
-  return Uint16Array.from(rawResult.data).buffer;
+  // Copy: the worker takes ownership of this buffer when it is transferred.
+  return rawResult.data instanceof Uint16Array
+    ? rawResult.data.slice().buffer
+    : Uint16Array.from(rawResult.data).buffer;
 }
 
 export function createWorkerDecodeRequestFromRaw(
@@ -127,7 +208,7 @@ export function createWorkerDecodeRequestFromRaw(
 
 export async function decodeDesktopRawForWorker(options: DesktopRawDecodeForWorkerOptions) {
   const { invoke } = await import('@tauri-apps/api/core');
-  const rawResult = await invoke<RawDecodeResult>('decode_raw', { path: options.path });
+  const rawResult = decodeRawIpcPayload(await invoke<ArrayBuffer>('decode_raw_binary', { path: options.path }));
 
   return {
     rawResult,

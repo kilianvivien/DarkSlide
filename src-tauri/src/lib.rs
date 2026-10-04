@@ -3,7 +3,7 @@ mod watcher;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex, OnceLock};
 
 use rawler::analyze::{analyze_metadata, AnalyzerData};
 use rawler::imgop::develop::{ProcessingStep, RawDevelop};
@@ -16,6 +16,26 @@ use tauri::RunEvent;
 use tauri_plugin_updater::UpdaterExt;
 
 const GITHUB_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
+
+// Binary RAW transport. JSON-encoding every 16-bit sample made a 24 MP RAW
+// cost ~72 million numbers to serialize and parse; this layout carries the
+// same samples as little-endian bytes. Keep in sync with src/utils/rawImport.ts.
+//
+//  0..8   magic "DSRIPC01"
+//  8..10  version (u16)
+// 10..12  bits per sample (u16, always 16)
+// 12..16  width (u32)
+// 16..20  height (u32)
+// 20..22  EXIF orientation (u16, 0 = none)
+// 22      transfer (u8, 0 = sRGB)
+// 23      colour space (u8, 0 = sRGB)
+// 24..32  sample count (u64, width * height * 3)
+// 32..    RGB samples (u16 little-endian)
+const RAW_IPC_MAGIC: &[u8; 8] = b"DSRIPC01";
+const RAW_IPC_VERSION: u16 = 1;
+const RAW_IPC_HEADER_BYTES: usize = 32;
+// Full-size RAW buffers are large; bound how many are developed at once.
+const RAW_DECODE_CONCURRENCY: usize = 2;
 
 #[derive(Serialize)]
 struct RawDecodeResult {
@@ -94,9 +114,124 @@ fn updater_endpoint(channel: &str) -> Result<String, String> {
     }
 }
 
+struct DecodedRaw {
+    width: u32,
+    height: u32,
+    data: Vec<u16>,
+    orientation: Option<u16>,
+}
+
+struct DecodeLimiter {
+    available: Mutex<usize>,
+    ready: Condvar,
+}
+
+struct DecodePermit<'a> {
+    limiter: &'a DecodeLimiter,
+}
+
+impl DecodeLimiter {
+    fn new(capacity: usize) -> Self {
+        Self {
+            available: Mutex::new(capacity.max(1)),
+            ready: Condvar::new(),
+        }
+    }
+
+    // Blocks the calling thread; only call from a blocking worker thread.
+    fn acquire(&self) -> Result<DecodePermit<'_>, String> {
+        let mut available = self.available.lock().map_err(|error| error.to_string())?;
+        while *available == 0 {
+            available = self.ready.wait(available).map_err(|error| error.to_string())?;
+        }
+        *available -= 1;
+        Ok(DecodePermit { limiter: self })
+    }
+}
+
+impl Drop for DecodePermit<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut available) = self.limiter.available.lock() {
+            *available += 1;
+            self.limiter.ready.notify_one();
+        }
+    }
+}
+
+fn raw_decode_limiter() -> &'static DecodeLimiter {
+    static LIMITER: OnceLock<DecodeLimiter> = OnceLock::new();
+    LIMITER.get_or_init(|| DecodeLimiter::new(RAW_DECODE_CONCURRENCY))
+}
+
+fn encode_raw_ipc_payload(decoded: &DecodedRaw) -> Result<Vec<u8>, String> {
+    let expected_samples = u64::from(decoded.width)
+        .checked_mul(u64::from(decoded.height))
+        .and_then(|value| value.checked_mul(3))
+        .ok_or_else(|| "RAW dimensions overflowed.".to_string())?;
+    if decoded.data.len() as u64 != expected_samples {
+        return Err(format!(
+            "RAW decode produced {} samples for a {}x{} image.",
+            decoded.data.len(),
+            decoded.width,
+            decoded.height,
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(RAW_IPC_HEADER_BYTES + decoded.data.len() * 2);
+    bytes.extend_from_slice(RAW_IPC_MAGIC);
+    bytes.extend_from_slice(&RAW_IPC_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&16_u16.to_le_bytes());
+    bytes.extend_from_slice(&decoded.width.to_le_bytes());
+    bytes.extend_from_slice(&decoded.height.to_le_bytes());
+    bytes.extend_from_slice(&decoded.orientation.unwrap_or(0).to_le_bytes());
+    bytes.push(0);
+    bytes.push(0);
+    bytes.extend_from_slice(&expected_samples.to_le_bytes());
+    debug_assert_eq!(bytes.len(), RAW_IPC_HEADER_BYTES);
+    for sample in &decoded.data {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    Ok(bytes)
+}
+
+async fn run_raw_decode<T: Send + 'static>(
+    path: String,
+    finish: impl FnOnce(DecodedRaw) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    // Developing a RAW takes seconds; keep it off the main (UI) thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = raw_decode_limiter().acquire()?;
+        finish(decode_raw_pixels(&path)?)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
-fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
-    let raw_image = rawler::decode_file(&path).map_err(|error| error.to_string())?;
+async fn decode_raw_binary(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = run_raw_decode(path, |decoded| encode_raw_ipc_payload(&decoded)).await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+// JSON variant kept for compatibility; the app uses decode_raw_binary.
+#[tauri::command]
+async fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
+    run_raw_decode(path, |decoded| {
+        Ok(RawDecodeResult {
+            width: decoded.width,
+            height: decoded.height,
+            data: decoded.data,
+            color_space: "sRGB".to_string(),
+            bit_depth: 16,
+            transfer: "srgb".to_string(),
+            orientation: decoded.orientation,
+        })
+    })
+    .await
+}
+
+fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
+    let raw_image = rawler::decode_file(path).map_err(|error| error.to_string())?;
     let developed = RawDevelop {
         // Camera white balance is tuned for the photographed scene, not for an
         // orange film negative. Applying it here makes DarkSlide's own negative
@@ -119,20 +254,17 @@ fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
         .map_err(|error| error.to_string())?;
     let rgb = developed.to_rgb16();
 
-    let orientation = analyze_metadata(&path)
+    let orientation = analyze_metadata(path)
         .ok()
         .and_then(|analysis| match analysis.data {
             Some(AnalyzerData::Metadata(metadata)) => metadata.raw_metadata.exif.orientation,
             _ => None,
         });
 
-    Ok(RawDecodeResult {
+    Ok(DecodedRaw {
         width: rgb.width(),
         height: rgb.height(),
         data: rgb.into_raw(),
-        color_space: "sRGB".to_string(),
-        bit_depth: 16,
-        transfer: "srgb".to_string(),
         orientation,
     })
 }
@@ -544,6 +676,7 @@ pub fn run() {
         .manage(PendingOpenedFiles::default())
         .invoke_handler(tauri::generate_handler![
             decode_raw,
+            decode_raw_binary,
             save_blob_to_directory,
             open_saved_file_in_editor,
             read_file_by_path,
@@ -769,8 +902,67 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
 #[cfg(test)]
 mod tests {
     use super::{
-        candidate_filename, next_available_file_path, save_blob_to_directory_inner,
+        candidate_filename, encode_raw_ipc_payload, next_available_file_path,
+        save_blob_to_directory_inner, DecodeLimiter, DecodedRaw, RAW_IPC_HEADER_BYTES,
     };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn encodes_raw_pixels_with_a_versioned_little_endian_header() {
+        let decoded = DecodedRaw {
+            width: 2,
+            height: 1,
+            data: vec![0, 1, 0xABCD, 65535, 256, 2],
+            orientation: Some(6),
+        };
+        let bytes = encode_raw_ipc_payload(&decoded).expect("payload");
+
+        assert_eq!(&bytes[0..8], b"DSRIPC01");
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 1);
+        assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 16);
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes([bytes[20], bytes[21]]), 6);
+        assert_eq!(u64::from_le_bytes(bytes[24..32].try_into().unwrap()), 6);
+        assert_eq!(bytes.len(), RAW_IPC_HEADER_BYTES + 12);
+        let samples: Vec<u16> = bytes[RAW_IPC_HEADER_BYTES..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        assert_eq!(samples, decoded.data);
+    }
+
+    #[test]
+    fn rejects_raw_payloads_whose_sample_count_does_not_match() {
+        let decoded = DecodedRaw { width: 2, height: 2, data: vec![0; 5], orientation: None };
+        assert!(encode_raw_ipc_payload(&decoded).is_err());
+    }
+
+    #[test]
+    fn bounds_concurrent_raw_decodes() {
+        let limiter = Arc::new(DecodeLimiter::new(2));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let workers: Vec<_> = (0..6).map(|_| {
+            let limiter = Arc::clone(&limiter);
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            thread::spawn(move || {
+                let _permit = limiter.acquire().expect("permit");
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(20));
+                active.fetch_sub(1, Ordering::SeqCst);
+            })
+        }).collect();
+        for worker in workers {
+            worker.join().expect("worker");
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};

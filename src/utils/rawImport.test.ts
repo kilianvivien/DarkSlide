@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_BASE_CONFIDENCE } from '../constants';
 import { processImageData } from './imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { rawIpcPayload } from '../test/rawIpcPayload';
 
 // Build an RGB Uint8Array by evaluating a per-pixel function. Pixel coordinates
 // are passed so fixtures can paint edge bands, rebate strips, etc.
@@ -539,5 +540,68 @@ describe('estimateFilmBase (confidence-scored)', () => {
     // than trusting the textured border.
     expect(estimate!.source).toBe('low-confidence');
     expect(estimate!.confidence).toBe(0);
+  });
+});
+
+describe('decodeRawIpcPayload', () => {
+  const sample = { width: 2, height: 1, data: [0, 1, 0xabcd, 65535, 256, 2], bitDepth: 16, orientation: 6 };
+
+  it('unpacks the binary RAW payload without changing any sample', () => {
+    const result = decodeRawIpcPayload(rawIpcPayload(sample));
+    expect(result.width).toBe(2);
+    expect(result.height).toBe(1);
+    expect(result.bitDepth).toBe(16);
+    expect(result.transfer).toBe('srgb');
+    expect(result.color_space).toBe('sRGB');
+    expect(result.orientation).toBe(6);
+    expect(Array.from(result.data)).toEqual(sample.data);
+  });
+
+  it('accepts typed-array views at odd offsets', () => {
+    const payload = new Uint8Array(rawIpcPayload(sample));
+    const padded = new Uint8Array(payload.length + 1);
+    padded.set(payload, 1);
+    const result = decodeRawIpcPayload(padded.subarray(1));
+    expect(Array.from(result.data)).toEqual(sample.data);
+  });
+
+  it('reports a missing orientation as null', () => {
+    expect(decodeRawIpcPayload(rawIpcPayload({ ...sample, orientation: null })).orientation).toBeNull();
+  });
+
+  it('rejects truncated, corrupted, and inconsistent payloads', () => {
+    const valid = new Uint8Array(rawIpcPayload(sample));
+
+    expect(() => decodeRawIpcPayload(valid.subarray(0, 20))).toThrow(/truncated/);
+    expect(() => decodeRawIpcPayload(valid.subarray(0, valid.length - 2))).toThrow(/length/);
+
+    const badMagic = valid.slice();
+    badMagic[0] = 0;
+    expect(() => decodeRawIpcPayload(badMagic)).toThrow(/invalid header/);
+
+    const badVersion = valid.slice();
+    new DataView(badVersion.buffer).setUint16(8, 99, true);
+    expect(() => decodeRawIpcPayload(badVersion)).toThrow(/version 99/);
+
+    const badCount = valid.slice();
+    new DataView(badCount.buffer).setBigUint64(24, 5n, true);
+    expect(() => decodeRawIpcPayload(badCount)).toThrow(/5 samples/);
+
+    const huge = valid.slice();
+    new DataView(huge.buffer).setUint32(12, 100_000, true);
+    new DataView(huge.buffer).setUint32(16, 100_000, true);
+    expect(() => decodeRawIpcPayload(huge)).toThrow(/invalid dimensions/);
+
+    expect(() => decodeRawIpcPayload({ width: 1 })).toThrow(/unexpected payload/);
+  });
+
+  it('produces the same worker request as the decoded samples', () => {
+    const result = decodeRawIpcPayload(rawIpcPayload({ ...sample, data: [10 * 257, 20 * 257, 30 * 257, 40 * 257, 50 * 257, 60 * 257] }));
+    const request = createWorkerDecodeRequestFromRaw('doc', 'scan.nef', 1, result);
+    expect(Array.from(new Uint8Array(request.buffer))).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
+    expect(Array.from(new Uint16Array(request.highDepthRawBuffer!))).toEqual([2570, 5140, 7710, 10280, 12850, 15420]);
+    expect(request.mirrorHorizontal).toBe(false);
+    // The worker owns the high-depth copy; the decoded samples stay readable.
+    expect(request.highDepthRawBuffer).not.toBe((result.data as Uint16Array).buffer);
   });
 });

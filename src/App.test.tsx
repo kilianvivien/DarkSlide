@@ -574,6 +574,7 @@ vi.mock('./utils/exportNotifications', () => ({
 }));
 
 import App from './App';
+import { rawIpcPayload } from './test/rawIpcPayload';
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
@@ -977,14 +978,14 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/scan.dng',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 2,
       height: 1,
       data: [10 * 257, 20 * 257, 30 * 257, 40 * 257, 50 * 257, 60 * 257],
       color_space: 'sRGB',
       bitDepth: 16,
       transfer: 'srgb',
-    });
+    }));
     workerState.decode.mockResolvedValue(createDecodedImage(2, 1));
     workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
       createRenderResult(payload.documentId, payload.revision, 2, 1)
@@ -1005,7 +1006,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(coreState.invoke).toHaveBeenCalledWith('decode_raw', { path: '/Users/tester/Desktop/scan.dng' });
+    expect(coreState.invoke).toHaveBeenCalledWith('decode_raw_binary', { path: '/Users/tester/Desktop/scan.dng' });
     expect(workerState.decode).toHaveBeenCalledWith(expect.objectContaining({
       fileName: 'scan.dng',
       mime: 'image/x-raw-rgba',
@@ -1153,13 +1154,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/scan.dng',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [200, 180, 150][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 200, g: 180, b: 150 },
@@ -1243,13 +1244,13 @@ describe('App import and preview pipeline', () => {
         path: '/Users/tester/Desktop/scan.nef',
         size: 12_345_678,
       });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 89, g: 105, b: 55 },
@@ -1293,13 +1294,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/startup.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 32,
       height: 32,
       data: Array.from({ length: 32 * 32 * 3 }, (_, index) => [76, 73, 68][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
@@ -1348,13 +1349,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/dim.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [76, 73, 68][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(32, 32),
       estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
@@ -1398,13 +1399,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/clean.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [160, 151, 134][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 160, g: 151, b: 134 },
@@ -1452,13 +1453,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/gold.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 89, g: 105, b: 55 },
@@ -1525,13 +1526,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/scan.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [135, 163, 107][index % 3]),
       color_space: 'sRGB',
       orientation: 1,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 135, g: 163, b: 107 },
@@ -1619,13 +1620,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/reset-raw.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [76, 73, 68][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
@@ -1740,13 +1741,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/auto-raw.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [76, 73, 68][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 76, g: 73, b: 68 },
@@ -1851,13 +1852,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/auto-color-raw.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [135, 163, 107][index % 3]),
       color_space: 'sRGB',
       orientation: 1,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 135, g: 163, b: 107 },
@@ -1915,13 +1916,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/acros-frame.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [32, 51, 39][index % 3]),
       color_space: 'sRGB',
       orientation: 1,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 32, g: 51, b: 39 },
@@ -2754,13 +2755,13 @@ describe('App import and preview pipeline', () => {
       path: '/Users/tester/Desktop/sampled-raw.nef',
       size: 12_345_678,
     });
-    coreState.invoke.mockResolvedValue({
+    coreState.invoke.mockResolvedValue(rawIpcPayload({
       width: 8,
       height: 8,
       data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
       color_space: 'sRGB',
       orientation: 6,
-    });
+    }));
     workerState.decode.mockResolvedValue({
       ...createDecodedImage(8, 8),
       estimatedFilmBaseSample: { r: 89, g: 105, b: 55 },
@@ -3958,13 +3959,12 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
     coreState.invoke.mockImplementation(async (command: string) => {
       if (command === 'drain_opened_files') return [];
-      return {
+      return rawIpcPayload({
         width: 8,
         height: 8,
         data: Array.from({ length: 8 * 8 * 3 }, (_, index) => [89, 105, 55][index % 3]),
-        color_space: 'sRGB',
         orientation: 1,
-      };
+      });
     });
     fileBridgeState.openImageFileByPath.mockResolvedValue({
       file: createFile('dropped.nef', 'application/octet-stream'),
