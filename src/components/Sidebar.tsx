@@ -425,7 +425,7 @@ export const Sidebar = memo(function Sidebar({
         <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
           <BarChart3 size={12} /> Histogram
         </h2>
-        <Histogram data={histogramData} />
+        <Histogram data={histogramData} variant={isColor && !settings.blackAndWhite.enabled ? 'color' : 'neutral'} />
       </div>
 
       <div className="flex px-6 pt-4 justify-between shrink-0">
