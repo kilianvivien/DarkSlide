@@ -1,6 +1,9 @@
 import type { AutoAnalyzeResult, ColorProfileId, HistogramData } from '../types';
 import { decodeProfileChannel, encodeProfileChannel } from './colorProfiles';
 import { clamp } from './math';
+import { neutralWhiteBalance } from './whiteBalance';
+
+export { neutralWhiteBalance };
 
 const WB_MARGIN_RATIO = 0.04;
 const WB_MARGIN_MIN = 8;
@@ -228,20 +231,8 @@ function sampleColorBalance(
   const meanG = weightedG / weightSum;
   const meanB = weightedB / weightSum;
   return {
-    ...neutralWhiteBalance({ r: meanR, g: meanG, b: meanB }, labTemperatureBias),
+    ...neutralWhiteBalance({ r: meanR, g: meanG, b: meanB }, labTemperatureBias, profile),
     sampleCount,
-  };
-}
-
-export function neutralWhiteBalance(sample: { r: number; g: number; b: number }, labTemperatureBias = 0) {
-  // Temperature moves red/blue equally in opposite directions; tint changes
-  // green only. These units match the manual sliders in every render backend.
-  // Weighted sums can put an exact half-step infinitesimally below its value.
-  // Keep rounding deterministic between a uniform frame and a picked patch.
-  const rounded = (value: number) => clamp(Math.round(value + 1e-9), -100, 100) || 0;
-  return {
-    temperature: rounded((sample.b - sample.r) / 2 - labTemperatureBias),
-    tint: rounded((sample.r + sample.b) / 2 - sample.g),
   };
 }
 

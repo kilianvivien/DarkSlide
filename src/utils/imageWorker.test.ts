@@ -120,7 +120,7 @@ describe('worker conversion analysis consistency', () => {
     };
     const auto = await request<AutoAnalyzeResult>({ type: 'auto-analyze', payload });
     const picked = await request<FilmBaseSample>({ type: 'sample-film-base', payload: { ...payload, sampleMode: 'white-balance', x: 0.5, y: 0.5 } });
-    expect({ temperature: auto.temperature, tint: auto.tint }).toEqual(neutralWhiteBalance(picked, 8));
+    expect({ temperature: auto.temperature, tint: auto.tint }).toEqual(neutralWhiteBalance(picked, 8, outputProfileId));
     const corrected = { ...settings, temperature: auto.temperature!, tint: auto.tint! };
     const repeated = await request<AutoAnalyzeResult>({ type: 'auto-analyze', payload: { ...payload, settings: corrected } });
     expect(repeated.temperature).toBe(auto.temperature);
@@ -149,12 +149,12 @@ describe('worker conversion analysis consistency', () => {
     } });
     expect(picked.r).toBeCloseTo(300);
     const correction = neutralWhiteBalance(picked);
-    expect(correction).toEqual({ temperature: -40, tint: 40 });
+    expect(correction).toEqual({ temperature: -20, tint: 20 });
     const corrected = { ...settings, ...correction };
     const result = await request<RenderResult>({ type: 'render', payload: {
       ...payload, settings: corrected, comparisonMode: 'processed', revision: 1,
     } });
-    expect(Array.from(result.imageData.data.slice(0, 3))).toEqual([130, 130, 130]);
+    expect(Array.from(result.imageData.data.slice(0, 3))).toEqual([124, 124, 124]);
     const repeated = await request<FilmBaseSample>({ type: 'sample-film-base', payload: {
       ...payload, settings: corrected, sampleMode: 'white-balance', x: 0.5, y: 0.5,
     } });
