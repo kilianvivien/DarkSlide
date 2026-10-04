@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CubeLut } from '../types';
 import {
@@ -12,6 +10,11 @@ import {
   serializeCubeLut,
   serializeCubeLutForJson,
 } from './cubeLut';
+import {
+  buildSyntheticNegativeLutText,
+  SYNTHETIC_NEGATIVE_LUT_SIZE,
+  SYNTHETIC_NEGATIVE_LUT_TITLE,
+} from '../test/fixtures/luts/syntheticNegativeLut';
 
 function buildIdentityLut(size: number): CubeLut {
   const data = new Float32Array(size ** 3 * 3);
@@ -207,14 +210,14 @@ describe('isValidCubeLut', () => {
   });
 });
 
-describe('Resources/PhoenixII.cube', () => {
-  const text = readFileSync(resolve(__dirname, '../../Resources/PhoenixII.cube'), 'utf-8');
+describe('negative→positive .cube fixture', () => {
+  const text = buildSyntheticNegativeLutText();
   const lut = parseCubeLut(text);
 
-  it('parses the real-world file', () => {
-    expect(lut.size).toBe(35);
-    expect(lut.title).toBe('PhoenixII');
-    expect(lut.data).toHaveLength(35 ** 3 * 3);
+  it('parses a full-size inverting table', () => {
+    expect(lut.size).toBe(SYNTHETIC_NEGATIVE_LUT_SIZE);
+    expect(lut.title).toBe(SYNTHETIC_NEGATIVE_LUT_TITLE);
+    expect(lut.data).toHaveLength(SYNTHETIC_NEGATIVE_LUT_SIZE ** 3 * 3);
   });
 
   it('is recognised as an inverting (negative→positive) LUT', () => {

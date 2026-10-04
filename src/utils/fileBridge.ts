@@ -133,6 +133,48 @@ async function openDesktopFile(path: string): Promise<NativeOpenFileResult> {
   };
 }
 
+type DesktopFileSystem = Pick<typeof import('@tauri-apps/plugin-fs'), 'readFile' | 'stat'>;
+
+/**
+ * A file reference whose bytes are read only when `arrayBuffer()` is called.
+ * Multi-file and folder opens return these so a roll of large scans is not
+ * held in memory all at once before the first one is processed.
+ */
+async function openDesktopFileReference(path: string, fileSystem: DesktopFileSystem): Promise<NativeOpenFileResult> {
+  const fileName = getFileName(path);
+  const extension = getFileExtension(fileName);
+  let size = 0;
+  try {
+    const metadata = await fileSystem.stat(path);
+    size = typeof metadata?.size === 'number' ? metadata.size : 0;
+  } catch {
+    // The size is informational; reading the file later reports real errors.
+  }
+
+  if (isRawExtension(extension)) {
+    // RAW files are decoded natively from their path.
+    return {
+      file: new File([], fileName, { type: 'application/octet-stream' }),
+      path,
+      size,
+    };
+  }
+
+  const file = new File([], fileName, { type: getMimeTypeForFile(fileName) });
+  Object.defineProperties(file, {
+    size: { configurable: true, value: size },
+    arrayBuffer: {
+      configurable: true,
+      value: async () => {
+        const bytes = await fileSystem.readFile(path);
+        return bytes.slice().buffer;
+      },
+    },
+  });
+
+  return { file, path, size };
+}
+
 export async function openImageFile(): Promise<NativeOpenFileResult | null> {
   if (!isDesktopShell()) {
     return null;
@@ -183,7 +225,8 @@ export async function openMultipleImageFiles(): Promise<NativeOpenFileResult[]> 
     return [];
   }
 
-  return Promise.all(selected.map((path) => openDesktopFile(path)));
+  const fileSystem = await import('@tauri-apps/plugin-fs');
+  return Promise.all(selected.map((path) => openDesktopFileReference(path, fileSystem)));
 }
 
 export async function openImageFolder(): Promise<NativeOpenFileResult[]> {
@@ -225,26 +268,7 @@ export async function openImageFolder(): Promise<NativeOpenFileResult[]> {
   };
 
   const filePaths = (await collectPaths(selected)).sort((left, right) => left.localeCompare(right));
-  return Promise.all(filePaths.map(async (path) => {
-    const fileName = getFileName(path);
-    const extension = getFileExtension(fileName);
-
-    if (isRawExtension(extension)) {
-      const metadata = await stat(path);
-      return {
-        file: new File([], fileName, { type: 'application/octet-stream' }),
-        path,
-        size: typeof metadata.size === 'number' ? metadata.size : 0,
-      } satisfies NativeOpenFileResult;
-    }
-
-    const bytes = await readFile(path);
-    return {
-      file: new File([bytes], fileName, { type: getMimeTypeForFile(fileName) }),
-      path,
-      size: bytes.byteLength,
-    } satisfies NativeOpenFileResult;
-  }));
+  return Promise.all(filePaths.map((path) => openDesktopFileReference(path, { readFile, stat })));
 }
 
 export async function openImageFileByPath(path: string): Promise<NativeOpenFileResult | null> {
@@ -629,6 +653,23 @@ export async function confirmSyncSettings(sourceName: string, frameCount: number
       kind: 'info',
       okLabel: 'Apply',
       cancelLabel: 'Cancel',
+    });
+  }
+
+  return window.confirm(message);
+}
+
+export async function confirmIncludeManualCrops(rollName: string, manualCount: number): Promise<boolean> {
+  const frames = manualCount === 1 ? '1 frame' : `${manualCount} frames`;
+  const message = `${frames} in ${rollName} ${manualCount === 1 ? 'has' : 'have'} a manually adjusted crop. Replace ${manualCount === 1 ? 'it' : 'them'} with the stabilized auto crop too?`;
+
+  if (isDesktopShell()) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return ask(message, {
+      title: 'Stabilize Roll Crops',
+      kind: 'info',
+      okLabel: 'Include',
+      cancelLabel: 'Keep Manual Crops',
     });
   }
 

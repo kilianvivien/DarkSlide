@@ -426,3 +426,110 @@ describe('runBatch auto-analysis', () => {
   });
 
 });
+
+describe('runBatch auto-crop and file entries', () => {
+  beforeEach(() => {
+    fileBridgeState.saveExportBlob.mockClear();
+    fileBridgeState.isDesktopShell.mockReturnValue(false);
+  });
+
+  it('maps detected frames through the shared rotation without applying the detected tilt', async () => {
+    const sharedSettings = createDefaultSettings({ rotation: 90, levelAngle: 0 });
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    const exportCalls: Array<{ settings: typeof sharedSettings }> = [];
+    const workerClient = {
+      detectFrame: vi.fn(async () => ({ left: 0.1, top: 0.2, right: 0.8, bottom: 0.8, angle: -1.5, confidence: 6 })),
+      computeFlare: vi.fn(async () => null),
+      export: vi.fn(async (payload: { settings: typeof sharedSettings }) => {
+        exportCalls.push(payload);
+        return { blob: new Blob(['ok'], { type: 'image/jpeg' }), filename: 'frame.jpg' };
+      }),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+    } as const;
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      [{
+        id: 'doc-1',
+        kind: 'open-tab',
+        documentId: 'doc-1',
+        sourceMetadata: createSourceMetadata('doc-1'),
+        filename: 'doc-1.tiff',
+        size: 1,
+        status: 'pending',
+      }],
+      sharedSettings,
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoMode: 'off' },
+    ));
+
+    const settings = exportCalls[0]?.settings;
+    expect(settings?.levelAngle).toBe(0);
+    // A clockwise quarter turn maps (x, y, w, h) to (1 - y - h, x, h, w).
+    expect(settings?.crop.x).toBeCloseTo(0.2, 6);
+    expect(settings?.crop.y).toBeCloseTo(0.1, 6);
+    expect(settings?.crop.width).toBeCloseTo(0.6, 6);
+    expect(settings?.crop.height).toBeCloseTo(0.7, 6);
+  });
+
+  it('reads file entries lazily and passes their recorded size to the decoder', async () => {
+    const sharedSettings = createDefaultSettings();
+    const profile = FILM_PROFILES.find((candidate) => candidate.id === 'generic-color') ?? FILM_PROFILES[0];
+    const order: string[] = [];
+    const makeLazyFile = (name: string) => {
+      const file = new File([], name, { type: 'image/tiff' });
+      Object.defineProperty(file, 'arrayBuffer', {
+        value: async () => {
+          order.push(`read:${name}`);
+          return new Uint8Array([1, 2, 3, 4]).buffer;
+        },
+      });
+      return file;
+    };
+    const workerClient = {
+      decode: vi.fn(async (payload: { fileName: string; size: number }) => {
+        order.push(`decode:${payload.fileName}`);
+        return { metadata: createSourceMetadata(payload.fileName), estimatedFlare: null };
+      }),
+      detectFrame: vi.fn(async () => null),
+      computeFlare: vi.fn(async () => null),
+      export: vi.fn(async () => {
+        order.push('export');
+        return { blob: new Blob(['ok'], { type: 'image/jpeg' }), filename: 'frame.jpg' };
+      }),
+      evictPreviews: vi.fn(async () => ({ evicted: true })),
+      disposeDocument: vi.fn(async () => undefined),
+    } as const;
+
+    await collectEvents(runBatch(
+      workerClient as never,
+      ['a.tiff', 'b.tiff'].map((name) => ({
+        id: name,
+        kind: 'file' as const,
+        file: makeLazyFile(name),
+        filename: name,
+        size: 123_456,
+        status: 'pending' as const,
+      })),
+      sharedSettings,
+      profile,
+      null,
+      DEFAULT_COLOR_MANAGEMENT,
+      null,
+      DEFAULT_EXPORT_OPTIONS,
+      null,
+      { cancelled: false },
+      { autoMode: 'off' },
+    ));
+
+    expect(workerClient.decode).toHaveBeenCalledWith(expect.objectContaining({ size: 123_456 }));
+    // The second file is not read until the first one has been exported.
+    expect(order.indexOf('read:b.tiff')).toBeGreaterThan(order.indexOf('export'));
+  });
+});

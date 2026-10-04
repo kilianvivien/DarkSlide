@@ -128,6 +128,8 @@ interface SidebarProps {
   cropImageWidth: number;
   cropImageHeight: number;
   onLevelInteractionChange?: (isInteracting: boolean) => void;
+  straightenActive?: boolean;
+  onStraightenActiveChange?: (active: boolean) => void;
   onSettingsChange: (settings: Partial<ConversionSettings>) => void;
   onExportOptionsChange: (options: Partial<ExportOptions>) => void;
   onColorManagementChange: (options: Partial<ColorManagementSettings>) => void;
@@ -185,6 +187,8 @@ export const Sidebar = memo(function Sidebar({
   cropImageWidth,
   cropImageHeight,
   onLevelInteractionChange,
+  straightenActive,
+  onStraightenActiveChange,
   onSettingsChange,
   onExportOptionsChange,
   onColorManagementChange,
@@ -425,7 +429,7 @@ export const Sidebar = memo(function Sidebar({
         <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
           <BarChart3 size={12} /> Histogram
         </h2>
-        <Histogram data={histogramData} />
+        <Histogram data={histogramData} variant={isColor && !settings.blackAndWhite.enabled ? 'color' : 'neutral'} />
       </div>
 
       <div className="flex px-6 pt-4 justify-between shrink-0">
@@ -572,10 +576,10 @@ export const Sidebar = memo(function Sidebar({
                     )}
                   </h2>
 
-                  <Slider label="Exposure" value={settings.exposure} min={-100} max={100} onChange={scalarSliderHandlers.exposure} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  <Slider label="Contrast" value={settings.contrast} min={-100} max={100} onChange={scalarSliderHandlers.contrast} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  <Slider label="Black Point" value={settings.blackPoint} min={0} max={80} onChange={scalarSliderHandlers.blackPoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  <Slider label="White Point" value={settings.whitePoint} min={180} max={255} onChange={scalarSliderHandlers.whitePoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="Exposure" fineStep={1} value={settings.exposure} min={-100} max={100} onChange={scalarSliderHandlers.exposure} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="Contrast" fineStep={1} value={settings.contrast} min={-100} max={100} onChange={scalarSliderHandlers.contrast} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="Black Point" fineStep={1} value={settings.blackPoint} min={0} max={80} onChange={scalarSliderHandlers.blackPoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="White Point" fineStep={1} value={settings.whitePoint} min={180} max={255} onChange={scalarSliderHandlers.whitePoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   <Slider
                     label="Highlight Protection"
                     value={settings.highlightProtection}
@@ -607,7 +611,7 @@ export const Sidebar = memo(function Sidebar({
                   />
 
                   {isColor && !settings.blackAndWhite.enabled && (
-                    <Slider label="Saturation" value={settings.saturation} min={0} max={200} onChange={scalarSliderHandlers.saturation} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Saturation" fineStep={1} value={settings.saturation} min={0} max={200} onChange={scalarSliderHandlers.saturation} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   )}
                 </section>
 
@@ -627,8 +631,8 @@ export const Sidebar = memo(function Sidebar({
                         </button>
                       )}
                     </h2>
-                    <Slider label="Temperature" value={settings.temperature} min={-100} max={100} onChange={scalarSliderHandlers.temperature} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                    <Slider label="Tint" value={settings.tint} min={-100} max={100} onChange={scalarSliderHandlers.tint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Temperature" fineStep={1} value={settings.temperature} min={-100} max={100} onChange={scalarSliderHandlers.temperature} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Tint" fineStep={1} value={settings.tint} min={-100} max={100} onChange={scalarSliderHandlers.tint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   </section>
                 )}
 
@@ -637,9 +641,9 @@ export const Sidebar = memo(function Sidebar({
                     <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                       <Settings2 size={12} /> Color Balance
                     </h2>
-                    <Slider label="Red Balance" value={settings.redBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.redBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                    <Slider label="Green Balance" value={settings.greenBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.greenBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                    <Slider label="Blue Balance" value={settings.blueBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.blueBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Red Balance" fineStep={0.01} value={settings.redBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.redBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Green Balance" fineStep={0.01} value={settings.greenBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.greenBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    <Slider label="Blue Balance" fineStep={0.01} value={settings.blueBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.blueBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   </section>
                 )}
 
@@ -777,6 +781,8 @@ export const Sidebar = memo(function Sidebar({
                   onRotate={handleCropRotate}
                   onLevelAngleChange={handleLevelAngleChange}
                   onLevelInteractionChange={onLevelInteractionChange}
+                  straightenActive={straightenActive}
+                  onStraightenActiveChange={onStraightenActiveChange}
                   onRedetectFrame={onRedetectFrame}
                   onDone={onCropDone}
                   onResetCrop={onResetCrop}

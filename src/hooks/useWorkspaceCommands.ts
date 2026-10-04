@@ -22,6 +22,7 @@ import { saveMaxResidentDocs, MaxResidentDocs } from '../utils/residentDocsStore
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 import { clamp } from '../utils/math';
 import { computeHighlightDensity, resolveDensityInversionParams } from '../utils/imagePipeline';
+import { getAutoFrameCrop } from '../utils/frameDetection';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
 import { buildProfileSettingsForDocument, createPresetRecipe } from '../utils/presetRecipe';
 import { neutralWhiteBalance } from '../utils/autoAnalysis';
@@ -1210,14 +1211,16 @@ export function useWorkspaceCommands({
         ...current,
         settings: {
           ...current.settings,
-          crop: {
-            x: detected.left,
-            y: detected.top,
-            width: detected.right - detected.left,
-            height: detected.bottom - detected.top,
-            aspectRatio: null,
-          },
-          levelAngle: detected.angle,
+          // Measured on the unrotated source: map into the displayed
+          // orientation. The detected tilt is not applied automatically, and
+          // a manual level angle is preserved.
+          crop: getAutoFrameCrop(
+            detected,
+            current.settings.rotation,
+            current.settings.levelAngle,
+            current.source.width,
+            current.source.height,
+          ),
         },
         cropSource: 'auto',
         dirty: true,

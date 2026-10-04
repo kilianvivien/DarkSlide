@@ -14,6 +14,29 @@ function createHistoryEntry(document: Pick<WorkspaceDocument, 'settings' | 'labS
   };
 }
 
+function appendHistoryState(tab: DocumentTab, nextState: DocumentHistoryEntry): DocumentTab {
+  const baseHistory = tab.historyStack.slice(0, tab.historyIndex + 1);
+  const lastEntry = baseHistory[baseHistory.length - 1];
+  if (historyEntryEqual(lastEntry, nextState)) {
+    return tab;
+  }
+
+  const nextHistory = [...baseHistory, structuredClone(nextState)].slice(-HISTORY_LIMIT);
+  return {
+    ...tab,
+    historyStack: nextHistory,
+    historyIndex: nextHistory.length - 1,
+  };
+}
+
+/**
+ * Records a tab's current document as an undo step. Used by actions that
+ * edit several tabs at once, where the active-tab history push cannot reach.
+ */
+export function appendDocumentHistory(tab: DocumentTab): DocumentTab {
+  return appendHistoryState(tab, createHistoryEntry(tab.document));
+}
+
 function createDocumentTab(document: WorkspaceDocument): DocumentTab {
   return {
     id: document.id,
@@ -93,18 +116,7 @@ export function useDocumentTabs() {
         return tab;
       }
 
-      const baseHistory = tab.historyStack.slice(0, tab.historyIndex + 1);
-      const lastEntry = baseHistory[baseHistory.length - 1];
-      if (historyEntryEqual(lastEntry, nextState)) {
-        return tab;
-      }
-
-      const nextHistory = [...baseHistory, structuredClone(nextState)].slice(-HISTORY_LIMIT);
-      return {
-        ...tab,
-        historyStack: nextHistory,
-        historyIndex: nextHistory.length - 1,
-      };
+      return appendHistoryState(tab, nextState);
     }));
   }, [activeTabId]);
 

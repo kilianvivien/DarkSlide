@@ -48,7 +48,7 @@ vi.mock('@tauri-apps/api/path', () => ({
   downloadDir: pathState.downloadDir,
 }));
 
-import { confirmDeletePreset, confirmReplacePresetLibrary, getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFile, openImageFolder, openInExternalEditor, openPresetBackupFile, openPresetFile, saveExportBlob, savePresetBackupFile, savePresetFile, saveToDirectory } from './fileBridge';
+import { confirmDeletePreset, confirmReplacePresetLibrary, getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFile, openImageFolder, openInExternalEditor, openMultipleImageFiles, openPresetBackupFile, openPresetFile, saveExportBlob, savePresetBackupFile, savePresetFile, saveToDirectory } from './fileBridge';
 
 describe('fileBridge', () => {
   beforeEach(() => {
@@ -148,6 +148,51 @@ describe('fileBridge', () => {
       '/Users/tester/Desktop/Scans/roll-a/frame-01.tiff',
       '/Users/tester/Desktop/Scans/roll-a/frame-02.jpg',
     ]);
+  });
+
+  it('opens multiple scans from one desktop dialog without reading them up front', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.open.mockResolvedValue([
+      '/Users/tester/Desktop/frame-01.tiff',
+      '/Users/tester/Desktop/frame-02.jpg',
+      '/Users/tester/Desktop/frame-03.nef',
+    ]);
+    fsState.stat.mockResolvedValue({ size: 4 });
+    fsState.readFile.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    const result = await openMultipleImageFiles();
+
+    expect(dialogState.open).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Open Scans',
+      multiple: true,
+    }));
+    expect(result.map((entry) => entry.file.name)).toEqual(['frame-01.tiff', 'frame-02.jpg', 'frame-03.nef']);
+    expect(result.map((entry) => entry.size)).toEqual([4, 4, 4]);
+    expect(result[0].file.size).toBe(4);
+    expect(result[0].file.type).toBe('image/tiff');
+    expect(fsState.readFile).not.toHaveBeenCalled();
+
+    expect(Array.from(new Uint8Array(await result[0].file.arrayBuffer()))).toEqual([1, 2, 3, 4]);
+    expect(fsState.readFile).toHaveBeenCalledTimes(1);
+    expect(fsState.readFile).toHaveBeenCalledWith('/Users/tester/Desktop/frame-01.tiff');
+  });
+
+  it('returns lazy references when opening a folder', async () => {
+    coreState.isTauri.mockReturnValue(true);
+    dialogState.open.mockResolvedValue('/Users/tester/Desktop/Scans');
+    fsState.readDir.mockResolvedValue([
+      { name: 'frame-01.tiff', isDirectory: false },
+      { name: 'frame-02.tiff', isDirectory: false },
+    ]);
+    fsState.stat.mockResolvedValue({ size: 90_000_000 });
+    fsState.readFile.mockResolvedValue(new Uint8Array([9]));
+
+    const result = await openImageFolder();
+
+    expect(fsState.readFile).not.toHaveBeenCalled();
+    expect(result.map((entry) => entry.size)).toEqual([90_000_000, 90_000_000]);
+    await result[1].file.arrayBuffer();
+    expect(fsState.readFile).toHaveBeenCalledWith('/Users/tester/Desktop/Scans/frame-02.tiff');
   });
 
   it('downloads blobs in the browser build', async () => {

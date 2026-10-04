@@ -1,0 +1,21 @@
+{
+  "$schema": "../color-accuracy.schema.json",
+  "schemaVersion": 1,
+  "id": "synthetic-observed-example",
+  "description": "Synthetic fixture: approximate ColorChecker-style D50 Lab references paired with hand-entered sRGB observations. It exercises the report format only and is not a measurement of DarkSlide.",
+  "evidence": "synthetic",
+  "referenceWhite": "D50",
+  "referenceObserver": "2-degree",
+  "patches": [
+    { "id": "dark-skin", "name": "Dark skin", "category": "skin", "referenceLab": [37.5, 14.4, 14.9], "observedSrgb": [117, 82, 68] },
+    { "id": "light-skin", "name": "Light skin", "category": "skin", "referenceLab": [65.7, 18.1, 17.8], "observedSrgb": [198, 148, 128] },
+    { "id": "blue-sky", "name": "Blue sky", "category": "color", "referenceLab": [49.9, -4.9, -21.9], "observedSrgb": [96, 122, 158] },
+    { "id": "foliage", "name": "Foliage", "category": "color", "referenceLab": [43.1, -13.1, 21.9], "observedSrgb": [88, 108, 64] },
+    { "id": "red", "name": "Red", "category": "color", "referenceLab": [42.1, 53.4, 28.2], "observedSrgb": [178, 50, 58] },
+    { "id": "green", "name": "Green", "category": "color", "referenceLab": [55.3, -38.3, 31.4], "observedSrgb": [72, 150, 74] },
+    { "id": "blue", "name": "Blue", "category": "color", "referenceLab": [28.8, 14.2, -50.3], "observedSrgb": [52, 62, 148] },
+    { "id": "white", "name": "White 9.5", "category": "neutral", "referenceLab": [96.5, -0.4, 1.2], "observedSrgb": [242, 242, 238] },
+    { "id": "neutral-5", "name": "Neutral 5", "category": "neutral", "referenceLab": [51.0, 0.0, 0.0], "observedSrgb": [122, 121, 120] },
+    { "id": "black", "name": "Black 2", "category": "neutral", "referenceLab": [20.6, 0.1, -0.5], "observedSrgb": [50, 50, 52] }
+  ]
+}

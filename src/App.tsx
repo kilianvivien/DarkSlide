@@ -12,16 +12,18 @@ import { useDocumentTabs } from './hooks/useDocumentTabs';
 import { useRenderQueue } from './hooks/useRenderQueue';
 import { useWorkspaceCommands } from './hooks/useWorkspaceCommands';
 import { useCustomLightSources } from './hooks/useCustomLightSources';
-import { useViewportZoom } from './hooks/useViewportZoom';
+import { useViewportZoom, WheelZoomOptions } from './hooks/useViewportZoom';
 import { useRolls } from './hooks/useRolls';
 import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic } from './utils/diagnostics';
-import { confirmDeleteRoll, confirmFilmBaseReanalysis, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
+import { confirmDeleteRoll, confirmFilmBaseReanalysis, confirmIncludeManualCrops, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
 import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { cubeLutSignature } from './utils/cubeLut';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
+import { getAutoFrameCrop } from './utils/frameDetection';
+import { applyStabilizedFrameToTab, planRollFrames, RollFrameMeasurement } from './utils/rollCropStabilization';
 import { analyzeMonochromeSuggestion } from './utils/autoAnalysis';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
@@ -90,6 +92,9 @@ export default function App() {
   const [comparisonMode, setComparisonMode] = useState<'processed' | 'original'>('processed');
   const [isDragActive, setIsDragActive] = useState(false);
   const [isCropOverlayVisible, setIsCropOverlayVisible] = useState(false);
+  const [isStraightenActive, setIsStraightenActive] = useState(false);
+  // The straighten tool only makes sense while the crop overlay is shown.
+  const straightenActive = isStraightenActive && isCropOverlayVisible;
   const [isAdjustingLevel, setIsAdjustingLevel] = useState(false);
   const [isInteractingWithPreviewControls, setIsInteractingWithPreviewControls] = useState(false);
   const [isZooming, setIsZooming] = useState(false);
@@ -619,9 +624,9 @@ export default function App() {
     }, delayMs);
   }, [finishZoomInteraction]);
 
-  const handleZoomWheel = useCallback((deltaY: number, normX: number, normY: number) => {
+  const handleZoomWheel = useCallback((deltaY: number, normX: number, normY: number, options?: WheelZoomOptions) => {
     beginZoomInteraction();
-    handleZoomWheelRaw(deltaY, normX, normY);
+    handleZoomWheelRaw(deltaY, normX, normY, options);
     scheduleZoomInteractionFinish(200);
   }, [beginZoomInteraction, handleZoomWheelRaw, scheduleZoomInteractionFinish]);
 
@@ -1462,8 +1467,10 @@ export default function App() {
     render: async (next) => {
       await executePreviewRender(next);
     },
-    cancelActive: (next) => {
-      void workerClientRef.current?.cancelActivePreviewRender(next.documentId);
+    // Receives the render still running, which may belong to a different
+    // document than the request that superseded it.
+    cancelActive: (active) => {
+      void workerClientRef.current?.cancelActivePreviewRender(active.documentId);
     },
     onCoalesced: () => {
       workerClientRef.current?.noteCoalescedPreviewRequest();
@@ -1877,6 +1884,10 @@ export default function App() {
     resolveRollId,
     getRollById,
   });
+
+  const handleOverlayLevelAngleChange = useCallback((levelAngle: number) => {
+    handleSettingsChange({ levelAngle });
+  }, [handleSettingsChange]);
 
   // Browser DataTransfer does not reliably expose native paths in Tauri v2,
   // while RAW decoding requires one. Listen to the desktop webview's native
@@ -2580,6 +2591,60 @@ export default function App() {
     showTransientNotice(`Synced ${roll.name} from ${tab.document.source.name}.`, 'success');
   }, [getRollById, showTransientNotice, syncSettingsToRoll, tabsRef]);
 
+  // Explicit, undoable roll action: detect each frame, share robust gate sizes
+  // between frames scanned at the same size, and keep each frame's own centre.
+  const handleStabilizeRollCrops = useCallback(async (rollId: string) => {
+    const worker = workerClientRef.current;
+    const roll = getRollById(rollId);
+    const rollTabs = tabsRef.current.filter((tab) => tab.rollId === rollId);
+    if (!worker || !roll || rollTabs.length === 0) {
+      return;
+    }
+
+    const manualCount = rollTabs.filter((tab) => tab.document.cropSource === 'manual').length;
+    const includeManual = manualCount > 0
+      ? await confirmIncludeManualCrops(roll.name, manualCount)
+      : false;
+    const eligibleTabs = rollTabs.filter((tab) => includeManual || tab.document.cropSource !== 'manual');
+    if (eligibleTabs.length === 0) {
+      showTransientNotice('Every frame in this roll has a manual crop; nothing was changed.');
+      return;
+    }
+
+    const measurements: RollFrameMeasurement[] = [];
+    // Sequential: each detection may reload an evicted document in the worker.
+    for (const tab of eligibleTabs) {
+      const frame = await worker.detectFrame(tab.id).catch(() => null);
+      measurements.push({
+        id: tab.id,
+        frame,
+        sourceWidth: tab.document.source.width,
+        sourceHeight: tab.document.source.height,
+      });
+    }
+
+    const plan = planRollFrames(measurements);
+    let appliedCount = 0;
+    plan.frames.forEach((frame, tabId) => {
+      const latest = tabsRef.current.find((tab) => tab.id === tabId);
+      if (!latest || (!includeManual && latest.document.cropSource === 'manual')) {
+        return;
+      }
+      appliedCount += 1;
+      updateTabById(tabId, (tab) => applyStabilizedFrameToTab(tab, frame, includeManual));
+    });
+
+    const skippedManual = rollTabs.length - eligibleTabs.length;
+    const details = [
+      plan.undetectedIds.length ? `no frame found in ${plan.undetectedIds.length}` : null,
+      skippedManual ? `${skippedManual} manual crop${skippedManual === 1 ? '' : 's'} kept` : null,
+    ].filter(Boolean).join(', ');
+    showTransientNotice(
+      `Stabilized crops on ${appliedCount} of ${rollTabs.length} frame${rollTabs.length === 1 ? '' : 's'}${details ? ` (${details})` : ''}.`,
+      appliedCount > 0 ? 'success' : 'warning',
+    );
+  }, [getRollById, showTransientNotice, tabsRef, updateTabById]);
+
   const handleApplyRollFilmBase = useCallback(async (rollId: string) => {
     const sourceDocument = tabsRef.current.find((tab) => tab.rollId === rollId && tab.document.settings.filmBaseSample)?.document ?? null;
     const roll = getRollById(rollId);
@@ -2728,14 +2793,16 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
         ...currentTab.document,
         settings: {
           ...currentTab.document.settings,
-          crop: {
-            x: detected.left,
-            y: detected.top,
-            width: detected.right - detected.left,
-            height: detected.bottom - detected.top,
-            aspectRatio: null,
-          },
-          levelAngle: detected.angle,
+          // Measured on the unrotated source: map into the displayed
+          // orientation. The detected tilt is not applied automatically, and
+          // a manual level angle is preserved.
+          crop: getAutoFrameCrop(
+            detected,
+            currentTab.document.settings.rotation,
+            currentTab.document.settings.levelAngle,
+            currentTab.document.source.width,
+            currentTab.document.source.height,
+          ),
         },
         cropSource: 'auto',
         dirty: true,
@@ -3055,6 +3122,7 @@ onToggleScanningSession: toggleScanningWindow,
       onSelectTab={handleSelectTab}
       onReorderTabs={handleReorderTabs}
       onSyncRollSettings={handleSyncRollSettings}
+      onStabilizeRollCrops={handleStabilizeRollCrops}
       onApplyRollFilmBase={handleApplyRollFilmBase}
       onRemoveFromRoll={handleRemoveFromRoll}
       onOpenRollInfo={handleOpenRollInfo}
@@ -3070,6 +3138,9 @@ onToggleScanningSession: toggleScanningWindow,
       onInteractionStart={handleInteractionStart}
       onInteractionEnd={handleInteractionEnd}
       onLevelInteractionChange={setIsAdjustingLevel}
+      straightenActive={straightenActive}
+      onStraightenActiveChange={setIsStraightenActive}
+      onLevelAngleChange={handleOverlayLevelAngleChange}
       onToggleFilmBasePicker={handleFilmBasePickerToggle}
       onReanalyzeFilmBase={handleReanalyzeFilmBase}
       onExportClick={handleExportClick}
