@@ -3,7 +3,7 @@
 <div align="center">
   <p>Turn your film negatives into beautiful positives — right in your browser or as a desktop app.</p>
   <p><strong><a href="https://darkslide.vercel.app">Try the live demo →</a></strong> — no install required</p>
-  <p><a href="https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.3">Download DarkSlide 1.2.3 for macOS, Windows, or Linux</a></p>
+  <p><a href="https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.4">Download DarkSlide 1.2.4 for macOS, Windows, or Linux</a></p>
   <img src="./.github/assets/screenshot.png" alt="DarkSlide Screenshot" width="800" />
 </div>
 
@@ -11,7 +11,22 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v1.2.3
+## What's New in v1.2.4
+
+DarkSlide 1.2.4 brings in the best ideas from [tdurieux](https://github.com/tdurieux)'s fork, reworked to fit DarkSlide's existing editor and conversion pipeline.
+
+- **Smarter auto crop** — portrait scans, film rebates, sprocket holes, and square (126, 6×6) or medium-format gates are recognized, and crops now land in the right place on rotated and EXIF-rotated scans
+- **Stabilize a roll's crops** — one action on the roll card shares a robust crop size across frames scanned at the same size, keeps each frame's position, leaves manual crops alone unless you include them, and can be undone per frame
+- **Better crop and straighten tools** — edge handles, Shift to keep the ratio, arrow-key nudging, and drawing a line along a horizon or vertical edge to level the image
+- **Fine adjustment buttons** — −/+ steppers on key sliders for exact values, each click a single undo step
+- **A more informative histogram** — channel toggles, luminance percentiles, per-channel clipping warnings, and an optional logarithmic scale
+- **Zoom that follows the cursor** — wheel and pinch zoom start from the fitted view and keep the point under the cursor in place
+- **Faster RAW imports** — decoded RAW pixels move from the native decoder to the editor as compact binary data, decoded off the main thread; opening many scans for a batch no longer loads them all into memory first
+- **Color-accuracy tooling** — a CIEDE2000 evaluator for measured chart captures, so accuracy changes can be checked against real targets
+
+See the [full v1.2.4 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.4) for details.
+
+### Earlier in v1.2.3
 
 - **More reliable exports** — previews wait while exports and contact sheets finish, and delayed worker requests no longer interrupt a healthy export
 - **Presets that preserve your look** — saved presets retain film-stock calibration, color conversion, LUTs, light-source settings, and lab style; saving leaves your active image and unsaved edits intact
@@ -20,7 +35,7 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **More accurate white balance** — automatic analysis and the grey picker use the converted image and matching slider math, including lab-style temperature bias and over-range channel samples
 - **Edits protected during analysis** — stale auto-adjustment, film-base re-analysis, and picker results are discarded; sidecar restoration respects saved profiles and explicitly disabled light-source or lab-style selections
 
-See the [full v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.3) for details. This release also includes the export reliability fixes from the unreleased v1.2.2 version.
+See the [v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.3). That release also included the export reliability fixes from the unreleased v1.2.2 version.
 
 ### Earlier in v1.2.0
 
@@ -114,10 +129,12 @@ See the [full v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/re
 - **Auto-detect mode** — automatically marks likely defects across the image so you can review and remove them in one step *(experimental — results may vary depending on scan quality and film type)*
 
 ### Crop & Compose
-- **Non-destructive crop** with common film format ratios (3:2, 4:5, 1:1, 6x7, etc.)
-- **Zoom & pan** for checking fine details
+- **Non-destructive crop** with common film format ratios (3:2, 4:5, 1:1, 6x7, etc.), edge and corner handles, and ratio lock
+- **Auto crop** that finds the image gate inside rebates and sprocket holes, plus roll-wide crop stabilization
+- **Straighten** with a level slider or by drawing along a reference line
+- **Zoom & pan** anchored to the cursor for checking fine details
 - **Before/after comparison** to see your edits side by side
-- **Live histogram** with per-channel display
+- **Live histogram** with channel toggles, percentiles, and clipping warnings
 
 ### Desktop App
 - **RAW file support** — open DNG, CR3, NEF, ARW, RAF, and RW2 files directly (desktop only)
@@ -146,7 +163,7 @@ Pre-built macOS binaries are currently **not notarized**. macOS will block the a
 
 ### Install the desktop app
 
-Download an installer from the [DarkSlide v1.2.3 release](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.3) — no build step required:
+Download an installer from the [DarkSlide v1.2.4 release](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.4) — no build step required:
 
 - **macOS:** universal `.dmg` for Apple Silicon and Intel Macs
 - **Windows:** `.msi` or NSIS `.exe`
@@ -200,6 +217,10 @@ DarkSlide is built on top of some amazing open-source projects:
 | [Framer Motion](https://www.framer.com/motion/) | MIT | Animation library for React |
 | [UTIF.js](https://github.com/photopea/UTIF.js) | MIT | Fast TIFF decoder |
 | [rawler](https://github.com/dnglab/dnglab) | LGPL-2.1 | Pure-Rust RAW image decoder |
+
+Thanks to [tdurieux](https://github.com/tdurieux), whose DarkSlide fork contributed the ideas and much of the code behind 1.2.4's frame detection, crop and straighten tools, fine adjustment buttons, histogram analysis, cursor-anchored zoom, render cancellation, lazy imports, binary RAW transport, and color-accuracy evaluator.
+
+The 126-format test image in [`evaluation/online-samples`](./evaluation/online-samples/README.md) is derived from a Wikimedia Commons photograph by Bigbear213 and is licensed under CC BY-SA 4.0, separately from DarkSlide's MIT license.
 
 ## 📜 License
 
