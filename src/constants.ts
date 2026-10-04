@@ -181,6 +181,10 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
 export function createDefaultSettings(overrides: Partial<ConversionSettings> = {}): ConversionSettings {
   const resolvedDustRemoval = resolveDustRemovalSettings(overrides.dustRemoval);
   return {
+    toneEnabled: true,
+    toneRangeEnabled: true,
+    whiteBalanceEnabled: true,
+    colorControlsEnabled: true,
     exposure: 0,
     contrast: 10,
     saturation: 100,

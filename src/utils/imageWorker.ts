@@ -65,6 +65,7 @@ import {
   processFloatRaster,
   releaseScratchBuffers,
   resolveDensityInversionParams,
+  resolveEffectiveSettings,
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
@@ -1122,6 +1123,8 @@ function applyAnalysisInversionStage(
     flareStrength,
     lightSourceBias,
   );
+  // Respect a disabled colour group, as the render pipeline does.
+  const balance = resolveEffectiveSettings(options.settings);
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -1152,9 +1155,9 @@ function applyAnalysisInversionStage(
       [r, g, b] = [m[0] * r + m[1] * g + m[2] * b, m[3] * r + m[4] * g + m[5] * b, m[6] * r + m[7] * g + m[8] * b];
     }
     if (options.isColor) {
-      r *= options.settings.redBalance;
-      g *= options.settings.greenBalance;
-      b *= options.settings.blueBalance;
+      r *= balance.redBalance;
+      g *= balance.greenBalance;
+      b *= balance.blueBalance;
     }
 
     output[index] = preserveRange ? r * 255 : clamp(Math.round(r * 255), 0, 255);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { FilmBaseEstimate } from '../types';
 
 function createPixel(r: number, g: number, b: number) {
@@ -40,6 +40,108 @@ const neutralSettings = createDefaultSettings({
   redBalance: 1,
   greenBalance: 1,
   blueBalance: 1,
+});
+
+describe('adjustment group toggles', () => {
+  const adjusted = createDefaultSettings({
+    exposure: 45,
+    contrast: 30,
+    highlightProtection: 80,
+    shadowRecovery: 60,
+    midtoneContrast: 35,
+    blackPoint: 24,
+    whitePoint: 210,
+    temperature: 40,
+    tint: -30,
+    saturation: 145,
+    redBalance: 1.2,
+    greenBalance: 0.8,
+    blueBalance: 1.1,
+  });
+
+  it('renders disabled groups as neutral sliders without discarding the saved values', () => {
+    const disabled = {
+      ...adjusted,
+      toneEnabled: false,
+      toneRangeEnabled: false,
+      whiteBalanceEnabled: false,
+      colorControlsEnabled: false,
+    };
+
+    expect(resolveEffectiveSettings(disabled)).toMatchObject({
+      exposure: 0,
+      contrast: 0,
+      highlightProtection: 0,
+      shadowRecovery: 0,
+      midtoneContrast: 0,
+      blackPoint: 0,
+      whitePoint: 255,
+      temperature: 0,
+      tint: 0,
+      saturation: 100,
+      redBalance: 1,
+      greenBalance: 1,
+      blueBalance: 1,
+    });
+    expect(disabled).toMatchObject({ exposure: 45, blackPoint: 24, temperature: 40, saturation: 145 });
+  });
+
+  it('keeps the film stock calibration when the user adjustment is switched off', () => {
+    const effective = resolveEffectiveSettings(
+      { ...adjusted, toneEnabled: false, toneRangeEnabled: false },
+      { highlightProtectionBias: 0.25, blackPointBias: 0.1 } as never,
+    );
+    expect(effective.highlightProtection).toBeCloseTo(25, 6);
+    expect(effective.blackPoint).toBeCloseTo(10, 6);
+  });
+
+  it('never switches black-and-white conversion off', () => {
+    const mono = { ...adjusted, colorControlsEnabled: false, blackAndWhite: { ...adjusted.blackAndWhite, enabled: true } };
+    expect(resolveEffectiveSettings(mono).blackAndWhite.enabled).toBe(true);
+  });
+
+  it('treats missing switches as enabled for older saved settings', () => {
+    const legacy = createDefaultSettings({ exposure: 20, temperature: 15 });
+    delete legacy.toneEnabled;
+    delete legacy.whiteBalanceEnabled;
+    expect(resolveEffectiveSettings(legacy)).toMatchObject({ exposure: 20, temperature: 15 });
+  });
+
+  it('renders a disabled group identically to neutral sliders on the CPU and GPU paths', () => {
+    const neutralSliders = {
+      ...adjusted,
+      exposure: 0,
+      contrast: 0,
+      highlightProtection: 0,
+      shadowRecovery: 0,
+      midtoneContrast: 0,
+      blackPoint: 0,
+      whitePoint: 255,
+      temperature: 0,
+      tint: 0,
+      saturation: 100,
+      redBalance: 1,
+      greenBalance: 1,
+      blueBalance: 1,
+    };
+    const disabled = {
+      ...adjusted,
+      toneEnabled: false,
+      toneRangeEnabled: false,
+      whiteBalanceEnabled: false,
+      colorControlsEnabled: false,
+    };
+    const render = (settings: typeof adjusted) => {
+      const image = createGrid(4, [[40, 90, 140], [200, 120, 90], [30, 180, 210], [128, 128, 128]]);
+      processImageData(image, settings, true, 'processed');
+      return Array.from(image.data);
+    };
+
+    expect(render(disabled)).toEqual(render(neutralSliders));
+    expect(render(disabled)).not.toEqual(render(adjusted));
+    expect(buildProcessingUniforms(disabled, true, 'processed'))
+      .toEqual(buildProcessingUniforms(neutralSliders, true, 'processed'));
+  });
 });
 
 describe('processImageData', () => {

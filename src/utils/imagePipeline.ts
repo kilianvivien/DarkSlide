@@ -906,15 +906,45 @@ function applyBlackAndWhiteTone(gray: number, tone: number): [number, number, nu
   ];
 }
 
+/**
+ * Settings as the pipeline applies them. A disabled adjustment group renders
+ * as if its sliders were at neutral, without discarding the saved values, so
+ * groups can be compared on and off. The film stock's own mask calibration
+ * still applies to a disabled group: only the user's adjustment is removed.
+ * Black-and-white conversion is not part of any group.
+ */
 export function resolveEffectiveSettings(
   settings: ConversionSettings,
   maskTuning?: MaskTuning,
-) {
-  return maskTuning ? {
+): ConversionSettings {
+  const toneEnabled = settings.toneEnabled !== false;
+  const toneRangeEnabled = settings.toneRangeEnabled !== false;
+  const whiteBalanceEnabled = settings.whiteBalanceEnabled !== false;
+  const colorControlsEnabled = settings.colorControlsEnabled !== false;
+
+  const highlightProtection = toneEnabled ? settings.highlightProtection : 0;
+  const blackPoint = toneRangeEnabled ? settings.blackPoint : 0;
+
+  return {
     ...settings,
-    highlightProtection: clamp(settings.highlightProtection + maskTuning.highlightProtectionBias * 100, 0, 100),
-    blackPoint: clamp(settings.blackPoint + maskTuning.blackPointBias * 100, 0, 80),
-  } : settings;
+    exposure: toneEnabled ? settings.exposure : 0,
+    contrast: toneEnabled ? settings.contrast : 0,
+    highlightProtection: maskTuning
+      ? clamp(highlightProtection + maskTuning.highlightProtectionBias * 100, 0, 100)
+      : highlightProtection,
+    shadowRecovery: toneEnabled ? settings.shadowRecovery : 0,
+    midtoneContrast: toneEnabled ? settings.midtoneContrast : 0,
+    blackPoint: maskTuning
+      ? clamp(blackPoint + maskTuning.blackPointBias * 100, 0, 80)
+      : blackPoint,
+    whitePoint: toneRangeEnabled ? settings.whitePoint : 255,
+    temperature: whiteBalanceEnabled ? settings.temperature : 0,
+    tint: whiteBalanceEnabled ? settings.tint : 0,
+    saturation: colorControlsEnabled ? settings.saturation : 100,
+    redBalance: colorControlsEnabled ? settings.redBalance : 1,
+    greenBalance: colorControlsEnabled ? settings.greenBalance : 1,
+    blueBalance: colorControlsEnabled ? settings.blueBalance : 1,
+  };
 }
 
 export const FLOAT_CURVE_TABLE_SIZE = 4096;

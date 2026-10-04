@@ -223,6 +223,11 @@ export interface LightSourceProfile {
 }
 
 export interface ConversionSettings {
+  // Adjustment group switches. Missing means enabled (older documents).
+  toneEnabled?: boolean;
+  toneRangeEnabled?: boolean;
+  whiteBalanceEnabled?: boolean;
+  colorControlsEnabled?: boolean;
   // Explicit film calibration survives renaming/saving a profile. Missing
   // values retain the legacy stock-ID lookup and per-image automatic analysis.
   densityBalance?: DensityBalance | null;
