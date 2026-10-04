@@ -465,10 +465,10 @@ export function BatchModal({
               {/* Header */}
               <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-4">
                 <div>
-                  <h2 id={titleId} className="text-base font-semibold text-zinc-100">Batch Export</h2>
-                  <p className="mt-0.5 text-xs text-zinc-500">Process multiple scans sequentially with one shared export recipe. RAW files supported on desktop.</p>
+                  <h2 id={titleId} className="text-base font-semibold text-zinc-100">Convert Files &amp; Contact Sheets</h2>
+                  <p className="mt-0.5 text-xs text-zinc-500">Apply one shared recipe to scans without opening them, or lay out a contact sheet. To export open frames with their own edits, use the Export panel. RAW files supported on desktop.</p>
                 </div>
-                <button type="button" onClick={onClose} aria-label="Close batch export" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
+                <button type="button" onClick={onClose} aria-label="Close convert files" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
                   <X size={16} />
                 </button>
               </div>

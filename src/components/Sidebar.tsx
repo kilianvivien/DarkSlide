@@ -26,6 +26,9 @@ import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
 import { Slider } from './Slider';
 import { GroupSwitch } from './GroupSwitch';
+import { ExportFramesControl, FrameExportProgress } from './ExportFramesControl';
+
+const noop = () => undefined;
 
 // A switched-off group stays editable but reads as inactive.
 const GROUP_DISABLED_CLASS = 'opacity-45 transition-opacity hover:opacity-80';
@@ -156,6 +159,11 @@ interface SidebarProps {
   onSaveQuickExportPreset: () => void;
   onDeleteQuickExportPreset: (presetId: string) => void;
   onOpenBatchExport: () => void;
+  frameSelectionCount?: number;
+  frameCount?: number;
+  frameExportProgress?: FrameExportProgress | null;
+  onExportFrames?: (scope: 'selected' | 'all') => void;
+  onCancelFrameExport?: () => void;
   isExporting: boolean;
   contentScrollTop?: number;
   onContentScrollTopChange?: (scrollTop: number) => void;
@@ -231,6 +239,11 @@ export const Sidebar = memo(function Sidebar({
   dustBrushActive = false,
   onDustBrushActiveChange,
   onOpenBatchExport,
+  frameSelectionCount = 1,
+  frameCount = 1,
+  frameExportProgress = null,
+  onExportFrames = noop,
+  onCancelFrameExport = noop,
   contentScrollTop = 0,
   onContentScrollTopChange,
 }: SidebarProps) {
@@ -813,6 +826,16 @@ export const Sidebar = memo(function Sidebar({
                 exit={VERTICAL_PANE_EXIT}
                 className="space-y-6"
               >
+                <ExportFramesControl
+                  selectedCount={frameSelectionCount}
+                  totalCount={frameCount}
+                  isExporting={isExporting}
+                  progress={frameExportProgress}
+                  onExportCurrent={onExport}
+                  onExportFrames={onExportFrames}
+                  onCancel={onCancelFrameExport}
+                />
+
                 <section>
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                     <Zap size={12} /> Quick Export
@@ -864,14 +887,6 @@ export const Sidebar = memo(function Sidebar({
                   </div>
                 </section>
 
-                <button
-                  type="button"
-                  onClick={onOpenBatchExport}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-[11px] font-medium text-zinc-400 transition-all hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-200"
-                >
-                  <FolderOutput size={13} />
-                  Batch Export…
-                </button>
 
                 <section className="border-t border-zinc-800/70 pt-6">
                   <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
@@ -1005,25 +1020,16 @@ export const Sidebar = memo(function Sidebar({
                   </div>
                 </section>
 
-                <button
-                  onClick={onExport}
-                  disabled={isExporting}
-                  className="grid w-full grid-cols-[1rem_auto] items-center justify-center gap-2 rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50"
-                  aria-busy={isExporting}
-                >
-                  {isExporting ? (
-                    <>
-                      <Loader2 size={15} className="shrink-0 animate-spin" />
-                      <span className="whitespace-nowrap">Exporting...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Download size={15} className="shrink-0" />
-                      <span className="whitespace-nowrap">Export Image</span>
-                    </>
-                  )}
-                </button>
 
+                <button
+                  type="button"
+                  onClick={onOpenBatchExport}
+                  data-tip="Apply one shared recipe to files that aren't open, or build a contact sheet"
+                  className="w-full flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-[11px] font-medium text-zinc-400 transition-all hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-200"
+                >
+                  <FolderOutput size={13} />
+                  Convert Files &amp; Contact Sheets…
+                </button>
               </motion.div>
             )}
           </AnimatePresence>

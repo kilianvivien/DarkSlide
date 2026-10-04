@@ -882,6 +882,46 @@ describe('App import and preview pipeline', () => {
     expect(frameBRender.settings).toMatchObject({ temperature: 41, tint: -27 });
   });
 
+  it('exports selected frames with their own names and the shared output format', async () => {
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(300, 200))
+      .mockResolvedValueOnce(createDecodedImage(320, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.export.mockImplementation(async (payload: { options: { filenameBase: string; format: string } }) => ({
+      blob: new Blob(['x'], { type: payload.options.format }),
+      filename: `${payload.options.filenameBase}.jpg`,
+    }));
+    fileBridgeState.saveExportBlob.mockResolvedValue('saved');
+    const settle = async () => {
+      await flushMicrotasks();
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      await flushMicrotasks();
+    };
+
+    render(<App />);
+    await uploadFile(createFile('frame-a.tiff', 'image/tiff'));
+    await settle();
+    await uploadFile(createFile('frame-b.tiff', 'image/tiff'));
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Frame 1: scan-300x200.tiff' }), { shiftKey: true });
+    const bar = screen.getByRole('toolbar', { name: 'Selected frames' });
+    await act(async () => {
+      fireEvent.click(within(bar).getByRole('button', { name: /Export 2/ }));
+    });
+    await settle();
+
+    expect(workerState.export).toHaveBeenCalledTimes(2);
+    const exportedOptions = workerState.export.mock.calls.map(([payload]) => payload.options);
+    expect(exportedOptions.map((options) => options.filenameBase).sort()).toEqual(['frame-a', 'frame-b']);
+    expect(new Set(exportedOptions.map((options) => options.format)).size).toBe(1);
+    expect(fileBridgeState.saveExportBlob).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps single-image imports full-frame and does not auto-run frame detection', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(4032, 6048));
     workerState.detectFrame.mockResolvedValue({

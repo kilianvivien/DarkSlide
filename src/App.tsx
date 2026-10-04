@@ -28,6 +28,7 @@ import { applyStabilizedFrameToTab, planRollFrames, RollFrameMeasurement } from 
 import { captureThumbnail, FilmstripThumbnail, getThumbnailKey } from './utils/filmstripThumbnails';
 import { applySelectionClick, FilmstripSelection, reconcileSelection } from './utils/filmstripSelection';
 import { mergeSyncedSettings } from './utils/settingsSync';
+import { FrameExportProgress } from './components/ExportFramesControl';
 import { appendDocumentHistory } from './hooks/useDocumentTabs';
 import { analyzeMonochromeSuggestion } from './utils/autoAnalysis';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
@@ -2923,8 +2924,10 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     }));
   }, [updateTabById]);
 
-  // Exports one open frame with its own settings, profile and export options.
-  const renderDocumentExport = useCallback(async (documentId: string) => {
+  // Exports one open frame with its own settings and profile. `optionsOverride`
+  // applies shared output settings (format, size, colour) while the frame
+  // keeps its own file name.
+  const renderDocumentExport = useCallback(async (documentId: string, optionsOverride?: ExportOptions) => {
     const worker = workerClientRef.current;
     const tab = tabsRef.current.find((candidate) => candidate.id === documentId) ?? null;
     if (!worker || !tab) {
@@ -2941,8 +2944,10 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       profileId: profile.id,
       filmType: profile.filmType,
       inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
-      outputProfileId: tab.document.exportOptions.outputProfileId,
-      options: tab.document.exportOptions,
+      outputProfileId: (optionsOverride ?? tab.document.exportOptions).outputProfileId,
+      options: optionsOverride
+        ? { ...optionsOverride, filenameBase: tab.document.exportOptions.filenameBase }
+        : tab.document.exportOptions,
       sourceExif: tab.document.source.exif,
       flareFloor: tab.document.estimatedFlare,
       lightSourceBias,
@@ -2967,49 +2972,67 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     await rendered.worker.evictPreviews(documentId).catch(() => undefined);
   }, [renderDocumentExport]);
 
-  // Filmstrip "Export N": every selected frame keeps its own edits, unlike
-  // batch export, which applies one shared recipe.
+  // Exports several frames, each with its own look, using the output settings
+  // of the frame being edited (the Export panel). Unlike Convert Files, no
+  // shared recipe is applied.
+  const [frameExportProgress, setFrameExportProgress] = useState<FrameExportProgress | null>(null);
+  const frameExportCancelledRef = useRef(false);
+
   const handleExportFrames = useCallback(async (tabIds: string[]) => {
-    if (tabIds.length === 0) return;
+    if (tabIds.length === 0 || frameExportProgress) return;
     let outputPath: string | null = null;
     if (usesNativeFileDialogs) {
       outputPath = await openDirectory();
       if (!outputPath) return;
     }
 
+    const sharedOptions = tabsRef.current.find((tab) => tab.id === activeTabId)?.document.exportOptions;
+    frameExportCancelledRef.current = false;
     setIsRunningSelectionAction(true);
     let exported = 0;
     const failures: string[] = [];
     try {
       for (const [index, tabId] of tabIds.entries()) {
+        if (frameExportCancelledRef.current) break;
         const name = tabsRef.current.find((tab) => tab.id === tabId)?.document.source.name ?? tabId;
-        showTransientNotice(`Exporting ${index + 1} of ${tabIds.length}: ${name}…`, 'success');
+        setFrameExportProgress({ done: index, total: tabIds.length, currentName: name });
         try {
-          const rendered = await renderDocumentExport(tabId);
+          const rendered = await renderDocumentExport(tabId, sharedOptions);
           if (!rendered) continue;
           if (outputPath) {
             await saveToDirectory(rendered.result.blob, rendered.result.filename, outputPath);
             await rendered.worker.evictPreviews(tabId).catch(() => undefined);
           } else {
-            await saveExportBlob(rendered.result.blob, rendered.result.filename, rendered.tab.document.exportOptions.format);
+            await saveExportBlob(rendered.result.blob, rendered.result.filename, (sharedOptions ?? rendered.tab.document.exportOptions).format);
           }
           exported += 1;
         } catch (exportError) {
           failures.push(name);
-          appendDiagnostic({ level: 'error', code: 'FILMSTRIP_EXPORT_FAILED', message: formatError(exportError), context: { tabId } });
+          appendDiagnostic({ level: 'error', code: 'FRAME_EXPORT_FAILED', message: formatError(exportError), context: { tabId } });
         }
       }
     } finally {
+      setFrameExportProgress(null);
       setIsRunningSelectionAction(false);
     }
 
+    const cancelled = frameExportCancelledRef.current;
     showTransientNotice(
       failures.length
         ? `Exported ${exported} of ${tabIds.length} frames. Failed: ${failures.join(', ')}.`
-        : `Exported ${exported} frame${exported === 1 ? '' : 's'}${outputPath ? ` to ${outputPath}` : ''}.`,
-      failures.length ? 'warning' : 'success',
+        : `${cancelled ? 'Export cancelled after' : 'Exported'} ${exported} frame${exported === 1 ? '' : 's'}${outputPath && exported > 0 ? ` to ${outputPath}` : ''}.`,
+      failures.length || cancelled ? 'warning' : 'success',
     );
-  }, [renderDocumentExport, showTransientNotice, tabsRef, usesNativeFileDialogs]);
+  }, [activeTabId, frameExportProgress, renderDocumentExport, showTransientNotice, tabsRef, usesNativeFileDialogs]);
+
+  const handleExportFramesInScope = useCallback((scope: 'selected' | 'all') => {
+    void handleExportFrames(scope === 'selected' ? filmstripSelection.ids : tabsRef.current.map((tab) => tab.id));
+  }, [filmstripSelection.ids, handleExportFrames, tabsRef]);
+
+  const handleCancelFrameExport = useCallback(() => {
+    // Stops after the frame currently being written.
+    frameExportCancelledRef.current = true;
+  }, []);
 
   const processScannedFile = useCallback(async (path: string, options: { autoExport: boolean; autoExportPath: string | null }) => {
     const result = await openImageFileByPath(path);
@@ -3125,7 +3148,6 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     isCropOverlayVisible,
     dustBrushActive,
     usesNativeFileDialogs,
-    setShowBatchModal,
     setShowSettingsModal,
     setIsSpaceHeld,
     onUndo: handleUndo,
@@ -3286,6 +3308,9 @@ onToggleScanningSession: toggleScanningWindow,
       onSyncSettingsToFrames={handleSyncSettingsToFrames}
       onStabilizeSelectedCrops={handleStabilizeSelectedCrops}
       onExportFrames={handleExportFrames}
+      frameExportProgress={frameExportProgress}
+      onExportFramesInScope={handleExportFramesInScope}
+      onCancelFrameExport={handleCancelFrameExport}
       onReset={handleReset}
       onOpenInEditor={() => { void handleOpenInEditor(); }}
       onDownload={() => { void handleDownload(); }}

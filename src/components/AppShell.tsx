@@ -61,6 +61,7 @@ import { MaxResidentDocs } from '../utils/residentDocsStore';
 import { computePanTranslate, PanGeometry, WheelZoomOptions } from '../hooks/useViewportZoom';
 import { ToolRail } from './ToolRail';
 import { Filmstrip } from './Filmstrip';
+import { FrameExportProgress } from './ExportFramesControl';
 import { FilmstripThumbnail } from '../utils/filmstripThumbnails';
 
 type AppShellProps = {
@@ -181,6 +182,9 @@ type AppShellProps = {
   onSyncSettingsToFrames: (sourceId: string, targetIds: string[]) => void;
   onStabilizeSelectedCrops: (tabIds: string[]) => Promise<void>;
   onExportFrames: (tabIds: string[]) => Promise<void>;
+  frameExportProgress: FrameExportProgress | null;
+  onExportFramesInScope: (scope: 'selected' | 'all') => void;
+  onCancelFrameExport: () => void;
   onReset: () => void;
   onOpenInEditor: () => void;
   onDownload: () => void;
@@ -416,6 +420,9 @@ export function AppShell({
   onSyncSettingsToFrames,
   onStabilizeSelectedCrops,
   onExportFrames,
+  frameExportProgress,
+  onExportFramesInScope,
+  onCancelFrameExport,
   onReset,
   onOpenInEditor,
   onDownload,
@@ -669,6 +676,11 @@ export function AppShell({
                     onSaveQuickExportPreset={onSaveQuickExportPreset}
                     onDeleteQuickExportPreset={onDeleteQuickExportPreset}
                     onOpenBatchExport={onOpenBatchExport}
+                    frameSelectionCount={filmstripSelectedIds.length}
+                    frameCount={tabs.length}
+                    frameExportProgress={frameExportProgress}
+                    onExportFrames={onExportFramesInScope}
+                    onCancelFrameExport={onCancelFrameExport}
                     isExporting={isExporting}
                     contentScrollTop={activeTab?.sidebarScrollTop ?? 0}
                     onContentScrollTopChange={onSidebarScrollTopChange}

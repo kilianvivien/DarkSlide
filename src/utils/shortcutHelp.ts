@@ -31,7 +31,7 @@ export const SHORTCUTS: ShortcutReference[] = [
   { action: 'Undo', keys: [SHORTCUT_MODIFIER, 'Z'] },
   { action: 'Redo', keys: [SHORTCUT_MODIFIER, '⇧', 'Z'] },
   { action: 'Export', keys: [SHORTCUT_MODIFIER, 'E'] },
-  { action: 'Batch export', keys: [SHORTCUT_MODIFIER, '⇧', 'E'] },
+  { action: 'Export several frames', keys: [SHORTCUT_MODIFIER, '⇧', 'E'] },
   { action: 'Quick export presets', keys: [SHORTCUT_MODIFIER, '⇧', '1–4'] },
   { action: 'Open in editor', keys: [SHORTCUT_MODIFIER, '⇧', 'O'] },
   { action: 'Scanning session', keys: [SHORTCUT_MODIFIER, '⇧', 'W'] },

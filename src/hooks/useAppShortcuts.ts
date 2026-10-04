@@ -12,7 +12,6 @@ type UseAppShortcutsOptions = {
   isCropOverlayVisible: boolean;
   dustBrushActive: boolean;
   usesNativeFileDialogs: boolean;
-  setShowBatchModal: Dispatch<SetStateAction<boolean>>;
   setShowSettingsModal: Dispatch<SetStateAction<boolean>>;
   setIsSpaceHeld: Dispatch<SetStateAction<boolean>>;
   onUndo: () => void;
@@ -56,7 +55,6 @@ export function useAppShortcuts({
   isCropOverlayVisible,
   dustBrushActive,
   usesNativeFileDialogs,
-  setShowBatchModal,
   setShowSettingsModal,
   setIsSpaceHeld,
   onUndo,
@@ -115,7 +113,8 @@ export function useAppShortcuts({
       removeLastDustMark: { key: 'backspace', when: () => dustBrushActive, handler: onRemoveLastDustMark },
       deactivateDustBrush: { key: 'escape', when: () => dustBrushActive, handler: onDeactivateDustBrush },
       clearFrameSelection: { key: 'escape', when: () => !dustBrushActive && hasFrameSelection, handler: onClearFrameSelection },
-      batchExport: { key: 'e', meta: true, shift: true, handler: () => setShowBatchModal(true) },
+      // Multi-frame export lives in the Export panel; Convert Files opens from there.
+      exportFrames: { key: 'e', meta: true, shift: true, handler: () => onSelectTool('export') },
       toggleScanningSession: { key: 'w', meta: true, shift: true, when: () => usesNativeFileDialogs, handler: onToggleScanningSession },
 previousTab: {
         key: '[',
@@ -179,7 +178,7 @@ previousTab: {
           void onOpenInEditor();
           break;
         case 'batch-export':
-          setShowBatchModal(true);
+          onSelectTool('export');
           break;
         case 'close-image':
           void onCloseImage();
