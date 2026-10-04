@@ -24,7 +24,6 @@ import { DustOverlay } from './DustOverlay';
 import { SettingsModal } from './SettingsModal';
 import { BatchModal } from './BatchModal';
 import { ContactSheetModal } from './ContactSheetModal';
-import { TabBar } from './TabBar';
 import { ZoomBar } from './ZoomBar';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
@@ -61,6 +60,8 @@ import {
 import { MaxResidentDocs } from '../utils/residentDocsStore';
 import { computePanTranslate, PanGeometry, WheelZoomOptions } from '../hooks/useViewportZoom';
 import { ToolRail } from './ToolRail';
+import { Filmstrip } from './Filmstrip';
+import { FilmstripThumbnail } from '../utils/filmstripThumbnails';
 
 type AppShellProps = {
   usesNativeFileDialogs: boolean;
@@ -172,6 +173,14 @@ type AppShellProps = {
   onUndo: () => void;
   onRedo: () => void;
   onSelectTool: (tool: EditorTool) => void;
+  filmstripSelectedIds: string[];
+  filmstripThumbnails: Record<string, FilmstripThumbnail>;
+  isFilmstripBusy: boolean;
+  onFilmstripFrameClick: (tabId: string, modifiers: { toggle: boolean; range: boolean }) => void;
+  onClearFilmstripSelection: () => void;
+  onSyncSettingsToFrames: (sourceId: string, targetIds: string[]) => void;
+  onStabilizeSelectedCrops: (tabIds: string[]) => Promise<void>;
+  onExportFrames: (tabIds: string[]) => Promise<void>;
   onReset: () => void;
   onOpenInEditor: () => void;
   onDownload: () => void;
@@ -399,6 +408,14 @@ export function AppShell({
   onUndo,
   onRedo,
   onSelectTool,
+  filmstripSelectedIds,
+  filmstripThumbnails,
+  isFilmstripBusy,
+  onFilmstripFrameClick,
+  onClearFilmstripSelection,
+  onSyncSettingsToFrames,
+  onStabilizeSelectedCrops,
+  onExportFrames,
   onReset,
   onOpenInEditor,
   onDownload,
@@ -782,23 +799,6 @@ export function AppShell({
             </div>
           </header>
 
-          {tabs.length > 0 && (
-            <ErrorBoundary>
-              <TabBar
-                tabs={tabs}
-                activeTabId={activeTabId}
-                getRollById={getRollById}
-                onSelectTab={onSelectTab}
-                onCloseTab={(tabId) => void onCloseImage(tabId)}
-                onCreateTab={() => void onOpenImage()}
-                onReorderTabs={onReorderTabs}
-                onSyncRollSettings={onSyncRollSettings}
-                onApplyRollFilmBase={onApplyRollFilmBase}
-                onRemoveFromRoll={onRemoveFromRoll}
-                onOpenRollInfo={onOpenRollInfo}
-              />
-            </ErrorBoundary>
-          )}
 
           <ErrorBoundary>
             <div
@@ -1151,6 +1151,31 @@ export function AppShell({
               </div>
             </div>
           </ErrorBoundary>
+
+          {tabs.length > 0 && (
+            <ErrorBoundary>
+              <Filmstrip
+                tabs={tabs}
+                activeTabId={activeTabId}
+                selectedIds={filmstripSelectedIds}
+                thumbnails={filmstripThumbnails}
+                getRollById={getRollById}
+                isBusy={isFilmstripBusy || Boolean(isExporting)}
+                onFrameClick={onFilmstripFrameClick}
+                onCloseTab={(tabId) => void onCloseImage(tabId)}
+                onAddImages={() => void onOpenImage()}
+                onReorderTabs={onReorderTabs}
+                onSyncSettings={onSyncSettingsToFrames}
+                onStabilizeCrops={(tabIds) => void onStabilizeSelectedCrops(tabIds)}
+                onExportFrames={(tabIds) => void onExportFrames(tabIds)}
+                onClearSelection={onClearFilmstripSelection}
+                onSyncRollSettings={onSyncRollSettings}
+                onApplyRollFilmBase={onApplyRollFilmBase}
+                onRemoveFromRoll={onRemoveFromRoll}
+                onOpenRollInfo={onOpenRollInfo}
+              />
+            </ErrorBoundary>
+          )}
         </main>
 
 

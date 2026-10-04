@@ -372,31 +372,6 @@ vi.mock('./components/CropOverlay', () => ({
   CropOverlay: () => <div data-testid="crop-overlay" />,
 }));
 
-vi.mock('./components/TabBar', () => ({
-  TabBar: ({
-    tabs = [],
-    activeTabId,
-    onSelectTab,
-  }: {
-    tabs?: Array<{ id: string; document: { source: { name: string } } }>;
-    activeTabId?: string | null;
-    onSelectTab?: (tabId: string) => void;
-  }) => (
-    <div data-testid="tab-bar">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          aria-pressed={tab.id === activeTabId}
-          onClick={() => onSelectTab?.(tab.id)}
-        >
-          {tab.document.source.name}
-        </button>
-      ))}
-    </div>
-  ),
-}));
-
 vi.mock('./components/BatchModal', () => ({
   BatchModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="batch-modal" /> : null),
 }));
@@ -566,6 +541,13 @@ vi.mock('./utils/fileBridge', () => ({
   saveExportBlob: fileBridgeState.saveExportBlob,
   savePresetBackupFile: fileBridgeState.savePresetBackupFile,
   registerBeforeUnloadGuard: fileBridgeState.registerBeforeUnloadGuard,
+}));
+
+// Preview-drawing tests count canvas calls; thumbnail capture is covered in
+// its own unit test.
+vi.mock('./utils/filmstripThumbnails', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./utils/filmstripThumbnails')>()),
+  captureThumbnail: () => null,
 }));
 
 vi.mock('./utils/exportNotifications', () => ({
@@ -854,6 +836,50 @@ describe('App import and preview pipeline', () => {
 
     fireEvent.keyDown(window, { key: '1' });
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+  });
+
+  it('syncs the current look to frames selected in the filmstrip', async () => {
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(300, 200))
+      .mockResolvedValueOnce(createDecodedImage(320, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    const settle = async () => {
+      await flushMicrotasks();
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      await flushMicrotasks();
+    };
+
+    render(<App />);
+    await uploadFile(createFile('frame-a.tiff', 'image/tiff'));
+    await settle();
+    await uploadFile(createFile('frame-b.tiff', 'image/tiff'));
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Frame 1: scan-300x200.tiff' }));
+    await settle();
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Set Manual WB' }));
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Frame 2: scan-320x200.tiff' }), { metaKey: true });
+    const bar = screen.getByRole('toolbar', { name: 'Selected frames' });
+    expect(bar).toHaveTextContent('2 selected');
+    // Cmd-click selects without leaving the frame being edited.
+    expect(screen.getByRole('button', { name: 'Frame 1: scan-300x200.tiff' })).toHaveAttribute('aria-current', 'true');
+
+    fireEvent.click(within(bar).getByRole('button', { name: /Sync look/ }));
+    await settle();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar', { name: 'Selected frames' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Frame 2: scan-320x200.tiff' }));
+    await settle();
+    const frameBRender = workerState.render.mock.calls.at(-1)?.[0] as { settings: ConversionSettings };
+    expect(frameBRender.settings).toMatchObject({ temperature: 41, tint: -27 });
   });
 
   it('keeps single-image imports full-frame and does not auto-run frame detection', async () => {

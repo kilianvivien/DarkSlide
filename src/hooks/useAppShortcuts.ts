@@ -38,6 +38,8 @@ type UseAppShortcutsOptions = {
   onToggleLeftPane: () => void;
   onToggleRightPane: () => void;
   onSelectTool: (tool: EditorTool) => void;
+  hasFrameSelection: boolean;
+  onClearFrameSelection: () => void;
   onToggleScanningSession: () => void;
   onCheckForUpdates: () => void;
   zoomToFit: () => void;
@@ -80,6 +82,8 @@ export function useAppShortcuts({
   onToggleLeftPane,
   onToggleRightPane,
   onSelectTool,
+  hasFrameSelection,
+  onClearFrameSelection,
   onToggleScanningSession,
   onCheckForUpdates,
   zoomToFit,
@@ -110,6 +114,7 @@ export function useAppShortcuts({
       increaseDustBrush: { key: ']', when: () => dustBrushActive, handler: onIncreaseDustBrushRadius },
       removeLastDustMark: { key: 'backspace', when: () => dustBrushActive, handler: onRemoveLastDustMark },
       deactivateDustBrush: { key: 'escape', when: () => dustBrushActive, handler: onDeactivateDustBrush },
+      clearFrameSelection: { key: 'escape', when: () => !dustBrushActive && hasFrameSelection, handler: onClearFrameSelection },
       batchExport: { key: 'e', meta: true, shift: true, handler: () => setShowBatchModal(true) },
       toggleScanningSession: { key: 'w', meta: true, shift: true, when: () => usesNativeFileDialogs, handler: onToggleScanningSession },
 previousTab: {

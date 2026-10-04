@@ -18,13 +18,17 @@ import { useRolls } from './hooks/useRolls';
 import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic } from './utils/diagnostics';
-import { confirmDeleteRoll, confirmFilmBaseReanalysis, confirmIncludeManualCrops, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveToDirectory } from './utils/fileBridge';
+import { confirmDeleteRoll, confirmFilmBaseReanalysis, confirmIncludeManualCrops, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveExportBlob, saveToDirectory } from './utils/fileBridge';
 import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences, savePreferences, UserPreferences } from './utils/preferenceStore';
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { cubeLutSignature } from './utils/cubeLut';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
 import { getAutoFrameCrop } from './utils/frameDetection';
 import { applyStabilizedFrameToTab, planRollFrames, RollFrameMeasurement } from './utils/rollCropStabilization';
+import { captureThumbnail, FilmstripThumbnail, getThumbnailKey } from './utils/filmstripThumbnails';
+import { applySelectionClick, FilmstripSelection, reconcileSelection } from './utils/filmstripSelection';
+import { mergeSyncedSettings } from './utils/settingsSync';
+import { appendDocumentHistory } from './hooks/useDocumentTabs';
 import { analyzeMonochromeSuggestion } from './utils/autoAnalysis';
 import { createPresetBackupFile, validatePresetBackupFile } from './utils/presetStore';
 import { computeViewportFitScale, CROP_OVERLAY_HANDLE_SAFE_PADDING, isFullFrameFreeCrop, resolveRenderTargetSelection } from './utils/previewLayout';
@@ -92,6 +96,9 @@ export default function App() {
   const [comparisonMode, setComparisonMode] = useState<'processed' | 'original'>('processed');
   const [isDragActive, setIsDragActive] = useState(false);
   const [isCropOverlayVisible, setIsCropOverlayVisible] = useState(false);
+  // While cropping, previews show the full uncropped frame; never thumbnail those.
+  const isCropOverlayVisibleRef = useRef(false);
+  isCropOverlayVisibleRef.current = isCropOverlayVisible;
   const [isStraightenActive, setIsStraightenActive] = useState(false);
   // The straighten tool only makes sense while the crop overlay is shown.
   const straightenActive = isStraightenActive && isCropOverlayVisible;
@@ -205,7 +212,10 @@ export default function App() {
     angle: number;
     imageData: ImageData;
     imageBitmap: ImageBitmap | null;
+    /** Settled, processed render of the real crop: worth a filmstrip thumbnail. */
+    captureThumbnail: boolean;
   } | null>(null);
+  const [filmstripThumbnails, setFilmstripThumbnails] = useState<Record<string, FilmstripThumbnail>>({});
   const currentPreviewImageDataRef = useRef<ImageData | null>(null);
   const previewRetryFrameRef = useRef<number | null>(null);
   const interactivePreviewFrameRef = useRef<number | null>(null);
@@ -1112,6 +1122,14 @@ export default function App() {
     const canvasDrawMs = drawPreview(pendingPreview.imageData, pendingPreview.imageBitmap);
     if (canvasDrawMs !== null) {
       pendingPreviewRef.current = null;
+      if (pendingPreview.captureThumbnail && displayCanvasRef.current) {
+        const url = captureThumbnail(displayCanvasRef.current);
+        const thumbnailDocument = tabsRef.current.find((tab) => tab.id === pendingPreview.documentId)?.document ?? null;
+        if (url && thumbnailDocument) {
+          const key = getThumbnailKey(thumbnailDocument);
+          setFilmstripThumbnails((current) => ({ ...current, [pendingPreview.documentId]: { url, key } }));
+        }
+      }
       setRenderedPreviewAngle(pendingPreview.angle);
       setPreviewVisibility(true);
       workerClientRef.current?.recordPreviewPresentationTimings(
@@ -1141,7 +1159,7 @@ export default function App() {
     previewRetryFrameRef.current = window.requestAnimationFrame(() => {
       attemptPreviewDraw(attempt + 1);
     });
-  }, [drawPreview, setPreviewVisibility]);
+  }, [drawPreview, setPreviewVisibility, tabsRef]);
 
   useEffect(() => {
     if (!displayCanvasRef.current) {
@@ -1377,6 +1395,9 @@ export default function App() {
         angle: settings.rotation + settings.levelAngle,
         imageData: normalizedImageData,
         imageBitmap,
+        captureThumbnail: previewMode === 'settled'
+          && nextComparisonMode === 'processed'
+          && !isCropOverlayVisibleRef.current,
       };
       clearRenderIndicator();
       cancelPendingPreviewRetry();
@@ -2602,21 +2623,22 @@ export default function App() {
 
   // Explicit, undoable roll action: detect each frame, share robust gate sizes
   // between frames scanned at the same size, and keep each frame's own centre.
-  const handleStabilizeRollCrops = useCallback(async (rollId: string) => {
+  // Shared by the roll card and the filmstrip selection: frames are grouped by
+  // scan size, never by assuming the whole set shares a film format.
+  const stabilizeCropsForTabs = useCallback(async (tabIds: string[], scopeName: string) => {
     const worker = workerClientRef.current;
-    const roll = getRollById(rollId);
-    const rollTabs = tabsRef.current.filter((tab) => tab.rollId === rollId);
-    if (!worker || !roll || rollTabs.length === 0) {
+    const rollTabs = tabsRef.current.filter((tab) => tabIds.includes(tab.id));
+    if (!worker || rollTabs.length === 0) {
       return;
     }
 
     const manualCount = rollTabs.filter((tab) => tab.document.cropSource === 'manual').length;
     const includeManual = manualCount > 0
-      ? await confirmIncludeManualCrops(roll.name, manualCount)
+      ? await confirmIncludeManualCrops(scopeName, manualCount)
       : false;
     const eligibleTabs = rollTabs.filter((tab) => includeManual || tab.document.cropSource !== 'manual');
     if (eligibleTabs.length === 0) {
-      showTransientNotice('Every frame in this roll has a manual crop; nothing was changed.');
+      showTransientNotice(`Every frame in ${scopeName} has a manual crop; nothing was changed.`);
       return;
     }
 
@@ -2652,7 +2674,89 @@ export default function App() {
       `Stabilized crops on ${appliedCount} of ${rollTabs.length} frame${rollTabs.length === 1 ? '' : 's'}${details ? ` (${details})` : ''}.`,
       appliedCount > 0 ? 'success' : 'warning',
     );
-  }, [getRollById, showTransientNotice, tabsRef, updateTabById]);
+  }, [showTransientNotice, tabsRef, updateTabById]);
+
+  const handleStabilizeRollCrops = useCallback(async (rollId: string) => {
+    const roll = getRollById(rollId);
+    if (!roll) return;
+    const rollTabIds = tabsRef.current.filter((tab) => tab.rollId === rollId).map((tab) => tab.id);
+    await stabilizeCropsForTabs(rollTabIds, roll.name);
+  }, [getRollById, stabilizeCropsForTabs, tabsRef]);
+
+  // ── Filmstrip selection ───────────────────────────────────────────────
+  const [filmstripSelection, setFilmstripSelection] = useState<FilmstripSelection>({ ids: [], anchorId: null });
+  const [isRunningSelectionAction, setIsRunningSelectionAction] = useState(false);
+  const tabIdsInOrder = useMemo(() => tabs.map((tab) => tab.id), [tabs]);
+
+  useEffect(() => {
+    setFilmstripSelection((current) => reconcileSelection(current, tabIdsInOrder, activeTabId));
+  }, [activeTabId, tabIdsInOrder]);
+
+  // Drop thumbnails of closed frames.
+  useEffect(() => {
+    setFilmstripThumbnails((current) => {
+      const stale = Object.keys(current).filter((id) => !tabIdsInOrder.includes(id));
+      if (stale.length === 0) return current;
+      const next = { ...current };
+      for (const id of stale) delete next[id];
+      return next;
+    });
+  }, [tabIdsInOrder]);
+
+  const handleFilmstripFrameClick = useCallback((tabId: string, modifiers: { toggle: boolean; range: boolean }) => {
+    setFilmstripSelection((current) => applySelectionClick(
+      { ids: current.ids, anchorId: current.anchorId ?? activeTabId },
+      tabIdsInOrder,
+      tabId,
+      modifiers,
+    ));
+    // Only a plain click opens the clicked frame. Cmd/Ctrl- and Shift-clicks
+    // change the selection and keep the current frame open, so it stays the
+    // source for "Sync look".
+    if (!modifiers.toggle && !modifiers.range) {
+      setActiveTabId(tabId);
+    }
+  }, [activeTabId, setActiveTabId, tabIdsInOrder]);
+
+  const handleClearFilmstripSelection = useCallback(() => {
+    setFilmstripSelection({ ids: activeTabId ? [activeTabId] : [], anchorId: activeTabId });
+  }, [activeTabId]);
+
+  const handleSyncSettingsToFrames = useCallback((sourceId: string, targetIds: string[]) => {
+    const source = tabsRef.current.find((tab) => tab.id === sourceId)?.document ?? null;
+    if (!source || targetIds.length === 0) return;
+    for (const targetId of targetIds) {
+      if (targetId === sourceId) continue;
+      updateTabById(targetId, (tab) => {
+        const before = appendDocumentHistory(tab);
+        return appendDocumentHistory({
+          ...before,
+          document: {
+            ...before.document,
+            settings: mergeSyncedSettings(source.settings, before.document.settings),
+            profileId: source.profileId,
+            labStyleId: source.labStyleId,
+            lightSourceId: source.lightSourceId,
+            dirty: true,
+          },
+        });
+      });
+    }
+    showTransientNotice(
+      `Synced the look of ${source.source.name} to ${targetIds.length} frame${targetIds.length === 1 ? '' : 's'}. Undo on each frame restores it.`,
+      'success',
+    );
+  }, [showTransientNotice, tabsRef, updateTabById]);
+
+  const handleStabilizeSelectedCrops = useCallback(async (tabIds: string[]) => {
+    setIsRunningSelectionAction(true);
+    try {
+      await stabilizeCropsForTabs(tabIds, `the ${tabIds.length} selected frames`);
+    } finally {
+      setIsRunningSelectionAction(false);
+    }
+  }, [stabilizeCropsForTabs]);
+
 
   const handleApplyRollFilmBase = useCallback(async (rollId: string) => {
     const sourceDocument = tabsRef.current.find((tab) => tab.rollId === rollId && tab.document.settings.filmBaseSample)?.document ?? null;
@@ -2819,11 +2923,12 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     }));
   }, [updateTabById]);
 
-  const exportDocumentToDirectory = useCallback(async (documentId: string, outputPath: string) => {
+  // Exports one open frame with its own settings, profile and export options.
+  const renderDocumentExport = useCallback(async (documentId: string) => {
     const worker = workerClientRef.current;
     const tab = tabsRef.current.find((candidate) => candidate.id === documentId) ?? null;
     if (!worker || !tab) {
-      return;
+      return null;
     }
 
     const profile = resolveDocumentProfile(tab.document, profilesById, fallbackProfile);
@@ -2852,10 +2957,59 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
       labTemperatureBias: labStyle?.temperatureBias ?? 0,
       highlightDensityEstimate: tab.document.histogram ? computeHighlightDensity(tab.document.histogram) : 0,
     });
-
-    await saveToDirectory(result.blob, result.filename, outputPath);
-    await worker.evictPreviews(documentId).catch(() => undefined);
+    return { result, worker, tab };
   }, [fallbackProfile, lightSourceProfilesById, profilesById, tabsRef]);
+
+  const exportDocumentToDirectory = useCallback(async (documentId: string, outputPath: string) => {
+    const rendered = await renderDocumentExport(documentId);
+    if (!rendered) return;
+    await saveToDirectory(rendered.result.blob, rendered.result.filename, outputPath);
+    await rendered.worker.evictPreviews(documentId).catch(() => undefined);
+  }, [renderDocumentExport]);
+
+  // Filmstrip "Export N": every selected frame keeps its own edits, unlike
+  // batch export, which applies one shared recipe.
+  const handleExportFrames = useCallback(async (tabIds: string[]) => {
+    if (tabIds.length === 0) return;
+    let outputPath: string | null = null;
+    if (usesNativeFileDialogs) {
+      outputPath = await openDirectory();
+      if (!outputPath) return;
+    }
+
+    setIsRunningSelectionAction(true);
+    let exported = 0;
+    const failures: string[] = [];
+    try {
+      for (const [index, tabId] of tabIds.entries()) {
+        const name = tabsRef.current.find((tab) => tab.id === tabId)?.document.source.name ?? tabId;
+        showTransientNotice(`Exporting ${index + 1} of ${tabIds.length}: ${name}…`, 'success');
+        try {
+          const rendered = await renderDocumentExport(tabId);
+          if (!rendered) continue;
+          if (outputPath) {
+            await saveToDirectory(rendered.result.blob, rendered.result.filename, outputPath);
+            await rendered.worker.evictPreviews(tabId).catch(() => undefined);
+          } else {
+            await saveExportBlob(rendered.result.blob, rendered.result.filename, rendered.tab.document.exportOptions.format);
+          }
+          exported += 1;
+        } catch (exportError) {
+          failures.push(name);
+          appendDiagnostic({ level: 'error', code: 'FILMSTRIP_EXPORT_FAILED', message: formatError(exportError), context: { tabId } });
+        }
+      }
+    } finally {
+      setIsRunningSelectionAction(false);
+    }
+
+    showTransientNotice(
+      failures.length
+        ? `Exported ${exported} of ${tabIds.length} frames. Failed: ${failures.join(', ')}.`
+        : `Exported ${exported} frame${exported === 1 ? '' : 's'}${outputPath ? ` to ${outputPath}` : ''}.`,
+      failures.length ? 'warning' : 'success',
+    );
+  }, [renderDocumentExport, showTransientNotice, tabsRef, usesNativeFileDialogs]);
 
   const processScannedFile = useCallback(async (path: string, options: { autoExport: boolean; autoExportPath: string | null }) => {
     const result = await openImageFileByPath(path);
@@ -2997,6 +3151,8 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onToggleLeftPane: handleToggleLeftPane,
     onToggleRightPane: handleToggleProfilesTool,
     onSelectTool: handleSelectTool,
+    hasFrameSelection: filmstripSelection.ids.length > 1,
+    onClearFrameSelection: handleClearFilmstripSelection,
 onToggleScanningSession: toggleScanningWindow,
     onCheckForUpdates: () => { void checkForUpdatesNow(); },
     zoomToFit: zoomToFitWithDraft,
@@ -3122,6 +3278,14 @@ onToggleScanningSession: toggleScanningWindow,
       onUndo={handleUndo}
       onRedo={handleRedo}
       onSelectTool={handleSelectTool}
+      filmstripSelectedIds={filmstripSelection.ids}
+      filmstripThumbnails={filmstripThumbnails}
+      isFilmstripBusy={isRunningSelectionAction}
+      onFilmstripFrameClick={handleFilmstripFrameClick}
+      onClearFilmstripSelection={handleClearFilmstripSelection}
+      onSyncSettingsToFrames={handleSyncSettingsToFrames}
+      onStabilizeSelectedCrops={handleStabilizeSelectedCrops}
+      onExportFrames={handleExportFrames}
       onReset={handleReset}
       onOpenInEditor={() => { void handleOpenInEditor(); }}
       onDownload={() => { void handleDownload(); }}
