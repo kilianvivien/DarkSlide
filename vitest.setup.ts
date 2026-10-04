@@ -33,6 +33,11 @@ if (!globalThis.ImageData) {
 }
 
 beforeEach(() => {
+  // Node-environment suites (the evaluation CLI tests) have no DOM storage.
+  if (typeof localStorage === 'undefined') {
+    return;
+  }
+
   localStorage.clear();
 
   if (!navigator.clipboard) {
