@@ -3805,7 +3805,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Close Image"]') as Element);
+      fireEvent.click(within(screen.getByRole('region', { name: 'Filmstrip' })).getByRole('button', { name: /^Close / }));
     });
 
     const [payload] = workerState.render.mock.calls[0];
@@ -3851,7 +3851,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.preparePreviewBitmap).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Close Image"]') as Element);
+      fireEvent.click(within(screen.getByRole('region', { name: 'Filmstrip' })).getByRole('button', { name: /^Close / }));
     });
     preparePreviewBitmapRequest.resolve(preparedBitmap);
     await flushMicrotasks();

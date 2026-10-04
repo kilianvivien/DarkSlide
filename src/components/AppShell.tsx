@@ -2,8 +2,6 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Building2,
-  Crop,
   Download,
   ExternalLink,
   FileWarning,
@@ -12,7 +10,6 @@ import {
   Loader2,
   Redo2,
   RotateCcw,
-  SplitSquareVertical,
   Undo2,
   Upload,
   X,
@@ -24,7 +21,6 @@ import { DustOverlay } from './DustOverlay';
 import { SettingsModal } from './SettingsModal';
 import { BatchModal } from './BatchModal';
 import { ContactSheetModal } from './ContactSheetModal';
-import { ZoomBar } from './ZoomBar';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -60,6 +56,8 @@ import {
 import { MaxResidentDocs } from '../utils/residentDocsStore';
 import { computePanTranslate, PanGeometry, WheelZoomOptions } from '../hooks/useViewportZoom';
 import { ToolRail } from './ToolRail';
+import { CanvasToolbar } from './CanvasToolbar';
+import { rotateCropClockwise } from '../utils/imagePipeline';
 import { Filmstrip } from './Filmstrip';
 import { FrameExportProgress } from './ExportFramesControl';
 import { FilmstripThumbnail } from '../utils/filmstripThumbnails';
@@ -522,6 +520,7 @@ export function AppShell({
   setZoomLevel,
 }: AppShellProps) {
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
+  const activeFrameIndex = tabs.findIndex((tab) => tab.id === activeTabId);
   void isAdjustingCrop;
   void profilesById;
   void lightSourceProfilesById;
@@ -714,6 +713,18 @@ export function AppShell({
               <h1 className="ml-2 text-sm font-bold tracking-tight text-zinc-100">
                 Dark<span className="font-medium text-zinc-500">Slide</span>
               </h1>
+              {documentState && (
+                <div className="ml-2 hidden min-w-0 items-baseline gap-3 border-l border-zinc-800 pl-4 md:flex">
+                  <span className="max-w-[260px] truncate text-sm font-medium text-zinc-200" title={documentState.source.name}>
+                    {documentState.source.name}
+                  </span>
+                  <span className="whitespace-nowrap font-mono text-[11px] text-zinc-500">
+                    {activeFrameIndex >= 0 && tabs.length > 1 ? `${activeFrameIndex + 1} / ${tabs.length} · ` : ''}
+                    {`${documentState.source.width.toLocaleString()} × ${documentState.source.height.toLocaleString()} px`}
+                    {activeRoll ? ` · ${activeRoll.name}` : ''}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-3">
@@ -751,22 +762,6 @@ export function AppShell({
                     data-tip="Reset Adjustments to Current Preset"
                   >
                     <RotateCcw size={18} />
-                  </button>
-                  <button
-                    onClick={() => onSetComparisonMode((current) => current === 'processed' ? 'original' : 'processed')}
-                    aria-label={comparisonMode === 'original' ? 'Return to processed view' : 'Toggle before and after'}
-                    className={`rounded-lg p-2 transition-all ${comparisonMode === 'original' ? 'bg-zinc-100 text-zinc-950' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200'}`}
-                    data-tip={comparisonMode === 'original' ? 'Showing Original — click to return' : 'Toggle Before/After'}
-                  >
-                    <SplitSquareVertical size={18} />
-                  </button>
-                  <button
-                    onClick={() => onSetIsCropOverlayVisible((current) => !current)}
-                    aria-label={isCropOverlayVisible ? 'Hide crop overlay' : 'Show crop overlay'}
-                    className={`rounded-lg p-2 transition-all ${isCropOverlayVisible ? 'bg-zinc-100 text-zinc-950' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200'}`}
-                    data-tip="Toggle Crop Overlay"
-                  >
-                    <Crop size={18} />
                   </button>
                   {usesNativeFileDialogs && (
                     <button
@@ -922,17 +917,6 @@ export function AppShell({
                       }}
                       style={{ cursor: isPanDragging ? 'grabbing' : (zoom !== 'fit' && !isPickingFilmBase && !activePointPicker && !dustBrushActive ? 'grab' : undefined) }}
                     >
-                      <div className="absolute right-4 top-4 z-20">
-                        <ZoomBar
-                          zoom={zoom}
-                          fitScale={fitScale}
-                          onZoomToFit={zoomToFit}
-                          onZoomTo100={zoomTo100}
-                          onZoomIn={zoomIn}
-                          onZoomOut={zoomOut}
-                          onSetZoom={setZoomLevel}
-                        />
-                      </div>
 
                       <AnimatePresence initial={false}>
                         {showTabSwitchOverlay && (
@@ -1016,28 +1000,27 @@ export function AppShell({
                       </div>
                     </div>
 
-<div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 shadow-2xl backdrop-blur-md">
-                        <span className="px-2 text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                          {activeProfile.name}{activeProfile.lut ? ' (LUT)' : ''}
-                        </span>
-                        <div className="mx-1 h-4 w-px bg-zinc-800" />
-                        <span className="px-2 text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                          {documentState.source.width.toLocaleString()} × {documentState.source.height.toLocaleString()} px
-                        </span>
-                      </div>
-                      {activeLabStyle && (
-                        <div className="flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 shadow-2xl backdrop-blur-md">
-                          <Building2 size={14} className="text-zinc-500" />
-                          <span className="px-2 text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                            {activeLabStyle.name}
-                          </span>
-                        </div>
-                      )}
-                      </div>
-
-                      <div className="flex flex-wrap items-center justify-end gap-3">
+                  <div className="relative flex w-full shrink-0 items-center justify-center">
+                    <CanvasToolbar
+                      profileName={`${activeProfile.name}${activeProfile.lut ? ' (LUT)' : ''}`}
+                      labStyleName={activeLabStyle?.name ?? null}
+                      comparisonMode={comparisonMode}
+                      isCropOverlayVisible={isCropOverlayVisible}
+                      zoom={zoom}
+                      fitScale={fitScale}
+                      onSetComparisonMode={(mode) => onSetComparisonMode(mode)}
+                      onRotateClockwise={() => onSettingsChange({
+                        rotation: (documentState.settings.rotation + 90) % 360,
+                        crop: rotateCropClockwise(documentState.settings.crop),
+                      })}
+                      onToggleCrop={() => onSetIsCropOverlayVisible((current) => !current)}
+                      onZoomToFit={zoomToFit}
+                      onZoomTo100={zoomTo100}
+                      onZoomIn={zoomIn}
+                      onZoomOut={zoomOut}
+                      onSetZoom={setZoomLevel}
+                    />
+                      <div className="pointer-events-none absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-3">
                         <AnimatePresence initial={false}>
                           {isRenderIndicatorVisible && (
                             <motion.div
@@ -1052,15 +1035,6 @@ export function AppShell({
                             </motion.div>
                           )}
                         </AnimatePresence>
-                        <button
-                          onClick={() => void onCloseImage()}
-                          aria-label="Close image"
-                          className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-zinc-400 shadow-xl transition-all hover:bg-red-500/20 hover:text-red-400 backdrop-blur-md"
-                          data-tip="Close Image"
-                        >
-                          <X size={16} />
-                          <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Close</span>
-                        </button>
                       </div>
                     </div>
                   </motion.div>
