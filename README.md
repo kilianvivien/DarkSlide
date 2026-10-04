@@ -3,6 +3,7 @@
 <div align="center">
   <p>Turn your film negatives into beautiful positives — right in your browser or as a desktop app.</p>
   <p><strong><a href="https://darkslide.vercel.app">Try the live demo →</a></strong> — no install required</p>
+  <p><a href="https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.3">Download DarkSlide 1.2.3 for macOS, Windows, or Linux</a></p>
   <img src="./.github/assets/screenshot.png" alt="DarkSlide Screenshot" width="800" />
 </div>
 
@@ -10,7 +11,18 @@
 
 DarkSlide is a free, open-source tool for converting scanned film negatives into positive images. Whether you shoot 35mm, 120, or large format — just scan your negatives, drop them into DarkSlide, and start editing. No subscription, no cloud upload, everything stays on your machine.
 
-## What's New in v1.2.0
+## What's New in v1.2.3
+
+- **More reliable exports** — previews wait while exports and contact sheets finish, and delayed worker requests no longer interrupt a healthy export
+- **Presets that preserve your look** — saved presets retain film-stock calibration, color conversion, LUTs, light-source settings, and lab style; saving leaves your active image and unsaved edits intact
+- **Repairs stay with the image** — reusable presets exclude dust-repair coordinates, and presets saved without framing preserve the target image's crop, rotation, and leveling
+- **More consistent conversions** — CPU rendering, GPU previews, and high-depth exports share precise curve tables; film-base references retain their color profile, and RAW import avoids applying film-base color compensation twice
+- **More accurate white balance** — automatic analysis and the grey picker use the converted image and matching slider math, including lab-style temperature bias and over-range channel samples
+- **Edits protected during analysis** — stale auto-adjustment, film-base re-analysis, and picker results are discarded; sidecar restoration respects saved profiles and explicitly disabled light-source or lab-style selections
+
+See the [full v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.3) for details. This release also includes the export reliability fixes from the unreleased v1.2.2 version.
+
+### Earlier in v1.2.0
 
 - **Import `.cube` LUTs as presets** — drop a 3D LUT on the Custom tab (or pick it through Import) and it becomes a custom preset. The LUT performs the negative→positive conversion in place of DarkSlide's own inversion, and every slider still applies on top of it
 - **Export any preset as a `.cube` LUT** — bake a preset's full conversion into a 33×33×33 LUT that turns a raw negative scan into a finished positive in Resolve, Premiere, or anything else that reads `.cube`
@@ -28,7 +40,7 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **Density-domain inversion** — negatives are now inverted in the film-density domain, with the base sample driving an exact black point and flare subtracted symmetrically from the base and the image, for more faithful, better-behaved conversions
 - **Deterministic, inspectable conversions** — per-document residual-base and highlight analysis are pinned so the preview and the export match, and a diagnostic report captures the exact conversion parameters used
 - **Parsed ICC input profiles** — embedded matrix+TRC ICC profiles are read directly (with D50→D65 adaptation), instead of always falling back to sRGB
-- **Bit-depth export controls** — PNG and TIFF exports expose a bit-depth choice; 8-bit PNG keeps real deflate compression, and a requested 16-bit export degrades gracefully to 8-bit with a warning until the high-depth render path ships
+- **Bit-depth export controls** — added a bit-depth choice for PNG and TIFF exports, with real deflate compression for 8-bit PNG; full 16-bit processing followed in v1.1.0
 - **Consistent batch pipeline** — batch export now makes the color-vs-mono decision the same way as preview and single export, so a B&W-toggled color negative no longer slips down the wrong pipeline
 - **Correct embedded PNG color profiles** — fixed the zlib framing in embedded PNG ICC profiles so the profile round-trips in other applications
 
@@ -93,7 +105,7 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 - **Batch export** — convert a whole roll with one click, optionally applying a preset to every frame
 - **Contact sheet generation** — create a grid overview of your scans
 - **High-bit-depth output** — export 16-bit PNG or TIFF files with float precision preserved through curves, sharpening, and noise reduction
-- **Save and share presets** — create custom looks, organize them in folders, and export/import as `.darkslide` files
+- **Save and share presets** — create custom looks with film-stock calibration, light-source settings, and lab style; organize them in folders and export/import as `.darkslide` files
 - **3D LUT interchange** — import `.cube` LUTs as presets and bake any preset back out to `.cube`
 - **Searchable preset browser** with sorting and tag display
 
@@ -134,7 +146,13 @@ Pre-built macOS binaries are currently **not notarized**. macOS will block the a
 
 ### Install the desktop app
 
-Download the latest `.dmg` installer from the [Releases](https://github.com/kilianvivien/DarkSlide/releases) page — no build step required.
+Download an installer from the [DarkSlide v1.2.3 release](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.2.3) — no build step required:
+
+- **macOS:** universal `.dmg` for Apple Silicon and Intel Macs
+- **Windows:** `.msi` or NSIS `.exe`
+- **Linux:** `.deb` or `.AppImage`
+
+Installers are attached automatically as the release builds finish. For future versions, check the [latest release](https://github.com/kilianvivien/DarkSlide/releases/latest).
 
 ### Run from source (browser)
 
