@@ -1,11 +1,10 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings } from '../constants';
 import type { FilmProfile } from '../types';
 import { parseCubeLut, sampleCubeLut } from './cubeLut';
 import { processImageData } from './imagePipeline';
 import { bakePresetToCubeLut } from './presetLutExport';
+import { buildSyntheticNegativeLutText } from '../test/fixtures/luts/syntheticNegativeLut';
 
 // Settings that leave the LUT output untouched, so a round-trip can be
 // compared against the imported table directly.
@@ -106,14 +105,14 @@ describe('bakePresetToCubeLut', () => {
 
   it('bakes an imported LUT back out, so import → export round-trips', () => {
     const imported = parseCubeLut(
-      readFileSync(resolve(__dirname, '../../Resources/PhoenixII.cube'), 'utf-8'),
+      buildSyntheticNegativeLutText(),
     );
     const profile = buildProfile({
-      name: 'PhoenixII',
+      name: 'Imported negative LUT',
       lut: imported,
       defaultSettings: structuredClone(NEUTRAL_SETTINGS),
     });
-    const baked = bakePresetToCubeLut(profile, 35);
+    const baked = bakePresetToCubeLut(profile, imported.size);
 
     // With neutral sliders the baked table reproduces the imported one at its
     // own lattice points.
@@ -145,14 +144,14 @@ describe('bakePresetToCubeLut', () => {
 
 describe('LUT presets in the render pipeline', () => {
   const imported = parseCubeLut(
-    readFileSync(resolve(__dirname, '../../Resources/PhoenixII.cube'), 'utf-8'),
+    buildSyntheticNegativeLutText(),
   );
 
   it('replaces the built-in inversion rather than layering on top of it', () => {
     const withLut = buildProfile({ lut: imported });
     const withoutLut = buildProfile();
 
-    // PhoenixII maps black to white. With the LUT standing in for the inversion
+    // The imported LUT maps black to white. With the LUT standing in for the inversion
     // stage, a black input must come out bright.
     const [r, g, b] = processPixel(withLut, 0, 0, 0);
     expect(Math.min(r, g, b)).toBeGreaterThan(200);
