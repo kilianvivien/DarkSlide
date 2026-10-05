@@ -35,7 +35,7 @@ const DENSITY_BALANCE_CLAMP_HIGH = 2;
 const DENSITY_BALANCE_MAX_TRANSMITTANCE_RATIO = 10 ** -3;
 const DENSITY_BALANCE_MIN_LINEAR = 1e-5;
 const DENSITY_BALANCE_MIN_SPREAD = 0.05;
-const CAMERA_MEASURED_MAX_OFFSET = 0.05;
+const CAMERA_MEASURED_MAX_OFFSET = 0.12;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -601,7 +601,9 @@ function sampleChannelToDensity(
 // scale)) * scale, so preview, GPU and export all pick it up through the base
 // density. The offsets were measured against the estimated base; when the
 // user picked another base they are re-referenced to it. Damped to a small
-// range because a frame dominated by one colour (a sky) biases them.
+// range because a frame dominated by one colour (a sky) biases them. Tuned
+// on real NEFs (Kodak Gold, CineStill 400D): +-0.05 left a 400D frame's blue
+// ~25% low, +-0.12 rendered sky, clouds and stone neutral on all of them.
 function applyCameraMeasuredOffsets(
   baseDensity: [number, number, number],
   balance: DensityBalance,
@@ -1054,6 +1056,13 @@ export function computeResidualBaseOffset(
     flareStrength,
     lightSourceBias,
   );
+  // A camera-measured balance already lines every channel's thin end up with
+  // its offsets; the 1st-percentile residual would only subtract them again
+  // (it cancelled a 400D frame's blue offset and left it ~25% yellow).
+  if (densityInversion.densityScaleSource === 'camera-measured'
+    && (estimatedDensityBalance?.offsetR !== undefined || estimatedDensityBalance?.offsetB !== undefined)) {
+    return null;
+  }
   const sampleStride = Math.max(1, Math.floor((width * height) / 50_000));
   const rs: number[] = [];
   const gs: number[] = [];

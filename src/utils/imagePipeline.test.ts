@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, composeCameraColorMatrix, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, composeCameraColorMatrix, computeDensityBalance, computeResidualBaseOffset, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { ColorMatrix, FilmBaseEstimate } from '../types';
 import { decodeProfileChannel, encodeProfileChannel } from './colorProfiles';
 
@@ -324,18 +324,29 @@ describe('density balance precedence on RAW scans', () => {
 
   it('lines up the thin end with a damped offset, re-referenced to a picked base', () => {
     const estimate = { sample: base, source: 'in-frame' as const, confidence: 0.4, rejectedCandidates: 0, clamped: false };
-    const withOffsets = { ...measured, offsetR: -0.03, offsetB: 0.2 };
+    const withOffsets = { ...measured, offsetR: -0.03, offsetB: 0.3 };
     const settings = createDefaultSettings({ filmBaseSample: null, densityBalance: null });
     const plain = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', estimate, measured, 'srgb', 'srgb', null, 0);
     const shifted = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', estimate, withOffsets, 'srgb', 'srgb', null, 0);
-    // (D - base) * s + o  ==  (D - (base - o / s)) * s; blue is damped to 0.05.
+    // (D - base) * s + o  ==  (D - (base - o / s)) * s; blue is damped to 0.12.
     expect(shifted.baseDensity[0]).toBeCloseTo(plain.baseDensity[0] + 0.03 / 1.08, 6);
     expect(shifted.baseDensity[1]).toBeCloseTo(plain.baseDensity[1], 6);
-    expect(shifted.baseDensity[2]).toBeCloseTo(plain.baseDensity[2] - 0.05 / 0.86, 6);
+    expect(shifted.baseDensity[2]).toBeCloseTo(plain.baseDensity[2] - 0.12 / 0.86, 6);
 
     // The same base picked by hand gives the same result as the estimate.
     const picked = resolveDensityInversionParams({ ...settings, filmBaseSample: { ...base } }, true, 'negative', 'gold-200', estimate, withOffsets, 'srgb', 'srgb', null, 0);
     picked.baseDensity.forEach((value, channel) => expect(value).toBeCloseTo(shifted.baseDensity[channel], 6));
+  });
+
+  it('skips the residual base offset once camera-measured offsets align the thin end', () => {
+    const estimate = { sample: base, source: 'in-frame' as const, confidence: 0.4, rejectedCandidates: 0, clamped: false };
+    const settings = createDefaultSettings({ filmBaseSample: null, densityBalance: null });
+    const imageData = createGrid(16, [[100, 90, 40], [80, 70, 30], [60, 50, 20], [40, 35, 12]]);
+    const residual = (balance: typeof measured & { offsetR?: number; offsetB?: number }) => computeResidualBaseOffset(
+      imageData, settings, true, 'negative', 'srgb', 'srgb', [1, 1, 1], null, 'gold-200', estimate, balance,
+    );
+    expect(residual({ ...measured, offsetR: -0.03, offsetB: 0.05 })).toBeNull();
+    expect(residual(measured)).not.toBeNull();
   });
 
   it('keeps the stock preset when the measurement is only an ordinary estimate', () => {
