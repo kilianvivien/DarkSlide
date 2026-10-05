@@ -230,7 +230,7 @@ describe('BatchModal', () => {
     await screen.findByText('open-scan.tiff');
     fireEvent.click(screen.getByText('Custom'));
     fireEvent.click(screen.getByText('Ignore preset crop and rotation'));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -255,7 +255,7 @@ describe('BatchModal', () => {
     renderModal({ customProfiles: [] });
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -272,7 +272,7 @@ describe('BatchModal', () => {
     renderModal({ customProfiles: [] });
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
@@ -295,7 +295,7 @@ describe('BatchModal', () => {
       expect(screen.getByText('/Users/tester/Downloads')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -319,7 +319,7 @@ describe('BatchModal', () => {
       expect(screen.getByText('/Users/tester/Exports')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -368,7 +368,7 @@ describe('BatchModal', () => {
 
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -392,7 +392,7 @@ describe('BatchModal', () => {
 
     await screen.findByText('open-scan.tiff');
     fireEvent.click(screen.getByText('Custom'));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -411,7 +411,7 @@ describe('BatchModal', () => {
     renderModal({ customProfiles: [] });
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(exportNotificationState.notifyExportFinished).toHaveBeenCalledWith({
@@ -437,7 +437,7 @@ describe('BatchModal', () => {
     renderModal({ customProfiles: [] });
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(exportNotificationState.notifyExportFinished).toHaveBeenCalledWith({

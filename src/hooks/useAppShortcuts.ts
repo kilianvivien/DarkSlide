@@ -18,6 +18,7 @@ type UseAppShortcutsOptions = {
   onRedo: () => void;
   onOpenImage: () => Promise<void>;
   onOpenFolder: () => Promise<void>;
+  onOpenConvertFiles: () => void;
   onOpenRecentFile: (file: File, path: string, size?: number) => Promise<string | null>;
   onOpenFilesByPath: (paths: string[]) => Promise<void>;
   onOpenInEditor: () => Promise<void>;
@@ -63,6 +64,7 @@ export function useAppShortcuts({
   onRedo,
   onOpenImage,
   onOpenFolder,
+  onOpenConvertFiles,
   onOpenRecentFile,
   onOpenFilesByPath,
   onOpenInEditor,
@@ -188,6 +190,9 @@ previousTab: {
           break;
         case 'batch-export':
           onSelectTool('export');
+          break;
+        case 'convert-files':
+          onOpenConvertFiles();
           break;
         case 'close-image':
           void onCloseImage();

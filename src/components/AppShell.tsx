@@ -158,8 +158,6 @@ type AppShellProps = {
   updateError: string | null;
   isCheckingForUpdates: boolean;
   activeRoll: Roll | null;
-  rolls: Map<string, Roll>;
-  filmstripTabs: DocumentTab[];
   getRollById: (rollId: string | null) => Roll | null;
   profilesById: Map<string, FilmProfile>;
   lightSourceProfilesById: Map<string, LightSourceProfile>;
@@ -202,16 +200,11 @@ type AppShellProps = {
   onDownload: () => void;
   onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   onRecentImport: (file: File, path?: string | null, size?: number) => Promise<string | null>;
-  onSelectTab: (tabId: string) => void;
   onReorderTabs: (sourceId: string, targetId: string) => void;
   onSyncRollSettings: (tabId: string, rollId: string) => void;
-  onStabilizeRollCrops: (rollId: string) => void;
   onApplyRollFilmBase: (rollId: string) => void;
   onRemoveFromRoll: (tabId: string) => void;
   onOpenRollInfo: (rollId: string) => void;
-  onDeleteRoll: (rollId: string) => void;
-  onCreateRollFromTabs: () => void;
-  onToggleScanningSession: () => void;
   defaultExportOptions: WorkspaceDocument['exportOptions'];
   onSettingsChange: (newSettings: Partial<ConversionSettings>) => void;
   onDustRemovalChange: (dustRemoval: ConversionSettings['dustRemoval']) => void;
@@ -390,8 +383,6 @@ export function AppShell({
   updateError,
   isCheckingForUpdates,
   activeRoll,
-  rolls,
-  filmstripTabs,
   getRollById,
   profilesById,
   lightSourceProfilesById,
@@ -434,16 +425,11 @@ export function AppShell({
   onDownload,
   onFileChange,
   onRecentImport,
-  onSelectTab,
   onReorderTabs,
   onSyncRollSettings,
-  onStabilizeRollCrops,
   onApplyRollFilmBase,
   onRemoveFromRoll,
   onOpenRollInfo,
-  onDeleteRoll,
-  onCreateRollFromTabs,
-  onToggleScanningSession,
   defaultExportOptions,
   onSettingsChange,
   onDustRemovalChange,
@@ -655,20 +641,6 @@ export function AppShell({
                     onDeleteFolder={onDeleteFolder}
                     onMovePresetToFolder={onMovePresetToFolder}
                     onError={onSetError}
-                    rolls={rolls}
-                    activeRoll={activeRoll}
-                    activeTabId={activeTabId}
-                    filmstripTabs={filmstripTabs}
-                    onSelectTab={onSelectTab}
-                    onOpenRollInfo={onOpenRollInfo}
-                    onSyncRollSettings={onSyncRollSettings}
-                    onStabilizeRollCrops={onStabilizeRollCrops}
-                    onRemoveFromRoll={onRemoveFromRoll}
-                    onDeleteRoll={onDeleteRoll}
-                    onCreateRollFromTabs={onCreateRollFromTabs}
-                    onToggleScanningSession={onToggleScanningSession}
-                    usesNativeFileDialogs={usesNativeFileDialogs}
-                    tabs={tabs}
                   />
                 ) : (
                   <Sidebar
@@ -1040,6 +1012,7 @@ export function AppShell({
                               imageHeight={cropImageSize.height}
                               levelAngle={documentState.settings.levelAngle}
                               straightenActive={straightenActive}
+                              displayScale={effectiveZoom}
                               onLevelAngleChange={onLevelAngleChange}
                               onInteractionStart={onCropInteractionStart}
                               onInteractionEnd={onCropInteractionEnd}

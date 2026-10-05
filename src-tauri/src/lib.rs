@@ -711,6 +711,8 @@ pub fn run() {
                 MenuItemBuilder::with_id("batch-export", "Export Frames…")
                     .accelerator("CmdOrCtrl+Shift+E")
                     .build(app)?;
+            let convert_files_item =
+                MenuItemBuilder::with_id("convert-files", "Convert Files…").build(app)?;
             let close_image_item = MenuItemBuilder::with_id("close-image", "Close Image")
                 .accelerator("CmdOrCtrl+W")
                 .build(app)?;
@@ -778,6 +780,7 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
                 .separator()
                 .item(&export_item)
                 .item(&batch_export_item)
+                .item(&convert_files_item)
                 .item(&open_in_editor_item)
                 .separator()
                 .item(&scan_session_item)

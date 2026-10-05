@@ -420,38 +420,6 @@ describe('PresetsPane', () => {
     expect(screen.getByText('Negative · Color')).toBeInTheDocument();
   });
 
-  it('does not show the old apply stored film base action on the active roll card', () => {
-    const activeRoll = {
-      id: 'roll-1',
-      name: 'Untitled Roll',
-      filmStock: null,
-      profileId: null,
-      camera: null,
-      date: null,
-      notes: '',
-      filmBaseSample: null,
-      createdAt: Date.now(),
-      directory: null,
-    };
-
-    render(
-      <PresetsPane
-        activeStockId="generic-color"
-        onStockChange={vi.fn()}
-        customPresets={[]}
-        canSavePreset
-        onSavePreset={vi.fn()}
-        onImportPreset={vi.fn()}
-        onDeletePreset={vi.fn()}
-        rolls={new Map([[activeRoll.id, activeRoll]])}
-        activeRoll={activeRoll}
-        filmstripTabs={[]}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /^rolls$/i }));
-    expect(screen.queryByRole('button', { name: /apply stored film base/i })).not.toBeInTheDocument();
-  });
   it('imports a .cube LUT as a custom preset', async () => {
     const onImportPreset = vi.fn();
     const cubeText = [

@@ -445,7 +445,6 @@ export default function App() {
   }, [allLightSourceProfiles]);
   const {
     rolls,
-    createRoll,
     updateRoll,
     deleteRoll,
     assignToRoll,
@@ -535,11 +534,6 @@ export default function App() {
     rollId ? rolls.get(rollId) ?? null : null
   ), [rolls]);
   const activeRoll = useMemo(() => getRollById(documentState?.rollId ?? null), [documentState?.rollId, getRollById]);
-  const filmstripTabs = useMemo(() => (
-    activeRoll
-      ? tabs.filter((tab) => tab.rollId === activeRoll.id)
-      : tabs
-  ), [activeRoll, tabs]);
 
   const resolveRollId = useCallback((nativePath: string | null | undefined) => {
     if (!nativePath) {
@@ -2188,6 +2182,17 @@ export default function App() {
     setIsCropOverlayVisible((current) => !current);
   }, []);
 
+  const handleStraightenActiveChange = useCallback((active: boolean) => {
+    setIsStraightenActive(active);
+    if (!active) return;
+    // Drawing a level line happens on the crop overlay, so open it on demand.
+    setDustBrushActive(false);
+    setIsPickingFilmBase(false);
+    setActivePointPicker(null);
+    setComparisonMode('processed');
+    setIsCropOverlayVisible(true);
+  }, []);
+
   const handleDustRemovalChange = useCallback((dustRemoval: ConversionSettings['dustRemoval']) => {
     handleSettingsChange({
       dustRemoval: resolveDustRemovalSettings(dustRemoval ?? DEFAULT_DUST_REMOVAL),
@@ -2769,13 +2774,6 @@ export default function App() {
     );
   }, [showTransientNotice, tabsRef, updateTabById]);
 
-  const handleStabilizeRollCrops = useCallback(async (rollId: string) => {
-    const roll = getRollById(rollId);
-    if (!roll) return;
-    const rollTabIds = tabsRef.current.filter((tab) => tab.rollId === rollId).map((tab) => tab.id);
-    await stabilizeCropsForTabs(rollTabIds, roll.name);
-  }, [getRollById, stabilizeCropsForTabs, tabsRef]);
-
   // ── Filmstrip selection ───────────────────────────────────────────────
   const [filmstripSelection, setFilmstripSelection] = useState<FilmstripSelection>({ ids: [], anchorId: null });
   const [isRunningSelectionAction, setIsRunningSelectionAction] = useState(false);
@@ -2871,17 +2869,6 @@ export default function App() {
     assignToRoll([tabId], null);
     showTransientNotice('Removed frame from its roll.', 'success');
   }, [assignToRoll, showTransientNotice]);
-
-  const handleCreateRollFromTabs = useCallback(() => {
-    const unrolledTabs = tabsRef.current.filter((tab) => !tab.rollId);
-    if (unrolledTabs.length === 0) {
-      showTransientNotice('All open tabs are already in a roll.');
-      return;
-    }
-    const roll = createRoll('Untitled Roll');
-    assignToRoll(unrolledTabs.map((tab) => tab.id), roll.id);
-    showTransientNotice(`Created roll with ${unrolledTabs.length} frame${unrolledTabs.length === 1 ? '' : 's'}.`, 'success');
-  }, [assignToRoll, createRoll, showTransientNotice, tabsRef]);
 
   const handleDeleteRoll = useCallback(async (rollId: string) => {
     const roll = rolls.get(rollId);
@@ -3269,6 +3256,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onRedo: handleRedo,
     onOpenImage: handleOpenImage,
     onOpenFolder: handleOpenFolder,
+    onOpenConvertFiles: handleOpenBatchExport,
     onOpenRecentFile: importFile,
     onOpenFilesByPath: handleOpenFilesByPath,
     onOpenInEditor: async () => { await handleOpenInEditor(); },
@@ -3386,8 +3374,6 @@ onToggleScanningSession: toggleScanningWindow,
       updateError={updateState.error}
       isCheckingForUpdates={updateState.isChecking}
       activeRoll={activeRoll}
-      rolls={rolls}
-      filmstripTabs={filmstripTabs}
       getRollById={getRollById}
       profilesById={profilesById}
       lightSourceProfilesById={lightSourceProfilesById}
@@ -3430,16 +3416,11 @@ onToggleScanningSession: toggleScanningWindow,
       onDownload={() => { void handleDownload(); }}
       onFileChange={handleFileChange}
       onRecentImport={importFile}
-      onSelectTab={handleSelectTab}
       onReorderTabs={handleReorderTabs}
       onSyncRollSettings={handleSyncRollSettings}
-      onStabilizeRollCrops={handleStabilizeRollCrops}
       onApplyRollFilmBase={handleApplyRollFilmBase}
       onRemoveFromRoll={handleRemoveFromRoll}
       onOpenRollInfo={handleOpenRollInfo}
-      onDeleteRoll={handleDeleteRoll}
-      onCreateRollFromTabs={handleCreateRollFromTabs}
-      onToggleScanningSession={toggleScanningWindow}
       onSettingsChange={handleSettingsChange}
       onDustRemovalChange={handleDustRemovalChange}
       defaultExportOptions={defaultExportOptions}
@@ -3449,7 +3430,7 @@ onToggleScanningSession: toggleScanningWindow,
       onInteractionEnd={handleInteractionEnd}
       onLevelInteractionChange={setIsAdjustingLevel}
       straightenActive={straightenActive}
-      onStraightenActiveChange={setIsStraightenActive}
+      onStraightenActiveChange={handleStraightenActiveChange}
       onLevelAngleChange={handleOverlayLevelAngleChange}
       onToggleFilmBasePicker={handleFilmBasePickerToggle}
       onReanalyzeFilmBase={handleReanalyzeFilmBase}
