@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyCrushGuard, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { FilmBaseEstimate } from '../types';
 
 function createPixel(r: number, g: number, b: number) {
@@ -40,6 +40,108 @@ const neutralSettings = createDefaultSettings({
   redBalance: 1,
   greenBalance: 1,
   blueBalance: 1,
+});
+
+describe('adjustment group toggles', () => {
+  const adjusted = createDefaultSettings({
+    exposure: 45,
+    contrast: 30,
+    highlightProtection: 80,
+    shadowRecovery: 60,
+    midtoneContrast: 35,
+    blackPoint: 24,
+    whitePoint: 210,
+    temperature: 40,
+    tint: -30,
+    saturation: 145,
+    redBalance: 1.2,
+    greenBalance: 0.8,
+    blueBalance: 1.1,
+  });
+
+  it('renders disabled groups as neutral sliders without discarding the saved values', () => {
+    const disabled = {
+      ...adjusted,
+      toneEnabled: false,
+      toneRangeEnabled: false,
+      whiteBalanceEnabled: false,
+      colorControlsEnabled: false,
+    };
+
+    expect(resolveEffectiveSettings(disabled)).toMatchObject({
+      exposure: 0,
+      contrast: 0,
+      highlightProtection: 0,
+      shadowRecovery: 0,
+      midtoneContrast: 0,
+      blackPoint: 0,
+      whitePoint: 255,
+      temperature: 0,
+      tint: 0,
+      saturation: 100,
+      redBalance: 1,
+      greenBalance: 1,
+      blueBalance: 1,
+    });
+    expect(disabled).toMatchObject({ exposure: 45, blackPoint: 24, temperature: 40, saturation: 145 });
+  });
+
+  it('keeps the film stock calibration when the user adjustment is switched off', () => {
+    const effective = resolveEffectiveSettings(
+      { ...adjusted, toneEnabled: false, toneRangeEnabled: false },
+      { highlightProtectionBias: 0.25, blackPointBias: 0.1 } as never,
+    );
+    expect(effective.highlightProtection).toBeCloseTo(25, 6);
+    expect(effective.blackPoint).toBeCloseTo(10, 6);
+  });
+
+  it('never switches black-and-white conversion off', () => {
+    const mono = { ...adjusted, colorControlsEnabled: false, blackAndWhite: { ...adjusted.blackAndWhite, enabled: true } };
+    expect(resolveEffectiveSettings(mono).blackAndWhite.enabled).toBe(true);
+  });
+
+  it('treats missing switches as enabled for older saved settings', () => {
+    const legacy = createDefaultSettings({ exposure: 20, temperature: 15 });
+    delete legacy.toneEnabled;
+    delete legacy.whiteBalanceEnabled;
+    expect(resolveEffectiveSettings(legacy)).toMatchObject({ exposure: 20, temperature: 15 });
+  });
+
+  it('renders a disabled group identically to neutral sliders on the CPU and GPU paths', () => {
+    const neutralSliders = {
+      ...adjusted,
+      exposure: 0,
+      contrast: 0,
+      highlightProtection: 0,
+      shadowRecovery: 0,
+      midtoneContrast: 0,
+      blackPoint: 0,
+      whitePoint: 255,
+      temperature: 0,
+      tint: 0,
+      saturation: 100,
+      redBalance: 1,
+      greenBalance: 1,
+      blueBalance: 1,
+    };
+    const disabled = {
+      ...adjusted,
+      toneEnabled: false,
+      toneRangeEnabled: false,
+      whiteBalanceEnabled: false,
+      colorControlsEnabled: false,
+    };
+    const render = (settings: typeof adjusted) => {
+      const image = createGrid(4, [[40, 90, 140], [200, 120, 90], [30, 180, 210], [128, 128, 128]]);
+      processImageData(image, settings, true, 'processed');
+      return Array.from(image.data);
+    };
+
+    expect(render(disabled)).toEqual(render(neutralSliders));
+    expect(render(disabled)).not.toEqual(render(adjusted));
+    expect(buildProcessingUniforms(disabled, true, 'processed'))
+      .toEqual(buildProcessingUniforms(neutralSliders, true, 'processed'));
+  });
 });
 
 describe('processImageData', () => {
@@ -1008,5 +1110,89 @@ describe('getTransformedDimensions', () => {
 
     expect(transformed.width).toBeGreaterThan(4032);
     expect(transformed.height).toBeGreaterThan(6048);
+  });
+});
+
+describe('linear-light exposure and white balance', () => {
+  const srgbDecode = (v: number) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  const positiveSettings = (overrides: Parameters<typeof createDefaultSettings>[0] = {}) => createDefaultSettings({
+    ...neutralSettings,
+    filmBaseSample: { r: 255, g: 255, b: 255 },
+    residualBaseCorrection: false,
+    flareCorrection: 0,
+    ...overrides,
+  });
+  const renderSlide = (pixels: Array<[number, number, number]>, overrides: Parameters<typeof createDefaultSettings>[0]) => {
+    const raster = createFloatGrid(2, pixels);
+    processFloatRaster(raster, positiveSettings(overrides), true, 'processed', undefined, undefined, undefined, undefined, undefined, undefined, 0, 0, 0, 'srgb', 'srgb', null, 'slide');
+    return raster.data;
+  };
+
+  it('keeps black neutral when warming or tinting', () => {
+    const data = renderSlide([[0, 0, 0], [128, 128, 128]], { temperature: 40, tint: -30 });
+    expect(Array.from(data.slice(0, 3))).toEqual([0, 0, 0]);
+    expect(data[3]).toBeGreaterThan(data[5]);
+  });
+
+  it('applies temperature as opposite stops on red and blue in linear light', () => {
+    const data = renderSlide([[128, 128, 128]], { temperature: 40 });
+    // 40 units = one stop: red/blue differ by two stops whatever the grey level.
+    expect(srgbDecode(data[0]) / srgbDecode(data[2])).toBeCloseTo(4, 2);
+  });
+
+  it('keeps the brightness of a neutral when only the cast changes', () => {
+    const [r, g, b] = Array.from(renderSlide([[128, 128, 128]], { temperature: 30, tint: 20 }).slice(0, 3)).map(srgbDecode);
+    const reference = srgbDecode(128 / 255);
+    expect(0.2126 * r + 0.7152 * g + 0.0722 * b).toBeCloseTo(reference, 3);
+  });
+
+  it('treats 25 exposure units as one stop of linear light', () => {
+    const base = renderSlide([[90, 90, 90]], {})[0];
+    const brighter = renderSlide([[90, 90, 90]], { exposure: 25 })[0];
+    expect(srgbDecode(brighter) / srgbDecode(base)).toBeCloseTo(2, 2);
+  });
+
+  it('puts exposure and white balance gains in the GPU uniforms', () => {
+    const uniforms = buildProcessingUniforms(positiveSettings({ exposure: 25, temperature: 40 }), true, 'processed');
+    const [gainR, gainG, gainB] = [uniforms[16], uniforms[7], uniforms[17]];
+    expect(gainR / gainB).toBeCloseTo(4, 5);
+    expect(0.2126 * gainR + 0.7152 * gainG + 0.0722 * gainB).toBeCloseTo(2, 5);
+  });
+});
+
+describe('tone stage', () => {
+  it('keeps the contrast stretch but eases clipped shadows into a toe', () => {
+    expect(applyContrast(0.3, 1)).toBeCloseTo(0.3);
+    expect(applyContrast(0.3, 0.8)).toBeCloseTo(0.34);
+    const k = 1.4;
+    // Mid and upper tones follow the plain stretch.
+    expect(applyContrast(0.7, k)).toBeCloseTo(k * 0.2 + 0.5);
+    // Black stays black, and shadows the stretch used to clip keep separation.
+    expect(applyContrast(0, k)).toBe(0);
+    expect(applyContrast(0.1, k)).toBeGreaterThan(0);
+    let previous = -Infinity;
+    for (let x = 0; x <= 1; x += 0.01) {
+      const value = applyContrast(x, k);
+      expect(value).toBeGreaterThanOrEqual(previous);
+      previous = value;
+    }
+  });
+
+  it('compresses an over-range highlight without changing its hue', () => {
+    const params = resolveToneStageParams(createDefaultSettings({
+      ...neutralSettings, contrast: 0, highlightProtection: 30,
+    }), 0);
+    const [r, g, b] = applyToneStage(1.4, 0.9, 0.5, params);
+    expect(Math.max(r, g, b)).toBeLessThanOrEqual(1);
+    expect(Math.min(r, g, b)).toBeGreaterThanOrEqual(0);
+    // Same position between the strongest and weakest channel as the input.
+    expect((g - b) / (r - b)).toBeCloseTo((0.9 - 0.5) / (1.4 - 0.5), 5);
+  });
+
+  it('keeps a neutral highlight neutral', () => {
+    const params = resolveToneStageParams(createDefaultSettings({ ...neutralSettings, highlightProtection: 40 }), 0);
+    const [r, g, b] = applyToneStage(1.2, 1.2, 1.2, params);
+    expect(r).toBeCloseTo(g, 6);
+    expect(g).toBeCloseTo(b, 6);
   });
 });

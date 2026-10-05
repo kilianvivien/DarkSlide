@@ -1,5 +1,5 @@
 import { Dispatch, SetStateAction, useEffect } from 'react';
-import { DocumentTab, QuickExportPreset } from '../types';
+import { DocumentTab, EditorTool, QuickExportPreset } from '../types';
 import { openImageFileByPath } from '../utils/fileBridge';
 import { clearRecentFiles } from '../utils/recentFilesStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -12,12 +12,13 @@ type UseAppShortcutsOptions = {
   isCropOverlayVisible: boolean;
   dustBrushActive: boolean;
   usesNativeFileDialogs: boolean;
-  setShowBatchModal: Dispatch<SetStateAction<boolean>>;
   setShowSettingsModal: Dispatch<SetStateAction<boolean>>;
   setIsSpaceHeld: Dispatch<SetStateAction<boolean>>;
   onUndo: () => void;
   onRedo: () => void;
   onOpenImage: () => Promise<void>;
+  onOpenFolder: () => Promise<void>;
+  onOpenConvertFiles: () => void;
   onOpenRecentFile: (file: File, path: string, size?: number) => Promise<string | null>;
   onOpenFilesByPath: (paths: string[]) => Promise<void>;
   onOpenInEditor: () => Promise<void>;
@@ -37,7 +38,10 @@ type UseAppShortcutsOptions = {
   onDeactivateDustBrush: () => void;
   onToggleLeftPane: () => void;
   onToggleRightPane: () => void;
-onToggleScanningSession: () => void;
+  onToggleFilmstrip: () => void;
+  onSelectTool: (tool: EditorTool) => void;
+  hasFrameSelection: boolean;
+  onClearFrameSelection: () => void;
   onCheckForUpdates: () => void;
   zoomToFit: () => void;
   zoomTo100: () => void;
@@ -53,12 +57,13 @@ export function useAppShortcuts({
   isCropOverlayVisible,
   dustBrushActive,
   usesNativeFileDialogs,
-  setShowBatchModal,
   setShowSettingsModal,
   setIsSpaceHeld,
   onUndo,
   onRedo,
   onOpenImage,
+  onOpenFolder,
+  onOpenConvertFiles,
   onOpenRecentFile,
   onOpenFilesByPath,
   onOpenInEditor,
@@ -78,7 +83,10 @@ export function useAppShortcuts({
   onDeactivateDustBrush,
   onToggleLeftPane,
   onToggleRightPane,
-onToggleScanningSession,
+  onToggleFilmstrip,
+  onSelectTool,
+  hasFrameSelection,
+  onClearFrameSelection,
   onCheckForUpdates,
   zoomToFit,
   zoomTo100,
@@ -108,8 +116,9 @@ onToggleScanningSession,
       increaseDustBrush: { key: ']', when: () => dustBrushActive, handler: onIncreaseDustBrushRadius },
       removeLastDustMark: { key: 'backspace', when: () => dustBrushActive, handler: onRemoveLastDustMark },
       deactivateDustBrush: { key: 'escape', when: () => dustBrushActive, handler: onDeactivateDustBrush },
-      batchExport: { key: 'e', meta: true, shift: true, handler: () => setShowBatchModal(true) },
-      toggleScanningSession: { key: 'w', meta: true, shift: true, when: () => usesNativeFileDialogs, handler: onToggleScanningSession },
+      clearFrameSelection: { key: 'escape', when: () => !dustBrushActive && hasFrameSelection, handler: onClearFrameSelection },
+      // Multi-frame export lives in the Export panel; Convert Files opens from there.
+      exportFrames: { key: 'e', meta: true, shift: true, handler: () => onSelectTool('export') },
 previousTab: {
         key: '[',
         meta: true,
@@ -133,12 +142,42 @@ previousTab: {
         },
       },
       settings: { key: ',', meta: true, handler: () => setShowSettingsModal((current) => !current) },
+      toolDevelop: { key: '1', handler: () => onSelectTool('adjust') },
+      toolCurves: { key: '2', handler: () => onSelectTool('curves') },
+      toolProfiles: { key: '3', handler: () => onSelectTool('profiles') },
+      toggleProfiles: { key: 'p', handler: onToggleRightPane },
+      toggleFilmstrip: { key: 'f', when: () => tabs.length > 0, handler: onToggleFilmstrip },
+      toolCrop: { key: '4', when: () => documentStatePresent, handler: () => onSelectTool('crop') },
+      toolDust: { key: '5', when: () => documentStatePresent, handler: () => onSelectTool('dust') },
+      toolExport: { key: '6', handler: () => onSelectTool('export') },
+      toolContactSheet: { key: '7', when: () => documentStatePresent, handler: () => onSelectTool('contact') },
+      toggleCropOverlay: { key: 'c', when: () => documentStatePresent && !dustBrushActive, handler: onToggleCropOverlay },
+      toggleComparison: { key: '\\', when: () => documentStatePresent, handler: onToggleComparison },
+      previousFrame: {
+        key: 'arrowleft',
+        when: () => tabs.length > 1 && !isCropOverlayVisible,
+        handler: () => {
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+          if (currentIndex > 0) setActiveTabId(tabs[currentIndex - 1].id);
+        },
+      },
+      nextFrame: {
+        key: 'arrowright',
+        when: () => tabs.length > 1 && !isCropOverlayVisible,
+        handler: () => {
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+          if (currentIndex >= 0 && currentIndex < tabs.length - 1) setActiveTabId(tabs[currentIndex + 1].id);
+        },
+      },
       holdPan: { key: ' ', handler: () => setIsSpaceHeld(true), when: () => !documentStatePresent || !isCropOverlayVisible },
     },
     onMenuAction: (action) => {
       switch (action) {
         case 'open':
           void onOpenImage();
+          break;
+        case 'open-folder':
+          void onOpenFolder();
           break;
         case 'export':
           void onDownload();
@@ -147,7 +186,10 @@ previousTab: {
           void onOpenInEditor();
           break;
         case 'batch-export':
-          setShowBatchModal(true);
+          onSelectTool('export');
+          break;
+        case 'convert-files':
+          onOpenConvertFiles();
           break;
         case 'close-image':
           void onCloseImage();
@@ -184,9 +226,6 @@ previousTab: {
           break;
         case 'show-settings':
           setShowSettingsModal(true);
-          break;
-        case 'scan-session-toggle':
-          onToggleScanningSession();
           break;
 case 'check-for-updates':
           onCheckForUpdates();

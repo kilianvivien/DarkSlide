@@ -13,7 +13,6 @@ import {
   Pipette,
   Plus,
   RefreshCw,
-  Settings,
   Settings2,
   SlidersHorizontal,
   Thermometer,
@@ -21,25 +20,37 @@ import {
   Wand2,
   Zap,
 } from 'lucide-react';
-import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, ExportFormat, ExportOptions, FilmBaseEstimate, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, PointPickerMode, QuickExportPreset, SourceMetadata } from '../types';
+import { ColorManagementSettings, ColorProfileId, ConversionSettings, CropTab, Curves, EditorTool, ExportFormat, ExportOptions, FilmBaseEstimate, FilmProfile, HistogramData, LabStyleProfile, LightSourceProfile, PointPickerMode, QuickExportPreset, SourceMetadata } from '../types';
 import { CropPane } from './CropPane';
 import { CurvesControl } from './CurvesControl';
 import { Histogram } from './Histogram';
 import { Slider } from './Slider';
+import { GroupSwitch } from './GroupSwitch';
+import { ExportFramesControl, FrameExportProgress } from './ExportFramesControl';
+import { ARMED, FIELD_LABEL, HEADER_ACTION, PANEL_BUTTON, panelToggleButton, SECTION_TITLE, SEGMENT_TRACK, SELECT_INPUT, segmentItem } from './ui';
+
+const noop = () => undefined;
+
+// A switched-off group stays editable but reads as inactive.
+const GROUP_DISABLED_CLASS = 'opacity-45 transition-opacity hover:opacity-80';
 import { DustPane } from './DustPane';
-import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription } from '../utils/colorProfiles';
 import { DEFAULT_DUST_REMOVAL, FILM_BASE_CONFIDENCE, resolveDustRemovalSettings } from '../constants';
 
-const ADJUST_PANE_INITIAL = { opacity: 0, x: -10 };
-const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0 };
-const ADJUST_PANE_EXIT = { opacity: 0, x: 10 };
-const CURVES_PANE_INITIAL = { opacity: 0, x: 10 };
-const CURVES_PANE_ANIMATE = { opacity: 1, x: 0 };
-const CURVES_PANE_EXIT = { opacity: 0, x: -10 };
-const VERTICAL_PANE_INITIAL = { opacity: 0, y: 10 };
-const VERTICAL_PANE_ANIMATE = { opacity: 1, y: 0 };
-const VERTICAL_PANE_EXIT = { opacity: 0, y: -10 };
+// Pane switches wait for the old pane to leave, so both halves stay short and
+// use tweens: motion's default spring on x took several hundred ms to settle
+// and made every tool switch feel slow.
+const PANE_ENTER_TRANSITION = { duration: 0.16, ease: [0.22, 1, 0.36, 1] as const };
+const PANE_EXIT_TRANSITION = { duration: 0.08, ease: 'easeIn' as const };
+const ADJUST_PANE_INITIAL = { opacity: 0, x: -8 };
+const ADJUST_PANE_ANIMATE = { opacity: 1, x: 0, transition: PANE_ENTER_TRANSITION };
+const ADJUST_PANE_EXIT = { opacity: 0, x: 8, transition: PANE_EXIT_TRANSITION };
+const CURVES_PANE_INITIAL = { opacity: 0, x: 8 };
+const CURVES_PANE_ANIMATE = { opacity: 1, x: 0, transition: PANE_ENTER_TRANSITION };
+const CURVES_PANE_EXIT = { opacity: 0, x: -8, transition: PANE_EXIT_TRANSITION };
+const VERTICAL_PANE_INITIAL = { opacity: 0, y: 8 };
+const VERTICAL_PANE_ANIMATE = { opacity: 1, y: 0, transition: PANE_ENTER_TRANSITION };
+const VERTICAL_PANE_EXIT = { opacity: 0, y: -8, transition: PANE_EXIT_TRANSITION };
 
 const POINT_PICKERS = [
   { mode: 'black' as const, label: 'Black', swatchClass: 'bg-zinc-950 border-zinc-700' },
@@ -154,11 +165,15 @@ interface SidebarProps {
   onSaveQuickExportPreset: () => void;
   onDeleteQuickExportPreset: (presetId: string) => void;
   onOpenBatchExport: () => void;
+  frameSelectionCount?: number;
+  frameCount?: number;
+  frameExportProgress?: FrameExportProgress | null;
+  onExportFrames?: (scope: 'selected' | 'all') => void;
+  onCancelFrameExport?: () => void;
   isExporting: boolean;
   contentScrollTop?: number;
   onContentScrollTopChange?: (scrollTop: number) => void;
-  activeTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
-  onTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => void;
+  activeTab: EditorTool;
   cropTab: CropTab;
   onCropTabChange: (tab: CropTab) => void;
   onRedetectFrame?: () => void;
@@ -166,7 +181,6 @@ interface SidebarProps {
   onResetCrop: () => void;
   activePointPicker: PointPickerMode | null;
   onSetPointPicker: (mode: PointPickerMode | null) => void;
-  onOpenSettings: () => void;
   onLightSourceChange?: (lightSourceId: string | null) => void;
   onLabStyleChange?: (labStyleId: string | null) => void;
   onAutoAdjust?: () => void;
@@ -214,7 +228,6 @@ export const Sidebar = memo(function Sidebar({
   onDeleteQuickExportPreset,
   isExporting,
   activeTab,
-  onTabChange,
   cropTab,
   onCropTabChange,
   onRedetectFrame,
@@ -222,7 +235,6 @@ export const Sidebar = memo(function Sidebar({
   onResetCrop,
   activePointPicker,
   onSetPointPicker,
-  onOpenSettings,
   onLightSourceChange,
   onLabStyleChange,
   onAutoAdjust,
@@ -233,6 +245,11 @@ export const Sidebar = memo(function Sidebar({
   dustBrushActive = false,
   onDustBrushActiveChange,
   onOpenBatchExport,
+  frameSelectionCount = 1,
+  frameCount = 1,
+  frameExportProgress = null,
+  onExportFrames = noop,
+  onCancelFrameExport = noop,
   contentScrollTop = 0,
   onContentScrollTopChange,
 }: SidebarProps) {
@@ -241,18 +258,27 @@ export const Sidebar = memo(function Sidebar({
   void sourceMetadata;
   void estimatedFlare;
   const filmBaseInstruction = isPickingFilmBase
-    ? 'Click an unexposed film-base area…'
+    ? 'Click a clear film-base area…'
     : 'Sample Film Base';
   const filmBaseLowConfidence = filmBaseSampleSource === null
     && estimatedFilmBase !== null
     && (estimatedFilmBase.confidence < FILM_BASE_CONFIDENCE.accept || estimatedFilmBase.source === 'low-confidence');
   const filmBaseStatus = filmBaseSampleSource === 'manual'
-    ? 'Manual sample'
+    ? 'Sampled on this frame'
     : filmBaseSampleSource === 'roll'
-      ? 'Roll sample'
+      ? 'Sampled for the roll'
       : estimatedFilmBase
-        ? `${estimatedFilmBase.source === 'frame-rebate' ? 'Frame rebate' : estimatedFilmBase.source === 'in-frame' ? 'In-frame estimate' : estimatedFilmBase.source === 'low-confidence' ? 'Conservative fallback' : 'Automatic estimate'} · ${Math.round(estimatedFilmBase.confidence * 100)}%`
-        : 'No base reference';
+        ? estimatedFilmBase.source === 'frame-rebate'
+          ? 'Found in the frame edge'
+          : estimatedFilmBase.source === 'in-frame'
+            ? 'In-frame estimate'
+            : estimatedFilmBase.source === 'low-confidence'
+              ? 'Not found, using a fallback'
+              : 'Automatic estimate'
+        : 'Not measured yet';
+  const filmBaseConfidence = filmBaseSampleSource === null && estimatedFilmBase
+    ? Math.round(estimatedFilmBase.confidence * 100)
+    : null;
 
   useEffect(() => {
     const element = contentRef.current;
@@ -273,11 +299,11 @@ export const Sidebar = memo(function Sidebar({
     return Object.fromEntries(entries) as Record<ScalarSliderKey, (value: number) => void>;
   }, [onSettingsChange]);
 
-  const handleBlackAndWhiteEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBlackAndWhiteEnabledChange = useCallback((enabled: boolean) => {
     onSettingsChange({
       blackAndWhite: {
         ...settings.blackAndWhite,
-        enabled: event.target.checked,
+        enabled,
       },
     });
   }, [onSettingsChange, settings.blackAndWhite]);
@@ -318,11 +344,11 @@ export const Sidebar = memo(function Sidebar({
     });
   }, [onSettingsChange, settings.blackAndWhite]);
 
-  const handleSharpenEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSharpenEnabledChange = useCallback((enabled: boolean) => {
     onSettingsChange({
       sharpen: {
         ...settings.sharpen,
-        enabled: event.target.checked,
+        enabled,
       },
     });
   }, [onSettingsChange, settings.sharpen]);
@@ -345,11 +371,11 @@ export const Sidebar = memo(function Sidebar({
     });
   }, [onSettingsChange, settings.sharpen]);
 
-  const handleNoiseReductionEnabledChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleNoiseReductionEnabledChange = useCallback((enabled: boolean) => {
     onSettingsChange({
       noiseReduction: {
         ...settings.noiseReduction,
-        enabled: event.target.checked,
+        enabled,
       },
     });
   }, [onSettingsChange, settings.noiseReduction]);
@@ -419,39 +445,33 @@ export const Sidebar = memo(function Sidebar({
     [settings.dustRemoval],
   );
 
+  const toneEnabled = settings.toneEnabled !== false;
+  const toneRangeEnabled = settings.toneRangeEnabled !== false;
+  const whiteBalanceEnabled = settings.whiteBalanceEnabled !== false;
+  const colorControlsEnabled = settings.colorControlsEnabled !== false;
+
+  // The histogram guides tone and color work; other tools get the space back.
+  const showHistogram = activeTab === 'adjust' || activeTab === 'curves';
+
   const isWebpExport = exportOptions.format === 'image/webp';
   const showQualityControl = exportOptions.format !== 'image/png' && exportOptions.format !== 'image/tiff';
   const showBitDepthControl = exportOptions.format === 'image/png' || exportOptions.format === 'image/tiff';
 
   return (
-    <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden">
-      <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-900/20 shrink-0">
-        <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
-          <BarChart3 size={12} /> Histogram
-        </h2>
-        <Histogram data={histogramData} variant={isColor && !settings.blackAndWhite.enabled ? 'color' : 'neutral'} />
-      </div>
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-zinc-950">
+      {showHistogram && (
+        <div className="shrink-0 border-b border-zinc-800 bg-zinc-900/20 px-5 py-3">
+          <Histogram data={histogramData} variant={isColor && !settings.blackAndWhite.enabled ? 'color' : 'neutral'} />
+        </div>
+      )}
 
-      <div className="flex px-6 pt-4 justify-between shrink-0">
-        {(['adjust', 'curves', 'crop', 'dust', 'export'] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => onTabChange(tab)}
-            className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all shrink-0 ${
-              activeTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
-            }`}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
 
       <div
         ref={contentRef}
         className="flex-1 overflow-y-auto custom-scrollbar"
         onScroll={(event) => onContentScrollTopChange?.(event.currentTarget.scrollTop)}
       >
-        <div className="p-6 space-y-8">
+        <div className="space-y-7 px-5 py-5">
           <AnimatePresence mode="wait">
             {activeTab === 'adjust' ? (
               <motion.div
@@ -462,7 +482,7 @@ export const Sidebar = memo(function Sidebar({
                 className="space-y-8"
               >
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                  <h2 className={SECTION_TITLE}>
                     <Pipette size={12} /> Film Base
                     <button
                       data-tip="Sample an unexposed area of the negative to neutralize the film base using color balance."
@@ -475,42 +495,48 @@ export const Sidebar = memo(function Sidebar({
                   </h2>
                   <button
                     onClick={onTogglePicker}
-                    className={`w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border transition-all ${
-                      isPickingFilmBase
-                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
-                        : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-zinc-800'
+                    aria-pressed={isPickingFilmBase}
+                    className={panelToggleButton(isPickingFilmBase)}
+                  >
+                    <Pipette size={14} className={isPickingFilmBase ? 'animate-pulse' : ''} />
+                    <span>{filmBaseInstruction}</span>
+                  </button>
+                  <div
+                    className={`mt-2 rounded-lg border px-3 py-2 ${
+                      filmBaseLowConfidence ? 'border-amber-500/20 bg-amber-500/[0.04]' : 'border-zinc-800/80 bg-zinc-900/30'
                     }`}
                   >
-                    <Pipette size={16} className={isPickingFilmBase ? 'animate-pulse' : ''} />
-                    <span className="text-sm font-medium">{filmBaseInstruction}</span>
-                  </button>
-                  <div className="mt-2 flex min-w-0 items-center gap-2 px-0.5">
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${filmBaseLowConfidence ? 'bg-amber-500/70' : 'bg-zinc-600'}`} />
-                    <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Base</span>
-                    <span role="status" className={`min-w-0 flex-1 truncate text-[11px] ${filmBaseLowConfidence ? 'text-amber-300/80' : 'text-zinc-500'}`}>{filmBaseStatus}</span>
-                    {onReanalyzeFilmBase && filmBaseSampleSource === null && (
-                      <button
-                        type="button"
-                        onClick={onReanalyzeFilmBase}
-                        disabled={isReanalyzingFilmBase}
-                        className="inline-flex shrink-0 items-center gap-1 py-1 text-[10px] font-medium text-zinc-600 transition-colors hover:text-zinc-300 disabled:cursor-wait disabled:opacity-50"
-                        aria-label="Re-analyze film base outside the current crop"
-                        data-tip="Look for clear film base outside the current crop. Large changes require confirmation."
-                      >
-                        {isReanalyzingFilmBase ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-                        {isReanalyzingFilmBase ? 'Analyzing…' : 'Re-analyze'}
-                      </button>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${filmBaseLowConfidence ? 'bg-amber-400' : filmBaseSampleSource !== null || estimatedFilmBase ? 'bg-accent-400' : 'bg-zinc-600'}`} />
+                      <span role="status" className="min-w-0 flex-1 truncate text-[12px] text-zinc-300">{filmBaseStatus}</span>
+                      {filmBaseConfidence !== null && (
+                        <span className={`shrink-0 font-mono text-[11px] tabular-nums ${filmBaseLowConfidence ? 'text-amber-300/90' : 'text-zinc-500'}`}>
+                          {filmBaseConfidence}%
+                        </span>
+                      )}
+                      {onReanalyzeFilmBase && filmBaseSampleSource === null && (
+                        <button
+                          type="button"
+                          onClick={onReanalyzeFilmBase}
+                          disabled={isReanalyzingFilmBase}
+                          className="-mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50"
+                          aria-label="Re-analyze film base outside the current crop"
+                          data-tip="Look for clear film base outside the current crop. Large changes require confirmation."
+                        >
+                          {isReanalyzingFilmBase ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                        </button>
+                      )}
+                    </div>
+                    {filmBaseLowConfidence && (
+                      <p className="mt-1 pl-3.5 text-[11px] leading-snug text-zinc-400">
+                        Low confidence. Sample clear film, such as the strip edge or the gap between frames.
+                      </p>
                     )}
                   </div>
-                  {filmBaseLowConfidence && (
-                    <p className="mt-1.5 pl-5 text-[10px] leading-relaxed text-amber-300/55">
-                      Low confidence — sample a clear area if the conversion looks wrong.
-                    </p>
-                  )}
                 </section>
 
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                  <h2 className={SECTION_TITLE}>
                     <Settings2 size={12} /> Scanning Corrections
                     <button
                       data-tip="Correct for light source color cast, lab-specific color shifts, and lens flare from the scanner or enlarger."
@@ -521,25 +547,24 @@ export const Sidebar = memo(function Sidebar({
                       <Info size={10} />
                     </button>
                   </h2>
-                  <div className="mb-4 flex items-center gap-3">
-                    <span className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-zinc-400">Light Source</span>
+                  <div className="mb-4 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5 px-1">
+                    <label htmlFor="develop-light-source" className={FIELD_LABEL}>Light Source</label>
                     <select
+                      id="develop-light-source"
                       value={lightSourceId ?? 'auto'}
                       onChange={(event) => handleLightSourceSelect(event.target.value)}
-                      className="min-w-0 flex-1 truncate rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-xs text-zinc-300 outline-none transition-colors focus:border-zinc-500"
+                      className={SELECT_INPUT}
                     >
                       {lightSourceProfiles.map((profile) => (
                         <option key={profile.id} value={profile.id}>{profile.name}</option>
                       ))}
                     </select>
-                  </div>
-
-                  <div className="mb-4 flex items-center gap-3">
-                    <span className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-zinc-400">Lab Style</span>
+                    <label htmlFor="develop-lab-style" className={FIELD_LABEL}>Lab Style</label>
                     <select
+                      id="develop-lab-style"
                       value={activeLabStyleId ?? 'none'}
                       onChange={(event) => onLabStyleChange?.(event.target.value === 'none' ? null : event.target.value)}
-                      className="min-w-0 flex-1 truncate rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-xs text-zinc-300 outline-none transition-colors focus:border-zinc-500"
+                      className={SELECT_INPUT}
                     >
                       <option value="none">None</option>
                       {labStyleProfiles.map((profile) => (
@@ -560,15 +585,16 @@ export const Sidebar = memo(function Sidebar({
 
                 </section>
 
-                <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
-                    <SlidersHorizontal size={12} /> Basic Adjustments
+                <section className={toneEnabled ? undefined : GROUP_DISABLED_CLASS}>
+                  <h2 className={SECTION_TITLE}>
+                    <GroupSwitch label="Tone" enabled={toneEnabled} onChange={(enabled) => onSettingsChange({ toneEnabled: enabled })} />
+                    <SlidersHorizontal size={12} /> Tone
                     {histogramData && (
                       <button
                         type="button"
                         onClick={onAutoAdjust}
                         data-tip="Auto-sets exposure, contrast, black point, and white point from the image histogram"
-                        className="ml-auto flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-200"
+                        className={HEADER_ACTION}
                       >
                         <Wand2 size={10} />
                         Auto
@@ -578,8 +604,6 @@ export const Sidebar = memo(function Sidebar({
 
                   <Slider label="Exposure" fineStep={1} value={settings.exposure} min={-100} max={100} onChange={scalarSliderHandlers.exposure} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   <Slider label="Contrast" fineStep={1} value={settings.contrast} min={-100} max={100} onChange={scalarSliderHandlers.contrast} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  <Slider label="Black Point" fineStep={1} value={settings.blackPoint} min={0} max={80} onChange={scalarSliderHandlers.blackPoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  <Slider label="White Point" fineStep={1} value={settings.whitePoint} min={180} max={255} onChange={scalarSliderHandlers.whitePoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   <Slider
                     label="Highlight Protection"
                     value={settings.highlightProtection}
@@ -609,22 +633,28 @@ export const Sidebar = memo(function Sidebar({
                     onInteractionStart={onInteractionStart}
                     onInteractionEnd={onInteractionEnd}
                   />
+                </section>
 
-                  {isColor && !settings.blackAndWhite.enabled && (
-                    <Slider label="Saturation" fineStep={1} value={settings.saturation} min={0} max={200} onChange={scalarSliderHandlers.saturation} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
-                  )}
+                <section className={toneRangeEnabled ? undefined : GROUP_DISABLED_CLASS}>
+                  <h2 className={SECTION_TITLE}>
+                    <GroupSwitch label="Range" enabled={toneRangeEnabled} onChange={(enabled) => onSettingsChange({ toneRangeEnabled: enabled })} />
+                    <BarChart3 size={12} /> Range
+                  </h2>
+                  <Slider label="Black Point" fineStep={1} value={settings.blackPoint} min={0} max={80} onChange={scalarSliderHandlers.blackPoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                  <Slider label="White Point" fineStep={1} value={settings.whitePoint} min={180} max={255} onChange={scalarSliderHandlers.whitePoint} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                 </section>
 
                 {isColor && !settings.blackAndWhite.enabled && (
-                  <section>
-                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                  <section className={whiteBalanceEnabled ? undefined : GROUP_DISABLED_CLASS}>
+                    <h2 className={SECTION_TITLE}>
+                      <GroupSwitch label="White Balance" enabled={whiteBalanceEnabled} onChange={(enabled) => onSettingsChange({ whiteBalanceEnabled: enabled })} />
                       <Thermometer size={12} /> White Balance
                       {onAutoWhiteBalance && histogramData && (
                         <button
                           type="button"
                           onClick={onAutoWhiteBalance}
                           data-tip="Auto-sets temperature and tint from a neutral-balance analysis of the image"
-                          className="ml-auto flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-200"
+                          className={HEADER_ACTION}
                         >
                           <Wand2 size={10} />
                           Auto WB
@@ -637,10 +667,14 @@ export const Sidebar = memo(function Sidebar({
                 )}
 
                 {isColor && (
-                  <section>
-                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
-                      <Settings2 size={12} /> Color Balance
+                  <section className={colorControlsEnabled ? undefined : GROUP_DISABLED_CLASS}>
+                    <h2 className={SECTION_TITLE}>
+                      <GroupSwitch label="Color" enabled={colorControlsEnabled} onChange={(enabled) => onSettingsChange({ colorControlsEnabled: enabled })} />
+                      <Settings2 size={12} /> Color
                     </h2>
+                    {!settings.blackAndWhite.enabled && (
+                      <Slider label="Saturation" fineStep={1} value={settings.saturation} min={0} max={200} onChange={scalarSliderHandlers.saturation} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
+                    )}
                     <Slider label="Red Balance" fineStep={0.01} value={settings.redBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.redBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                     <Slider label="Green Balance" fineStep={0.01} value={settings.greenBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.greenBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                     <Slider label="Blue Balance" fineStep={0.01} value={settings.blueBalance} min={0.5} max={1.5} step={0.01} onChange={scalarSliderHandlers.blueBalance} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
@@ -649,18 +683,10 @@ export const Sidebar = memo(function Sidebar({
 
                 {isColor && (
                   <section>
-                    <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
-                      <Circle size={12} /> Convert to Black and White
+                    <h2 className={SECTION_TITLE}>
+                      <GroupSwitch label="Black and white" enabled={settings.blackAndWhite.enabled} onChange={handleBlackAndWhiteEnabledChange} />
+                      <Circle size={12} /> Black &amp; White
                     </h2>
-                    <label className="flex items-center gap-2 mb-4 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={settings.blackAndWhite.enabled}
-                        onChange={handleBlackAndWhiteEnabledChange}
-                        className="accent-zinc-200"
-                      />
-                      <span className="text-[11px] text-zinc-400">Enable</span>
-                    </label>
                     {settings.blackAndWhite.enabled && (
                       <>
                         <Slider label="Red" value={settings.blackAndWhite.redMix} min={-100} max={100} onChange={handleBlackAndWhiteRedChange} unit="%" onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
@@ -673,18 +699,10 @@ export const Sidebar = memo(function Sidebar({
                 )}
 
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                  <h2 className={SECTION_TITLE}>
+                    <GroupSwitch label="Sharpen" enabled={settings.sharpen.enabled} onChange={handleSharpenEnabledChange} />
                     <Focus size={12} /> Sharpen
                   </h2>
-                  <label className="flex items-center gap-2 mb-4 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={settings.sharpen.enabled}
-                      onChange={handleSharpenEnabledChange}
-                      className="accent-zinc-200"
-                    />
-                    <span className="text-[11px] text-zinc-400">Enable</span>
-                  </label>
                   {settings.sharpen.enabled && (
                     <>
                       <Slider label="Amount" value={settings.sharpen.amount} min={0} max={200} onChange={handleSharpenAmountChange} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
@@ -694,18 +712,10 @@ export const Sidebar = memo(function Sidebar({
                 </section>
 
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                  <h2 className={SECTION_TITLE}>
+                    <GroupSwitch label="Noise reduction" enabled={settings.noiseReduction.enabled} onChange={handleNoiseReductionEnabledChange} />
                     <Eraser size={12} /> Noise Reduction
                   </h2>
-                  <label className="flex items-center gap-2 mb-4 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={settings.noiseReduction.enabled}
-                      onChange={handleNoiseReductionEnabledChange}
-                      className="accent-zinc-200"
-                    />
-                    <span className="text-[11px] text-zinc-400">Enable</span>
-                  </label>
                   {settings.noiseReduction.enabled && (
                     <Slider label="Luminance" value={settings.noiseReduction.luminanceStrength} min={0} max={100} onChange={handleNoiseReductionStrengthChange} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                   )}
@@ -720,21 +730,21 @@ export const Sidebar = memo(function Sidebar({
                 className="space-y-6"
               >
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                  <h2 className={SECTION_TITLE}>
                     <Activity size={12} /> RGB Curves
                   </h2>
                   <CurvesControl curves={settings.curves} onChange={handleCurvesChange} isColor={isColor} onInteractionStart={onInteractionStart} onInteractionEnd={onInteractionEnd} />
                 </section>
 
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center justify-between">
+                  <h2 className={`${SECTION_TITLE} justify-between`}>
                     <span className="flex items-center gap-2"><Pipette size={12} /> Point Pickers</span>
                     {histogramData && (
                       <button
                         data-tip="Auto-balance: stretch levels to histogram data range, correct color balance"
                         aria-label="Auto balance from histogram"
                         onClick={handleAutoBalance}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 text-[10px] font-semibold uppercase tracking-widest transition-all"
+                        className={HEADER_ACTION}
                       >
                         <Wand2 size={10} />
                         Auto
@@ -748,10 +758,11 @@ export const Sidebar = memo(function Sidebar({
                         data-tip={`Set ${label} Point — click a pixel on the image`}
                         aria-label={`Set ${label} point`}
                         onClick={() => handlePointPickerToggle(mode)}
-                        className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg border text-[11px] font-medium transition-all ${
+                        aria-pressed={activePointPicker === mode}
+                        className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[11px] font-medium transition-colors ${
                           activePointPicker === mode
-                            ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
-                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                            ? ARMED
+                            : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-200'
                         }`}
                       >
                         <span className={`inline-block w-2.5 h-2.5 rounded-full border shrink-0 ${swatchClass}`} />
@@ -814,8 +825,18 @@ export const Sidebar = memo(function Sidebar({
                 exit={VERTICAL_PANE_EXIT}
                 className="space-y-6"
               >
+                <ExportFramesControl
+                  selectedCount={frameSelectionCount}
+                  totalCount={frameCount}
+                  isExporting={isExporting}
+                  progress={frameExportProgress}
+                  onExportCurrent={onExport}
+                  onExportFrames={onExportFrames}
+                  onCancel={onCancelFrameExport}
+                />
+
                 <section>
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                  <h2 className={SECTION_TITLE}>
                     <Zap size={12} /> Quick Export
                   </h2>
 
@@ -865,33 +886,23 @@ export const Sidebar = memo(function Sidebar({
                   </div>
                 </section>
 
-                <button
-                  type="button"
-                  onClick={onOpenBatchExport}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-[11px] font-medium text-zinc-400 transition-all hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-200"
-                >
-                  <FolderOutput size={13} />
-                  Batch Export…
-                </button>
 
                 <section className="border-t border-zinc-800/70 pt-6">
-                  <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                  <h2 className={SECTION_TITLE}>
                     <Settings2 size={12} /> Custom Export
                   </h2>
 
                   <div className="space-y-3">
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Format</label>
-                      <div className="grid grid-cols-4 gap-1.5">
+                      <label className={`block ${FIELD_LABEL}`}>Format</label>
+                      <div className={`${SEGMENT_TRACK} grid-cols-4`}>
                         {(['image/jpeg', 'image/png', 'image/webp', 'image/tiff'] as ExportFormat[]).map((format) => (
                           <button
                             key={format}
+                            type="button"
+                            aria-pressed={exportOptions.format === format}
                             onClick={() => onExportOptionsChange({ format })}
-                            className={`px-1.5 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-tighter transition-all border ${
-                              exportOptions.format === format
-                                ? 'bg-zinc-100 text-zinc-950 border-white shadow-lg'
-                                : 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-300'
-                            }`}
+                            className={`${segmentItem(exportOptions.format === format)} uppercase`}
                           >
                             {format.split('/')[1]}
                           </button>
@@ -900,12 +911,12 @@ export const Sidebar = memo(function Sidebar({
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Filename</label>
+                      <label className={`block ${FIELD_LABEL}`}>Filename</label>
                       <input
                         type="text"
                         value={exportOptions.filenameBase}
                         onChange={handleFilenameChange}
-                        className="w-full select-text px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-200 outline-none focus:border-zinc-600"
+                        className="w-full select-text rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200 outline-none transition-colors focus:border-zinc-500"
                         placeholder="darkslide-converted"
                         spellCheck={false}
                         autoCapitalize="off"
@@ -926,18 +937,14 @@ export const Sidebar = memo(function Sidebar({
 
                     {showBitDepthControl && (
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Bit Depth</label>
-                        <div className="grid grid-cols-2 gap-1 rounded-lg bg-zinc-950 p-1">
+                        <label className={`block ${FIELD_LABEL}`}>Bit Depth</label>
+                        <div className={`${SEGMENT_TRACK} grid-cols-2`}>
                           {([8, 16] as const).map((bitDepth) => (
                             <button
                               key={bitDepth}
                               type="button"
                               onClick={() => onExportOptionsChange({ bitDepth })}
-                              className={`rounded-md px-2 py-1.5 text-[10px] font-bold uppercase transition-all ${
-                                exportOptions.bitDepth === bitDepth
-                                  ? 'bg-zinc-100 text-zinc-950'
-                                  : 'text-zinc-500 hover:text-zinc-300'
-                              }`}
+                              className={segmentItem(exportOptions.bitDepth === bitDepth)}
                             >
                               {bitDepth}-bit
                             </button>
@@ -975,7 +982,7 @@ export const Sidebar = memo(function Sidebar({
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest">Output Profile</label>
+                      <label className={`block ${FIELD_LABEL}`}>Output Profile</label>
                       {COLOR_PROFILE_IDS.map((profileId) => (
                         <label key={profileId} className={`flex items-center gap-2 text-[11px] ${isWebpExport && profileId !== 'srgb' ? 'text-zinc-600' : 'text-zinc-400'}`}>
                           <input
@@ -1006,44 +1013,22 @@ export const Sidebar = memo(function Sidebar({
                   </div>
                 </section>
 
-                <button
-                  onClick={onExport}
-                  disabled={isExporting}
-                  className="grid w-full grid-cols-[1rem_auto] items-center justify-center gap-2 rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50"
-                  aria-busy={isExporting}
-                >
-                  {isExporting ? (
-                    <>
-                      <Loader2 size={15} className="shrink-0 animate-spin" />
-                      <span className="whitespace-nowrap">Exporting...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Download size={15} className="shrink-0" />
-                      <span className="whitespace-nowrap">Export Image</span>
-                    </>
-                  )}
-                </button>
 
+                <button
+                  type="button"
+                  onClick={onOpenBatchExport}
+                  data-tip="Apply one shared recipe to files that aren't open"
+                  className={PANEL_BUTTON}
+                >
+                  <FolderOutput size={13} />
+                  Convert Files…
+                </button>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
       </div>
 
-      <div className="shrink-0 px-6 py-3 border-t border-zinc-800/50 flex items-center justify-between gap-3">
-        <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-zinc-600">
-          {APP_VERSION_LABEL}
-        </span>
-        <button
-          onClick={onOpenSettings}
-          data-tip="Settings (⌘,)"
-          aria-label="Open settings"
-          className="p-1.5 text-zinc-700 hover:text-zinc-400 hover:bg-zinc-800 rounded-lg transition-all"
-        >
-          <Settings size={16} />
-        </button>
-      </div>
     </div>
   );
 });

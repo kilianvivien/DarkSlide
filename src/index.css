@@ -3,11 +3,98 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-accent-100: var(--accent-100);
+  --color-accent-200: var(--accent-200);
+  --color-accent-300: var(--accent-300);
+  --color-accent-400: var(--accent-400);
+  --color-accent-500: var(--accent-500);
 }
 
 :root {
   background-color: #09090b;
   color: #fafafa;
+  color-scheme: dark;
+}
+
+/* Interface accent, chosen in Settings → Appearance (see utils/accentColor.ts). */
+:root {
+  --accent-100: #fef3c7;
+  --accent-200: #fde68a;
+  --accent-300: #fcd34d;
+  --accent-400: #fbbf24;
+  --accent-500: #f59e0b;
+}
+
+:root[data-accent='orange'] {
+  --accent-100: #ffedd5;
+  --accent-200: #fed7aa;
+  --accent-300: #fdba74;
+  --accent-400: #fb923c;
+  --accent-500: #f97316;
+}
+
+:root[data-accent='red'] {
+  --accent-100: #fee2e2;
+  --accent-200: #fecaca;
+  --accent-300: #fca5a5;
+  --accent-400: #f87171;
+  --accent-500: #ef4444;
+}
+
+:root[data-accent='pink'] {
+  --accent-100: #fce7f3;
+  --accent-200: #fbcfe8;
+  --accent-300: #f9a8d4;
+  --accent-400: #f472b6;
+  --accent-500: #ec4899;
+}
+
+:root[data-accent='violet'] {
+  --accent-100: #ede9fe;
+  --accent-200: #ddd6fe;
+  --accent-300: #c4b5fd;
+  --accent-400: #a78bfa;
+  --accent-500: #8b5cf6;
+}
+
+:root[data-accent='blue'] {
+  --accent-100: #dbeafe;
+  --accent-200: #bfdbfe;
+  --accent-300: #93c5fd;
+  --accent-400: #60a5fa;
+  --accent-500: #3b82f6;
+}
+
+:root[data-accent='teal'] {
+  --accent-100: #ccfbf1;
+  --accent-200: #99f6e4;
+  --accent-300: #5eead4;
+  --accent-400: #2dd4bf;
+  --accent-500: #14b8a6;
+}
+
+:root[data-accent='green'] {
+  --accent-100: #dcfce7;
+  --accent-200: #bbf7d0;
+  --accent-300: #86efac;
+  --accent-400: #4ade80;
+  --accent-500: #22c55e;
+}
+
+:root[data-accent='neutral'] {
+  --accent-100: #fafafa;
+  --accent-200: #f4f4f5;
+  --accent-300: #e4e4e7;
+  --accent-400: #d4d4d8;
+  --accent-500: #a1a1aa;
+}
+
+/* Native checkboxes and radios share the app's amber accent. */
+@layer base {
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--accent-400);
+  }
 }
 
 body {
@@ -34,26 +121,75 @@ body {
   background: #3f3f46;
 }
 
-/* macOS-like range input styling */
+/* Range inputs: a thin track with the active span filled, and a thumb that
+   grows slightly under the pointer. Sliders set --fill-from / --fill-to. */
 input[type='range'] {
   -webkit-appearance: none;
-}
-
-input[type='range']::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  height: 12px;
-  width: 12px;
-  border-radius: 50%;
-  background: #fafafa;
-  cursor: pointer;
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
-  margin-top: -4px;
+  appearance: none;
+  height: 16px;
+  background: transparent;
 }
 
 input[type='range']::-webkit-slider-runnable-track {
   width: 100%;
   height: 4px;
   cursor: pointer;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #27272a var(--fill-from, 0%),
+    #a1a1aa var(--fill-from, 0%),
+    #a1a1aa var(--fill-to, 0%),
+    #27272a var(--fill-to, 0%)
+  );
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 14px;
+  width: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: #fafafa;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+input[type='range']:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+
+input[type='range']:active::-webkit-slider-thumb {
+  transform: scale(1.2);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent-400) 30%, transparent), 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
   background: #27272a;
-  border-radius: 2px;
+}
+
+input[type='range']::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: #a1a1aa;
+}
+
+input[type='range']::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: #fafafa;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Keyboard focus is visible everywhere, in the accent color. */
+@layer base {
+  :where(button, select, input, textarea, [role='switch'], [role='radio']):focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--accent-400) 75%, transparent);
+    outline-offset: 2px;
+  }
 }

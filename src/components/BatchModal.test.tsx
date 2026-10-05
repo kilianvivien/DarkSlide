@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES, createDefaultSettings } from '../constants';
+import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LIGHT_SOURCE_PROFILES, createDefaultSettings } from '../constants';
 import { BatchModal } from './BatchModal';
 import type { DocumentTab, FilmProfile, WorkspaceDocument } from '../types';
 import type { ImageWorkerClient } from '../utils/imageWorkerClient';
@@ -100,21 +100,12 @@ function renderModal({
   currentProfile = null,
   currentLightSourceBias = null,
   notificationSettings = DEFAULT_NOTIFICATION_SETTINGS,
-  onOpenContactSheet = vi.fn(),
 }: {
   customProfiles: FilmProfile[];
   currentSettings?: WorkspaceDocument['settings'] | null;
   currentProfile?: FilmProfile | null;
   currentLightSourceBias?: [number, number, number] | null;
   notificationSettings?: typeof DEFAULT_NOTIFICATION_SETTINGS;
-  onOpenContactSheet?: (payload: {
-    entries: Array<{ id: string }>;
-    sharedSettings: WorkspaceDocument['settings'];
-    sharedProfile: FilmProfile;
-    sharedLabStyle: unknown;
-    sharedColorManagement: typeof DEFAULT_COLOR_MANAGEMENT;
-    sharedLightSourceBias: [number, number, number] | null;
-  }) => void;
 }) {
   const profile = FILM_PROFILES.find((item) => item.id === 'generic-color') ?? FILM_PROFILES[0];
 
@@ -122,7 +113,6 @@ function renderModal({
     <BatchModal
       isOpen
       onClose={vi.fn()}
-      onOpenContactSheet={onOpenContactSheet}
       workerClient={{} as ImageWorkerClient}
       currentSettings={currentSettings}
       currentProfile={currentProfile}
@@ -136,7 +126,6 @@ function renderModal({
     />,
   );
 
-  return { onOpenContactSheet };
 }
 
 describe('BatchModal', () => {
@@ -241,7 +230,7 @@ describe('BatchModal', () => {
     await screen.findByText('open-scan.tiff');
     fireEvent.click(screen.getByText('Custom'));
     fireEvent.click(screen.getByText('Ignore preset crop and rotation'));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -259,44 +248,6 @@ describe('BatchModal', () => {
     });
   });
 
-  it('passes the same neutralized settings into contact sheet generation', async () => {
-    const onOpenContactSheet = vi.fn();
-
-    renderModal({
-      customProfiles: [{
-        id: 'custom-transforms',
-        version: 1,
-        name: 'Transforms',
-        type: 'color',
-        description: 'Custom',
-        defaultSettings: createDefaultSettings({
-          rotation: 180,
-          crop: { x: 0.05, y: 0.05, width: 0.9, height: 0.9, aspectRatio: null },
-        }),
-      }],
-      onOpenContactSheet,
-    });
-
-    await screen.findByText('open-scan.tiff');
-    fireEvent.click(screen.getByText('Custom'));
-    fireEvent.click(screen.getByText('Ignore preset crop and rotation'));
-    fireEvent.click(screen.getByRole('button', { name: /contact sheet/i }));
-
-    expect(onOpenContactSheet).toHaveBeenCalledWith(expect.objectContaining({
-      sharedSettings: expect.objectContaining({
-        rotation: 0,
-        levelAngle: 0,
-        crop: {
-          x: 0,
-          y: 0,
-          width: 1,
-          height: 1,
-          aspectRatio: null,
-        },
-      }),
-    }));
-  });
-
   it('prompts for a desktop destination when starting without one selected', async () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
     fileBridgeState.openDirectory.mockResolvedValue('/Users/tester/Pictures/DarkSlide');
@@ -304,7 +255,7 @@ describe('BatchModal', () => {
     renderModal({ customProfiles: [] });
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -321,7 +272,7 @@ describe('BatchModal', () => {
     renderModal({ customProfiles: [] });
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(fileBridgeState.openDirectory).toHaveBeenCalledTimes(1);
@@ -344,7 +295,7 @@ describe('BatchModal', () => {
       expect(screen.getByText('/Users/tester/Downloads')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -368,7 +319,7 @@ describe('BatchModal', () => {
       expect(screen.getByText('/Users/tester/Exports')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
@@ -403,34 +354,27 @@ describe('BatchModal', () => {
     expect(fileBridgeState.openImageFolder).toHaveBeenCalledTimes(1);
   });
 
-  it('forwards the current light source bias to batch export and contact sheet flows', async () => {
+  it('forwards the current light source bias to batch export', async () => {
     const currentProfile = FILM_PROFILES.find((profile) => profile.id === 'generic-color') ?? FILM_PROFILES[0];
     const currentSettings = createDefaultSettings();
     const currentLightSourceBias: [number, number, number] = [0.92, 0.96, 1];
-    const onOpenContactSheet = vi.fn();
 
     renderModal({
       customProfiles: [],
       currentSettings,
       currentProfile,
       currentLightSourceBias,
-      onOpenContactSheet,
     });
 
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
     });
 
     expect(runBatchState.runBatch.mock.calls[0]?.[6]).toEqual(currentLightSourceBias);
-
-    fireEvent.click(screen.getByRole('button', { name: /contact sheet/i }));
-    expect(onOpenContactSheet).toHaveBeenCalledWith(expect.objectContaining({
-      sharedLightSourceBias: currentLightSourceBias,
-    }));
   });
 
   it('forwards a custom preset light source bias when preset mode is selected', async () => {
@@ -448,38 +392,13 @@ describe('BatchModal', () => {
 
     await screen.findByText('open-scan.tiff');
     fireEvent.click(screen.getByText('Custom'));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(runBatchState.runBatch).toHaveBeenCalledTimes(1);
     });
 
     expect(runBatchState.runBatch.mock.calls[0]?.[6]).toEqual([0.82, 0.87, 1]);
-  });
-
-  it('forwards a custom preset lab style into the contact sheet flow', async () => {
-    const onOpenContactSheet = vi.fn();
-
-    renderModal({
-      customProfiles: [{
-        id: 'custom-lab-style',
-        version: 1,
-        name: 'Custom Lab Style',
-        type: 'color',
-        description: 'Custom',
-        defaultSettings: createDefaultSettings(),
-        labStyleId: 'lab-frontier-modern',
-      }],
-      onOpenContactSheet,
-    });
-
-    await screen.findByText('open-scan.tiff');
-    fireEvent.click(screen.getByText('Custom'));
-    fireEvent.click(screen.getByRole('button', { name: /contact sheet/i }));
-
-    expect(onOpenContactSheet).toHaveBeenCalledWith(expect.objectContaining({
-      sharedLabStyle: LAB_STYLE_PROFILES_MAP['lab-frontier-modern'],
-    }));
   });
 
   it('sends one completion notification when the batch succeeds', async () => {
@@ -492,7 +411,7 @@ describe('BatchModal', () => {
     renderModal({ customProfiles: [] });
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(exportNotificationState.notifyExportFinished).toHaveBeenCalledWith({
@@ -518,7 +437,7 @@ describe('BatchModal', () => {
     renderModal({ customProfiles: [] });
     await screen.findByText('open-scan.tiff');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start Batch' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Convert \d+ files?$/ }));
 
     await waitFor(() => {
       expect(exportNotificationState.notifyExportFinished).toHaveBeenCalledWith({

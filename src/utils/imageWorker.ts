@@ -65,6 +65,7 @@ import {
   processFloatRaster,
   releaseScratchBuffers,
   resolveDensityInversionParams,
+  resolveEffectiveSettings,
   sanitizeFilenameBase,
   selectPreviewLevel,
 } from './imagePipeline';
@@ -96,6 +97,8 @@ import {
 interface StoredPreview {
   level: PreviewLevel;
   canvas: OffscreenCanvas;
+  // Built on demand to match the viewport rather than one of PREVIEW_LEVELS.
+  fitted?: boolean;
 }
 
 interface HighDepthRawSource {
@@ -126,6 +129,11 @@ interface StoredDocument {
 const ANALYSIS_CACHE_LIMIT = 16;
 const RESIDUAL_ANALYSIS_MAX_DIMENSION = 1024;
 const HIGHLIGHT_ANALYSIS_MAX_DIMENSION = 512;
+// A fixed preview level this much larger than the requested size (by long
+// edge) is wasteful: a 2128px target would otherwise render the 4096 level,
+// almost four times the pixels, on every frame.
+const FITTED_PREVIEW_MIN_OVERSIZE = 1.3;
+const FITTED_PREVIEW_STEP = 256;
 
 interface StoredTileJob {
   documentId: string;
@@ -370,6 +378,48 @@ function getOrCreatePreviewByMaxDimension(document: StoredDocument, maxDimension
   document.previews.push(preview);
   document.previews.sort((left, right) => left.level.maxDimension - right.level.maxDimension);
   return preview;
+}
+
+// Keeps at most one fitted level per document; the previous one is dropped
+// when the viewport asks for a different size.
+function getFittedPreview(document: StoredDocument, selected: PreviewLevel, targetMaxDimension: number) {
+  const sourceMax = Math.max(document.sourceCanvas.width, document.sourceCanvas.height);
+  const fittedMaxDimension = Math.ceil(targetMaxDimension / FITTED_PREVIEW_STEP) * FITTED_PREVIEW_STEP;
+  if (
+    selected.maxDimension < targetMaxDimension * FITTED_PREVIEW_MIN_OVERSIZE
+    || fittedMaxDimension >= sourceMax
+    || fittedMaxDimension >= selected.maxDimension
+  ) {
+    return null;
+  }
+
+  const existing = document.previews.find((preview) => preview.level.maxDimension === fittedMaxDimension);
+  if (existing) {
+    return existing;
+  }
+
+  const stale = document.previews.filter((preview) => preview.fitted);
+  document.previews = document.previews.filter((preview) => !preview.fitted);
+  stale.forEach((preview) => releaseCanvas(preview.canvas));
+
+  // Downscale from the nearest larger level: cheaper than the full source and
+  // just as sharp at this size.
+  const base = document.previews.find((preview) => preview.level.maxDimension === selected.maxDimension)?.canvas
+    ?? document.sourceCanvas;
+  const canvas = buildPreviewCanvas(base, fittedMaxDimension);
+  const fitted = {
+    level: {
+      id: `preview-fit-${fittedMaxDimension}`,
+      width: canvas.width,
+      height: canvas.height,
+      maxDimension: fittedMaxDimension,
+    },
+    canvas,
+    fitted: true,
+  } satisfies StoredPreview;
+  document.previews.push(fitted);
+  document.previews.sort((left, right) => left.level.maxDimension - right.level.maxDimension);
+  return fitted;
 }
 
 function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: ConversionSettings) {
@@ -784,11 +834,14 @@ function getTileSource(document: StoredDocument, payload: PrepareTileJobRequest)
     };
   }
 
+  const targetMaxDimension = payload.targetMaxDimension ?? Math.max(document.metadata.width, document.metadata.height);
   const level = selectPreviewLevel(
     document.previews.map((preview) => preview.level),
-    payload.targetMaxDimension ?? Math.max(document.metadata.width, document.metadata.height),
+    targetMaxDimension,
   );
-  const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
+  const preview = getFittedPreview(document, level, targetMaxDimension)
+    ?? document.previews.find((candidate) => candidate.level.id === level.id)
+    ?? document.previews[document.previews.length - 1];
   return {
     canvas: preview.canvas,
     previewLevelId: preview.level.id,
@@ -1122,6 +1175,8 @@ function applyAnalysisInversionStage(
     flareStrength,
     lightSourceBias,
   );
+  // Respect a disabled colour group, as the render pipeline does.
+  const balance = resolveEffectiveSettings(options.settings);
 
   for (let index = 0; index < data.length; index += 4) {
     let r = data[index] / 255;
@@ -1152,9 +1207,9 @@ function applyAnalysisInversionStage(
       [r, g, b] = [m[0] * r + m[1] * g + m[2] * b, m[3] * r + m[4] * g + m[5] * b, m[6] * r + m[7] * g + m[8] * b];
     }
     if (options.isColor) {
-      r *= options.settings.redBalance;
-      g *= options.settings.greenBalance;
-      b *= options.settings.blueBalance;
+      r *= balance.redBalance;
+      g *= balance.greenBalance;
+      b *= balance.blueBalance;
     }
 
     output[index] = preserveRange ? r * 255 : clamp(Math.round(r * 255), 0, 255);
@@ -1165,18 +1220,33 @@ function applyAnalysisInversionStage(
   return output;
 }
 
+// Dust is found on a 3072 px rendering: fine enough to resolve specks a few
+// source pixels wide on a 24 MP camera scan, small enough to stay quick.
+const DUST_DETECTION_MAX_DIMENSION = 3072;
+// The "Maximum Defect Width" slider is in pixels of the 2048 px preview that
+// detection used to run on; it is rescaled so it keeps covering the same area.
+const DUST_RADIUS_REFERENCE_DIMENSION = 2048;
+
 function handleDustDetect(payload: DustDetectRequest) {
   const document = getStoredDocument(payload.documentId);
-  const analysisTargetDimension = 1600;
-  const level = selectPreviewLevel(document.previews.map((preview) => preview.level), analysisTargetDimension);
+  const sourceMax = Math.max(document.sourceCanvas.width, document.sourceCanvas.height);
+  const level = selectPreviewLevel(document.previews.map((preview) => preview.level), DUST_DETECTION_MAX_DIMENSION);
   const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
-  const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
+  const needsResize = preview.level.maxDimension > DUST_DETECTION_MAX_DIMENSION;
+  const detectionCanvas = needsResize
+    ? buildPreviewCanvas(preview.canvas, DUST_DETECTION_MAX_DIMENSION)
+    : preview.canvas;
+  const detectionMax = Math.max(detectionCanvas.width, detectionCanvas.height);
+  const transformed = renderTransformedCanvas(detectionCanvas, payload.settings);
   const context = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!context) {
     throw new Error('Could not read transformed image for dust detection.');
   }
 
   const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
+  if (needsResize) {
+    releaseCanvas(detectionCanvas);
+  }
   const residualBaseOffset = getPinnedResidualBaseOffset(
     document,
     payload.settings,
@@ -1196,7 +1266,15 @@ function handleDustDetect(payload: DustDetectRequest) {
     document,
     residualBaseOffset,
   );
-  const detectedMarks = detectDustMarks(imageData, payload.sensitivity, payload.maxRadius, payload.mode)
+  const radiusScale = detectionMax / Math.min(DUST_RADIUS_REFERENCE_DIMENSION, sourceMax);
+  const detectedMarks = detectDustMarks(
+    imageData,
+    payload.sensitivity,
+    payload.maxRadius * radiusScale,
+    payload.mode,
+    // Dust blocks light: bright in a converted negative, dark on a slide.
+    { polarity: payload.filmType === 'slide' ? 'dark' : 'bright' },
+  )
     .map((mark) => projectDustMarkFromTransformedSpace(
       mark,
       payload.settings,

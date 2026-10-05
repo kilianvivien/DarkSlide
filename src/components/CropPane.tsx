@@ -18,6 +18,7 @@ import { CropSettings, CropTab } from '../types';
 import { formatAspectRatio } from '../utils/aspectRatio';
 import { createCenteredAspectCrop, rotateCropClockwise } from '../utils/imagePipeline';
 import { Slider } from './Slider';
+import { ARMED, SECTION_TITLE, SEGMENT_TRACK, segmentItem } from './ui';
 
 type Orientation = 'landscape' | 'portrait';
 
@@ -285,7 +286,7 @@ export const CropPane = memo(function CropPane({
           <span className="opacity-60">{getIcon(group.iconEntry)}</span>
           <div className="flex flex-col items-start leading-tight">
             <span className="font-medium">{group.label}</span>
-            <span className={`text-[9px] uppercase tracking-wider opacity-50 ${selected ? 'text-zinc-700' : 'text-zinc-500'}`}>
+            <span className={`text-[10px] capitalize opacity-60 ${selected ? 'text-zinc-700' : 'text-zinc-500'}`}>
               {orientation}
             </span>
           </div>
@@ -309,22 +310,22 @@ export const CropPane = memo(function CropPane({
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-7">
       <section>
-        <h2 className="mb-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+        <h2 className={SECTION_TITLE}>
           <RotateCw size={12} /> Orientation
         </h2>
         <button
           onClick={handleRotate}
-          className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 rounded-xl border border-zinc-800 transition-all"
+          className="flex w-full items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-[13px] font-medium text-zinc-200 transition-[color,background-color,border-color,transform] duration-150 hover:border-zinc-700 hover:bg-zinc-800 active:scale-[0.99]"
         >
-          <RotateCw size={18} className="text-zinc-400" />
-          <span className="text-sm font-medium">Rotate 90° Clockwise</span>
-          <span className="text-[10px] text-zinc-500 ml-auto bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
+          <RotateCw size={14} className="text-zinc-400" />
+          <span>Rotate 90° Clockwise</span>
+          <span className="ml-auto rounded border border-zinc-800 bg-zinc-950 px-2 py-0.5 font-mono text-[10px] text-zinc-500">
             {rotation}°
           </span>
         </button>
-        <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/35 p-3">
+        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/35 p-3">
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <p className="text-[11px] font-semibold text-zinc-300">Straighten</p>
@@ -337,10 +338,10 @@ export const CropPane = memo(function CropPane({
                 type="button"
                 aria-pressed={straightenActive}
                 onClick={() => onStraightenActiveChange(!straightenActive)}
-                className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors ${
+                className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
                   straightenActive
-                    ? 'border-amber-300 bg-amber-300 text-zinc-950'
-                    : 'border-zinc-700 bg-zinc-950/70 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
+                    ? ARMED
+                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-200'
                 }`}
               >
                 <Ruler size={12} /> {straightenActive ? 'Drawing' : 'Draw line'}
@@ -363,7 +364,7 @@ export const CropPane = memo(function CropPane({
             type="button"
             onClick={() => onLevelAngleChange(0)}
             disabled={Math.abs(levelAngle) < 0.05}
-            className="mt-1 text-[10px] uppercase tracking-[0.2em] text-zinc-500 transition-colors hover:text-zinc-300 disabled:cursor-default disabled:text-zinc-700"
+            className="mt-0.5 rounded-md px-1 py-0.5 text-[11px] text-zinc-500 transition-colors hover:text-zinc-200 disabled:cursor-default disabled:text-zinc-700"
           >
             Reset Level
           </button>
@@ -371,7 +372,7 @@ export const CropPane = memo(function CropPane({
       </section>
 
       <section>
-        <h2 className="mb-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+        <h2 className={SECTION_TITLE}>
           <CropIcon size={12} /> Aspect Ratio Presets
         </h2>
         {imageWidth > 0 && imageHeight > 0 && (
@@ -394,7 +395,7 @@ export const CropPane = memo(function CropPane({
             <span className="opacity-60"><CropIcon size={14} /></span>
             <div className="flex flex-col items-start leading-tight">
               <span className="font-medium">Free</span>
-              <span className={`text-[9px] uppercase tracking-wider opacity-50 ${isFreeSelected ? 'text-zinc-700' : 'text-zinc-500'}`}>
+              <span className={`text-[10px] opacity-60 ${isFreeSelected ? 'text-zinc-700' : 'text-zinc-500'}`}>
                 Unlocked
               </span>
             </div>
@@ -408,21 +409,20 @@ export const CropPane = memo(function CropPane({
               <ScanLine size={14} className="shrink-0 opacity-60" />
               <div className="flex flex-col items-start leading-tight">
                 <span className="font-medium">Auto Crop</span>
-                <span className="text-[9px] uppercase tracking-wider opacity-50 text-zinc-500">Detect</span>
+                <span className="text-[10px] opacity-60 text-zinc-500">Detect</span>
               </div>
             </button>
           )}
         </div>
 
-        <div className="flex gap-4 border-b border-zinc-800">
+        <div className={`${SEGMENT_TRACK} grid-cols-4`}>
           {CROP_TABS.map((tab) => (
             <button
               key={tab}
               type="button"
+              aria-pressed={cropTab === tab}
               onClick={() => onCropTabChange(tab)}
-              className={`pb-2 text-[11px] font-semibold uppercase tracking-widest border-b-2 transition-all ${
-                cropTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
-              }`}
+              className={segmentItem(cropTab === tab)}
             >
               {tab}
             </button>
@@ -504,21 +504,21 @@ export const CropPane = memo(function CropPane({
       </section>
 
       {cropSource === 'auto' && (
-        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300">
-          Crop source: auto
-        </div>
+        <p className="flex items-center gap-2 px-1 text-[11px] text-zinc-500">
+          <ScanLine size={12} className="shrink-0" /> Crop set by auto detection
+        </p>
       )}
 
       <div className="flex gap-3 pt-2">
         <button
           onClick={onResetCrop}
-          className="flex-1 px-4 py-2.5 rounded-xl border border-zinc-800 bg-zinc-900/50 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 text-sm font-medium transition-all"
+          className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-[13px] font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100"
         >
           Reset Crop
         </button>
         <button
           onClick={onDone}
-          className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-100 text-zinc-950 hover:bg-white text-sm font-semibold transition-all shadow-lg shadow-black/20"
+          className="flex-1 rounded-lg bg-zinc-100 px-4 py-2.5 text-[13px] font-semibold text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white"
         >
           Done
         </button>

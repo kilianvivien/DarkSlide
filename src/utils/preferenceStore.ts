@@ -1,5 +1,5 @@
 import { DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
-import { CropTab, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
+import { CropTab, EditorTool, ExportOptions, NotificationSettings, UpdateChannel } from '../types';
 import { normalizeExportOptions } from './exportOptions';
 
 const STORAGE_KEY = 'darkslide_preferences_v1';
@@ -11,7 +11,7 @@ export interface UserPreferences {
   autoApplyPresetId: string | null;
   exportOptions: ExportOptions;
   notificationSettings: NotificationSettings;
-  sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
+  sidebarTab: EditorTool;
   cropTab?: CropTab;
   isLeftPaneOpen: boolean;
   isRightPaneOpen: boolean;
@@ -23,17 +23,14 @@ export interface UserPreferences {
   defaultExportPath: string | null;
   batchOutputPath: string | null;
   contactSheetOutputPath: string | null;
-  scanningWatchPath: string | null;
-  scanningAutoExport: boolean;
-  scanningAutoExportPath: string | null;
   updateChannel: UpdateChannel;
 }
 
-type PreferencesV5 = Omit<UserPreferences, 'version' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 5 };
+type PreferencesV5 = Omit<UserPreferences, 'version' | 'updateChannel'> & { version: 5 };
 type PreferencesV6 = Omit<UserPreferences, 'version' | 'autoApplyPresetId'> & { version: 6 };
 type PreferencesV7 = Omit<UserPreferences, 'version' | 'autoApplyPresetId'> & { version: 7 };
-type PreferencesV6Base = Omit<UserPreferences, 'version' | 'autoApplyPresetId' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'>
-  & Partial<Pick<UserPreferences, 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel' | 'autoApplyPresetId'>>;
+type PreferencesV6Base = Omit<UserPreferences, 'version' | 'autoApplyPresetId' | 'updateChannel'>
+  & Partial<Pick<UserPreferences, 'updateChannel' | 'autoApplyPresetId'>>;
 
 function isValidPreferences(value: unknown): value is UserPreferences {
   if (!value || typeof value !== 'object') return false;
@@ -67,9 +64,6 @@ function isValidPreferences(value: unknown): value is UserPreferences {
     (prefs.defaultExportPath === null || typeof prefs.defaultExportPath === 'string') &&
     (prefs.batchOutputPath === null || typeof prefs.batchOutputPath === 'string') &&
     (prefs.contactSheetOutputPath === null || typeof prefs.contactSheetOutputPath === 'string') &&
-    (prefs.scanningWatchPath === null || typeof prefs.scanningWatchPath === 'string') &&
-    typeof prefs.scanningAutoExport === 'boolean' &&
-    (prefs.scanningAutoExportPath === null || typeof prefs.scanningAutoExportPath === 'string') &&
     (prefs.updateChannel === 'stable' || prefs.updateChannel === 'beta') &&
     (prefs.notificationSettings.enabled === undefined || typeof prefs.notificationSettings.enabled === 'boolean') &&
     (prefs.notificationSettings.exportComplete === undefined || typeof prefs.notificationSettings.exportComplete === 'boolean') &&
@@ -100,7 +94,7 @@ function isLegacyPreferences(value: unknown): value is {
   return prefs.version === 1 && typeof prefs.exportOptions === 'object' && prefs.exportOptions !== null;
 }
 
-function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'openInEditorOutputPath' | 'notificationSettings' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 2 } {
+function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'openInEditorOutputPath' | 'notificationSettings' | 'updateChannel'> & { version: 2 } {
   if (!value || typeof value !== 'object') return false;
   const prefs = value as Partial<{
     version: number;
@@ -129,9 +123,9 @@ function isVersion2Preferences(value: unknown): value is Omit<UserPreferences, '
   );
 }
 
-function isVersion3Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'notificationSettings' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 3 } {
+function isVersion3Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'notificationSettings' | 'updateChannel'> & { version: 3 } {
   if (!value || typeof value !== 'object') return false;
-  const prefs = value as Partial<Omit<UserPreferences, 'version' | 'notificationSettings' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 3 }>;
+  const prefs = value as Partial<Omit<UserPreferences, 'version' | 'notificationSettings' | 'updateChannel'> & { version: 3 }>;
   return prefs.version === 3
     && typeof prefs.lastProfileId === 'string'
     && typeof prefs.sidebarTab === 'string'
@@ -139,9 +133,9 @@ function isVersion3Preferences(value: unknown): value is Omit<UserPreferences, '
     && typeof prefs.isRightPaneOpen === 'boolean';
 }
 
-function isVersion4Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'defaultExportPath' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 4 } {
+function isVersion4Preferences(value: unknown): value is Omit<UserPreferences, 'version' | 'defaultExportPath' | 'updateChannel'> & { version: 4 } {
   if (!value || typeof value !== 'object') return false;
-  const prefs = value as Partial<Omit<UserPreferences, 'version' | 'defaultExportPath' | 'scanningWatchPath' | 'scanningAutoExport' | 'scanningAutoExportPath' | 'updateChannel'> & { version: 4 }>;
+  const prefs = value as Partial<Omit<UserPreferences, 'version' | 'defaultExportPath' | 'updateChannel'> & { version: 4 }>;
   return prefs.version === 4
     && typeof prefs.lastProfileId === 'string'
     && typeof prefs.sidebarTab === 'string'
@@ -161,9 +155,6 @@ function isVersion5Preferences(value: unknown): value is PreferencesV5 {
 
 function withCurrentDefaults(base: PreferencesV6Base): UserPreferences {
   const {
-    scanningWatchPath,
-    scanningAutoExport,
-    scanningAutoExportPath,
     updateChannel,
     autoApplyPresetId,
     ...rest
@@ -174,9 +165,6 @@ function withCurrentDefaults(base: PreferencesV6Base): UserPreferences {
     version: 8,
     exportOptions: normalizeStoredExportOptions(rest.exportOptions),
     autoApplyPresetId: autoApplyPresetId ?? null,
-    scanningWatchPath: scanningWatchPath ?? null,
-    scanningAutoExport: scanningAutoExport ?? false,
-    scanningAutoExportPath: scanningAutoExportPath ?? null,
     updateChannel: updateChannel ?? 'stable',
   };
 }
@@ -412,9 +400,6 @@ export function loadPreferences(): UserPreferences | null {
       defaultExportPath: parsed.defaultExportPath ?? null,
       batchOutputPath: parsed.batchOutputPath ?? null,
       contactSheetOutputPath: parsed.contactSheetOutputPath ?? null,
-      scanningWatchPath: parsed.scanningWatchPath ?? null,
-      scanningAutoExport: parsed.scanningAutoExport ?? false,
-      scanningAutoExportPath: parsed.scanningAutoExportPath ?? null,
       updateChannel: parsed.updateChannel ?? 'stable',
       autoApplyPresetId: parsed.autoApplyPresetId ?? null,
     };

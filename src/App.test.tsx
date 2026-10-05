@@ -341,11 +341,15 @@ vi.mock('./components/PresetsPane', () => ({
     builtinProfiles = [],
     customPresets = [],
     onStockChange,
+    onStockPreview,
+    onStockPreviewEnd,
     onSavePreset,
   }: {
     builtinProfiles?: Array<{ id: string; name: string }>;
     customPresets?: Array<{ id: string; name: string }>;
     onStockChange: (profile: { id: string; name: string }) => void;
+    onStockPreview?: (profile: { id: string; name: string }) => void;
+    onStockPreviewEnd?: () => void;
     onSavePreset?: (name: string, metadata?: { saveFraming?: boolean }) => void;
   }) => (
     <div data-testid="presets">
@@ -360,6 +364,8 @@ vi.mock('./components/PresetsPane', () => ({
           key={profile.id}
           type="button"
           onClick={() => onStockChange(profile)}
+          onMouseEnter={() => onStockPreview?.(profile)}
+          onMouseLeave={() => onStockPreviewEnd?.()}
         >
           {profile.name}
         </button>
@@ -372,37 +378,8 @@ vi.mock('./components/CropOverlay', () => ({
   CropOverlay: () => <div data-testid="crop-overlay" />,
 }));
 
-vi.mock('./components/TabBar', () => ({
-  TabBar: ({
-    tabs = [],
-    activeTabId,
-    onSelectTab,
-  }: {
-    tabs?: Array<{ id: string; document: { source: { name: string } } }>;
-    activeTabId?: string | null;
-    onSelectTab?: (tabId: string) => void;
-  }) => (
-    <div data-testid="tab-bar">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          aria-pressed={tab.id === activeTabId}
-          onClick={() => onSelectTab?.(tab.id)}
-        >
-          {tab.document.source.name}
-        </button>
-      ))}
-    </div>
-  ),
-}));
-
 vi.mock('./components/BatchModal', () => ({
   BatchModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="batch-modal" /> : null),
-}));
-
-vi.mock('./components/ContactSheetModal', () => ({
-  ContactSheetModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="contact-sheet-modal" /> : null),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -568,6 +545,13 @@ vi.mock('./utils/fileBridge', () => ({
   registerBeforeUnloadGuard: fileBridgeState.registerBeforeUnloadGuard,
 }));
 
+// Preview-drawing tests count canvas calls; thumbnail capture is covered in
+// its own unit test.
+vi.mock('./utils/filmstripThumbnails', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./utils/filmstripThumbnails')>()),
+  captureThumbnail: () => null,
+}));
+
 vi.mock('./utils/exportNotifications', () => ({
   notifyExportFinished: exportNotificationState.notifyExportFinished,
   primeExportNotificationsPermission: exportNotificationState.primeExportNotificationsPermission,
@@ -667,6 +651,22 @@ function createRenderImageData(
   return new ImageData(data, width, height);
 }
 
+// The profiles panel lives in the inspector behind the "Film profiles" rail
+// tool; the Develop sidebar is behind "Develop".
+function openProfiles() {
+  if (!screen.queryByTestId('presets')) {
+    fireEvent.click(screen.getByRole('button', { name: 'Film profiles' }));
+  }
+  return screen.getByTestId('presets');
+}
+
+function openDevelop() {
+  if (!screen.queryByTestId('sidebar')) {
+    fireEvent.click(screen.getByRole('button', { name: 'Develop' }));
+  }
+  return screen.getByTestId('sidebar');
+}
+
 async function uploadFile(file: File) {
   const input = document.querySelector('input[type="file"]') as HTMLInputElement;
   expect(input).toBeTruthy();
@@ -727,6 +727,12 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.openImageFileByPath.mockReset();
     fileBridgeState.openImageFolder.mockReset();
     fileBridgeState.openMultipleImageFiles.mockReset();
+    // Import opens the multi-select dialog; most tests script a single pick
+    // through openImageFile.
+    fileBridgeState.openMultipleImageFiles.mockImplementation(async () => {
+      const picked = await fileBridgeState.openImageFile();
+      return picked ? [picked] : [];
+    });
     fileBridgeState.openPresetBackupFile.mockReset();
     fileBridgeState.openDirectory.mockReset();
     fileBridgeState.openInExternalEditor.mockReset();
@@ -821,6 +827,160 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps frame tools closed until a scan is open', () => {
+    render(<App />);
+
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Develop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Film profiles' })).toBeEnabled();
+  });
+
+  it('switches inspector panels from the tool rail and its shortcuts', async () => {
+    workerState.decode.mockResolvedValueOnce(createDecodedImage(300, 200));
+    render(<App />);
+    await uploadFile(createFile('frame-a.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+    expect(screen.queryByTestId('presets')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: '3' });
+    expect(screen.getByTestId('presets')).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+
+    // Choosing the open tool again collapses the inspector.
+    fireEvent.click(screen.getByRole('button', { name: 'Film profiles' }));
+    expect(screen.queryByTestId('presets')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: '1' });
+    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+  });
+
+  it('builds a contact sheet of the open frames from its own rail tool', async () => {
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(300, 200))
+      .mockResolvedValueOnce(createDecodedImage(320, 200));
+    workerState.contactSheet.mockResolvedValue({
+      blob: new Blob(['sheet'], { type: 'image/jpeg' }),
+      width: 1000,
+      height: 600,
+      filename: 'contact_sheet.jpg',
+    });
+    render(<App />);
+    await uploadFile(createFile('frame-a.tiff', 'image/tiff'));
+    await uploadFile(createFile('frame-b.tiff', 'image/tiff'));
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+    await flushMicrotasks();
+
+    fireEvent.keyDown(window, { key: '7' });
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /Contact sheet preview, 2 frames in 2 columns/ })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Export sheet of 2 frames' }));
+    });
+    await flushMicrotasks();
+
+    expect(workerState.contactSheet).toHaveBeenCalledTimes(1);
+    const request = workerState.contactSheet.mock.calls[0]?.[0] as { cells: Array<{ label: string }>; settingsPerCell: unknown[]; columns: number };
+    expect(request.cells.map((cell) => cell.label)).toEqual(['scan-300x200.tiff', 'scan-320x200.tiff']);
+    expect(request.settingsPerCell).toHaveLength(2);
+    expect(request.columns).toBe(2);
+    expect(fileBridgeState.saveExportBlob).toHaveBeenCalledWith(expect.any(Blob), 'contact_sheet.jpg', 'image/jpeg');
+  });
+
+  it('syncs the current look to frames selected in the filmstrip', async () => {
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(300, 200))
+      .mockResolvedValueOnce(createDecodedImage(320, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    const settle = async () => {
+      await flushMicrotasks();
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      await flushMicrotasks();
+    };
+
+    render(<App />);
+    await uploadFile(createFile('frame-a.tiff', 'image/tiff'));
+    await settle();
+    await uploadFile(createFile('frame-b.tiff', 'image/tiff'));
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Frame 1: scan-300x200.tiff' }));
+    await settle();
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Set Manual WB' }));
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Frame 2: scan-320x200.tiff' }), { metaKey: true });
+    const bar = screen.getByRole('toolbar', { name: 'Selected frames' });
+    expect(bar).toHaveTextContent('2 selected');
+    // Cmd-click selects without leaving the frame being edited.
+    expect(screen.getByRole('button', { name: 'Frame 1: scan-300x200.tiff' })).toHaveAttribute('aria-current', 'true');
+
+    fireEvent.click(within(bar).getByRole('button', { name: /Sync look/ }));
+    await settle();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar', { name: 'Selected frames' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Frame 2: scan-320x200.tiff' }));
+    await settle();
+    const frameBRender = workerState.render.mock.calls.at(-1)?.[0] as { settings: ConversionSettings };
+    expect(frameBRender.settings).toMatchObject({ temperature: 41, tint: -27 });
+  });
+
+  it('exports selected frames with their own names and the shared output format', async () => {
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(300, 200))
+      .mockResolvedValueOnce(createDecodedImage(320, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    workerState.export.mockImplementation(async (payload: { options: { filenameBase: string; format: string } }) => ({
+      blob: new Blob(['x'], { type: payload.options.format }),
+      filename: `${payload.options.filenameBase}.jpg`,
+    }));
+    fileBridgeState.saveExportBlob.mockResolvedValue('saved');
+    const settle = async () => {
+      await flushMicrotasks();
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      await flushMicrotasks();
+    };
+
+    render(<App />);
+    await uploadFile(createFile('frame-a.tiff', 'image/tiff'));
+    await settle();
+    await uploadFile(createFile('frame-b.tiff', 'image/tiff'));
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Frame 1: scan-300x200.tiff' }), { shiftKey: true });
+    const bar = screen.getByRole('toolbar', { name: 'Selected frames' });
+    await act(async () => {
+      fireEvent.click(within(bar).getByRole('button', { name: /Export 2/ }));
+    });
+    await settle();
+
+    expect(workerState.export).toHaveBeenCalledTimes(2);
+    const exportedOptions = workerState.export.mock.calls.map(([payload]) => payload.options);
+    expect(exportedOptions.map((options) => options.filenameBase).sort()).toEqual(['frame-a', 'frame-b']);
+    expect(new Set(exportedOptions.map((options) => options.format)).size).toBe(1);
+    expect(fileBridgeState.saveExportBlob).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps single-image imports full-frame and does not auto-run frame detection', async () => {
     workerState.decode.mockResolvedValue(createDecodedImage(4032, 6048));
     workerState.detectFrame.mockResolvedValue({
@@ -876,7 +1036,7 @@ describe('App import and preview pipeline', () => {
     await act(async () => { vi.runAllTimers(); });
     await flushMicrotasks();
     expect(workerState.render.mock.calls.at(-1)?.[0].settings.filmBaseSample).toBeNull();
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic Color' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic Color' }));
     await flushMicrotasks();
     await act(async () => { vi.runAllTimers(); });
     await flushMicrotasks();
@@ -1180,10 +1340,10 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
+    expect(within(openProfiles()).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
 
     const renderCallsAfterImport = workerState.render.mock.calls.length;
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic Color' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic Color' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1205,7 +1365,7 @@ describe('App import and preview pipeline', () => {
     expect(latestRenderCall.settings.rotation).toBe(0);
 
     const renderCallsAfterGeneric = workerState.render.mock.calls.length;
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Raw Import Result' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1557,7 +1717,7 @@ describe('App import and preview pipeline', () => {
 
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'CineStill 400D' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'CineStill 400D' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -1730,9 +1890,6 @@ describe('App import and preview pipeline', () => {
       defaultExportPath: null,
       batchOutputPath: null,
       contactSheetOutputPath: null,
-      scanningWatchPath: null,
-      scanningAutoExport: false,
-      scanningAutoExportPath: null,
       updateChannel: 'stable',
     }));
     fileBridgeState.isDesktopShell.mockReturnValue(true);
@@ -1782,9 +1939,9 @@ describe('App import and preview pipeline', () => {
     expect(importRenderCall.settings.saturation).toBe(0);
     expect(importRenderCall.settings.filmBaseSample).toBeNull();
     expect(importRenderCall.settings.rotation).toBe(90);
-    expect(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
+    expect(within(openProfiles()).getByRole('button', { name: 'Raw Import Result' })).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Raw Import Result' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Raw Import Result' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runOnlyPendingTimers();
@@ -1841,9 +1998,6 @@ describe('App import and preview pipeline', () => {
       defaultExportPath: null,
       batchOutputPath: null,
       contactSheetOutputPath: null,
-      scanningWatchPath: null,
-      scanningAutoExport: false,
-      scanningAutoExportPath: null,
       updateChannel: 'stable',
     }));
     fileBridgeState.isDesktopShell.mockReturnValue(true);
@@ -1942,7 +2096,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1981,7 +2135,7 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.lightSourceBias).toEqual([0.82, 0.87, 1]);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -1993,7 +2147,7 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.94, 0.88]);
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Fuji Provia 100F' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Fuji Provia 100F' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2022,9 +2176,9 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    expect(screen.getByText('Current Light Source: cs-lite-cool')).toBeInTheDocument();
+    expect(within(openDevelop()).getByText('Current Light Source: cs-lite-cool')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select Auto Light Source' }));
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Select Auto Light Source' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2035,7 +2189,7 @@ describe('App import and preview pipeline', () => {
       lightSourceBias: [number, number, number];
     };
     expect(latestRenderCall.lightSourceBias).toEqual([1, 1, 1]);
-    expect(screen.getByText('Current Light Source: auto')).toBeInTheDocument();
+    expect(within(openDevelop()).getByText('Current Light Source: auto')).toBeInTheDocument();
     expect(localStorage.getItem('darkslide_default_light_source')).toBe('cs-lite');
   });
 
@@ -2063,21 +2217,21 @@ describe('App import and preview pipeline', () => {
 
     const renderCountBeforeSave = workerState.render.mock.calls.length;
     const renderBeforeSave = structuredClone(workerState.render.mock.calls.at(-1)?.[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
     await act(async () => { vi.runAllTimers(); });
     await flushMicrotasks();
     expect(workerState.render).toHaveBeenCalledTimes(renderCountBeforeSave);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select Auto Light Source' }));
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Select Auto Light Source' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
     });
     await flushMicrotasks();
-    expect(screen.getByText('Current Light Source: auto')).toBeInTheDocument();
+    expect(within(openDevelop()).getByText('Current Light Source: auto')).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Saved Custom Preset' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2090,7 +2244,7 @@ describe('App import and preview pipeline', () => {
       tonalCharacter: unknown;
       settings: ConversionSettings;
     };
-    expect(screen.getByText('Current Light Source: daylight')).toBeInTheDocument();
+    expect(within(openDevelop()).getByText('Current Light Source: daylight')).toBeInTheDocument();
     expect(latestRenderCall.lightSourceBias).toEqual([1, 0.98, 0.95]);
     expect(latestRenderCall.colorMatrix).toEqual(renderBeforeSave.colorMatrix);
     expect(latestRenderCall.tonalCharacter).toEqual(renderBeforeSave.tonalCharacter);
@@ -2130,7 +2284,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Phoenix LUT' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Phoenix LUT' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2141,7 +2295,7 @@ describe('App import and preview pipeline', () => {
     const lutRenderCall = workerState.render.mock.calls.at(-1)?.[0] as { cubeLut?: { size: number } | null };
     expect(lutRenderCall.cubeLut?.size).toBe(2);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
 
     const saved = customPresetState.presets.find((preset) => preset.name === 'Saved Custom Preset') as
@@ -2188,10 +2342,10 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Save Custom Preset' }));
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Square Crop' }));
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Apply Square Crop' }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply Half Rotation' }));
     await flushMicrotasks();
     await act(async () => {
@@ -2199,7 +2353,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Saved Custom Preset' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Saved Custom Preset' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2228,6 +2382,40 @@ describe('App import and preview pipeline', () => {
     });
     expect(latestRenderCall.settings.rotation).toBe(180);
     expect(latestRenderCall.settings.levelAngle).toBe(-3);
+  });
+
+  it('previews a hovered film profile with the current framing and restores the look afterwards', async () => {
+    workerState.decode.mockResolvedValue(createDecodedImage(300, 200));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 300, 200)
+    ));
+    const settle = async () => {
+      await flushMicrotasks();
+      await act(async () => {
+        vi.runAllTimers();
+      });
+      await flushMicrotasks();
+    };
+
+    render(<App />);
+    await uploadFile(createFile('scan.jpg', 'image/jpeg'));
+    await settle();
+    fireEvent.click(within(openDevelop()).getByRole('button', { name: 'Apply Wide Crop' }));
+    await settle();
+    const applied = workerState.render.mock.calls.at(-1)?.[0] as { profileId: string; settings: ConversionSettings };
+    expect(applied.profileId).not.toBe('generic-bw');
+
+    fireEvent.mouseEnter(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
+    await settle();
+    const previewed = workerState.render.mock.calls.at(-1)?.[0] as { profileId: string; isColor: boolean; settings: ConversionSettings };
+    expect(previewed).toMatchObject({ profileId: 'generic-bw', isColor: false });
+    expect(previewed.settings.crop).toEqual(applied.settings.crop);
+    expect(screen.getByText('Preview')).toBeInTheDocument();
+
+    fireEvent.mouseLeave(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
+    await settle();
+    expect(workerState.render.mock.calls.at(-1)?.[0]).toMatchObject({ profileId: applied.profileId, settings: applied.settings });
+    expect(screen.queryByText('Preview')).not.toBeInTheDocument();
   });
 
   it('switches CS-LITE to the white mode when black-and-white conversion is enabled', async () => {
@@ -2386,7 +2574,7 @@ describe('App import and preview pipeline', () => {
 
     expect(screen.getByText('This scan looks monochrome. Convert it to black and white?')).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Generic B&W' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Generic B&W' }));
     await flushMicrotasks();
 
     expect(screen.queryByText('This scan looks monochrome. Convert it to black and white?')).not.toBeInTheDocument();
@@ -2425,9 +2613,6 @@ describe('App import and preview pipeline', () => {
       defaultExportPath: null,
       batchOutputPath: null,
       contactSheetOutputPath: null,
-      scanningWatchPath: null,
-      scanningAutoExport: false,
-      scanningAutoExportPath: null,
       updateChannel: 'stable',
     }));
 
@@ -2491,9 +2676,6 @@ describe('App import and preview pipeline', () => {
       defaultExportPath: null,
       batchOutputPath: null,
       contactSheetOutputPath: null,
-      scanningWatchPath: null,
-      scanningAutoExport: false,
-      scanningAutoExportPath: null,
       updateChannel: 'stable',
     }));
 
@@ -2615,7 +2797,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Toggle Before/After"]') as Element);
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle before and after' }));
     });
     await act(async () => {
       vi.advanceTimersByTime(120);
@@ -2636,7 +2818,7 @@ describe('App import and preview pipeline', () => {
 
     expect(drawImage).toHaveBeenCalledTimes(2);
     expect((drawImage.mock.calls.at(-1)?.[0] as { width: number }).width).toBe(77);
-    expect(document.querySelector('[data-tip="Showing Original — click to return"]')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Return to processed view' })).toBeInTheDocument();
   });
 
   it('applies film-base sampling directly to the negative density stage without changing exposure', async () => {
@@ -2654,7 +2836,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(screen.getByText('Toggle Film Base Picker'));
+    fireEvent.click(within(openDevelop()).getByText('Toggle Film Base Picker'));
 
     const canvas = document.querySelector('canvas');
     expect(canvas).toBeTruthy();
@@ -2717,7 +2899,7 @@ describe('App import and preview pipeline', () => {
       await flushMicrotasks();
       await act(async () => { vi.runOnlyPendingTimers(); });
       await flushMicrotasks();
-      expect(workerState.render.mock.calls.at(-1)?.[0].settings).toMatchObject({ temperature: 12, tint: 0 });
+      expect(workerState.render.mock.calls.at(-1)?.[0].settings).toMatchObject({ temperature: 11, tint: 0 });
     }
     expect(workerState.sampleFilmBase).toHaveBeenCalledWith(expect.objectContaining({
       sampleMode: 'white-balance', filmType: 'negative', profileId: 'generic-color', isColor: true,
@@ -2789,7 +2971,7 @@ describe('App import and preview pipeline', () => {
     });
     await flushMicrotasks();
 
-    fireEvent.click(within(screen.getByTestId('presets')).getByRole('button', { name: 'Kodak Gold 200' }));
+    fireEvent.click(within(openProfiles()).getByRole('button', { name: 'Kodak Gold 200' }));
     await flushMicrotasks();
     await act(async () => {
       vi.runAllTimers();
@@ -2806,7 +2988,7 @@ describe('App import and preview pipeline', () => {
       };
     };
 
-    fireEvent.click(screen.getByText('Toggle Film Base Picker'));
+    fireEvent.click(within(openDevelop()).getByText('Toggle Film Base Picker'));
 
     const canvas = document.querySelector('canvas');
     expect(canvas).toBeTruthy();
@@ -3306,7 +3488,7 @@ describe('App import and preview pipeline', () => {
     render(<App />);
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Open Settings'));
+      fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     });
 
     await act(async () => {
@@ -3674,7 +3856,7 @@ describe('App import and preview pipeline', () => {
     expect(context.drawImage).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Toggle Before/After"]') as Element);
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle before and after' }));
     });
     await flushMicrotasks();
 
@@ -3704,7 +3886,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.render).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Close Image"]') as Element);
+      fireEvent.click(within(screen.getByRole('region', { name: 'Filmstrip' })).getByRole('button', { name: /^Close / }));
     });
 
     const [payload] = workerState.render.mock.calls[0];
@@ -3750,7 +3932,7 @@ describe('App import and preview pipeline', () => {
     expect(workerState.preparePreviewBitmap).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-tip="Close Image"]') as Element);
+      fireEvent.click(within(screen.getByRole('region', { name: 'Filmstrip' })).getByRole('button', { name: /^Close / }));
     });
     preparePreviewBitmapRequest.resolve(preparedBitmap);
     await flushMicrotasks();
@@ -3906,6 +4088,74 @@ describe('App import and preview pipeline', () => {
     expect(drawImage).toHaveBeenCalledTimes(1);
     expect((drawImage.mock.calls[0]?.[0] as { width: number }).width).toBe(80);
     expect((drawImage.mock.calls[0]?.[0] as { height: number }).height).toBe(60);
+  });
+
+  it('imports several scans from one pick and lands on the first', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openMultipleImageFiles.mockResolvedValue([
+      { file: createFile('roll-01.tiff', 'image/tiff'), path: '/scans/roll-01.tiff', size: 12 },
+      { file: createFile('roll-02.tiff', 'image/tiff'), path: '/scans/roll-02.tiff', size: 12 },
+    ]);
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(640, 480))
+      .mockResolvedValueOnce(createDecodedImage(320, 240));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    render(<App />);
+    await act(async () => {
+      fireEvent.click(screen.getByText('Import'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.decode).toHaveBeenCalledTimes(2);
+    const frames = screen.getAllByRole('button', { name: /^Frame \d+:/ });
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('imports a folder up to the open-frame limit and says what was left out', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFolder.mockResolvedValue(Array.from({ length: 10 }, (_, index) => ({
+      file: createFile(`frame-${String(index + 1).padStart(2, '0')}.tiff`, 'image/tiff'),
+      path: `/scans/frame-${index + 1}.tiff`,
+      size: 12,
+    })));
+    workerState.decode.mockResolvedValue(createDecodedImage(64, 48));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    const { subscribeToasts } = await import('./utils/toastStore');
+    const toastTitles = new Set<string>();
+    const unsubscribe = subscribeToasts((toasts) => toasts.forEach((toast) => toastTitles.add(toast.title)));
+
+    render(<App />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Import a folder' }));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.decode).toHaveBeenCalledTimes(8);
+    expect(screen.getAllByRole('button', { name: /^Frame \d+:/ })).toHaveLength(8);
+    // The last import settles after its first render.
+    for (let step = 0; step < 5; step += 1) {
+      await act(async () => {
+        vi.runOnlyPendingTimers();
+      });
+      await flushMicrotasks();
+    }
+    unsubscribe();
+    expect(toastTitles).toContain('Opened the first 8 of 10 scans');
   });
 
   it('opens files through the native dialog when running in the desktop shell', async () => {

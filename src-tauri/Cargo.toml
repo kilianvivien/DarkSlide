@@ -1,6 +1,6 @@
 [package]
 name = "darkslide"
-version = "1.2.4"
+version = "1.3.0"
 description = "A professional-grade film negative to positive converter."
 authors = ["Kilian Vivien"]
 license = "MIT"
@@ -18,7 +18,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.5.6", features = [] }
 
 [dependencies]
-notify = "7"
 tauri = { version = "2.10.3", features = [] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-fs = "2.4.5"

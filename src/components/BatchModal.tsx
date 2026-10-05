@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Check, ChevronDown, Download, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
+import { AlertCircle, Check, CheckCircle2, ChevronDown, Download, FileImage, Files, FolderOpen, Layers, Loader2, Plus, Trash2, Upload, X } from 'lucide-react';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, MAX_FILE_SIZE_BYTES, RAW_EXTENSIONS } from '../constants';
 import { ColorManagementSettings, ColorProfileId, ConversionSettings, DocumentTab, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings } from '../types';
 import { getDesktopDownloadsDirectory, isDesktopShell, openDirectory, openImageFolder, openMultipleImageFiles } from '../utils/fileBridge';
@@ -12,20 +12,14 @@ import { notifyExportFinished, primeExportNotificationsPermission } from '../uti
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useModalA11y } from '../hooks/useModalA11y';
 import { normalizeExportOptions } from '../utils/exportOptions';
+import { Slider } from './Slider';
+import { FIELD_LABEL, SECTION_TITLE, SEGMENT_TRACK, segmentItem } from './ui';
 
 type SettingsSourceMode = 'current' | 'builtin' | 'custom';
 
 interface BatchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onOpenContactSheet: (payload: {
-    entries: BatchJobEntry[];
-    sharedSettings: ConversionSettings;
-    sharedProfile: FilmProfile;
-    sharedLabStyle: LabStyleProfile | null;
-    sharedColorManagement: ColorManagementSettings;
-    sharedLightSourceBias: [number, number, number] | null;
-  }) => void;
   workerClient: ImageWorkerClient | null;
   currentSettings: ConversionSettings | null;
   currentProfile: FilmProfile | null;
@@ -47,6 +41,22 @@ function formatFileSize(size: number) {
   return `${Math.max(1, Math.round(size / 1024))} KB`;
 }
 
+const SMALL_BUTTON = 'inline-flex shrink-0 items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-50';
+const FIELD_SELECT = 'w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200 outline-none transition-colors focus:border-zinc-500';
+
+const STATUS_STYLE: Record<BatchJobEntry['status'], { label: string; text: string }> = {
+  pending: { label: 'Ready', text: 'text-zinc-500' },
+  processing: { label: 'Converting', text: 'text-accent-300' },
+  done: { label: 'Done', text: 'text-emerald-400' },
+  error: { label: 'Error', text: 'text-red-400' },
+};
+
+function StepNumber({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-zinc-800 font-mono text-[9px] text-zinc-300">{children}</span>
+  );
+}
+
 function RadioOption({
   checked,
   disabled,
@@ -59,12 +69,12 @@ function RadioOption({
   children: React.ReactNode;
 }) {
   return (
-    <label className={`flex items-center gap-3 text-sm ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
-      <input type="radio" className="sr-only" checked={checked} disabled={disabled} onChange={onChange} />
-      <span className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full border transition-colors ${
-        checked ? 'border-zinc-100' : 'border-zinc-600'
+    <label className={`flex items-center gap-2.5 text-[12px] ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
+      <input type="radio" className="peer sr-only" checked={checked} disabled={disabled} onChange={onChange} />
+      <span className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-accent-400 ${
+        checked ? 'border-accent-400' : 'border-zinc-600'
       }`}>
-        {checked && <span className="h-[5px] w-[5px] rounded-full bg-zinc-100" />}
+        {checked && <span className="h-[7px] w-[7px] rounded-full bg-accent-400" />}
       </span>
       <span className="text-zinc-300">{children}</span>
     </label>
@@ -83,10 +93,10 @@ function CheckOption({
   children: React.ReactNode;
 }) {
   return (
-    <label className={`flex items-center gap-3 text-sm ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
-      <input type="checkbox" className="sr-only" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
-      <span className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
-        checked ? 'border-zinc-100 bg-zinc-100' : 'border-zinc-600'
+    <label className={`flex items-center gap-2.5 text-[12px] ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
+      <input type="checkbox" className="peer sr-only" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[4px] border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-accent-400 ${
+        checked ? 'border-accent-400 bg-accent-400' : 'border-zinc-600'
       }`}>
         {checked && <Check size={10} className="text-zinc-950" strokeWidth={3} />}
       </span>
@@ -98,7 +108,6 @@ function CheckOption({
 export function BatchModal({
   isOpen,
   onClose,
-  onOpenContactSheet,
   workerClient,
   currentSettings,
   currentProfile,
@@ -129,6 +138,7 @@ export function BatchModal({
   const [isRunning, setIsRunning] = useState(false);
   const [colorMgmtExpanded, setColorMgmtExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDropTarget, setIsDropTarget] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const cancelTokenRef = useRef({ cancelled: false });
@@ -301,7 +311,6 @@ export function BatchModal({
       : null);
   const selectedCustomProfileHasEmbeddedTransforms = settingsSource === 'custom'
     && customProfileHasEmbeddedCropOrRotation(selectedCustomProfile);
-  const canOpenContactSheet = entries.length > 0 && Boolean(sharedSettings && sharedProfile);
 
   const handleStart = async () => {
     if (!workerClient || !sharedSettings || !sharedProfile) {
@@ -421,6 +430,15 @@ export function BatchModal({
     }
   };
 
+  const runnableCount = entries.filter((entry) => !entry.errorMessage).length;
+  const totalSize = entries.reduce((sum, entry) => sum + entry.size, 0);
+  const finishedCount = entries.filter((entry) => entry.status === 'done' || entry.status === 'error').length;
+  const overallProgress = runnableCount > 0
+    ? entries.reduce((sum, entry) => sum + (entry.errorMessage && entry.status !== 'error' ? 0 : (entry.status === 'done' ? 1 : entry.progress ?? 0)), 0) / runnableCount
+    : 0;
+  const startLabel = `Convert ${runnableCount} file${runnableCount === 1 ? '' : 's'}`;
+  const isPngOrTiff = exportOptions.format === 'image/png' || exportOptions.format === 'image/tiff';
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -441,7 +459,7 @@ export function BatchModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: -6 }}
             transition={{ type: 'spring', bounce: 0.08, duration: 0.22 }}
-            className="fixed inset-0 z-50 flex items-stretch justify-center p-6 pointer-events-none"
+            className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-6"
           >
             {/* stopPropagation prevents backdrop-click-to-close from firing
                when the user clicks inside the modal. */}
@@ -451,11 +469,20 @@ export function BatchModal({
               role="dialog"
               aria-modal="true"
               aria-labelledby={titleId}
-              className="pointer-events-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-2xl shadow-black/60"
+              className="pointer-events-auto flex h-full max-h-[760px] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-2xl shadow-black/60"
               onClick={(event) => event.stopPropagation()}
-              onDragOver={(event) => event.preventDefault()}
+              onDragOver={(event) => {
+                event.preventDefault();
+                if (!isRunning) setIsDropTarget(true);
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                setIsDropTarget(false);
+              }}
               onDrop={(event) => {
                 event.preventDefault();
+                setIsDropTarget(false);
+                if (isRunning) return;
                 const files = Array.from(event.dataTransfer.files ?? []) as File[];
                 if (files.length > 0) {
                   addFiles(files.map((file) => ({ file })));
@@ -463,193 +490,210 @@ export function BatchModal({
               }}
             >
               {/* Header */}
-              <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-4">
-                <div>
-                  <h2 id={titleId} className="text-base font-semibold text-zinc-100">Batch Export</h2>
-                  <p className="mt-0.5 text-xs text-zinc-500">Process multiple scans sequentially with one shared export recipe. RAW files supported on desktop.</p>
+              <div className="flex items-center gap-3 border-b border-zinc-800/80 px-5 py-4">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent-400/25 bg-accent-400/10 text-accent-300">
+                  <Layers size={16} />
                 </div>
-                <button type="button" onClick={onClose} aria-label="Close batch export" className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-900 hover:text-zinc-300">
+                <div className="min-w-0 flex-1">
+                  <h2 id={titleId} className="text-[15px] font-semibold text-zinc-100">Convert Files</h2>
+                  <p className="mt-0.5 truncate text-xs text-zinc-500">
+                    One recipe for many scans, without opening them. Open frames keep their own look in the Export panel.
+                  </p>
+                </div>
+                <button type="button" onClick={onClose} aria-label="Close convert files" className="rounded-lg p-1.5 text-zinc-500 transition-colors hover:bg-zinc-900 hover:text-zinc-200">
                   <X size={16} />
                 </button>
               </div>
 
               {/* Body */}
-              <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[1.3fr_1fr]">
-                {/* Left: file list */}
-                <div className="flex min-h-0 flex-col border-r border-zinc-800/80">
-                  <div className="flex items-center justify-between border-b border-zinc-800/80 px-6 py-3">
-                    <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Files</h3>
-                    <div className="flex items-center gap-2">
+              <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(0,1fr)_340px]">
+                {/* Left: files */}
+                <div className="flex min-h-0 flex-col">
+                  <div className="flex items-center gap-2 px-5 pb-2 pt-4">
+                    <h3 className={`${SECTION_TITLE} mb-0`}>
+                      <Files size={12} /> Files
+                    </h3>
+                    {entries.length > 0 && (
+                      <span className="rounded-full bg-zinc-900 px-2 py-0.5 font-mono text-[10px] tabular-nums text-zinc-400">
+                        {entries.length} · {formatFileSize(totalSize)}
+                      </span>
+                    )}
+                    <div className="ml-auto flex items-center gap-1.5">
+                      {entries.length > 0 && !isRunning && (
+                        <button type="button" onClick={() => setEntries([])} className={SMALL_BUTTON}>
+                          Clear
+                        </button>
+                      )}
                       {desktopShell && (
-                        <button
-                          type="button"
-                          onClick={() => void handleAddFolder()}
-                          disabled={isRunning}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-100 disabled:opacity-50"
-                        >
+                        <button type="button" onClick={() => void handleAddFolder()} disabled={isRunning} className={SMALL_BUTTON}>
                           <FolderOpen size={12} />
                           Add Folder
                         </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => void handleAddFiles()}
-                        disabled={isRunning}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-100 disabled:opacity-50"
-                      >
+                      <button type="button" onClick={() => void handleAddFiles()} disabled={isRunning} className={SMALL_BUTTON}>
                         <Plus size={12} />
                         Add Files
                       </button>
                     </div>
                   </div>
 
-                  <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      multiple
-                      accept={`image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff,${RAW_EXTENSIONS.join(',')}`}
-                      className="hidden"
-                      onChange={(event) => {
-                        const files = Array.from(event.target.files ?? []) as File[];
-                        addFiles(files.map((file) => ({ file })));
-                        event.target.value = '';
-                      }}
-                    />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept={`image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff,${RAW_EXTENSIONS.join(',')}`}
+                    className="hidden"
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? []) as File[];
+                      addFiles(files.map((file) => ({ file })));
+                      event.target.value = '';
+                    }}
+                  />
 
-                    <div className="space-y-2">
-                      {entries.length === 0 ? (
-                        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-zinc-700/50 bg-zinc-900/20 p-10 text-center">
-                          <div className="rounded-full border border-zinc-800 bg-zinc-900/60 p-3">
-                            <FolderOpen size={20} className="text-zinc-600" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium text-zinc-500">Drop scans here</p>
-                            <p className="mt-1 text-xs text-zinc-700">TIFF, JPEG, PNG, WebP · RAW on desktop</p>
-                          </div>
-                        </div>
-                      ) : entries.map((entry) => (
-                        <div key={entry.id} className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3.5">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-zinc-100">{entry.filename}</p>
-                              <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-600">
-                                <span>{formatFileSize(entry.size)}</span>
-                                <span className="text-zinc-800">·</span>
-                                <span>{entry.kind === 'open-tab' ? 'Open in app' : 'Added file'}</span>
+                  <div className="relative min-h-0 flex-1 overflow-y-auto px-5 pb-4 custom-scrollbar">
+                    {entries.length === 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleAddFiles()}
+                        className={`flex h-full min-h-[240px] w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed text-center transition-colors ${
+                          isDropTarget
+                            ? 'border-accent-400/70 bg-accent-400/5'
+                            : 'border-zinc-800 bg-zinc-900/20 hover:border-zinc-700 hover:bg-zinc-900/40'
+                        }`}
+                      >
+                        <span className={`flex h-12 w-12 items-center justify-center rounded-full border transition-colors ${isDropTarget ? 'border-accent-400/50 text-accent-300' : 'border-zinc-800 bg-zinc-900/60 text-zinc-500'}`}>
+                          <Upload size={20} />
+                        </span>
+                        <span>
+                          <span className="block text-sm font-medium text-zinc-300">Drop scans or a folder here</span>
+                          <span className="mt-1 block text-xs text-zinc-600">or click to choose files · TIFF, JPEG, PNG, WebP · RAW on desktop</span>
+                        </span>
+                      </button>
+                    ) : (
+                      <ul className={`divide-y divide-zinc-900 overflow-hidden rounded-xl border transition-colors ${isDropTarget ? 'border-accent-400/60' : 'border-zinc-800/80'}`}>
+                        {entries.map((entry) => {
+                          const status = entry.errorMessage && entry.status !== 'processing' ? 'error' : entry.status;
+                          return (
+                            <li key={entry.id} className="group relative flex items-center gap-3 bg-zinc-900/30 px-3 py-2.5">
+                              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-zinc-900 text-zinc-500">
+                                <FileImage size={15} />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-[13px] font-medium text-zinc-200">{entry.filename}</p>
+                                <p className="mt-0.5 truncate text-[11px] text-zinc-600">
+                                  {formatFileSize(entry.size)}
+                                  <span className="text-zinc-800"> · </span>
+                                  {entry.kind === 'open-tab' ? 'Open in app' : 'Added file'}
+                                  {entry.errorMessage && <span className="text-red-400"> · {entry.errorMessage}</span>}
+                                </p>
                               </div>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-2">
-                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                                entry.status === 'done'
-                                  ? 'bg-emerald-500/12 text-emerald-400'
-                                  : entry.status === 'error'
-                                    ? 'bg-red-500/12 text-red-400'
-                                    : entry.status === 'processing'
-                                      ? 'bg-amber-500/12 text-amber-400'
-                                      : 'bg-zinc-800/80 text-zinc-500'
-                              }`}
-                              >
-                                {entry.status}
+                              <span className={`flex shrink-0 items-center gap-1.5 text-[11px] font-medium ${STATUS_STYLE[status].text}`}>
+                                {status === 'processing'
+                                  ? <Loader2 size={12} className="animate-spin" />
+                                  : status === 'done'
+                                    ? <CheckCircle2 size={12} />
+                                    : status === 'error'
+                                      ? <AlertCircle size={12} />
+                                      : <span className="h-1.5 w-1.5 rounded-full bg-zinc-600" />}
+                                {STATUS_STYLE[status].label}
                               </span>
                               <button
                                 type="button"
+                                aria-label={`Remove ${entry.filename}`}
                                 onClick={() => setEntries((current) => current.filter((candidate) => candidate.id !== entry.id))}
                                 disabled={isRunning}
-                                className="rounded-md p-1.5 text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-zinc-300 disabled:opacity-40"
+                                className="shrink-0 rounded-md p-1.5 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-zinc-300 focus-visible:opacity-100 group-hover:opacity-100 disabled:hidden"
                               >
                                 <Trash2 size={12} />
                               </button>
-                            </div>
-                          </div>
-                          {typeof entry.progress === 'number' && (
-                            <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-zinc-800">
-                              <div className="h-full rounded-full bg-zinc-300 transition-all duration-300" style={{ width: `${Math.round(entry.progress * 100)}%` }} />
-                            </div>
-                          )}
-                          {entry.errorMessage && (
-                            <p className="mt-2 text-xs text-red-400">{entry.errorMessage}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                              {typeof entry.progress === 'number' && entry.status === 'processing' && (
+                                <span className="absolute inset-x-0 bottom-0 h-0.5 bg-zinc-800">
+                                  <span className="block h-full bg-accent-400 transition-[width] duration-300" style={{ width: `${Math.round(entry.progress * 100)}%` }} />
+                                </span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                   </div>
                 </div>
 
-                {/* Right: settings */}
-                <div className="min-h-0 overflow-y-auto px-6 py-5">
+                {/* Right: recipe and output */}
+                <div className="min-h-0 overflow-y-auto border-t border-zinc-800/80 bg-zinc-900/20 px-5 py-4 custom-scrollbar md:border-l md:border-t-0">
                   <div className="space-y-6">
-
-                    <section className="space-y-3">
-                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Settings Source</h3>
-                      <div className="grid grid-cols-3 gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-1">
+                    <section>
+                      <h3 className={SECTION_TITLE}><StepNumber>1</StepNumber> Recipe</h3>
+                      <div role="radiogroup" aria-label="Settings source" className={`${SEGMENT_TRACK} grid-cols-3`}>
                         {([
-                          { value: 'current', label: 'Current Doc', disabled: !currentSettings || !currentProfile },
+                          { value: 'current', label: 'This frame', disabled: !currentSettings || !currentProfile },
                           { value: 'builtin', label: 'Built-in', disabled: false },
                           { value: 'custom', label: 'Custom', disabled: customProfiles.length === 0 },
                         ] as const).map((opt) => (
                           <button
                             key={opt.value}
                             type="button"
-                            disabled={opt.disabled}
+                            role="radio"
+                            aria-checked={settingsSource === opt.value}
+                            disabled={opt.disabled || isRunning}
                             onClick={() => setSettingsSource(opt.value)}
-                            className={`rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
-                              settingsSource === opt.value
-                                ? 'bg-zinc-100 text-zinc-950'
-                                : opt.disabled
-                                  ? 'cursor-not-allowed text-zinc-700'
-                                  : 'text-zinc-400 hover:text-zinc-200'
-                            }`}
+                            className={segmentItem(settingsSource === opt.value)}
                           >
                             {opt.label}
                           </button>
                         ))}
                       </div>
-                      {settingsSource === 'builtin' && (
-                        <select
-                          value={selectedProfileId}
-                          onChange={(event) => setSelectedProfileId(event.target.value)}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
-                        >
-                          {FILM_PROFILES.map((profile) => (
-                            <option key={profile.id} value={profile.id}>{profile.name}</option>
-                          ))}
-                        </select>
-                      )}
-                      {settingsSource === 'custom' && (
-                        <div className="space-y-3">
+                      <div className="mt-2.5">
+                        {settingsSource === 'current' && currentProfile && (
+                          <p className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs leading-relaxed text-zinc-400">
+                            Look of the frame you are editing · <span className="whitespace-nowrap text-zinc-200">{currentProfile.name}</span>
+                          </p>
+                        )}
+                        {settingsSource === 'builtin' && (
                           <select
-                            value={selectedCustomProfileId}
-                            onChange={(event) => setSelectedCustomProfileId(event.target.value)}
-                            className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                            aria-label="Built-in profile"
+                            value={selectedProfileId}
+                            onChange={(event) => setSelectedProfileId(event.target.value)}
+                            className={FIELD_SELECT}
                           >
-                            {customProfiles.map((profile) => (
+                            {FILM_PROFILES.map((profile) => (
                               <option key={profile.id} value={profile.id}>{profile.name}</option>
                             ))}
                           </select>
-                          {selectedCustomProfileHasEmbeddedTransforms && (
-                            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3.5 py-3">
-                              <p className="text-xs font-medium text-amber-200">This preset has a saved crop or rotation.</p>
-                              <p className="mt-1 text-[11px] leading-5 text-amber-100/80">
-                                Every image will be cropped and rotated the same way. Tick the box below to skip this and keep each image as-is.
-                              </p>
-                              <div className="mt-3">
-                                <CheckOption
-                                  checked={ignorePresetCropAndRotation}
-                                  onChange={setIgnorePresetCropAndRotation}
-                                >
-                                  Ignore preset crop and rotation
-                                </CheckOption>
+                        )}
+                        {settingsSource === 'custom' && (
+                          <div className="space-y-2.5">
+                            <select
+                              aria-label="Custom preset"
+                              value={selectedCustomProfileId}
+                              onChange={(event) => setSelectedCustomProfileId(event.target.value)}
+                              className={FIELD_SELECT}
+                            >
+                              {customProfiles.map((profile) => (
+                                <option key={profile.id} value={profile.id}>{profile.name}</option>
+                              ))}
+                            </select>
+                            {selectedCustomProfileHasEmbeddedTransforms && (
+                              <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
+                                <p className="text-xs font-medium text-amber-200">This preset has a saved crop or rotation.</p>
+                                <p className="mt-1 text-[11px] leading-5 text-amber-100/80">
+                                  Every image will be cropped and rotated the same way.
+                                </p>
+                                <div className="mt-2">
+                                  <CheckOption checked={ignorePresetCropAndRotation} onChange={setIgnorePresetCropAndRotation}>
+                                    Ignore preset crop and rotation
+                                  </CheckOption>
+                                </div>
                               </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </section>
 
-                    <section className="space-y-3">
-                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Scanning Corrections</h3>
-                      <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+                    <section>
+                      <h3 className={SECTION_TITLE}><StepNumber>2</StepNumber> Corrections</h3>
+                      <div className="space-y-2.5">
                         <CheckOption checked={batchAutoCrop} disabled={isRunning} onChange={setBatchAutoCrop}>
                           Auto-crop each scan after decode
                         </CheckOption>
@@ -659,257 +703,227 @@ export function BatchModal({
                       </div>
                     </section>
 
-                    <div className="border-t border-zinc-800/80" />
+                    <section>
+                      <h3 className={SECTION_TITLE}><StepNumber>3</StepNumber> Output</h3>
+                      <div className="space-y-3.5">
+                        <div role="radiogroup" aria-label="Output format" className={`${SEGMENT_TRACK} grid-cols-4`}>
+                          {(['image/jpeg', 'image/png', 'image/webp', 'image/tiff'] as const).map((format) => (
+                            <button
+                              key={format}
+                              type="button"
+                              role="radio"
+                              aria-checked={exportOptions.format === format}
+                              disabled={isRunning}
+                              onClick={() => setExportOptions((current) => normalizeExportOptions({
+                                ...current,
+                                format,
+                                ...(format === 'image/webp' ? { outputProfileId: 'srgb' as const } : {}),
+                              }))}
+                              className={`${segmentItem(exportOptions.format === format)} uppercase`}
+                            >
+                              {format === 'image/jpeg' ? 'jpeg' : format.split('/')[1]}
+                            </button>
+                          ))}
+                        </div>
 
-                    <section className="space-y-3">
-                      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Export Options</h3>
-                      <div className="grid grid-cols-3 gap-1.5">
-                      {(['image/jpeg', 'image/png', 'image/webp', 'image/tiff'] as const).map((format) => (
-                          <button
-                            key={format}
-                            type="button"
-                            onClick={() => setExportOptions((current) => normalizeExportOptions({
-                              ...current,
-                              format,
-                              ...(format === 'image/webp' ? { outputProfileId: 'srgb' as const } : {}),
-                            }))}
-                            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors ${
-                              exportOptions.format === format
-                                ? 'border-zinc-100 bg-zinc-100 text-zinc-950'
-                                : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'
-                            }`}
-                          >
-                            {format.split('/')[1]}
-                          </button>
-                        ))}
-                      </div>
-                      {exportOptions.format !== 'image/png' && exportOptions.format !== 'image/tiff' && (
-                        <div>
-                          <div className="mb-2 flex items-center justify-between">
-                            <span className="text-xs text-zinc-400">Quality</span>
-                            <span className="text-xs tabular-nums text-zinc-500">{Math.round(exportOptions.quality * 100)}%</span>
+                        {isPngOrTiff ? (
+                          <div className="flex items-center justify-between gap-3">
+                            <span className={FIELD_LABEL}>Bit Depth</span>
+                            <div role="radiogroup" aria-label="Bit depth" className={`${SEGMENT_TRACK} w-36 grid-cols-2`}>
+                              {([8, 16] as const).map((bitDepth) => (
+                                <button
+                                  key={bitDepth}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={exportOptions.bitDepth === bitDepth}
+                                  onClick={() => setExportOptions((current) => normalizeExportOptions({ ...current, bitDepth }))}
+                                  className={segmentItem(exportOptions.bitDepth === bitDepth)}
+                                >
+                                  {bitDepth}-bit
+                                </button>
+                              ))}
+                            </div>
                           </div>
-                          <input
-                            type="range"
+                        ) : (
+                          <Slider
+                            label="Quality"
+                            value={Math.round(exportOptions.quality * 100)}
                             min={10}
                             max={100}
-                            value={Math.round(exportOptions.quality * 100)}
-                            onChange={(event) => setExportOptions((current) => ({ ...current, quality: Number(event.target.value) / 100 }))}
-                            className="w-full"
+                            unit="%"
+                            onChange={(value) => setExportOptions((current) => ({ ...current, quality: value / 100 }))}
                           />
-                        </div>
-                      )}
-                      {(exportOptions.format === 'image/png' || exportOptions.format === 'image/tiff') && (
+                        )}
+
                         <div>
-                          <p className="mb-1.5 text-xs text-zinc-400">Bit depth</p>
-                          <div className="grid grid-cols-2 gap-1 rounded-lg bg-zinc-950 p-1">
-                            {([8, 16] as const).map((bitDepth) => (
+                          <label className={`${FIELD_LABEL} mb-1.5 block`} htmlFor={`${titleId}-naming`}>Filename</label>
+                          <input
+                            id={`${titleId}-naming`}
+                            type="text"
+                            value={exportOptions.filenameBase}
+                            onChange={(event) => setExportOptions((current) => ({ ...current, filenameBase: event.target.value }))}
+                            className={`${FIELD_SELECT} font-mono`}
+                          />
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {['{original}', '{date}', '{index}'].map((token) => (
                               <button
-                                key={bitDepth}
+                                key={token}
                                 type="button"
-                                onClick={() => setExportOptions((current) => normalizeExportOptions({ ...current, bitDepth }))}
-                                className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
-                                  exportOptions.bitDepth === bitDepth
-                                    ? 'bg-zinc-100 text-zinc-950'
-                                    : 'text-zinc-500 hover:text-zinc-300'
-                                }`}
+                                onClick={() => setExportOptions((current) => ({ ...current, filenameBase: current.filenameBase + token }))}
+                                className="rounded-md border border-zinc-800 bg-zinc-900/60 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 transition-colors hover:border-zinc-700 hover:text-zinc-300"
                               >
-                                {bitDepth}-bit
+                                + {token}
                               </button>
                             ))}
                           </div>
                         </div>
-                      )}
-                      <div>
-                        <p className="mb-1.5 text-xs text-zinc-400">Output naming</p>
-                        <input
-                          type="text"
-                          value={exportOptions.filenameBase}
-                          onChange={(event) => setExportOptions((current) => ({ ...current, filenameBase: event.target.value }))}
-                          className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
-                        />
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {['{original}', '{date}', '{index}'].map((token) => (
-                            <button
-                              key={token}
-                              type="button"
-                              onClick={() => setExportOptions((current) => ({ ...current, filenameBase: current.filenameBase + token }))}
-                              className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-0.5 font-mono text-[10px] text-zinc-500 transition-colors hover:border-zinc-700 hover:text-zinc-300"
-                            >
-                              {token}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <CheckOption
-                        checked={exportOptions.embedMetadata}
-                        onChange={(checked) => setExportOptions((current) => ({ ...current, embedMetadata: checked }))}
-                      >
-                        Embed metadata
-                      </CheckOption>
-                      <div className="rounded-xl border border-zinc-800/60">
-                        <button
-                          type="button"
-                          onClick={() => setColorMgmtExpanded((v) => !v)}
-                          className="flex w-full items-center justify-between px-3.5 py-2.5 text-[10px] font-semibold uppercase tracking-widest text-zinc-600 transition-colors hover:text-zinc-400"
+
+                        <CheckOption
+                          checked={exportOptions.embedMetadata}
+                          onChange={(checked) => setExportOptions((current) => ({ ...current, embedMetadata: checked }))}
                         >
-                          <span>Color Management</span>
-                          <ChevronDown size={12} className={`transition-transform duration-150 ${colorMgmtExpanded ? 'rotate-180' : ''}`} />
-                        </button>
-                        {colorMgmtExpanded && (
-                          <div className="space-y-4 border-t border-zinc-800/60 px-3.5 pb-3.5 pt-3">
-                            <div className="space-y-2">
-                              <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Input Profile</p>
-                              <select
-                                value={colorManagement.inputMode}
-                                onChange={(event) => setColorManagement((current) => ({ ...current, inputMode: event.target.value as ColorManagementSettings['inputMode'] }))}
-                                className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
-                              >
-                                <option value="auto">Auto</option>
-                                <option value="override">Manual Override</option>
-                              </select>
-                              <select
-                                value={colorManagement.inputProfileId}
-                                onChange={(event) => setColorManagement((current) => ({
-                                  ...current,
-                                  inputMode: 'override',
-                                  inputProfileId: event.target.value as ColorProfileId,
-                                }))}
-                                disabled={colorManagement.inputMode === 'auto'}
-                                className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none disabled:opacity-50"
-                              >
-                                {(['srgb', 'display-p3', 'adobe-rgb', 'linear'] as ColorProfileId[]).map((profileId) => (
-                                  <option key={profileId} value={profileId}>{getColorProfileDescription(profileId)}</option>
-                                ))}
-                              </select>
-                              <p className="text-[11px] text-zinc-500">Auto uses each file&apos;s embedded or decoder-reported profile.</p>
-                            </div>
-                            <div className="space-y-2">
-                              <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-600">Output Profile</p>
-                              <div className="space-y-2">
-                                {(['srgb', 'display-p3', 'adobe-rgb', 'linear'] as ColorProfileId[]).map((profileId) => (
-                                  <React.Fragment key={profileId}>
-                                    <RadioOption
-                                      disabled={exportOptions.format === 'image/webp' && profileId !== 'srgb'}
-                                      checked={exportOptions.outputProfileId === profileId}
-                                      onChange={() => setExportOptions((current) => ({ ...current, outputProfileId: profileId }))}
-                                    >
-                                      {getColorProfileDescription(profileId)}
-                                    </RadioOption>
-                                  </React.Fragment>
-                                ))}
-                              </div>
-                              <CheckOption
-                                checked={exportOptions.embedOutputProfile}
-                                onChange={(checked) => setExportOptions((current) => ({ ...current, embedOutputProfile: checked }))}
-                              >
-                                Embed ICC profile
-                              </CheckOption>
-                              {exportOptions.format === 'image/webp' && (
-                                <p className="text-[11px] text-zinc-500">WebP export is limited to sRGB for now.</p>
-                              )}
-                            </div>
+                          Embed metadata
+                        </CheckOption>
+
+                        <div>
+                          <span className={`${FIELD_LABEL} mb-1.5 block`}>Folder</span>
+                          <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 py-1 pl-2.5 pr-1">
+                            <FolderOpen size={13} className="shrink-0 text-zinc-500" />
+                            <span className={`min-w-0 flex-1 truncate text-xs ${outputPath ? 'text-zinc-200' : 'text-zinc-500'}`} data-tip={outputPath ?? undefined}>
+                              {outputPath ?? (desktopShell ? 'No destination selected.' : 'Browser downloads')}
+                            </span>
+                            <button type="button" onClick={() => void handleChooseFolder()} className={SMALL_BUTTON}>
+                              Choose Folder
+                            </button>
                           </div>
-                        )}
-                      </div>
-                    </section>
-
-                    <div className="border-t border-zinc-800/80" />
-
-                    <section className="space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Output Folder</h3>
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void handleChooseFolder()}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200"
-                          >
-                            <FolderOpen size={12} />
-                            Choose Folder
-                          </button>
                           {desktopShell && (
                             <button
                               type="button"
                               onClick={() => void handleUseDownloads()}
-                              className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200"
+                              className="mt-1.5 text-[11px] text-zinc-500 underline-offset-2 transition-colors hover:text-zinc-300 hover:underline"
                             >
                               Use Downloads
                             </button>
                           )}
                         </div>
-                      </div>
-                      <p className="text-[11px] leading-relaxed text-zinc-500">
-                        {desktopShell
-                          ? 'Desktop batch export needs a destination before processing starts. Choose a folder or use Downloads.'
-                          : 'Choose a folder to save directly there, or leave it empty to use your browser download flow.'}
-                      </p>
-                      <p className="rounded-lg border border-zinc-800/60 bg-zinc-900/30 px-3 py-2 text-xs text-zinc-500">
-                        {outputPath ?? (desktopShell ? 'No destination selected.' : 'Browser download flow will be used if no folder is chosen.')}
-                      </p>
-                    </section>
 
+                        <div className="rounded-lg border border-zinc-800/80">
+                          <button
+                            type="button"
+                            aria-expanded={colorMgmtExpanded}
+                            onClick={() => setColorMgmtExpanded((v) => !v)}
+                            className="flex w-full items-center justify-between px-3 py-2 text-[11px] font-medium text-zinc-400 transition-colors hover:text-zinc-200"
+                          >
+                            <span>Color management · <span className="text-zinc-500">{getColorProfileDescription(exportOptions.outputProfileId)}</span></span>
+                            <ChevronDown size={12} className={`transition-transform duration-150 ${colorMgmtExpanded ? 'rotate-180' : ''}`} />
+                          </button>
+                          {colorMgmtExpanded && (
+                            <div className="space-y-4 border-t border-zinc-800/80 px-3 pb-3 pt-3">
+                              <div className="space-y-2">
+                                <p className={FIELD_LABEL}>Input Profile</p>
+                                <select
+                                  value={colorManagement.inputMode}
+                                  onChange={(event) => setColorManagement((current) => ({ ...current, inputMode: event.target.value as ColorManagementSettings['inputMode'] }))}
+                                  className={FIELD_SELECT}
+                                >
+                                  <option value="auto">Auto</option>
+                                  <option value="override">Manual Override</option>
+                                </select>
+                                <select
+                                  value={colorManagement.inputProfileId}
+                                  onChange={(event) => setColorManagement((current) => ({
+                                    ...current,
+                                    inputMode: 'override',
+                                    inputProfileId: event.target.value as ColorProfileId,
+                                  }))}
+                                  disabled={colorManagement.inputMode === 'auto'}
+                                  className={`${FIELD_SELECT} disabled:opacity-50`}
+                                >
+                                  {(['srgb', 'display-p3', 'adobe-rgb', 'linear'] as ColorProfileId[]).map((profileId) => (
+                                    <option key={profileId} value={profileId}>{getColorProfileDescription(profileId)}</option>
+                                  ))}
+                                </select>
+                                <p className="text-[11px] text-zinc-500">Auto uses each file&apos;s embedded or decoder-reported profile.</p>
+                              </div>
+                              <div className="space-y-2">
+                                <p className={FIELD_LABEL}>Output Profile</p>
+                                {(['srgb', 'display-p3', 'adobe-rgb', 'linear'] as ColorProfileId[]).map((profileId) => (
+                                  <RadioOption
+                                    key={profileId}
+                                    disabled={exportOptions.format === 'image/webp' && profileId !== 'srgb'}
+                                    checked={exportOptions.outputProfileId === profileId}
+                                    onChange={() => setExportOptions((current) => ({ ...current, outputProfileId: profileId }))}
+                                  >
+                                    {getColorProfileDescription(profileId)}
+                                  </RadioOption>
+                                ))}
+                                <CheckOption
+                                  checked={exportOptions.embedOutputProfile}
+                                  onChange={(checked) => setExportOptions((current) => ({ ...current, embedOutputProfile: checked }))}
+                                >
+                                  Embed ICC profile
+                                </CheckOption>
+                                {exportOptions.format === 'image/webp' && (
+                                  <p className="text-[11px] text-zinc-500">WebP export is limited to sRGB for now.</p>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </section>
                   </div>
                 </div>
               </div>
 
               {error && (
-                <div className="border-t border-zinc-800/80 px-6 py-3 text-xs text-red-400">{error}</div>
+                <div className="flex items-center gap-2 border-t border-red-900/40 bg-red-950/20 px-5 py-2.5 text-xs text-red-300">
+                  <AlertCircle size={13} className="shrink-0" />
+                  {error}
+                </div>
               )}
 
-              <div className="flex items-center justify-between gap-2.5 border-t border-zinc-800/80 px-6 py-4">
+              {/* Footer */}
+              <div className="flex items-center gap-4 border-t border-zinc-800/80 px-5 py-3.5">
+                <div className="min-w-0 flex-1">
+                  {isRunning ? (
+                    <div className="max-w-sm">
+                      <div className="mb-1.5 flex justify-between text-[11px] tabular-nums text-zinc-400">
+                        <span>Converting {Math.min(finishedCount + 1, runnableCount)} of {runnableCount}</span>
+                        <span>{Math.round(overallProgress * 100)}%</span>
+                      </div>
+                      <div className="h-1 overflow-hidden rounded-full bg-zinc-800">
+                        <div className="h-full rounded-full bg-accent-400 transition-[width] duration-300" style={{ width: `${Math.round(overallProgress * 100)}%` }} />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="truncate text-[11px] text-zinc-600">
+                      {entries.length === 0 ? 'Add scans to start.' : `${runnableCount} ready${entries.length > runnableCount ? `, ${entries.length - runnableCount} skipped` : ''}.`}
+                    </p>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => {
-                    if (!sharedSettings || !sharedProfile) {
-                      setError('Choose a settings source before opening the contact sheet.');
-                      return;
+                    if (isRunning) {
+                      cancelTokenRef.current.cancelled = true;
+                    } else {
+                      onClose();
                     }
-
-                    onOpenContactSheet({
-                      entries,
-                      sharedSettings: structuredClone(sharedSettings),
-                      sharedProfile,
-                      sharedLabStyle,
-                      sharedColorManagement: {
-                        ...colorManagement,
-                        outputProfileId: exportOptions.outputProfileId,
-                        embedOutputProfile: exportOptions.embedOutputProfile,
-                      },
-                      sharedLightSourceBias,
-                    });
                   }}
-                  disabled={!canOpenContactSheet || isRunning}
-                  title={canOpenContactSheet ? 'Create a contact sheet from the current batch list' : 'Add batch items and choose a settings source first'}
-                  className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800/80 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="rounded-lg border border-zinc-800 px-4 py-2 text-[13px] text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
                 >
-                  <LayoutGrid size={13} />
-                  Contact Sheet…
+                  {isRunning ? 'Cancel After Current File' : 'Close'}
                 </button>
-                <div className="flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isRunning) {
-                        cancelTokenRef.current.cancelled = true;
-                      } else {
-                        onClose();
-                      }
-                    }}
-                    className="rounded-lg border border-zinc-800 px-4 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
-                  >
-                    {isRunning ? 'Cancel After Current File' : 'Close'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleStart()}
-                    disabled={isRunning}
-                    className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-white disabled:opacity-50"
-                  >
-                    <Download size={14} />
-                    {isRunning ? 'Processing…' : 'Start Batch'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleStart()}
+                  disabled={isRunning || runnableCount === 0}
+                  className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-[13px] font-semibold text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isRunning ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                  {isRunning ? 'Converting…' : startLabel}
+                </button>
               </div>
             </div>
           </motion.div>

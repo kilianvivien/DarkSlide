@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings } from '../constants';
 import { parseCubeLut } from '../utils/cubeLut';
 import { validateDarkslideFile } from '../utils/presetStore';
@@ -22,6 +22,93 @@ vi.mock('../utils/fileBridge', () => ({
 import { PresetsPane } from './PresetsPane';
 
 describe('PresetsPane', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderWithPreview(activeStockId = 'generic-color') {
+    const handlers = { onStockChange: vi.fn(), onStockPreview: vi.fn(), onStockPreviewEnd: vi.fn() };
+    const view = render(
+      <PresetsPane
+        activeStockId={activeStockId}
+        {...handlers}
+        customPresets={[]}
+        canSavePreset
+        onSavePreset={vi.fn()}
+        onImportPreset={vi.fn()}
+        onDeletePreset={vi.fn()}
+      />,
+    );
+    return { ...handlers, ...view };
+  }
+
+  it('previews a hovered profile after a short delay without applying it', () => {
+    vi.useFakeTimers();
+    const { onStockChange, onStockPreview, onStockPreviewEnd } = renderWithPreview();
+    const profile = screen.getByRole('button', { name: /Generic B&W/i });
+
+    fireEvent.mouseEnter(profile);
+    expect(onStockPreview).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(120));
+
+    expect(onStockPreview).toHaveBeenCalledWith(expect.objectContaining({ id: 'generic-bw' }));
+    expect(onStockChange).not.toHaveBeenCalled();
+
+    fireEvent.mouseLeave(profile);
+    expect(onStockPreviewEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not preview a profile the pointer only sweeps across', () => {
+    vi.useFakeTimers();
+    const { onStockPreview, onStockPreviewEnd } = renderWithPreview();
+    const profile = screen.getByRole('button', { name: /Generic B&W/i });
+
+    fireEvent.mouseEnter(profile);
+    act(() => vi.advanceTimersByTime(60));
+    fireEvent.mouseLeave(profile);
+    act(() => vi.advanceTimersByTime(200));
+
+    expect(onStockPreview).not.toHaveBeenCalled();
+    expect(onStockPreviewEnd).not.toHaveBeenCalled();
+  });
+
+  it('ends the preview when the hovered profile is chosen', () => {
+    vi.useFakeTimers();
+    const { onStockChange, onStockPreviewEnd } = renderWithPreview();
+    const profile = screen.getByRole('button', { name: /Generic B&W/i });
+
+    fireEvent.mouseEnter(profile);
+    act(() => vi.advanceTimersByTime(120));
+    fireEvent.click(profile);
+
+    expect(onStockPreviewEnd).toHaveBeenCalledTimes(1);
+    expect(onStockChange).toHaveBeenCalledWith(expect.objectContaining({ id: 'generic-bw' }));
+  });
+
+  it('restores the current look when the pointer moves back to the active profile', () => {
+    vi.useFakeTimers();
+    const { onStockPreview, onStockPreviewEnd } = renderWithPreview();
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /Generic B&W/i }));
+    act(() => vi.advanceTimersByTime(120));
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /Generic Color/i }));
+    act(() => vi.advanceTimersByTime(200));
+
+    expect(onStockPreview).toHaveBeenCalledTimes(1);
+    expect(onStockPreviewEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends an active preview when the panel closes', () => {
+    vi.useFakeTimers();
+    const { onStockPreviewEnd, unmount } = renderWithPreview();
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /Generic B&W/i }));
+    act(() => vi.advanceTimersByTime(120));
+    unmount();
+
+    expect(onStockPreviewEnd).toHaveBeenCalledTimes(1);
+  });
+
   it('switches to the custom tab when opening the save preset form', () => {
     render(
       <PresetsPane
@@ -333,38 +420,6 @@ describe('PresetsPane', () => {
     expect(screen.getByText('Negative · Color')).toBeInTheDocument();
   });
 
-  it('does not show the old apply stored film base action on the active roll card', () => {
-    const activeRoll = {
-      id: 'roll-1',
-      name: 'Untitled Roll',
-      filmStock: null,
-      profileId: null,
-      camera: null,
-      date: null,
-      notes: '',
-      filmBaseSample: null,
-      createdAt: Date.now(),
-      directory: null,
-    };
-
-    render(
-      <PresetsPane
-        activeStockId="generic-color"
-        onStockChange={vi.fn()}
-        customPresets={[]}
-        canSavePreset
-        onSavePreset={vi.fn()}
-        onImportPreset={vi.fn()}
-        onDeletePreset={vi.fn()}
-        rolls={new Map([[activeRoll.id, activeRoll]])}
-        activeRoll={activeRoll}
-        filmstripTabs={[]}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /^rolls$/i }));
-    expect(screen.queryByRole('button', { name: /apply stored film base/i })).not.toBeInTheDocument();
-  });
   it('imports a .cube LUT as a custom preset', async () => {
     const onImportPreset = vi.fn();
     const cubeText = [

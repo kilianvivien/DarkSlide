@@ -3,7 +3,7 @@ import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS
 import type { FilmProfile, WorkspaceDocument } from '../types';
 import { processFloatRaster, resolveDensityInversionParams } from './imagePipeline';
 import { createRawImportProfile } from './rawImport';
-import { buildProfileSettingsForDocument, createPresetRecipe, resolveDocumentProfile } from './presetRecipe';
+import { buildProfileSettingsForDocument, createPresetRecipe, resolveDocumentProfile, resolveProfileApplication } from './presetRecipe';
 import { encodeProfileForTransport, validateDarkslideFile } from './presetStore';
 
 function makeDocument(profile: FilmProfile): WorkspaceDocument {
@@ -109,5 +109,35 @@ describe('preset conversion recipes', () => {
     const map = new Map([[first.profileId, second.rawImportProfile]]);
     expect(resolveDocumentProfile(first, map, gold)).toBe(first.rawImportProfile);
     expect(resolveDocumentProfile(second, map, gold)).toBe(second.rawImportProfile);
+  });
+});
+
+describe('resolveProfileApplication', () => {
+  const colorProfile = FILM_PROFILES.find((profile) => profile.type === 'color' && (profile.filmType ?? 'negative') === 'negative')!;
+  const labStyleId = Object.keys(LAB_STYLE_PROFILES_MAP)[0];
+
+  it('keeps the document light source and lab style when the profile names neither', () => {
+    const document = { ...makeDocument(colorProfile), lightSourceId: 'skier', labStyleId };
+    const applied = resolveProfileApplication(colorProfile, document);
+
+    expect(applied.lightSourceId).toBe('skier');
+    expect(applied.labStyleId).toBe(labStyleId);
+    expect(applied.settings).toEqual(buildProfileSettingsForDocument(colorProfile, document));
+  });
+
+  it('switches a CS-Lite light source to the mode for the film type', () => {
+    const applied = resolveProfileApplication(colorProfile, makeDocument(colorProfile));
+
+    expect(applied.lightSourceId).toBe('cs-lite-cool');
+  });
+
+  it('lets the profile set or clear the light source and lab style', () => {
+    const document = { ...makeDocument(colorProfile), labStyleId };
+    const profile: FilmProfile = { ...colorProfile, id: 'custom-look', lightSourceId: null, labStyleId: null };
+    const applied = resolveProfileApplication(profile, document);
+
+    expect(applied.lightSourceId).toBeNull();
+    expect(applied.labStyleId).toBeNull();
+    expect(resolveProfileApplication({ ...profile, labStyleId }, makeDocument(colorProfile)).labStyleId).toBe(labStyleId);
   });
 });

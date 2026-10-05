@@ -40,6 +40,7 @@ declare global {
       compute: { module: GPUShaderModule; entryPoint: string };
     }): GPUComputePipeline;
     createRenderPipeline(descriptor: GPURenderPipelineDescriptor): GPURenderPipeline;
+    createRenderPipelineAsync?(descriptor: GPURenderPipelineDescriptor): Promise<GPURenderPipeline>;
     createBuffer(descriptor: GPUBufferDescriptor): GPUBuffer;
     createTexture(descriptor: GPUTextureDescriptor): GPUTexture;
     createBindGroup(descriptor: GPUCreateBindGroupDescriptor): GPUBindGroup;

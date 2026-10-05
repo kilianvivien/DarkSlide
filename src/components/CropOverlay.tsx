@@ -11,6 +11,8 @@ interface CropOverlayProps {
   imageHeight: number;
   levelAngle?: number;
   straightenActive?: boolean;
+  /** Scale the preview is drawn at. Handles and labels are counter-scaled so they keep their on-screen size. */
+  displayScale?: number;
   onChange: (crop: CropSettings) => void;
   onLevelAngleChange?: (levelAngle: number) => void;
   onInteractionStart?: () => void;
@@ -28,50 +30,50 @@ const RESIZE_HANDLES: Array<{
   {
     mode: 'nw',
     label: 'Resize crop from top left',
-    hitAreaClass: 'left-0 top-0 h-7 w-7 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize',
-    gripClass: 'left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 border-l-2 border-t-2',
+    hitAreaClass: 'left-0 top-0 h-10 w-10 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize',
+    gripClass: 'left-1/2 top-1/2 h-6 w-6 -translate-x-[5px] -translate-y-[5px] border-l-4 border-t-4',
   },
   {
     mode: 'n',
     label: 'Resize crop from top',
-    hitAreaClass: 'left-1/2 top-0 h-6 w-12 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize',
-    gripClass: 'left-1/2 top-1/2 h-1 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-50',
+    hitAreaClass: 'left-1/2 top-0 h-8 w-16 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize',
+    gripClass: 'left-1/2 top-1/2 h-1.5 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-50',
   },
   {
     mode: 'ne',
     label: 'Resize crop from top right',
-    hitAreaClass: 'right-0 top-0 h-7 w-7 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize',
-    gripClass: 'left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 border-r-2 border-t-2',
+    hitAreaClass: 'right-0 top-0 h-10 w-10 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize',
+    gripClass: 'right-1/2 top-1/2 h-6 w-6 translate-x-[5px] -translate-y-[5px] border-r-4 border-t-4',
   },
   {
     mode: 'e',
     label: 'Resize crop from right',
-    hitAreaClass: 'right-0 top-1/2 h-12 w-6 -translate-y-1/2 translate-x-1/2 cursor-ew-resize',
-    gripClass: 'left-1/2 top-1/2 h-5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-50',
+    hitAreaClass: 'right-0 top-1/2 h-16 w-8 -translate-y-1/2 translate-x-1/2 cursor-ew-resize',
+    gripClass: 'left-1/2 top-1/2 h-8 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-50',
   },
   {
     mode: 'se',
     label: 'Resize crop from bottom right',
-    hitAreaClass: 'bottom-0 right-0 h-7 w-7 translate-x-1/2 translate-y-1/2 cursor-nwse-resize',
-    gripClass: 'left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 border-b-2 border-r-2',
+    hitAreaClass: 'bottom-0 right-0 h-10 w-10 translate-x-1/2 translate-y-1/2 cursor-nwse-resize',
+    gripClass: 'right-1/2 bottom-1/2 h-6 w-6 translate-x-[5px] translate-y-[5px] border-b-4 border-r-4',
   },
   {
     mode: 's',
     label: 'Resize crop from bottom',
-    hitAreaClass: 'bottom-0 left-1/2 h-6 w-12 -translate-x-1/2 translate-y-1/2 cursor-ns-resize',
-    gripClass: 'left-1/2 top-1/2 h-1 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-50',
+    hitAreaClass: 'bottom-0 left-1/2 h-8 w-16 -translate-x-1/2 translate-y-1/2 cursor-ns-resize',
+    gripClass: 'left-1/2 top-1/2 h-1.5 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-50',
   },
   {
     mode: 'sw',
     label: 'Resize crop from bottom left',
-    hitAreaClass: 'bottom-0 left-0 h-7 w-7 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize',
-    gripClass: 'left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 border-b-2 border-l-2',
+    hitAreaClass: 'bottom-0 left-0 h-10 w-10 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize',
+    gripClass: 'left-1/2 bottom-1/2 h-6 w-6 -translate-x-[5px] translate-y-[5px] border-b-4 border-l-4',
   },
   {
     mode: 'w',
     label: 'Resize crop from left',
-    hitAreaClass: 'left-0 top-1/2 h-12 w-6 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize',
-    gripClass: 'left-1/2 top-1/2 h-5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-50',
+    hitAreaClass: 'left-0 top-1/2 h-16 w-8 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize',
+    gripClass: 'left-1/2 top-1/2 h-8 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-50',
   },
 ];
 
@@ -112,6 +114,7 @@ export const CropOverlay = memo(function CropOverlay({
   imageHeight,
   levelAngle = 0,
   straightenActive = false,
+  displayScale = 1,
   onChange,
   onLevelAngleChange,
   onInteractionStart,
@@ -284,8 +287,11 @@ export const CropOverlay = memo(function CropOverlay({
     top: `${crop.y * 100}%`,
     width: `${crop.width * 100}%`,
     height: `${crop.height * 100}%`,
-    boxShadow: '0 0 0 1px rgba(9,9,11,0.95), 0 2px 14px rgba(0,0,0,0.45)',
+    borderWidth: `calc(2px * var(--crop-ui))`,
+    boxShadow: '0 0 0 calc(1px * var(--crop-ui)) rgba(9,9,11,0.95), 0 calc(2px * var(--crop-ui)) calc(14px * var(--crop-ui)) rgba(0,0,0,0.45)',
   };
+  const uiScale = 1 / Math.max(displayScale, 0.01);
+  const counterScale = { scale: 'var(--crop-ui)' } as const;
 
   const beginDrag = (mode: DragMode) => (event: React.PointerEvent) => {
     if (straightenActive || event.button !== 0) return;
@@ -416,6 +422,7 @@ export const CropOverlay = memo(function CropOverlay({
     <div
       ref={frameRef}
       className={`absolute inset-0 touch-none ${straightenActive ? 'pointer-events-auto cursor-crosshair' : 'pointer-events-none'}`}
+      style={{ '--crop-ui': uiScale } as React.CSSProperties}
       onPointerDown={beginStraighten}
       onPointerMove={updateStraighten}
       onPointerUp={finishStraighten}
@@ -447,33 +454,33 @@ export const CropOverlay = memo(function CropOverlay({
       />
       <div
         style={frameStyle}
-        className={`group absolute touch-none border-[3px] border-white pointer-events-auto ${straightenActive ? 'cursor-crosshair' : dragState?.mode === 'move' ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`group absolute touch-none border-solid border-white pointer-events-auto ${straightenActive ? 'cursor-crosshair' : dragState?.mode === 'move' ? 'cursor-grabbing' : 'cursor-grab'}`}
       >
         <button
           type="button"
           tabIndex={straightenActive ? -1 : 0}
           aria-label="Crop area. Drag to move, or use the arrow keys for precise positioning."
-          className={`absolute inset-0 z-0 border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 ${straightenActive ? 'pointer-events-none cursor-crosshair' : dragState?.mode === 'move' ? 'cursor-grabbing' : 'cursor-grab'}`}
+          className={`absolute inset-0 z-0 border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 ${straightenActive ? 'pointer-events-none cursor-crosshair' : dragState?.mode === 'move' ? 'cursor-grabbing' : 'cursor-grab'}`}
           onKeyDown={handleKeyboardMove}
           onPointerDown={beginDrag('move')}
         />
         <div data-testid="crop-rule-of-thirds" className={`pointer-events-none absolute inset-0 transition-opacity ${dragState || straightenActive ? 'opacity-90' : 'opacity-55'}`} aria-hidden="true">
-          <span className="absolute inset-y-0 left-1/3 w-px bg-white/65 shadow-[0_0_1px_rgba(0,0,0,0.9)]" />
-          <span className="absolute inset-y-0 left-2/3 w-px bg-white/65 shadow-[0_0_1px_rgba(0,0,0,0.9)]" />
-          <span className="absolute inset-x-0 top-1/3 h-px bg-white/65 shadow-[0_0_1px_rgba(0,0,0,0.9)]" />
-          <span className="absolute inset-x-0 top-2/3 h-px bg-white/65 shadow-[0_0_1px_rgba(0,0,0,0.9)]" />
+          <span className="absolute inset-y-0 left-1/3 bg-white/65 shadow-[0_0_1px_rgba(0,0,0,0.9)]" style={{ width: 'calc(1px * var(--crop-ui))' }} />
+          <span className="absolute inset-y-0 left-2/3 bg-white/65 shadow-[0_0_1px_rgba(0,0,0,0.9)]" style={{ width: 'calc(1px * var(--crop-ui))' }} />
+          <span className="absolute inset-x-0 top-1/3 bg-white/65 shadow-[0_0_1px_rgba(0,0,0,0.9)]" style={{ height: 'calc(1px * var(--crop-ui))' }} />
+          <span className="absolute inset-x-0 top-2/3 bg-white/65 shadow-[0_0_1px_rgba(0,0,0,0.9)]" style={{ height: 'calc(1px * var(--crop-ui))' }} />
         </div>
 
         {!straightenActive && !dragState && (
-          <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border border-white/20 bg-zinc-950/70 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/80 opacity-0 shadow-lg backdrop-blur-sm transition-opacity group-hover:opacity-100">
+          <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border border-white/20 bg-zinc-950/70 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/80 opacity-0 shadow-lg backdrop-blur-sm transition-opacity group-hover:opacity-100" style={counterScale}>
             <span className="text-sm leading-none">↕</span> Move crop
           </div>
         )}
 
         {dragState && (
-          <div className="pointer-events-none absolute left-2 top-2 rounded-md bg-zinc-950/85 px-2.5 py-1.5 font-mono text-[13px] font-medium tabular-nums text-zinc-100 shadow-lg" aria-live="polite">
+          <div className="pointer-events-none absolute rounded-md bg-zinc-950/85 px-2.5 py-1.5 font-mono text-[13px] font-medium tabular-nums text-zinc-100 shadow-lg" style={{ ...counterScale, transformOrigin: 'top left', left: 'calc(10px * var(--crop-ui))', top: 'calc(10px * var(--crop-ui))' }} aria-live="polite">
             {Math.round(crop.width * imageWidth)} × {Math.round(crop.height * imageHeight)} px
-            <span className="ml-2 text-amber-300">
+            <span className="ml-2 text-accent-300">
               {formatAspectRatio(crop.width * imageWidth, crop.height * imageHeight)}
             </span>
           </div>
@@ -484,7 +491,8 @@ export const CropOverlay = memo(function CropOverlay({
             key={handle.mode}
             type="button"
             aria-label={handle.label}
-            className={`absolute z-10 border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${straightenActive ? 'pointer-events-none opacity-0' : ''} ${handle.hitAreaClass}`}
+            className={`absolute z-10 border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-accent-400 ${straightenActive ? 'pointer-events-none opacity-0' : ''} ${handle.hitAreaClass}`}
+            style={counterScale}
             onPointerDown={beginDrag(handle.mode)}
           >
             <span className={`pointer-events-none absolute border-zinc-50 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)] ${handle.gripClass}`} />
@@ -496,8 +504,8 @@ export const CropOverlay = memo(function CropOverlay({
         <div className="pointer-events-none absolute inset-0" aria-hidden="true">
           {[25, 50, 75].map((position) => (
             <React.Fragment key={position}>
-              <span className="absolute inset-y-0 w-px bg-amber-300/25" style={{ left: `${position}%` }} />
-              <span className="absolute inset-x-0 h-px bg-amber-300/25" style={{ top: `${position}%` }} />
+              <span className="absolute inset-y-0 w-px bg-accent-300/25" style={{ left: `${position}%` }} />
+              <span className="absolute inset-x-0 h-px bg-accent-300/25" style={{ top: `${position}%` }} />
             </React.Fragment>
           ))}
         </div>
@@ -506,7 +514,7 @@ export const CropOverlay = memo(function CropOverlay({
       {straightenLine && createPortal(
         <div
           data-testid="straighten-line"
-          className="pointer-events-none fixed z-[100] h-0.5 origin-left bg-amber-300 shadow-[0_0_0_1px_rgba(0,0,0,0.65),0_0_12px_rgba(252,211,77,0.65)]"
+          className="pointer-events-none fixed z-[100] h-0.5 origin-left bg-accent-300 shadow-[0_0_0_1px_rgba(0,0,0,0.65),0_0_12px_var(--accent-300)]"
           style={{
             left: straightenLine.startX,
             top: straightenLine.startY,
@@ -514,7 +522,7 @@ export const CropOverlay = memo(function CropOverlay({
             transform: `rotate(${Math.atan2(straightenLine.endY - straightenLine.startY, straightenLine.endX - straightenLine.startX)}rad)`,
           }}
         >
-          <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded bg-zinc-950/90 px-2 py-1 font-mono text-[10px] text-amber-200 shadow-lg">
+          <span className="absolute left-1/2 top-2 -translate-x-1/2 whitespace-nowrap rounded bg-zinc-950/90 px-2 py-1 font-mono text-[10px] text-accent-200 shadow-lg">
             {straightenDeviation > 0 ? '+' : ''}{straightenDeviation.toFixed(1)}°
           </span>
         </div>,

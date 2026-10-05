@@ -3,7 +3,9 @@ import { buildEmptyHistogram } from './imagePipeline';
 import {
   analyzeHistogram,
   buildHistogramPath,
+  buildHistogramShape,
   formatClippingFraction,
+  histogramDisplayPeak,
   histogramPercentile,
 } from './histogramAnalysis';
 
@@ -81,5 +83,37 @@ describe('buildHistogramPath', () => {
     const log = heightOfFirstBin(buildHistogramPath(bins, 1000, 80, 'log'));
     // Lower y is taller in SVG coordinates.
     expect(log).toBeLessThan(linear);
+  });
+});
+
+describe('histogramDisplayPeak', () => {
+  it('ignores clipped endpoint bins so they do not flatten the chart', () => {
+    const data = buildEmptyHistogram();
+    data.l[0] = 50_000;
+    data.l[128] = 400;
+    data.l[255] = 30_000;
+    expect(histogramDisplayPeak(data, ['l'])).toBe(400);
+  });
+
+  it('falls back to the endpoints when nothing else is filled', () => {
+    const data = buildEmptyHistogram();
+    data.l[255] = 12;
+    expect(histogramDisplayPeak(data, ['l'])).toBe(12);
+  });
+});
+
+describe('buildHistogramShape', () => {
+  it('returns empty paths for an empty histogram', () => {
+    expect(buildHistogramShape(new Array(256).fill(0), 0, 96, 'linear')).toEqual({ area: '', line: '' });
+  });
+
+  it('clamps bins above the peak to the top of the chart and closes the area at the baseline', () => {
+    const bins = new Array(256).fill(0);
+    bins[0] = 10_000;
+    bins[100] = 100;
+    const { area, line } = buildHistogramShape(bins, 100, 96, 'linear');
+    expect(line.startsWith('M 0 0 ')).toBe(true);
+    expect(area.startsWith('M 0 96 L 0 0')).toBe(true);
+    expect(area.endsWith('L 256 96 Z')).toBe(true);
   });
 });

@@ -134,15 +134,17 @@ export function normalizePreviewImageData(imageData: ImageData, width: number, h
   return new ImageData(new Uint8ClampedArray(imageData.data), width, height);
 }
 
+// The preview canvas is only drawn to and composited, never read back, so it
+// stays GPU-backed: willReadFrequently would force a software canvas that is
+// re-uploaded on every frame.
 export function getCanvas2dContext(canvas: HTMLCanvasElement) {
   if (supportsDisplayP3Canvas()) {
     return canvas.getContext('2d', {
-      willReadFrequently: true,
       colorSpace: 'display-p3',
     } as CanvasRenderingContext2DSettings) ?? canvas.getContext('2d');
   }
 
-  return canvas.getContext('2d', { willReadFrequently: true }) ?? canvas.getContext('2d');
+  return canvas.getContext('2d');
 }
 
 export function getNativePathFromFile(file: File): string | null {
@@ -195,6 +197,8 @@ export type QueuedPreviewRender = {
   highlightDensityEstimate?: number;
   flareFloor?: [number, number, number] | null;
   lightSourceBias?: [number, number, number];
+  // Rendered for a hovered film profile rather than the document's own look.
+  isProfilePreview?: boolean;
 };
 
 export type BlockingOverlayState = {

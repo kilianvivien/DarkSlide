@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowDownUp, Box, Check, ChevronDown, Copy, Download, Film, FolderOpen, FolderPlus, Grid3x3, Info, Layers, Pencil, Plus, ScanLine, Search, SlidersHorizontal, Trash2, Unlink2, Upload, X } from 'lucide-react';
+import { ArrowDownUp, Box, Check, ChevronDown, Download, Film, FolderOpen, FolderPlus, Grid3x3, Layers, Pencil, Plus, Search, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
 import { DARKSLIDE_PRESET_FILE_VERSION, FILM_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES } from '../constants';
 import { confirmDeletePreset, isDesktopShell, saveCubeLutFile, savePresetFile, openPresetFile } from '../utils/fileBridge';
 import { CubeLutParseError, parseCubeLut, serializeCubeLut } from '../utils/cubeLut';
 import { bakePresetToCubeLut, createProfileFromCubeLut, cubeLutPerformsInversion } from '../utils/presetLutExport';
 import { encodeProfileForTransport, validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
-import { getRollAccent } from '../utils/rolls';
-import { DarkslidePresetFile, DocumentTab, FilmProfile, FilmProfileCategory, PresetFolder, Roll, ScannerType } from '../types';
+import { DarkslidePresetFile, FilmProfile, FilmProfileCategory, PresetFolder, ScannerType } from '../types';
+import { SEGMENT_TRACK, segmentItem } from './ui';
 
 const GENERIC_IDS = new Set(['generic-bw', 'generic-color']);
 
@@ -133,11 +133,17 @@ function formatBuiltInProfileLabel(profile: FilmProfile) {
   return `${filmTypeLabel} · ${processLabel}`;
 }
 
+const STOCK_PREVIEW_DELAY_MS = 120;
+
 const CATEGORY_ORDER: FilmProfileCategory[] = ['Generic', 'Kodak', 'Fuji', 'Ilford', 'CineStill', 'Lomography', 'Harman', 'Kentmere', 'Foma', 'Rollei'];
 
 interface PresetsPaneProps {
   activeStockId: string;
   onStockChange: (stock: FilmProfile) => void;
+  // Shows a profile on the image without applying it, while the pointer or
+  // keyboard focus rests on it. onStockPreviewEnd restores the current look.
+  onStockPreview?: (stock: FilmProfile) => void;
+  onStockPreviewEnd?: () => void;
   builtinProfiles?: FilmProfile[];
   customPresets: FilmProfile[];
   presetFolders?: PresetFolder[];
@@ -156,25 +162,13 @@ interface PresetsPaneProps {
   onDeleteFolder?: (id: string) => void;
   onMovePresetToFolder?: (presetId: string, folderId: string | null) => void;
   onError?: (message: string | null) => void;
-  rolls?: Map<string, Roll>;
-  activeRoll?: Roll | null;
-  activeTabId?: string | null;
-  filmstripTabs?: DocumentTab[];
-  onSelectTab?: (tabId: string) => void;
-  onOpenRollInfo?: (rollId: string) => void;
-  onSyncRollSettings?: (tabId: string, rollId: string) => void;
-  onStabilizeRollCrops?: (rollId: string) => void;
-  onRemoveFromRoll?: (tabId: string) => void;
-  onDeleteRoll?: (rollId: string) => void;
-  onCreateRollFromTabs?: () => void;
-  onToggleScanningSession?: () => void;
-  usesNativeFileDialogs?: boolean;
-  tabs?: DocumentTab[];
 }
 
 export const PresetsPane: React.FC<PresetsPaneProps> = ({
   activeStockId,
   onStockChange,
+  onStockPreview,
+  onStockPreviewEnd,
   builtinProfiles = FILM_PROFILES,
   customPresets,
   presetFolders = [],
@@ -188,27 +182,13 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   onDeleteFolder,
   onMovePresetToFolder,
   onError,
-  rolls,
-  activeRoll,
-  activeTabId,
-  filmstripTabs = [],
-  onSelectTab,
-  onOpenRollInfo,
-  onSyncRollSettings,
-  onStabilizeRollCrops,
-  onRemoveFromRoll,
-  onDeleteRoll,
-  onCreateRollFromTabs,
-  onToggleScanningSession,
-  usesNativeFileDialogs,
-  tabs = [],
 }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [saveFilmStock, setSaveFilmStock] = useState('');
   const [saveScannerType, setSaveScannerType] = useState<ScannerType | null>(null);
   const [saveFraming, setSaveFraming] = useState(false);
-  const [presetTab, setPresetTab] = useState<'builtin' | 'custom' | 'rolls'>('builtin');
+  const [presetTab, setPresetTab] = useState<'builtin' | 'custom'>('builtin');
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [importConflict, setImportConflict] = useState<ImportConflictState | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -257,6 +237,56 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewTimerRef = useRef<number | null>(null);
+  const previewedStockIdRef = useRef<string | null>(null);
+
+  // stockId limits the stop to that profile, so leaving one row after the
+  // pointer already entered the next does not cancel the newer preview.
+  const stopStockPreview = useCallback((stockId?: string) => {
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    if (previewedStockIdRef.current && (!stockId || previewedStockIdRef.current === stockId)) {
+      previewedStockIdRef.current = null;
+      onStockPreviewEnd?.();
+    }
+  }, [onStockPreviewEnd]);
+
+  // A short delay keeps a pointer sweeping across the list from queueing a
+  // render for every row it crosses.
+  const scheduleStockPreview = useCallback((stock: FilmProfile) => {
+    if (!onStockPreview) return;
+    if (previewTimerRef.current !== null) window.clearTimeout(previewTimerRef.current);
+    if (stock.id === activeStockId) {
+      previewTimerRef.current = null;
+      if (previewedStockIdRef.current) {
+        previewedStockIdRef.current = null;
+        onStockPreviewEnd?.();
+      }
+      return;
+    }
+    previewTimerRef.current = window.setTimeout(() => {
+      previewTimerRef.current = null;
+      previewedStockIdRef.current = stock.id;
+      onStockPreview(stock);
+    }, STOCK_PREVIEW_DELAY_MS);
+  }, [activeStockId, onStockPreview, onStockPreviewEnd]);
+
+  const selectStock = useCallback((stock: FilmProfile) => {
+    stopStockPreview();
+    onStockChange(stock);
+  }, [onStockChange, stopStockPreview]);
+
+  useEffect(() => () => stopStockPreview(), [stopStockPreview]);
+
+  const stockButtonHandlers = (stock: FilmProfile) => ({
+    onClick: () => selectStock(stock),
+    onMouseEnter: () => scheduleStockPreview(stock),
+    onMouseLeave: () => stopStockPreview(stock.id),
+    onFocus: () => scheduleStockPreview(stock),
+    onBlur: () => stopStockPreview(stock.id),
+  });
   const genericProfiles = useMemo(
     () => builtinProfiles.filter(isGenericProfile),
     [builtinProfiles],
@@ -618,7 +648,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
     return (
       <div key={stock.id} className="relative">
         <button
-          onClick={() => onStockChange(stock)}
+          {...stockButtonHandlers(stock)}
           className={`group w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex flex-col gap-1 ${
             isExpanded
               ? 'bg-zinc-100 text-zinc-950 shadow-lg'
@@ -788,7 +818,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
   };
 
   return (
-    <div className="w-80 h-full bg-zinc-950 flex flex-col overflow-hidden select-none">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-zinc-950 select-none">
       <input
         ref={fileInputRef}
         type="file"
@@ -803,11 +833,21 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         }}
       />
 
-      <div className={`px-6 pt-6 ${isSearching ? 'pb-4' : 'pb-0'} border-b border-zinc-800 shrink-0`}>
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-[10px] font-bold text-zinc-600 uppercase tracking-[0.2em] flex items-center gap-2">
-            <Layers size={12} /> Film Profiles
-          </h2>
+      <div className={`px-5 pt-3 ${isSearching ? 'pb-3' : 'pb-0'} border-b border-zinc-800 shrink-0`}>
+        <div className="flex items-center gap-2 pb-3">
+          <div className={`${SEGMENT_TRACK} flex-1 grid-cols-2`}>
+            {(['builtin', 'custom'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                aria-pressed={presetTab === tab}
+                onClick={() => setPresetTab(tab)}
+                className={segmentItem(presetTab === tab)}
+              >
+                {tab === 'builtin' ? 'Built-in' : 'Custom'}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-1">
             <button
               onClick={() => {
@@ -841,22 +881,9 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
             </button>
           </div>
         </div>
-        <div className="flex gap-4">
-          {(['builtin', 'custom', 'rolls'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setPresetTab(tab)}
-              className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all ${
-                presetTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
-              }`}
-            >
-              {tab === 'builtin' ? 'Built-in' : tab === 'custom' ? 'Custom' : 'Rolls'}
-            </button>
-          ))}
-        </div>
 
         {isSearching && (
-          <div className="mt-3 mb-1 relative">
+          <div className="relative">
             <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
             <input
               ref={searchInputRef}
@@ -890,7 +917,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 px-5 py-5">
         {isSaving && (
           <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-4 shadow-lg">
             <div className="space-y-3">
@@ -1115,187 +1142,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
           </div>
         )}
 
-        {presetTab === 'rolls' ? (
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={onCreateRollFromTabs}
-                disabled={tabs.length < 2 || tabs.every((t) => Boolean(t.rollId))}
-                data-tip={
-                  tabs.length < 2
-                    ? 'Open at least 2 images to group them into a roll'
-                    : tabs.every((t) => Boolean(t.rollId))
-                      ? 'All open tabs are already assigned to a roll'
-                      : 'Create a new roll from all unassigned tabs'
-                }
-                className="flex w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Plus size={14} className="shrink-0" />
-                Group open tabs into a roll
-              </button>
-              <button
-                type="button"
-                onClick={onToggleScanningSession}
-                disabled={!usesNativeFileDialogs}
-                data-tip="Watch a folder for new scans and automatically import them into a roll as they appear"
-                className="flex w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Film size={14} className="shrink-0" />
-                Scanning Session
-                {!usesNativeFileDialogs && <span className="ml-auto text-[10px] text-zinc-600">Desktop only</span>}
-              </button>
-            </div>
-
-            {activeRoll ? (
-              <>
-                <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${getRollAccent(activeRoll.id).dot}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-zinc-100">{activeRoll.name}</p>
-                      <p className="truncate text-[11px] text-zinc-500">
-                        {filmstripTabs.length} frame{filmstripTabs.length === 1 ? '' : 's'}
-                        {activeRoll.filmStock ? ` · ${activeRoll.filmStock}` : ''}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => onOpenRollInfo?.(activeRoll.id)}
-                      className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
-                    >
-                      <Info size={12} />
-                      Edit Info
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => activeTabId && onSyncRollSettings?.(activeTabId, activeRoll.id)}
-                      disabled={!activeTabId || filmstripTabs.length < 2}
-                      className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <Copy size={12} />
-                      Sync Settings
-                    </button>
-                  </div>
-                  {onStabilizeRollCrops && (
-                    <button
-                      type="button"
-                      onClick={() => onStabilizeRollCrops(activeRoll.id)}
-                      disabled={filmstripTabs.length === 0}
-                      data-tip="Detects every frame and shares a robust crop size between frames scanned at the same size, keeping each frame's own position. Manual crops are kept unless you choose to include them. Undo restores each frame."
-                      className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <ScanLine size={12} />
-                      Stabilize Crops
-                    </button>
-                  )}
-                  {onDeleteRoll && (
-                    <div className="mt-2 pt-2 border-t border-zinc-800">
-                      <button
-                        type="button"
-                        onClick={() => onDeleteRoll(activeRoll.id)}
-                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-900/40 bg-zinc-800 px-2.5 py-2 text-[11px] font-medium text-red-400/80 transition-colors hover:border-red-800/60 hover:bg-red-950/30 hover:text-red-300"
-                      >
-                        <Trash2 size={12} />
-                        Delete Roll
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <h3 className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
-                    Frames
-                  </h3>
-                  <div className="space-y-1.5">
-                    {filmstripTabs.map((tab, index) => {
-                      const isActive = tab.id === activeTabId;
-                      const accent = getRollAccent(activeRoll.id);
-                      return (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          onClick={() => onSelectTab?.(tab.id)}
-                          className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-all ${
-                            isActive
-                              ? `${accent.border} border bg-zinc-900 text-zinc-100`
-                              : 'border border-transparent text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
-                          }`}
-                        >
-                          <span className="w-5 shrink-0 text-center text-[10px] font-mono text-zinc-600">{index + 1}</span>
-                          <span className="min-w-0 flex-1 truncate text-[13px]">{tab.document.source.name}</span>
-                          {isActive && onRemoveFromRoll && (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); onRemoveFromRoll(tab.id); }}
-                              className="shrink-0 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-zinc-300 group-hover:opacity-100"
-                              aria-label="Remove from roll"
-                              data-tip="Remove this frame from the roll (the image stays open)"
-                            >
-                              <Unlink2 size={12} />
-                            </button>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </>
-            ) : rolls && rolls.size > 0 ? (
-              <div>
-                <h3 className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
-                  All Rolls
-                </h3>
-                <div className="space-y-2">
-                  {Array.from(rolls!.values())
-                    .sort((a: Roll, b: Roll) => b.createdAt - a.createdAt)
-                    .map((roll: Roll) => {
-                      const accent = getRollAccent(roll.id);
-                      return (
-                        <div
-                          key={roll.id}
-                          className="group flex w-full items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2.5 text-left transition-colors hover:bg-zinc-900"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => onOpenRollInfo?.(roll.id)}
-                            className="flex min-w-0 flex-1 items-center gap-3"
-                          >
-                            <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium text-zinc-200">{roll.name}</p>
-                              <p className="truncate text-[10px] text-zinc-600">
-                                {roll.filmStock || 'No film stock set'}
-                              </p>
-                            </div>
-                          </button>
-                          {onDeleteRoll && (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); onDeleteRoll(roll.id); }}
-                              className="shrink-0 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-red-400 group-hover:opacity-100"
-                              aria-label={`Delete roll ${roll.name}`}
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <Film size={24} className="mb-2 text-zinc-700" />
-                <p className="text-[11px] leading-relaxed text-zinc-600 max-w-[200px]">
-                  Group frames from the same film roll to sync settings and film base across all frames.
-                </p>
-              </div>
-            )}
-          </div>
-        ) : presetTab === 'custom' ? (
+        {presetTab === 'custom' ? (
           <div
             className="space-y-6"
             onDragOver={(event) => {
@@ -1582,7 +1429,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                   {filteredGenericProfiles.map((stock) => (
                     <button
                       key={stock.id}
-                      onClick={() => onStockChange(stock)}
+                      {...stockButtonHandlers(stock)}
                       className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
                         activeStockId === stock.id
                           ? 'bg-zinc-100 text-zinc-950 shadow-lg'
@@ -1627,7 +1474,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
                       {group.profiles.map((stock) => (
                         <button
                           key={stock.id}
-                          onClick={() => onStockChange(stock)}
+                          {...stockButtonHandlers(stock)}
                           className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-3 ${
                             activeStockId === stock.id
                               ? 'bg-zinc-100 text-zinc-950 shadow-lg'

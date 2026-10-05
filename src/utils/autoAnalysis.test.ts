@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeColorBalance, analyzeExposure, analyzeMonochromeSuggestion, autoAnalyze, neutralWhiteBalance } from './autoAnalysis';
 import type { HistogramData } from '../types';
+import { createLinearGainApplier, resolveWhiteBalanceGains } from './whiteBalance';
 
 function createHistogramData(): HistogramData {
   return {
@@ -53,8 +54,11 @@ describe('autoAnalysis', () => {
   it('uses the manual slider units to neutralize both warm/cool and green/magenta casts', () => {
     for (const sample of [{ r: 118, g: 122, b: 148 }, { r: 148, g: 154, b: 118 }]) {
       const wb = neutralWhiteBalance(sample);
-      const corrected = [sample.r + wb.temperature, sample.g + wb.tint, sample.b - wb.temperature];
-      expect(Math.max(...corrected) - Math.min(...corrected)).toBe(0);
+      const gains = resolveWhiteBalanceGains(wb.temperature, wb.tint);
+      const applyGains = createLinearGainApplier('srgb');
+      const corrected = applyGains(sample.r / 255, sample.g / 255, sample.b / 255, gains).map((value) => value * 255);
+      // Slider steps are integers, so the residual cast stays within a level.
+      expect(Math.max(...corrected) - Math.min(...corrected)).toBeLessThan(1.5);
       expect(analyzeColorBalance(createImageData(80, 80, () => [sample.r, sample.g, sample.b])))
         .toEqual(wb);
     }

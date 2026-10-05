@@ -268,6 +268,8 @@ function modeClusterMean(values: number[]): number {
   return sum / count;
 }
 
+const DARK_SCAN_MIN_LUMINANCE = 32;
+
 function percentileSample(cells: AnalysisCell[], percentile: number): FilmBaseSample {
   const collect = (channel: 'r' | 'g' | 'b') => {
     const values = cells.map((cell) => cell[channel]).sort((left, right) => left - right);
@@ -381,6 +383,47 @@ function estimateInFrameBase(
     rejectedCandidates: clusters.length - survivors.length,
     clamped: false,
   };
+}
+
+// Dark-scan fallback: a camera RAW exposed for the image can leave clear film
+// base below the absolute `minPlausibleLuminance` floor (an orange mask
+// scanned around 105/96/43 has a luminance near 94), so no candidate survives
+// and the render falls back to the percentile sample. Clear base is still the
+// brightest smooth area of a negative, so retry over the whole frame (border
+// band and interior, which finds the gap between two frames on a two-up scan)
+// with a floor relative to the frame's own bright end. Only runs when that
+// floor is below the absolute one, and only when the bright end clearly stands
+// out from the median, so a uniformly dark frame still gets the fallback.
+function estimateDarkScanBase(
+  cells: AnalysisCell[],
+  interiorCells: AnalysisCell[],
+  gridW: number,
+  gridH: number,
+): FilmBaseEstimate | null {
+  const merged: AnalysisCell[] = cells.map((cell, index) => {
+    const interior = interiorCells[index];
+    if (!cell.scanned) return interior;
+    if (!interior.scanned) return cell;
+    return interior.count > cell.count ? interior : cell;
+  });
+  const scanned = merged.filter((cell) => cell.scanned);
+  if (scanned.length < 8) {
+    return null;
+  }
+  const luminances = scanned.map((cell) => cell.lum).sort((left, right) => left - right);
+  const brightLum = luminances[clamp(Math.floor(luminances.length * 0.995), 0, luminances.length - 1)];
+  const medianLum = luminances[Math.floor(luminances.length / 2)];
+  const floor = Math.max(DARK_SCAN_MIN_LUMINANCE, brightLum * 0.8);
+  if (floor >= FILM_BASE_CONFIDENCE.minPlausibleLuminance || brightLum < medianLum * 1.25) {
+    return null;
+  }
+  const isDarkScanCandidate = (cell: AnalysisCell) => (
+    cell.scanned
+    && cell.lum >= floor
+    && cell.stdDev <= FILM_BASE_CONFIDENCE.maxRegionStdDev
+    && Math.min(cell.r, cell.g, cell.b) < 250
+  );
+  return estimateInFrameBase(merged, gridW, gridH, scanned, isDarkScanCandidate);
 }
 
 // Region-based, confidence-scored clear-film-base estimator. Parameterized by a
@@ -557,6 +600,10 @@ function estimateFilmBaseCore(
     const inFrame = estimateInFrameBase(interiorCells, gridW, gridH, scannedInteriorCells, isCandidate);
     if (inFrame) {
       return { ...inFrame, rejectedCandidates: inFrame.rejectedCandidates + clusters.length };
+    }
+    const darkScan = estimateDarkScanBase(cells, interiorCells, gridW, gridH);
+    if (darkScan) {
+      return { ...darkScan, rejectedCandidates: darkScan.rejectedCandidates + clusters.length };
     }
     // No trustworthy clear base anywhere — conservative bright-percentile
     // fallback so the render can never collapse to black. Fed by border and

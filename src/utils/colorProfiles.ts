@@ -809,6 +809,26 @@ export function encodeProfileChannel(profile: InputProfileSpec, value: number) {
   return encodeChannel(profile, value);
 }
 
+// Unclamped, sign-symmetric transfer pair for stages that must keep
+// over-white and negative values (white-balance and exposure gains run before
+// the tone stages clip). Mirrors decodeTransfer/encodeTransfer in
+// tiledRender.wgsl's extended variants.
+export function getExtendedTransferFunctions(profile: InputProfileSpec) {
+  const trc = getProfileTrc(profile);
+  if (trc.type === 'gamma') {
+    const gamma = trc.gamma;
+    const inverse = 1 / gamma;
+    return {
+      decode: (value: number) => (value < 0 ? -((-value) ** gamma) : value ** gamma),
+      encode: (value: number) => (value < 0 ? -((-value) ** inverse) : value ** inverse),
+    };
+  }
+  return {
+    decode: (value: number) => (value < 0 ? -srgbDecode(-value) : srgbDecode(value)),
+    encode: (value: number) => (value < 0 ? -srgbEncode(-value) : srgbEncode(value)),
+  };
+}
+
 // Transfer mode as consumed by the WGSL shader: 0 selects the sRGB piecewise
 // curve, any positive value is a pure gamma exponent.
 export function getTransferMode(profile: InputProfileSpec) {

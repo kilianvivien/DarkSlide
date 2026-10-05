@@ -393,6 +393,26 @@ describe('estimateFilmBase (confidence-scored)', () => {
     expect(estimate!.sample.b).toBeCloseTo(rebate[2], -1);
   });
 
+  it('finds the gap between two frames on a dark two-up camera scan', () => {
+    // Orange mask exposed low enough to sit under the absolute luminance floor,
+    // black holder at the sides, two frames of dense image content.
+    const base: [number, number, number] = [105, 96, 43];
+    const rgb = buildRgb(360, 240, (x, y) => {
+      if (x < 20 || x >= 340) return [6, 6, 6];
+      if (x >= 170 && x < 190) return base;
+      return (x * 7 + y * 13) % 5 === 0 ? [70, 52, 24] : [48, 40, 20];
+    });
+
+    const estimate = estimateFilmBase(rgb, 360, 240, 3);
+    expect(estimate).not.toBeNull();
+    expect(estimate!.source).toBe('in-frame');
+    expect(estimate!.sample.r).toBeCloseTo(base[0], -1);
+    expect(estimate!.sample.g).toBeCloseTo(base[1], -1);
+    expect(estimate!.sample.b).toBeCloseTo(base[2], -1);
+    expect(estimate!.confidence).toBeGreaterThan(FILM_BASE_CONFIDENCE.reject);
+    expect(estimate!.confidence).toBeLessThan(FILM_BASE_CONFIDENCE.accept);
+  });
+
   it('falls back to a bright-percentile sample with zero confidence for a fully dark frame', () => {
     const rgb = buildRgb(160, 120, () => [22, 20, 24]);
 

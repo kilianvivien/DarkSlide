@@ -1,47 +1,72 @@
 import { DustAutoDetectMode, DustMark, DustPathPoint, PathDustMark, SpotDustMark } from '../types';
 import { clamp } from './math';
 
+// Automatic dust and scratch detection on the converted positive.
+//
+// 1. Morphological top-hat on luminance. An opening (or closing) with a square
+//    a little wider than the largest defect removes every bright (or dark)
+//    structure that fits inside it and leaves edges, gradients and broad
+//    shapes alone. What remains is small-scale contrast: dust, hairs,
+//    scratches, grain and fine texture.
+// 2. A local noise floor, measured per block as a robust percentile of that
+//    residual, so grain and busy texture raise the bar where they live.
+// 3. Hysteresis: strong pixels seed a component, weaker neighbours extend it,
+//    so a defect is captured whole and faint stretches of a scratch stay
+//    connected.
+// 4. Each component is measured along its own geodesic axis (length, width,
+//    centreline) and then judged on shape, isolation from similar texture,
+//    and colour. Dust and hairs are opaque, so they push the colour towards
+//    neutral; a lit window or a coloured detail does not.
+//
+// Dust on a negative blocks light, so it comes out bright in the positive;
+// on a slide it stays dark. Spots are looked for with that polarity only.
+// Scratches can go either way (base scratches scatter, emulsion scratches
+// remove dye), so paths are looked for in both.
+
 const LUMA_R = 0.299;
 const LUMA_G = 0.587;
 const LUMA_B = 0.114;
-const MAX_AUTO_MARKS = 64;
-const MAX_AUTO_PATHS = 16;
-const MAX_PATH_POINTS = 48;
+const MAX_AUTO_SPOTS = 320;
+const MAX_AUTO_PATHS = 40;
+const MAX_PATH_POINTS = 64;
+const MAX_COMPONENT_AREA = 40000;
+const NOISE_HISTOGRAM_BINS = 96;
+const NOISE_HISTOGRAM_RANGE = 0.5;
 
-type ComponentStats = {
-  area: number;
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-  totalX: number;
-  totalY: number;
-  totalSignal: number;
-  totalEdge: number;
-  nearBorderCount: number;
-  points: Array<{ x: number; y: number }>;
-};
+export type DustPolarity = 'bright' | 'dark';
+
+export interface DustDetectOptions {
+  // Polarity of dust specks in the analysed positive: 'bright' for negatives,
+  // 'dark' for slides.
+  polarity?: DustPolarity;
+}
+
+type Point = { x: number; y: number };
 
 type ScoredMark = DustMark & { score: number };
 
+type NoiseField = {
+  blockSize: number;
+  columns: number;
+  rows: number;
+  values: Float32Array;
+};
+
+type Component = {
+  pixels: Int32Array;
+  peak: number;
+  totalSignal: number;
+};
+
+type ComponentShape = {
+  centerline: Point[];
+  widths: number[];
+  length: number;
+  width: number;
+};
+
 function lerp(start: number, end: number, amount: number) {
   return start + (end - start) * amount;
-}
-
-function createComponentStats(width: number, height: number): ComponentStats {
-  return {
-    area: 0,
-    minX: width,
-    maxX: 0,
-    minY: height,
-    maxY: 0,
-    totalX: 0,
-    totalY: 0,
-    totalSignal: 0,
-    totalEdge: 0,
-    nearBorderCount: 0,
-    points: [],
-  };
 }
 
 function computeLuminance(data: Uint8ClampedArray, width: number, height: number) {
@@ -56,57 +81,6 @@ function computeLuminance(data: Uint8ClampedArray, width: number, height: number
   return luminance;
 }
 
-function boxBlurHorizontal(source: Float32Array, width: number, height: number, radius: number) {
-  const result = new Float32Array(source.length);
-  const windowSize = radius * 2 + 1;
-
-  for (let y = 0; y < height; y += 1) {
-    const rowOffset = y * width;
-    let running = 0;
-
-    for (let x = -radius; x <= radius; x += 1) {
-      const sampleX = clamp(x, 0, width - 1);
-      running += source[rowOffset + sampleX];
-    }
-
-    for (let x = 0; x < width; x += 1) {
-      result[rowOffset + x] = running / windowSize;
-      const removeX = clamp(x - radius, 0, width - 1);
-      const addX = clamp(x + radius + 1, 0, width - 1);
-      running += source[rowOffset + addX] - source[rowOffset + removeX];
-    }
-  }
-
-  return result;
-}
-
-function boxBlur(source: Float32Array, width: number, height: number, radius: number) {
-  if (radius <= 0) {
-    return new Float32Array(source);
-  }
-
-  const horizontal = boxBlurHorizontal(source, width, height, radius);
-  const result = new Float32Array(source.length);
-  const windowSize = radius * 2 + 1;
-
-  for (let x = 0; x < width; x += 1) {
-    let running = 0;
-    for (let y = -radius; y <= radius; y += 1) {
-      const sampleY = clamp(y, 0, height - 1);
-      running += horizontal[sampleY * width + x];
-    }
-
-    for (let y = 0; y < height; y += 1) {
-      result[y * width + x] = running / windowSize;
-      const removeY = clamp(y - radius, 0, height - 1);
-      const addY = clamp(y + radius + 1, 0, height - 1);
-      running += horizontal[addY * width + x] - horizontal[removeY * width + x];
-    }
-  }
-
-  return result;
-}
-
 function downsampleImageData(imageData: ImageData) {
   const width = Math.max(1, Math.floor(imageData.width / 2));
   const height = Math.max(1, Math.floor(imageData.height / 2));
@@ -114,339 +88,762 @@ function downsampleImageData(imageData: ImageData) {
 
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      const samples = [0, 0, 0, 0];
-      let count = 0;
-
-      for (let offsetY = 0; offsetY < 2; offsetY += 1) {
-        for (let offsetX = 0; offsetX < 2; offsetX += 1) {
-          const sourceX = Math.min(imageData.width - 1, x * 2 + offsetX);
-          const sourceY = Math.min(imageData.height - 1, y * 2 + offsetY);
-          const sourceIndex = (sourceY * imageData.width + sourceX) * 4;
-          samples[0] += imageData.data[sourceIndex];
-          samples[1] += imageData.data[sourceIndex + 1];
-          samples[2] += imageData.data[sourceIndex + 2];
-          samples[3] += imageData.data[sourceIndex + 3];
-          count += 1;
-        }
-      }
-
       const targetIndex = (y * width + x) * 4;
-      result[targetIndex] = Math.round(samples[0] / count);
-      result[targetIndex + 1] = Math.round(samples[1] / count);
-      result[targetIndex + 2] = Math.round(samples[2] / count);
-      result[targetIndex + 3] = Math.round(samples[3] / count);
+      for (let channel = 0; channel < 4; channel += 1) {
+        let total = 0;
+        for (let offsetY = 0; offsetY < 2; offsetY += 1) {
+          for (let offsetX = 0; offsetX < 2; offsetX += 1) {
+            const sourceX = Math.min(imageData.width - 1, x * 2 + offsetX);
+            const sourceY = Math.min(imageData.height - 1, y * 2 + offsetY);
+            total += imageData.data[(sourceY * imageData.width + sourceX) * 4 + channel];
+          }
+        }
+        result[targetIndex + channel] = Math.round(total / 4);
+      }
     }
   }
 
   return new ImageData(result, width, height);
 }
 
-function computeGradientMagnitude(luminance: Float32Array, width: number, height: number) {
-  const result = new Float32Array(luminance.length);
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      const index = y * width + x;
-      const topLeft = luminance[index - width - 1];
-      const top = luminance[index - width];
-      const topRight = luminance[index - width + 1];
-      const left = luminance[index - 1];
-      const right = luminance[index + 1];
-      const bottomLeft = luminance[index + width - 1];
-      const bottom = luminance[index + width];
-      const bottomRight = luminance[index + width + 1];
+// Running minimum over a square window of 2·radius+1, truncated at the image
+// border. Each axis uses the van Herk/Gil-Werman scheme: per block of window
+// length, a forward and a backward running minimum, so the cost does not
+// depend on the radius. The vertical pass works on whole rows at a time to
+// stay cache-friendly.
+function squareMinimum(source: Float32Array, width: number, height: number, radius: number) {
+  const windowSize = radius * 2 + 1;
+  const forward = new Float32Array(source.length);
+  const backward = new Float32Array(source.length);
+  const horizontal = new Float32Array(source.length);
 
-      const gx = -topLeft - 2 * left - bottomLeft + topRight + 2 * right + bottomRight;
-      const gy = -topLeft - 2 * top - topRight + bottomLeft + 2 * bottom + bottomRight;
-      result[index] = Math.sqrt(gx * gx + gy * gy) * 0.25;
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    for (let blockStart = 0; blockStart < width; blockStart += windowSize) {
+      const blockEnd = Math.min(width, blockStart + windowSize) - 1;
+      let running = source[row + blockStart];
+      forward[row + blockStart] = running;
+      for (let x = blockStart + 1; x <= blockEnd; x += 1) {
+        const value = source[row + x];
+        running = value < running ? value : running;
+        forward[row + x] = running;
+      }
+      running = source[row + blockEnd];
+      backward[row + blockEnd] = running;
+      for (let x = blockEnd - 1; x >= blockStart; x -= 1) {
+        const value = source[row + x];
+        running = value < running ? value : running;
+        backward[row + x] = running;
+      }
+    }
+    for (let x = 0; x < width; x += 1) {
+      const low = x - radius;
+      const high = x + radius < width ? x + radius : width - 1;
+      if (low <= 0) {
+        horizontal[row + x] = forward[row + high];
+      } else if (high - (high % windowSize) <= low) {
+        horizontal[row + x] = backward[row + low];
+      } else {
+        const left = backward[row + low];
+        const right = forward[row + high];
+        horizontal[row + x] = left < right ? left : right;
+      }
+    }
+  }
+
+  for (let blockStart = 0; blockStart < height; blockStart += windowSize) {
+    const blockEnd = Math.min(height, blockStart + windowSize) - 1;
+    forward.set(horizontal.subarray(blockStart * width, blockStart * width + width), blockStart * width);
+    for (let y = blockStart + 1; y <= blockEnd; y += 1) {
+      const row = y * width;
+      for (let x = 0; x < width; x += 1) {
+        const value = horizontal[row + x];
+        const previous = forward[row - width + x];
+        forward[row + x] = value < previous ? value : previous;
+      }
+    }
+    backward.set(horizontal.subarray(blockEnd * width, blockEnd * width + width), blockEnd * width);
+    for (let y = blockEnd - 1; y >= blockStart; y -= 1) {
+      const row = y * width;
+      for (let x = 0; x < width; x += 1) {
+        const value = horizontal[row + x];
+        const next = backward[row + width + x];
+        backward[row + x] = value < next ? value : next;
+      }
+    }
+  }
+
+  const result = horizontal;
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    const low = y - radius;
+    const high = y + radius < height ? y + radius : height - 1;
+    if (low <= 0) {
+      result.set(forward.subarray(high * width, high * width + width), row);
+    } else if (high - (high % windowSize) <= low) {
+      result.set(backward.subarray(low * width, low * width + width), row);
+    } else {
+      const lowRow = low * width;
+      const highRow = high * width;
+      for (let x = 0; x < width; x += 1) {
+        const top = backward[lowRow + x];
+        const bottom = forward[highRow + x];
+        result[row + x] = top < bottom ? top : bottom;
+      }
     }
   }
 
   return result;
 }
 
-// Hessian-based line response on a band-passed signal. For thin elongated
-// structures (bright or dark) the Hessian's most-negative eigenvalue has large
-// magnitude perpendicular to the line, while the orthogonal eigenvalue stays
-// near zero. Scoring with `|λ_max| - |λ_min|` (clamped ≥ 0) gives a clean
-// "line-likeness" map that responds equally well to straight, curved, and
-// faint scratches — and stays low on isotropic noise (grain) where both
-// eigenvalues are similar in magnitude.
-//
-// Cheaper than running morphological opening at 8 orientations and gives a
-// continuous score rather than a binary per-orientation match.
-function computeHessianLineResponse(signal: Float32Array, width: number, height: number) {
-  const result = new Float32Array(signal.length);
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      const index = y * width + x;
-      const center = signal[index];
-      const left = signal[index - 1];
-      const right = signal[index + 1];
-      const top = signal[index - width];
-      const bottom = signal[index + width];
-      const topLeft = signal[index - width - 1];
-      const topRight = signal[index - width + 1];
-      const bottomLeft = signal[index + width - 1];
-      const bottomRight = signal[index + width + 1];
-
-      const ixx = right - 2 * center + left;
-      const iyy = bottom - 2 * center + top;
-      const ixy = (bottomRight - bottomLeft - topRight + topLeft) * 0.25;
-
-      // Eigenvalues of the 2x2 Hessian via the closed form.
-      const trace = ixx + iyy;
-      const determinant = ixx * iyy - ixy * ixy;
-      const radicand = Math.max(0, (trace * trace) / 4 - determinant);
-      const sqrtTerm = Math.sqrt(radicand);
-      const lambda1 = trace / 2 + sqrtTerm;
-      const lambda2 = trace / 2 - sqrtTerm;
-      const absMax = Math.max(Math.abs(lambda1), Math.abs(lambda2));
-      const absMin = Math.min(Math.abs(lambda1), Math.abs(lambda2));
-
-      // line-likeness: dominant eigenvalue much larger than the other.
-      result[index] = Math.max(0, absMax - absMin);
-    }
+function negate(values: Float32Array) {
+  for (let index = 0; index < values.length; index += 1) {
+    values[index] = -values[index];
   }
-  return result;
+  return values;
 }
 
-function computeLineStrength(signal: Float32Array, width: number, height: number) {
-  const result = new Float32Array(signal.length);
-
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      const index = y * width + x;
-      const center = signal[index];
-
-      const horizontal = (
-        signal[index - 1]
-        + center
-        + signal[index + 1]
-      ) - 0.5 * (
-        signal[index - width]
-        + signal[index + width]
-        + signal[index - width - 1]
-        + signal[index - width + 1]
-        + signal[index + width - 1]
-        + signal[index + width + 1]
-      ) / 3;
-      const vertical = (
-        signal[index - width]
-        + center
-        + signal[index + width]
-      ) - 0.5 * (
-        signal[index - 1]
-        + signal[index + 1]
-        + signal[index - width - 1]
-        + signal[index - width + 1]
-        + signal[index + width - 1]
-        + signal[index + width + 1]
-      ) / 3;
-      const diagonalDown = (
-        signal[index - width - 1]
-        + center
-        + signal[index + width + 1]
-      ) - 0.5 * (
-        signal[index - width]
-        + signal[index + width]
-        + signal[index - 1]
-        + signal[index + 1]
-        + signal[index - width + 1]
-        + signal[index + width - 1]
-      ) / 3;
-      const diagonalUp = (
-        signal[index - width + 1]
-        + center
-        + signal[index + width - 1]
-      ) - 0.5 * (
-        signal[index - width]
-        + signal[index + width]
-        + signal[index - 1]
-        + signal[index + 1]
-        + signal[index - width - 1]
-        + signal[index + width + 1]
-      ) / 3;
-
-      result[index] = Math.max(horizontal, vertical, diagonalDown, diagonalUp, 0);
-    }
+// Erosion (min) or dilation (max, as the negated minimum of the negation).
+function squareFilter(source: Float32Array, width: number, height: number, radius: number, useMax: boolean) {
+  if (!useMax) {
+    return squareMinimum(source, width, height, radius);
   }
-
-  return result;
+  const negated = negate(Float32Array.from(source));
+  return negate(squareMinimum(negated, width, height, radius));
 }
 
-function orderPointsAlongCurve(points: Array<{ x: number; y: number }>) {
-  if (points.length <= 2) {
-    return points;
+// White top-hat (luminance minus its opening) for bright defects, black
+// top-hat (closing minus luminance) for dark ones.
+function computeTopHat(luminance: Float32Array, width: number, height: number, radius: number, polarity: DustPolarity) {
+  const bright = polarity === 'bright';
+  const first = squareFilter(luminance, width, height, radius, !bright);
+  const reference = squareFilter(first, width, height, radius, bright);
+  for (let index = 0; index < reference.length; index += 1) {
+    reference[index] = bright
+      ? Math.max(0, luminance[index] - reference[index])
+      : Math.max(0, reference[index] - luminance[index]);
   }
+  return reference;
+}
 
-  let startIndex = 0;
-  let minScore = Infinity;
-  for (let index = 0; index < points.length; index += 1) {
-    const score = points[index].x + points[index].y;
-    if (score < minScore) {
-      minScore = score;
-      startIndex = index;
+// The 80th percentile of the top-hat residual in each block approximates the
+// local grain/texture level while staying blind to the few defect pixels a
+// block may hold. Blocks are smoothed with their neighbours so the floor does
+// not jump at block seams.
+function measureNoiseField(signal: Float32Array, width: number, height: number, blockSize: number): NoiseField {
+  const columns = Math.max(1, Math.ceil(width / blockSize));
+  const rows = Math.max(1, Math.ceil(height / blockSize));
+  const raw = new Float32Array(columns * rows);
+  const histogram = new Uint32Array(NOISE_HISTOGRAM_BINS);
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      histogram.fill(0);
+      const startX = column * blockSize;
+      const startY = row * blockSize;
+      const endX = Math.min(width, startX + blockSize);
+      const endY = Math.min(height, startY + blockSize);
+      let count = 0;
+      for (let y = startY; y < endY; y += 1) {
+        for (let x = startX; x < endX; x += 1) {
+          // Square-root binning keeps resolution where grain lives (small values).
+          const normalized = Math.min(1, signal[y * width + x] / NOISE_HISTOGRAM_RANGE);
+          histogram[Math.min(NOISE_HISTOGRAM_BINS - 1, Math.floor(Math.sqrt(normalized) * NOISE_HISTOGRAM_BINS))] += 1;
+          count += 1;
+        }
+      }
+      const target = count * 0.8;
+      let cumulative = 0;
+      let bin = 0;
+      for (; bin < NOISE_HISTOGRAM_BINS; bin += 1) {
+        cumulative += histogram[bin];
+        if (cumulative >= target) {
+          break;
+        }
+      }
+      const upper = (bin + 1) / NOISE_HISTOGRAM_BINS;
+      raw[row * columns + column] = upper * upper * NOISE_HISTOGRAM_RANGE;
     }
   }
 
-  const ordered: Array<{ x: number; y: number }> = [];
-  const used = new Uint8Array(points.length);
-  let current = startIndex;
+  const values = new Float32Array(raw.length);
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      let total = 0;
+      let weight = 0;
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+          const neighbourRow = row + offsetY;
+          const neighbourColumn = column + offsetX;
+          if (neighbourRow < 0 || neighbourColumn < 0 || neighbourRow >= rows || neighbourColumn >= columns) {
+            continue;
+          }
+          const sampleWeight = offsetX === 0 && offsetY === 0 ? 2 : 1;
+          total += raw[neighbourRow * columns + neighbourColumn] * sampleWeight;
+          weight += sampleWeight;
+        }
+      }
+      // Never let smoothing pull a busy block below its own level by much.
+      values[row * columns + column] = Math.max(total / weight, raw[row * columns + column] * 0.8);
+    }
+  }
 
-  for (let step = 0; step < points.length; step += 1) {
-    ordered.push(points[current]);
-    used[current] = 1;
+  return { blockSize, columns, rows, values };
+}
 
-    let bestIndex = -1;
-    let bestDistance = Infinity;
-    for (let index = 0; index < points.length; index += 1) {
-      if (used[index]) {
+function sampleNoise(field: NoiseField, x: number, y: number) {
+  const gx = clamp(x / field.blockSize - 0.5, 0, field.columns - 1);
+  const gy = clamp(y / field.blockSize - 0.5, 0, field.rows - 1);
+  const x0 = Math.floor(gx);
+  const y0 = Math.floor(gy);
+  const x1 = Math.min(field.columns - 1, x0 + 1);
+  const y1 = Math.min(field.rows - 1, y0 + 1);
+  const fx = gx - x0;
+  const fy = gy - y0;
+  const top = field.values[y0 * field.columns + x0] * (1 - fx) + field.values[y0 * field.columns + x1] * fx;
+  const bottom = field.values[y1 * field.columns + x0] * (1 - fx) + field.values[y1 * field.columns + x1] * fx;
+  return top * (1 - fy) + bottom * fy;
+}
+
+// 2 = above the strong threshold, 1 = above the weak one.
+function buildHysteresisMask(
+  signal: Float32Array,
+  noise: NoiseField,
+  width: number,
+  height: number,
+  highFactor: number,
+  lowFactor: number,
+  highFloor: number,
+  lowFloor: number,
+) {
+  const mask = new Uint8Array(signal.length);
+  const rowLevels = new Float32Array(noise.columns);
+  for (let y = 0; y < height; y += 1) {
+    // Interpolate the block grid down to this row once, then along it.
+    const gy = clamp(y / noise.blockSize - 0.5, 0, noise.rows - 1);
+    const y0 = Math.floor(gy);
+    const y1 = Math.min(noise.rows - 1, y0 + 1);
+    const fy = gy - y0;
+    for (let column = 0; column < noise.columns; column += 1) {
+      rowLevels[column] = noise.values[y0 * noise.columns + column] * (1 - fy)
+        + noise.values[y1 * noise.columns + column] * fy;
+    }
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      const value = signal[index];
+      if (value <= lowFloor) {
         continue;
       }
-      const dx = points[index].x - points[current].x;
-      const dy = points[index].y - points[current].y;
-      const distance = dx * dx + dy * dy;
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestIndex = index;
+      const gx = clamp(x / noise.blockSize - 0.5, 0, noise.columns - 1);
+      const x0 = Math.floor(gx);
+      const fx = gx - x0;
+      const level = rowLevels[x0] * (1 - fx) + rowLevels[Math.min(noise.columns - 1, x0 + 1)] * fx;
+      if (value > Math.max(highFloor, level * highFactor)) {
+        mask[index] = 2;
+      } else if (value > Math.max(lowFloor, level * lowFactor)) {
+        mask[index] = 1;
       }
     }
-
-    if (bestIndex === -1) {
-      break;
-    }
-    current = bestIndex;
   }
-
-  return ordered;
+  return mask;
 }
 
-function subsamplePathPoints(
-  orderedPoints: Array<{ x: number; y: number }>,
-  spacing: number,
-  width: number,
-  height: number,
-  scale: number,
-): DustPathPoint[] {
-  if (orderedPoints.length === 0) {
-    return [];
-  }
-
-  const normalized: DustPathPoint[] = [];
-  let previous = orderedPoints[0];
-  normalized.push({
-    x: clamp(((previous.x + 0.5) * scale) / (width * scale), 0, 1),
-    y: clamp(((previous.y + 0.5) * scale) / (height * scale), 0, 1),
-  });
-
-  let accumulated = 0;
-  for (let index = 1; index < orderedPoints.length; index += 1) {
-    const current = orderedPoints[index];
-    accumulated += Math.hypot(current.x - previous.x, current.y - previous.y);
-    previous = current;
-    if (accumulated < spacing) {
-      continue;
-    }
-
-    normalized.push({
-      x: clamp(((current.x + 0.5) * scale) / (width * scale), 0, 1),
-      y: clamp(((current.y + 0.5) * scale) / (height * scale), 0, 1),
-    });
-    accumulated = 0;
-  }
-
-  const last = orderedPoints[orderedPoints.length - 1];
-  const lastPoint = {
-    x: clamp(((last.x + 0.5) * scale) / (width * scale), 0, 1),
-    y: clamp(((last.y + 0.5) * scale) / (height * scale), 0, 1),
-  };
-  const prevPoint = normalized[normalized.length - 1];
-  if (!prevPoint || prevPoint.x !== lastPoint.x || prevPoint.y !== lastPoint.y) {
-    normalized.push(lastPoint);
-  }
-
-  if (normalized.length <= MAX_PATH_POINTS) {
-    return normalized;
-  }
-
-  const step = (normalized.length - 1) / (MAX_PATH_POINTS - 1);
-  const result: DustPathPoint[] = [];
-  for (let index = 0; index < MAX_PATH_POINTS; index += 1) {
-    result.push(normalized[Math.round(index * step)]);
-  }
-  return result;
-}
-
-function buildComponentStats(
-  mask: Uint8Array,
-  signal: Float32Array,
-  edge: Float32Array,
-  width: number,
-  height: number,
-) {
+function collectComponents(mask: Uint8Array, signal: Float32Array, width: number, height: number) {
   const visited = new Uint8Array(mask.length);
   const queue = new Int32Array(mask.length);
-  const components: ComponentStats[] = [];
-  const borderMargin = Math.max(2, Math.round(Math.min(width, height) * 0.015));
+  const components: Component[] = [];
 
-  for (let index = 0; index < mask.length; index += 1) {
-    if (!mask[index] || visited[index]) {
+  for (let start = 0; start < mask.length; start += 1) {
+    if (mask[start] !== 2 || visited[start]) {
       continue;
     }
 
     let head = 0;
     let tail = 0;
-    queue[tail++] = index;
-    visited[index] = 1;
-    const stats = createComponentStats(width, height);
+    queue[tail++] = start;
+    visited[start] = 1;
+    let peak = 0;
+    let totalSignal = 0;
 
     while (head < tail) {
       const current = queue[head++];
+      const value = signal[current];
+      peak = Math.max(peak, value);
+      totalSignal += value;
       const x = current % width;
-      const y = Math.floor(current / width);
-      stats.area += 1;
-      stats.minX = Math.min(stats.minX, x);
-      stats.maxX = Math.max(stats.maxX, x);
-      stats.minY = Math.min(stats.minY, y);
-      stats.maxY = Math.max(stats.maxY, y);
-      stats.totalX += x;
-      stats.totalY += y;
-      stats.totalSignal += signal[current];
-      stats.totalEdge += edge[current];
-      if (
-        x <= borderMargin
-        || y <= borderMargin
-        || x >= width - borderMargin - 1
-        || y >= height - borderMargin - 1
-      ) {
-        stats.nearBorderCount += 1;
-      }
-      stats.points.push({ x, y });
-
+      const y = (current - x) / width;
       for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        const nextY = y + offsetY;
+        if (nextY < 0 || nextY >= height) {
+          continue;
+        }
         for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-          if (offsetX === 0 && offsetY === 0) {
-            continue;
-          }
           const nextX = x + offsetX;
-          const nextY = y + offsetY;
-          if (nextX < 0 || nextY < 0 || nextX >= width || nextY >= height) {
+          if (nextX < 0 || nextX >= width) {
             continue;
           }
-          const nextIndex = nextY * width + nextX;
-          if (visited[nextIndex] || !mask[nextIndex]) {
+          const next = nextY * width + nextX;
+          if (visited[next] || mask[next] === 0) {
             continue;
           }
-          visited[nextIndex] = 1;
-          queue[tail++] = nextIndex;
+          visited[next] = 1;
+          queue[tail++] = next;
         }
       }
     }
 
-    components.push(stats);
+    // Components that sprawl past any plausible defect are texture or image
+    // structure; they are dropped before the costlier measurements.
+    if (tail > MAX_COMPONENT_AREA) {
+      continue;
+    }
+    components.push({ pixels: queue.slice(0, tail), peak, totalSignal });
   }
 
   return components;
+}
+
+// Breadth-first distances inside one component, from `origin`.
+function geodesicDistances(
+  pixels: Int32Array,
+  lookup: Map<number, number>,
+  width: number,
+  origin: number,
+) {
+  const distances = new Int32Array(pixels.length).fill(-1);
+  const parents = new Int32Array(pixels.length).fill(-1);
+  const queue = new Int32Array(pixels.length);
+  let head = 0;
+  let tail = 0;
+  distances[origin] = 0;
+  queue[tail++] = origin;
+  let farthest = origin;
+
+  while (head < tail) {
+    const current = queue[head++];
+    if (distances[current] > distances[farthest]) {
+      farthest = current;
+    }
+    const pixel = pixels[current];
+    const x = pixel % width;
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        if (offsetX === 0 && offsetY === 0) {
+          continue;
+        }
+        const nextX = x + offsetX;
+        if (nextX < 0 || nextX >= width) {
+          continue;
+        }
+        const neighbour = lookup.get(pixel + offsetY * width + offsetX);
+        if (neighbour === undefined || distances[neighbour] !== -1) {
+          continue;
+        }
+        distances[neighbour] = distances[current] + 1;
+        parents[neighbour] = current;
+        queue[tail++] = neighbour;
+      }
+    }
+  }
+
+  return { distances, parents, farthest };
+}
+
+// Length, width and centreline of a component, measured along its longest
+// internal path, so curved hairs and diagonal scratches measure as well as
+// straight horizontal ones.
+function measureShape(pixels: Int32Array, width: number): ComponentShape {
+  if (pixels.length === 1) {
+    const x = pixels[0] % width;
+    const y = (pixels[0] - x) / width;
+    return { centerline: [{ x, y }], widths: [1], length: 1, width: 1 };
+  }
+
+  const lookup = new Map<number, number>();
+  for (let index = 0; index < pixels.length; index += 1) {
+    lookup.set(pixels[index], index);
+  }
+
+  const firstPass = geodesicDistances(pixels, lookup, width, 0);
+  const { distances, parents, farthest } = geodesicDistances(pixels, lookup, width, firstPass.farthest);
+  const maxDistance = distances[farthest];
+
+  // Euclidean length of the longest internal path.
+  let pathLength = 0;
+  for (let current = farthest; parents[current] !== -1; current = parents[current]) {
+    const pixel = pixels[current];
+    const parent = pixels[parents[current]];
+    const dx = (pixel % width) - (parent % width);
+    const dy = Math.floor(pixel / width) - Math.floor(parent / width);
+    pathLength += Math.hypot(dx, dy);
+  }
+  const length = Math.max(1, pathLength + 1);
+  const componentWidth = pixels.length / length;
+  const stepLength = maxDistance > 0 ? pathLength / maxDistance : 1;
+
+  const binSize = Math.max(2, Math.round(componentWidth * 1.5));
+  const binCount = Math.floor(maxDistance / binSize) + 1;
+  const sumX = new Float64Array(binCount);
+  const sumY = new Float64Array(binCount);
+  const counts = new Uint32Array(binCount);
+  for (let index = 0; index < pixels.length; index += 1) {
+    const distance = distances[index];
+    if (distance < 0) {
+      continue;
+    }
+    const bin = Math.min(binCount - 1, Math.floor(distance / binSize));
+    const x = pixels[index] % width;
+    sumX[bin] += x;
+    sumY[bin] += (pixels[index] - x) / width;
+    counts[bin] += 1;
+  }
+
+  const centerline: Point[] = [];
+  const widths: number[] = [];
+  for (let bin = 0; bin < binCount; bin += 1) {
+    if (counts[bin] === 0) {
+      continue;
+    }
+    centerline.push({ x: sumX[bin] / counts[bin], y: sumY[bin] / counts[bin] });
+    const binSpan = Math.max(1, Math.min(binSize, maxDistance + 1 - bin * binSize)) * stepLength;
+    widths.push(counts[bin] / binSpan);
+  }
+
+  // Run top-left to bottom-right, whichever end the search started from.
+  const first = centerline[0];
+  const last = centerline[centerline.length - 1];
+  if (first.x + first.y > last.x + last.y) {
+    centerline.reverse();
+    widths.reverse();
+  }
+
+  return { centerline, widths, length, width: componentWidth };
+}
+
+// Largest distance of the centreline from the chord joining its ends.
+function measureBend(centerline: Point[]) {
+  const start = centerline[0];
+  const end = centerline[centerline.length - 1];
+  let bend = 0;
+  for (const point of centerline) {
+    bend = Math.max(bend, distancePointToSegment(point.x, point.y, start.x, start.y, end.x, end.y));
+  }
+  return bend;
+}
+
+function readColor(data: Uint8ClampedArray, pixel: number): [number, number, number] {
+  const offset = pixel * 4;
+  return [data[offset] / 255, data[offset + 1] / 255, data[offset + 2] / 255];
+}
+
+function chroma(color: [number, number, number]) {
+  return Math.max(color[0], color[1], color[2]) - Math.min(color[0], color[1], color[2]);
+}
+
+function quantile(values: number[], amount: number) {
+  if (values.length === 0) {
+    return 0;
+  }
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * amount))];
+}
+
+function median(values: number[]) {
+  return quantile(values, 0.5);
+}
+
+type Surroundings = {
+  background: [number, number, number];
+  busyRatio: number;
+  // Interquartile range of the ring's luminance.
+  spread: number;
+};
+
+// Samples a ring (or, for paths, both sides of the centreline) just outside
+// the component: its median colour is the background the defect sits on, and
+// the share of ring pixels that are themselves above the weak threshold says
+// whether the component is one grain of a busy texture.
+function sampleSurroundings(
+  data: Uint8ClampedArray,
+  activity: Uint8Array,
+  width: number,
+  height: number,
+  samplePoints: Point[],
+): Surroundings {
+  const reds: number[] = [];
+  const greens: number[] = [];
+  const blues: number[] = [];
+  const lumas: number[] = [];
+  let busy = 0;
+  for (const point of samplePoints) {
+    const x = Math.round(point.x);
+    const y = Math.round(point.y);
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+      continue;
+    }
+    const pixel = y * width + x;
+    const [red, green, blue] = readColor(data, pixel);
+    reds.push(red);
+    greens.push(green);
+    blues.push(blue);
+    lumas.push(red * LUMA_R + green * LUMA_G + blue * LUMA_B);
+    if (activity[pixel] !== 0) {
+      busy += 1;
+    }
+  }
+  return {
+    background: [median(reds), median(greens), median(blues)],
+    busyRatio: reds.length > 0 ? busy / reds.length : 1,
+    spread: quantile(lumas, 0.75) - quantile(lumas, 0.25),
+  };
+}
+
+function ringPoints(cx: number, cy: number, radii: number[]) {
+  const points: Point[] = [];
+  for (const radius of radii) {
+    const count = Math.max(12, Math.round(radius * 4));
+    for (let index = 0; index < count; index += 1) {
+      const angle = (index / count) * Math.PI * 2;
+      points.push({ x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius });
+    }
+  }
+  return points;
+}
+
+function sidePoints(centerline: Point[], offsets: number[]) {
+  const points: Point[] = [];
+  for (let index = 0; index < centerline.length; index += 1) {
+    const previous = centerline[Math.max(0, index - 1)];
+    const next = centerline[Math.min(centerline.length - 1, index + 1)];
+    const tangentX = next.x - previous.x;
+    const tangentY = next.y - previous.y;
+    const tangentLength = Math.hypot(tangentX, tangentY) || 1;
+    const normalX = -tangentY / tangentLength;
+    const normalY = tangentX / tangentLength;
+    for (const offset of offsets) {
+      points.push({ x: centerline[index].x + normalX * offset, y: centerline[index].y + normalY * offset });
+      points.push({ x: centerline[index].x - normalX * offset, y: centerline[index].y - normalY * offset });
+    }
+  }
+  return points;
+}
+
+function meanColor(data: Uint8ClampedArray, pixels: Int32Array, signal: Float32Array, peak: number) {
+  // Only the core of the component: its faint rim is mostly background.
+  const total: [number, number, number] = [0, 0, 0];
+  let count = 0;
+  for (let index = 0; index < pixels.length; index += 1) {
+    if (signal[pixels[index]] < peak * 0.5) {
+      continue;
+    }
+    const color = readColor(data, pixels[index]);
+    total[0] += color[0];
+    total[1] += color[1];
+    total[2] += color[2];
+    count += 1;
+  }
+  return total.map((value) => value / Math.max(1, count)) as [number, number, number];
+}
+
+// Opaque dust and hair pull the colour towards white (or black); a coloured
+// feature such as a lit window adds chroma of its own.
+function addsChroma(
+  core: [number, number, number],
+  background: [number, number, number],
+  tolerance: number,
+) {
+  return chroma(core) > chroma(background) + tolerance;
+}
+
+function toNormalizedPoint(point: Point, width: number, height: number): DustPathPoint {
+  return {
+    x: clamp((point.x + 0.5) / width, 0, 1),
+    y: clamp((point.y + 0.5) / height, 0, 1),
+  };
+}
+
+function limitPathPoints(points: DustPathPoint[], widths: number[]) {
+  if (points.length <= MAX_PATH_POINTS) {
+    return { points, widths };
+  }
+  const step = (points.length - 1) / (MAX_PATH_POINTS - 1);
+  const keptPoints: DustPathPoint[] = [];
+  const keptWidths: number[] = [];
+  for (let index = 0; index < MAX_PATH_POINTS; index += 1) {
+    const source = Math.round(index * step);
+    keptPoints.push(points[source]);
+    keptWidths.push(widths[source]);
+  }
+  return { points: keptPoints, widths: keptWidths };
+}
+
+type DetectionContext = {
+  data: Uint8ClampedArray;
+  width: number;
+  height: number;
+  scale: number;
+  maxRadius: number;
+  sensitivity: number;
+  canEmitSpots: boolean;
+  canEmitPaths: boolean;
+};
+
+function classifyComponent(
+  context: DetectionContext,
+  component: Component,
+  signal: Float32Array,
+  activity: Uint8Array,
+  noise: NoiseField,
+  allowSpots: boolean,
+): ScoredMark | null {
+  const { data, width, height, scale, maxRadius, sensitivity } = context;
+  const { pixels, peak } = component;
+  const area = pixels.length;
+  const shape = measureShape(pixels, width);
+  const elongation = shape.length / Math.max(shape.width, 1);
+  const diagonal = Math.hypot(width * scale, height * scale);
+
+  let weightedX = 0;
+  let weightedY = 0;
+  for (let index = 0; index < area; index += 1) {
+    const pixel = pixels[index];
+    const x = pixel % width;
+    const value = signal[pixel];
+    weightedX += x * value;
+    weightedY += ((pixel - x) / width) * value;
+  }
+  const cx = weightedX / component.totalSignal;
+  const cy = weightedY / component.totalSignal;
+  const level = Math.max(1e-4, sampleNoise(noise, cx, cy));
+  const contrast = component.totalSignal / area;
+  const snr = peak / level;
+  const core = meanColor(data, pixels, signal, peak);
+
+  const maxSpotLength = maxRadius * 2.5 + 2;
+  const isSpotShaped = shape.length <= maxSpotLength && (elongation < 4.5 || shape.length < maxRadius * 1.5);
+  if (isSpotShaped) {
+    if (!allowSpots || !context.canEmitSpots) {
+      return null;
+    }
+    // Dust is opaque or close to it, so its profile has a flat top. A
+    // lens-soft highlight peaks and falls away like a bell.
+    let coreCount = 0;
+    let topCount = 0;
+    let extentCount = 0;
+    for (let index = 0; index < area; index += 1) {
+      const value = signal[pixels[index]];
+      extentCount += value >= peak * 0.25 ? 1 : 0;
+      coreCount += value >= peak * 0.5 ? 1 : 0;
+      topCount += value >= peak * 0.8 ? 1 : 0;
+    }
+    // A lone pixel needs to stand far above the grain; a broad plateau of
+    // many pixels is convincing at a lower contrast.
+    const sizeFactor = clamp((4 / coreCount) ** 0.25, 0.65, 1.6);
+    const minSnr = lerp(4, 2.6, sensitivity) * sizeFactor;
+    if (snr < minSnr) {
+      return null;
+    }
+    if (coreCount >= 7 && topCount / coreCount < lerp(0.45, 0.3, sensitivity)) {
+      return null;
+    }
+    const defectRadius = Math.max(0.5, Math.sqrt(extentCount / Math.PI), shape.length * 0.375);
+    const surroundings = sampleSurroundings(
+      data,
+      activity,
+      width,
+      height,
+      ringPoints(cx, cy, [defectRadius + 2, defectRadius + 3.5, defectRadius * 2 + 5]),
+    );
+    if (surroundings.busyRatio > lerp(0.12, 0.3, sensitivity)) {
+      return null;
+    }
+    if (surroundings.spread > peak * lerp(0.3, 0.45, sensitivity)) {
+      return null;
+    }
+    if (addsChroma(core, surroundings.background, lerp(0.05, 0.12, sensitivity))) {
+      return null;
+    }
+
+    const radiusPx = clamp(defectRadius * 1.6 + 1, 1.5, maxRadius * 1.6) * scale;
+    return {
+      id: `dust-auto-${crypto.randomUUID()}`,
+      kind: 'spot',
+      cx: clamp((cx + 0.5) / width, 0, 1),
+      cy: clamp((cy + 0.5) / height, 0, 1),
+      radius: clamp(radiusPx / diagonal, 0, 1),
+      source: 'auto',
+      score: (contrast / level) * Math.sqrt(area),
+    } satisfies SpotDustMark & { score: number };
+  }
+
+  if (!context.canEmitPaths) {
+    return null;
+  }
+  const maxPathWidth = Math.max(2.6, maxRadius * 0.9);
+  if (
+    elongation < 4.5
+    || shape.length < Math.max(12, maxRadius * 2.5)
+    || shape.width > maxPathWidth
+    || shape.centerline.length < 2
+  ) {
+    return null;
+  }
+  // Scratches are judged on their mean, not their peak: a run of grain
+  // touching end to end has the odd strong pixel but a weak average.
+  const lengthRelief = clamp(Math.sqrt(24 / shape.length), 0.6, 1);
+  if (contrast / level < lerp(3.6, 2.2, sensitivity) * lengthRelief) {
+    return null;
+  }
+
+  const sideOffset = shape.width / 2 + 3;
+  const surroundings = sampleSurroundings(
+    data,
+    activity,
+    width,
+    height,
+    sidePoints(shape.centerline, [sideOffset, sideOffset + 2]),
+  );
+  if (surroundings.busyRatio > lerp(0.3, 0.45, sensitivity)) {
+    return null;
+  }
+  // Emulsion scratches can take on colour, so paths get more slack.
+  if (addsChroma(core, surroundings.background, lerp(0.12, 0.22, sensitivity))) {
+    return null;
+  }
+
+  // Hairs come out with the dust's polarity. A line of the other polarity
+  // is only taken when it is straight, as transport scratches are; that keeps
+  // branches and wires in the picture.
+  if (!allowSpots && measureBend(shape.centerline) > Math.max(1.5, shape.length * 0.02)) {
+    return null;
+  }
+
+  // Lines hugging the frame edge are usually the film holder or rebate.
+  const borderMargin = Math.max(3, Math.min(width, height) * 0.012);
+  const nearBorder = shape.centerline.filter((point) => (
+    point.x < borderMargin
+    || point.y < borderMargin
+    || point.x > width - 1 - borderMargin
+    || point.y > height - 1 - borderMargin
+  )).length;
+  if (nearBorder / shape.centerline.length > 0.5) {
+    return null;
+  }
+
+  const { points, widths } = limitPathPoints(
+    shape.centerline.map((point) => toNormalizedPoint(point, width, height)),
+    shape.widths,
+  );
+  const radiusPx = clamp(shape.width * 0.75 + 0.75, 1.2, maxRadius) * scale;
+  return {
+    id: `dust-auto-${crypto.randomUUID()}`,
+    kind: 'path',
+    points,
+    radius: clamp(radiusPx / diagonal, 0, 1),
+    widthAlongPath: widths.map((value) => (value * scale) / diagonal),
+    source: 'auto',
+    score: (contrast / level) * Math.sqrt(area) * 1.5,
+  } satisfies PathDustMark & { score: number };
 }
 
 function distancePointToSegment(
@@ -468,62 +865,52 @@ function distancePointToSegment(
     0,
     1,
   );
-  const projX = startX + dx * t;
-  const projY = startY + dy * t;
-  return Math.hypot(pointX - projX, pointY - projY);
+  return Math.hypot(pointX - (startX + dx * t), pointY - (startY + dy * t));
 }
 
 function distancePointToPath(pointX: number, pointY: number, mark: PathDustMark) {
   let bestDistance = Infinity;
   for (let index = 1; index < mark.points.length; index += 1) {
-    const distance = distancePointToSegment(
+    bestDistance = Math.min(bestDistance, distancePointToSegment(
       pointX,
       pointY,
       mark.points[index - 1].x,
       mark.points[index - 1].y,
       mark.points[index].x,
       mark.points[index].y,
-    );
-    bestDistance = Math.min(bestDistance, distance);
+    ));
   }
   return bestDistance;
 }
 
-function dedupeMarks(marks: ScoredMark[]) {
+// Marks are compared in a square space so radii (normalised by the diagonal)
+// and positions (normalised per axis) can be compared directly.
+function dedupeMarks(marks: ScoredMark[], aspect: { x: number; y: number }) {
   const deduped: ScoredMark[] = [];
   const sorted = [...marks].sort((left, right) => right.score - left.score);
-  let autoPathCount = 0;
+  let spotCount = 0;
+  let pathCount = 0;
+  const toSquare = (x: number, y: number) => ({ x: x * aspect.x, y: y * aspect.y });
 
   for (const mark of sorted) {
-    if (mark.kind === 'path' && autoPathCount >= MAX_AUTO_PATHS) {
+    if (mark.kind === 'path' ? pathCount >= MAX_AUTO_PATHS : spotCount >= MAX_AUTO_SPOTS) {
       continue;
     }
 
     const isDuplicate = deduped.some((existing) => {
       if (mark.kind === 'spot' && existing.kind === 'spot') {
-        return Math.hypot(existing.cx - mark.cx, existing.cy - mark.cy) < Math.max(existing.radius, mark.radius) * 0.8;
+        const a = toSquare(mark.cx, mark.cy);
+        const b = toSquare(existing.cx, existing.cy);
+        return Math.hypot(a.x - b.x, a.y - b.y) < Math.max(existing.radius, mark.radius) * 0.8;
       }
-
-      if (mark.kind === 'spot' && existing.kind === 'path') {
-        return distancePointToPath(mark.cx, mark.cy, existing) < Math.max(existing.radius, mark.radius) * 0.9;
+      const spot = mark.kind === 'spot' ? mark : existing.kind === 'spot' ? existing : null;
+      const path = mark.kind === 'path' ? mark : existing.kind === 'path' ? existing : null;
+      if (spot && path) {
+        const squarePath = { ...path, points: path.points.map((point) => toSquare(point.x, point.y)) };
+        const center = toSquare(spot.cx, spot.cy);
+        return distancePointToPath(center.x, center.y, squarePath) < Math.max(path.radius, spot.radius) * 0.9;
       }
-
-      if (mark.kind === 'path' && existing.kind === 'spot') {
-        return distancePointToPath(existing.cx, existing.cy, mark) < Math.max(existing.radius, mark.radius) * 0.9;
-      }
-
-      if (mark.kind !== 'path' || existing.kind !== 'path') {
-        return false;
-      }
-
-      const markStart = mark.points[0];
-      const markEnd = mark.points[mark.points.length - 1];
-      const existingStart = existing.points[0];
-      const existingEnd = existing.points[existing.points.length - 1];
-      return (
-        Math.hypot(markStart.x - existingStart.x, markStart.y - existingStart.y) < Math.max(existing.radius, mark.radius)
-        && Math.hypot(markEnd.x - existingEnd.x, markEnd.y - existingEnd.y) < Math.max(existing.radius, mark.radius)
-      );
+      return false;
     });
 
     if (isDuplicate) {
@@ -532,345 +919,39 @@ function dedupeMarks(marks: ScoredMark[]) {
 
     deduped.push(mark);
     if (mark.kind === 'path') {
-      autoPathCount += 1;
-    }
-    if (deduped.length >= MAX_AUTO_MARKS) {
-      break;
+      pathCount += 1;
+    } else {
+      spotCount += 1;
     }
   }
 
   return deduped.map(({ score: _score, ...mark }) => mark);
 }
 
-// Mean of `localMad` in an annular ring around the component bounding box.
-// Used as a texture veto: a real defect stands clearly above its surrounding
-// local-noise floor; a grain "blob" has signal of the same order as its
-// neighbourhood's local MAD.
-function sampleRingNoise(
-  localMad: Float32Array,
-  width: number,
-  height: number,
-  stats: ComponentStats,
-) {
-  const ringRadius = Math.max(2, Math.round(Math.max(stats.maxX - stats.minX, stats.maxY - stats.minY) * 0.8) + 2);
-  const cx = (stats.minX + stats.maxX) / 2;
-  const cy = (stats.minY + stats.maxY) / 2;
-  let total = 0;
-  let count = 0;
-  for (let angleIndex = 0; angleIndex < 12; angleIndex += 1) {
-    const angle = (angleIndex / 12) * Math.PI * 2;
-    const sx = Math.round(cx + Math.cos(angle) * ringRadius);
-    const sy = Math.round(cy + Math.sin(angle) * ringRadius);
-    if (sx < 0 || sy < 0 || sx >= width || sy >= height) {
-      continue;
-    }
-    total += localMad[sy * width + sx];
-    count += 1;
-  }
-  return count > 0 ? total / count : 0;
-}
+type PolarityStage = {
+  polarity: DustPolarity;
+  signal: Float32Array;
+  noise: NoiseField;
+  mask: Uint8Array;
+};
 
-function classifySpotComponent(
-  stats: ComponentStats,
-  width: number,
-  height: number,
-  maxRadius: number,
-  scale: number,
-  normalizedSensitivity: number,
-  localMad: Float32Array,
-): ScoredMark | null {
-  const blobWidth = stats.maxX - stats.minX + 1;
-  const blobHeight = stats.maxY - stats.minY + 1;
-  const longSide = Math.max(blobWidth, blobHeight);
-  const shortSide = Math.min(blobWidth, blobHeight);
-  const aspectRatio = longSide / Math.max(shortSide, 1);
-  const fillRatio = stats.area / Math.max(blobWidth * blobHeight, 1);
-  const meanSignal = stats.totalSignal / Math.max(stats.area, 1);
-  const meanEdge = stats.totalEdge / Math.max(stats.area, 1);
-  const borderRatio = stats.nearBorderCount / Math.max(stats.area, 1);
-  const edgePenalty = meanEdge * lerp(2.4, 1.2, normalizedSensitivity);
-  const score = meanSignal - edgePenalty - borderRatio * 0.08;
-
-  // Surrounding-noise veto. The required margin tightens at low sensitivity
-  // and loosens at high sensitivity but never falls below 2.0 — a real spot
-  // always stands clearly above its local noise floor.
-  const ringNoise = sampleRingNoise(localMad, width, height, stats);
-  const requiredRatio = lerp(3.4, 2.0, normalizedSensitivity);
-  if (ringNoise > 0 && meanSignal < ringNoise * requiredRatio) {
-    return null;
-  }
-
-  if (
-    stats.area < 2
-    || stats.area > Math.max(24, Math.round(Math.PI * maxRadius * maxRadius * 1.35))
-    || aspectRatio > lerp(2.3, 3.4, normalizedSensitivity)
-    || fillRatio < 0.2
-    || meanSignal < lerp(0.022, 0.01, normalizedSensitivity)
-    || score < lerp(0.012, 0.006, normalizedSensitivity)
-  ) {
-    return null;
-  }
-
-  const diagonal = Math.hypot(width * scale, height * scale);
-  const radiusPx = clamp(Math.max(longSide * 0.72, shortSide * 0.95), 1.5, maxRadius * 1.15) * scale;
-  const cx = ((stats.totalX / stats.area) + 0.5) * scale;
-  const cy = ((stats.totalY / stats.area) + 0.5) * scale;
-
-  return {
-    id: `dust-auto-${crypto.randomUUID()}`,
-    kind: 'spot',
-    cx: clamp(cx / (width * scale), 0, 1),
-    cy: clamp(cy / (height * scale), 0, 1),
-    radius: clamp(radiusPx / diagonal, 0, 1),
-    source: 'auto',
-    score: score * stats.area,
-  } satisfies SpotDustMark & { score: number };
-}
-
-function measurePathWidths(
-  componentPoints: Array<{ x: number; y: number }>,
-  pathPoints: DustPathPoint[],
-  imgWidth: number,
-  imgHeight: number,
-  scale: number,
-  diagonal: number,
-  maxScan: number,
-): number[] {
-  const occupied = new Set<number>();
-  for (const point of componentPoints) {
-    occupied.add(point.y * imgWidth + point.x);
-  }
-  const isOccupied = (x: number, y: number) => (
-    x >= 0 && y >= 0 && x < imgWidth && y < imgHeight
-    && occupied.has(y * imgWidth + x)
-  );
-
-  const widths: number[] = [];
-  for (let index = 0; index < pathPoints.length; index += 1) {
-    const prev = pathPoints[Math.max(0, index - 1)];
-    const next = pathPoints[Math.min(pathPoints.length - 1, index + 1)];
-    const tangentDx = next.x - prev.x;
-    const tangentDy = next.y - prev.y;
-    const tangentLen = Math.hypot(tangentDx, tangentDy);
-    let normalX: number;
-    let normalY: number;
-    if (tangentLen === 0) {
-      normalX = 0;
-      normalY = 1;
-    } else {
-      // perpendicular to tangent
-      normalX = -tangentDy / tangentLen;
-      normalY = tangentDx / tangentLen;
-    }
-
-    // path points are stored in normalized full-resolution coordinates;
-    // convert back to detection-image pixel space to walk the component mask.
-    const cx = pathPoints[index].x * imgWidth;
-    const cy = pathPoints[index].y * imgHeight;
-
-    let positiveSteps = 0;
-    for (let step = 1; step <= maxScan; step += 1) {
-      const sx = Math.round(cx + normalX * step);
-      const sy = Math.round(cy + normalY * step);
-      if (!isOccupied(sx, sy)) {
-        break;
-      }
-      positiveSteps = step;
-    }
-    let negativeSteps = 0;
-    for (let step = 1; step <= maxScan; step += 1) {
-      const sx = Math.round(cx - normalX * step);
-      const sy = Math.round(cy - normalY * step);
-      if (!isOccupied(sx, sy)) {
-        break;
-      }
-      negativeSteps = step;
-    }
-
-    // Width is total chord length through the defect at this point, in
-    // detection-image pixels; convert to source pixels and normalize like radius.
-    const widthInDetectionPx = positiveSteps + negativeSteps + 1;
-    widths.push((widthInDetectionPx * scale) / diagonal);
-  }
-
-  return widths;
-}
-
-function classifyPathComponent(
-  stats: ComponentStats,
-  width: number,
-  height: number,
-  maxRadius: number,
-  scale: number,
-  normalizedSensitivity: number,
-  localMad: Float32Array,
-): ScoredMark | null {
-  const blobWidth = stats.maxX - stats.minX + 1;
-  const blobHeight = stats.maxY - stats.minY + 1;
-  const longSide = Math.max(blobWidth, blobHeight);
-  const shortSide = Math.min(blobWidth, blobHeight);
-  const aspectRatio = longSide / Math.max(shortSide, 1);
-  const averageWidth = stats.area / Math.max(longSide, 1);
-  const meanSignal = stats.totalSignal / Math.max(stats.area, 1);
-  const meanEdge = stats.totalEdge / Math.max(stats.area, 1);
-  const borderRatio = stats.nearBorderCount / Math.max(stats.area, 1);
-  const score = meanSignal - meanEdge * lerp(1.9, 1.0, normalizedSensitivity) - borderRatio * 0.04;
-
-  if (
-    stats.area < Math.max(10, Math.round(maxRadius * 1.5))
-    || longSide < Math.max(14, Math.round(maxRadius * 2))
-    || averageWidth > Math.max(4.8, maxRadius * 0.95)
-    || aspectRatio < lerp(2.4, 1.85, normalizedSensitivity)
-    || score < lerp(0.022, 0.012, normalizedSensitivity)
-  ) {
-    return null;
-  }
-
-  // Same surrounding-noise veto as for spots: a real scratch / hair stands
-  // clearly above the surrounding local-MAD level, where elongated grain
-  // clusters sit at the same scale as their neighbourhood.
-  const ringNoise = sampleRingNoise(localMad, width, height, stats);
-  const requiredRatio = lerp(3.0, 1.8, normalizedSensitivity);
-  if (ringNoise > 0 && meanSignal < ringNoise * requiredRatio) {
-    return null;
-  }
-
-  const ordered = orderPointsAlongCurve(stats.points);
-  const pathPoints = subsamplePathPoints(
-    ordered,
-    Math.max(2, Math.round(Math.max(averageWidth * 1.5, maxRadius * 0.45))),
+function buildPolarityStage(context: DetectionContext, luminance: Float32Array, polarity: DustPolarity): PolarityStage {
+  const { width, height, maxRadius, sensitivity } = context;
+  const radius = Math.ceil(maxRadius) + 1;
+  const signal = computeTopHat(luminance, width, height, radius, polarity);
+  const noise = measureNoiseField(signal, width, height, Math.max(16, radius * 4));
+  const highFactor = lerp(3.2, 2.6, sensitivity);
+  const mask = buildHysteresisMask(
+    signal,
+    noise,
     width,
     height,
-    scale,
+    highFactor,
+    highFactor * 0.5,
+    lerp(0.05, 0.025, sensitivity),
+    lerp(0.025, 0.012, sensitivity),
   );
-  if (pathPoints.length < 2) {
-    return null;
-  }
-
-  const diagonal = Math.hypot(width * scale, height * scale);
-  const radiusPx = clamp(Math.max(averageWidth * 1.25, maxRadius * 0.42), 1.5, maxRadius * 0.95) * scale;
-
-  // Cap normal scans at a few times maxRadius to keep cost bounded on noisy
-  // components that bleed into surrounding pixels through the mask.
-  const widthScanLimit = Math.max(6, Math.round(maxRadius * 3));
-  const widthAlongPath = measurePathWidths(
-    stats.points,
-    pathPoints,
-    width,
-    height,
-    scale,
-    diagonal,
-    widthScanLimit,
-  );
-
-  return {
-    id: `dust-auto-${crypto.randomUUID()}`,
-    kind: 'path',
-    points: pathPoints,
-    radius: clamp(radiusPx / diagonal, 0, 1),
-    widthAlongPath,
-    source: 'auto',
-    score: score * ordered.length,
-  } satisfies PathDustMark & { score: number };
-}
-
-function collectFallbackSpotCandidates(
-  signal: Float32Array,
-  localMad: Float32Array,
-  edge: Float32Array,
-  lineStrength: Float32Array,
-  width: number,
-  height: number,
-  maxRadius: number,
-  scale: number,
-  normalizedSensitivity: number,
-) {
-  const marks: ScoredMark[] = [];
-  const diagonal = Math.hypot(width * scale, height * scale);
-
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      const index = y * width + x;
-      const anomaly = signal[index];
-      const threshold = Math.max(
-        lerp(0.014, 0.006, normalizedSensitivity),
-        localMad[index] * lerp(2.3, 1.4, normalizedSensitivity) + 0.0015,
-      );
-      if (anomaly <= threshold) {
-        continue;
-      }
-
-      const gradient = edge[index];
-      const localLine = lineStrength[index];
-      if (
-        gradient > anomaly * 1.45 + 0.03
-        || localLine > anomaly * 1.9
-      ) {
-        continue;
-      }
-
-      let isPeak = true;
-      for (let offsetY = -1; offsetY <= 1 && isPeak; offsetY += 1) {
-        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-          if (offsetX === 0 && offsetY === 0) {
-            continue;
-          }
-          if (signal[(y + offsetY) * width + (x + offsetX)] > anomaly) {
-            isPeak = false;
-            break;
-          }
-        }
-      }
-      if (!isPeak) {
-        continue;
-      }
-
-      // Peak isolation veto: a real dust speck stands out clearly from a ring
-      // of neighbours; a pure-grain "peak" is one of many similar values in
-      // the neighbourhood. Sample two rings (close + further out) so we both
-      // detect immediate isolation AND verify the broader area isn't simply
-      // an evenly-noisy field. This was the dominant false-positive source.
-      let isolated = true;
-      for (const ringRadius of [3, 5]) {
-        const ringSamples: number[] = [];
-        for (let angleIndex = 0; angleIndex < 12; angleIndex += 1) {
-          const angle = (angleIndex / 12) * Math.PI * 2;
-          const sx = clamp(Math.round(x + Math.cos(angle) * ringRadius), 0, width - 1);
-          const sy = clamp(Math.round(y + Math.sin(angle) * ringRadius), 0, height - 1);
-          ringSamples.push(signal[sy * width + sx]);
-        }
-        ringSamples.sort((left, right) => left - right);
-        // Use the 75th-percentile rather than the median: in a noisy field,
-        // half the ring samples are near zero by chance, so the median
-        // understates the noise floor and the peak passes too easily.
-        const ringQ75 = ringSamples[Math.floor(ringSamples.length * 0.75)];
-        const isolationMargin = Math.max(
-          lerp(0.018, 0.008, normalizedSensitivity),
-          localMad[index] * lerp(2.6, 1.7, normalizedSensitivity),
-        );
-        if (anomaly < ringQ75 + isolationMargin) {
-          isolated = false;
-          break;
-        }
-      }
-      if (!isolated) {
-        continue;
-      }
-
-      const radiusPx = clamp(maxRadius * 0.52, 1.2, maxRadius * 0.9) * scale;
-      marks.push({
-        id: `dust-auto-${crypto.randomUUID()}`,
-        kind: 'spot',
-        cx: clamp(((x + 0.5) * scale) / (width * scale), 0, 1),
-        cy: clamp(((y + 0.5) * scale) / (height * scale), 0, 1),
-        radius: clamp(radiusPx / diagonal, 0, 1),
-        source: 'auto',
-        score: anomaly - gradient * 0.7,
-      });
-    }
-  }
-
-  return marks;
+  return { polarity, signal, noise, mask };
 }
 
 function detectDustMarksAtScale(
@@ -879,106 +960,47 @@ function detectDustMarksAtScale(
   maxRadius: number,
   scale: number,
   mode: DustAutoDetectMode,
+  polarity: DustPolarity,
 ) {
   const { width, height, data } = imageData;
-  const normalizedSensitivity = clamp(sensitivity, 0, 100) / 100;
-  const backgroundRadius = Math.max(3, Math.round(maxRadius * 2.4));
-  const madRadius = Math.max(1, Math.round(maxRadius * 0.85));
+  const context: DetectionContext = {
+    data,
+    width,
+    height,
+    scale,
+    maxRadius,
+    sensitivity: clamp(sensitivity, 0, 100) / 100,
+    canEmitSpots: mode === 'spots' || mode === 'both',
+    canEmitPaths: mode === 'scratches' || mode === 'both',
+  };
   const luminance = computeLuminance(data, width, height);
-  const baseline = boxBlur(luminance, width, height, backgroundRadius);
-  const edge = computeGradientMagnitude(luminance, width, height);
-  const signal = new Float32Array(luminance.length);
-
-  for (let index = 0; index < luminance.length; index += 1) {
-    signal[index] = Math.abs(luminance[index] - baseline[index]);
-  }
-
-  const localMad = boxBlur(signal, width, height, madRadius);
-  const lineStrength = computeLineStrength(signal, width, height);
-  // Complementary line-likeness map. Combined with the existing line strength
-  // it raises sensitivity for faint/curved scratches without lowering the
-  // global threshold (which would also let in more grain).
-  const hessianLine = computeHessianLineResponse(signal, width, height);
-  const spotMask = new Uint8Array(signal.length);
-  const lineMask = new Uint8Array(signal.length);
-
-  const canEmitSpots = mode === 'spots' || mode === 'both';
-  const canEmitPaths = mode === 'scratches' || mode === 'both';
-
-  for (let index = 0; index < signal.length; index += 1) {
-    const anomaly = signal[index];
-    const localNoise = localMad[index];
-    const gradient = edge[index];
-    const localLine = lineStrength[index];
-    const spotThreshold = Math.max(
-      lerp(0.02, 0.008, normalizedSensitivity),
-      localNoise * lerp(3.1, 1.7, normalizedSensitivity) + 0.0025,
-    );
-    const lineThreshold = Math.max(
-      lerp(0.022, 0.01, normalizedSensitivity),
-      localNoise * lerp(3.1, 1.8, normalizedSensitivity) + 0.003,
-    );
-    const edgePenaltyFactor = lerp(1.05, 1.55, normalizedSensitivity);
-
-    if (
-      canEmitSpots
-      && anomaly > spotThreshold
-      && gradient < anomaly * edgePenaltyFactor + 0.025
-    ) {
-      spotMask[index] = 1;
-    }
-
-    // Combined line score: pixels qualify if either the orientation filter or
-    // the Hessian line-likeness map says "line." Hessian helps faint and
-    // curved defects pass the gate that the orientation filter misses;
-    // orientation helps thin straight defects with weak Hessian response.
-    const hessianResponse = hessianLine[index];
-    const combinedLine = Math.max(localLine, hessianResponse * 0.85);
-    if (
-      canEmitPaths
-      && anomaly > lineThreshold
-      && combinedLine > anomaly * lerp(0.95, 0.65, normalizedSensitivity)
-      && gradient < combinedLine * lerp(1.4, 1.9, normalizedSensitivity) + 0.03
-    ) {
-      lineMask[index] = 1;
-    }
+  const stages = [
+    buildPolarityStage(context, luminance, polarity),
+    buildPolarityStage(context, luminance, polarity === 'bright' ? 'dark' : 'bright'),
+  ];
+  // Small structure of either polarity counts as surrounding texture: the
+  // dark gaps between lit windows sit in a field of bright ones.
+  const activity = new Uint8Array(luminance.length);
+  for (let index = 0; index < activity.length; index += 1) {
+    activity[index] = stages[0].mask[index] | stages[1].mask[index];
   }
 
   const marks: ScoredMark[] = [];
-
-  if (canEmitSpots) {
-    const components = buildComponentStats(spotMask, signal, edge, width, height);
-    for (const component of components) {
-      const mark = classifySpotComponent(component, width, height, maxRadius, scale, normalizedSensitivity, localMad);
-      if (mark) {
-        marks.push(mark);
-      }
+  for (const stage of stages) {
+    const isDefectPolarity = stage.polarity === polarity;
+    if (!isDefectPolarity && !context.canEmitPaths) {
+      continue;
     }
-
-    marks.push(...collectFallbackSpotCandidates(
-      signal,
-      localMad,
-      edge,
-      lineStrength,
-      width,
-      height,
-      maxRadius,
-      scale,
-      normalizedSensitivity,
-    ));
-  }
-
-  if (canEmitPaths) {
-    const components = buildComponentStats(lineMask, lineStrength, edge, width, height);
-    for (const component of components) {
-      const mark = classifyPathComponent(component, width, height, maxRadius, scale, normalizedSensitivity, localMad);
+    for (const component of collectComponents(stage.mask, stage.signal, width, height)) {
+      const mark = classifyComponent(context, component, stage.signal, activity, stage.noise, isDefectPolarity);
       if (mark) {
         marks.push(mark);
       }
     }
   }
 
-  return dedupeMarks(marks);
+  const diagonal = Math.hypot(width, height);
+  return dedupeMarks(marks, { x: width / diagonal, y: height / diagonal });
 }
 
 export function detectDustMarks(
@@ -986,12 +1008,14 @@ export function detectDustMarks(
   sensitivity: number,
   maxRadius: number,
   mode: DustAutoDetectMode = 'both',
+  options: DustDetectOptions = {},
 ): DustMark[] {
+  const polarity = options.polarity ?? 'bright';
   const megapixels = (imageData.width * imageData.height) / 1_000_000;
   if (megapixels > 10 && imageData.width >= 2 && imageData.height >= 2) {
     const downsampled = downsampleImageData(imageData);
-    return detectDustMarksAtScale(downsampled, sensitivity, Math.max(1, maxRadius / 2), 2, mode);
+    return detectDustMarksAtScale(downsampled, sensitivity, Math.max(1, maxRadius / 2), 2, mode, polarity);
   }
 
-  return detectDustMarksAtScale(imageData, sensitivity, maxRadius, 1, mode);
+  return detectDustMarksAtScale(imageData, sensitivity, maxRadius, 1, mode, polarity);
 }

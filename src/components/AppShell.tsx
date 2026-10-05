@@ -1,22 +1,16 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Building2,
-  Crop,
+  AlertTriangle,
+  CheckCircle2,
   Download,
   ExternalLink,
-  FileWarning,
+  FolderOpen,
   Image as ImageIcon,
   Info,
   Loader2,
-  PanelLeft,
-  PanelLeftClose,
-  PanelRight,
-  PanelRightClose,
   Redo2,
   RotateCcw,
-  SplitSquareVertical,
   Undo2,
   Upload,
   X,
@@ -27,17 +21,11 @@ import { CropOverlay } from './CropOverlay';
 import { DustOverlay } from './DustOverlay';
 import { SettingsModal } from './SettingsModal';
 import { BatchModal } from './BatchModal';
-import { ContactSheetModal } from './ContactSheetModal';
-import { TabBar } from './TabBar';
-import { ZoomBar } from './ZoomBar';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ToastHost } from './ToastHost';
 import { DEFAULT_COLOR_MANAGEMENT } from '../constants';
-import {
-  BatchJobEntry,
-} from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import {
   BlockingOverlayState,
@@ -60,9 +48,36 @@ import {
   Roll,
   ScannerType,
   WorkspaceDocument,
+  EditorTool,
 } from '../types';
 import { MaxResidentDocs } from '../utils/residentDocsStore';
 import { computePanTranslate, PanGeometry, WheelZoomOptions } from '../hooks/useViewportZoom';
+import { ToolRail } from './ToolRail';
+import { InspectorHeader } from './InspectorHeader';
+import { CanvasToolbar } from './CanvasToolbar';
+import { rotateCropClockwise } from '../utils/imagePipeline';
+import { Filmstrip } from './Filmstrip';
+import { ContactSheetPane } from './ContactSheetPane';
+import { ContactSheetPreview } from './ContactSheetPreview';
+import { ContactSheetController } from '../hooks/useContactSheet';
+import { FrameExportProgress } from './ExportFramesControl';
+import { FilmstripThumbnail } from '../utils/filmstripThumbnails';
+
+/** Export and Import share one size so the header actions line up. */
+const HEADER_BUTTON = 'inline-flex h-9 min-w-[8.5rem] items-center justify-center gap-2 rounded-lg border px-4 text-sm font-medium transition-colors';
+
+// Notices about the open frame drop in at the top of the canvas, clear of the
+// floating toolbar, as one compact glass card per notice.
+const NOTICE_CARD = 'pointer-events-auto flex w-full max-w-[32rem] items-center gap-3 rounded-xl border border-zinc-700/60 bg-zinc-900/85 py-2 pl-3.5 pr-2 text-[13px] text-zinc-200 shadow-xl shadow-black/40 backdrop-blur-xl';
+const NOTICE_DISMISS = 'grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200';
+const NOTICE_MOTION = {
+  initial: { opacity: 0, y: -10, scale: 0.98 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: -8, scale: 0.98, transition: { duration: 0.15 } },
+  transition: { type: 'spring' as const, bounce: 0.15, duration: 0.35 },
+};
+
+const TOOLS_NEEDING_A_FRAME: EditorTool[] = ['adjust', 'curves', 'crop', 'dust', 'export', 'contact'];
 
 type AppShellProps = {
   usesNativeFileDialogs: boolean;
@@ -87,14 +102,13 @@ type AppShellProps = {
   customPresets: FilmProfile[];
   presetFolders: PresetFolder[];
   savePresetTags: string[];
-  sidebarTab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export';
+  sidebarTab: EditorTool;
   dustBrushActive: boolean;
   selectedDustMarkId: string | null;
   isDetectingDust: boolean;
   cropTab: CropTab;
   comparisonMode: 'processed' | 'original';
   isLeftPaneOpen: boolean;
-  isRightPaneOpen: boolean;
   isPickingFilmBase: boolean;
   activePointPicker: PointPickerMode | null;
   isAdjustingLevel: boolean;
@@ -104,7 +118,6 @@ type AppShellProps = {
   isDragActive: boolean;
   showSettingsModal: boolean;
   showBatchModal: boolean;
-  showContactSheetModal: boolean;
   showTabSwitchOverlay: boolean;
   tabSwitchOverlayKey: number;
   showMagnifier: boolean;
@@ -132,6 +145,9 @@ type AppShellProps = {
   defaultExportPath: string | null;
   batchOutputPath: string | null;
   contactSheetOutputPath: string | null;
+  contactSheet: ContactSheetController;
+  filmstripCollapsed: boolean;
+  onToggleFilmstrip: () => void;
   customPresetCount: number;
   presetFolderCount: number;
   quickExportPresets: QuickExportPreset[];
@@ -142,8 +158,6 @@ type AppShellProps = {
   updateError: string | null;
   isCheckingForUpdates: boolean;
   activeRoll: Roll | null;
-  rolls: Map<string, Roll>;
-  filmstripTabs: DocumentTab[];
   getRollById: (rollId: string | null) => Roll | null;
   profilesById: Map<string, FilmProfile>;
   lightSourceProfilesById: Map<string, LightSourceProfile>;
@@ -154,51 +168,43 @@ type AppShellProps = {
   previewTransformAngle: number;
   logicalPreviewSize: { width: number; height: number };
   cropImageSize: { width: number; height: number };
-  contactSheetEntries: BatchJobEntry[];
-  contactSheetSharedSettings: ConversionSettings | null;
-  contactSheetSharedProfile: FilmProfile | null;
-  contactSheetSharedLabStyle: LabStyleProfile | null;
-  contactSheetSharedColorManagement: ColorManagementSettings | null;
-  contactSheetSharedLightSourceBias: [number, number, number] | null;
   onSetIsPanDragging: React.Dispatch<React.SetStateAction<boolean>>;
   onSetIsDragActive: React.Dispatch<React.SetStateAction<boolean>>;
   onSetComparisonMode: React.Dispatch<React.SetStateAction<'processed' | 'original'>>;
   onSetIsCropOverlayVisible: React.Dispatch<React.SetStateAction<boolean>>;
   onSetShowSettingsModal: React.Dispatch<React.SetStateAction<boolean>>;
   onSetShowBatchModal: React.Dispatch<React.SetStateAction<boolean>>;
-  onSetShowContactSheetModal: React.Dispatch<React.SetStateAction<boolean>>;
   onSetSuggestionNotice: React.Dispatch<React.SetStateAction<SuggestionNoticeState | null>>;
   onSetTransientNotice: React.Dispatch<React.SetStateAction<TransientNoticeState | null>>;
   onSetError: React.Dispatch<React.SetStateAction<string | null>>;
   onOpenImage: () => Promise<void>;
+  onOpenFolder: () => Promise<void>;
+  folderInputRef: React.RefObject<HTMLInputElement | null>;
   onCloseImage: (requestedTabId?: string | null) => Promise<void>;
   onUndo: () => void;
   onRedo: () => void;
-  onToggleLeftPane: () => void;
-  onToggleRightPane: () => void;
+  onSelectTool: (tool: EditorTool) => void;
+  filmstripSelectedIds: string[];
+  filmstripThumbnails: Record<string, FilmstripThumbnail>;
+  isFilmstripBusy: boolean;
+  onFilmstripFrameClick: (tabId: string, modifiers: { toggle: boolean; range: boolean }) => void;
+  onClearFilmstripSelection: () => void;
+  onSyncSettingsToFrames: (sourceId: string, targetIds: string[]) => void;
+  onStabilizeSelectedCrops: (tabIds: string[]) => Promise<void>;
+  onExportFrames: (tabIds: string[]) => Promise<void>;
+  frameExportProgress: FrameExportProgress | null;
+  onExportFramesInScope: (scope: 'selected' | 'all') => void;
+  onCancelFrameExport: () => void;
   onReset: () => void;
   onOpenInEditor: () => void;
   onDownload: () => void;
   onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   onRecentImport: (file: File, path?: string | null, size?: number) => Promise<string | null>;
-  onSelectTab: (tabId: string) => void;
   onReorderTabs: (sourceId: string, targetId: string) => void;
   onSyncRollSettings: (tabId: string, rollId: string) => void;
-  onStabilizeRollCrops: (rollId: string) => void;
   onApplyRollFilmBase: (rollId: string) => void;
   onRemoveFromRoll: (tabId: string) => void;
   onOpenRollInfo: (rollId: string) => void;
-  onDeleteRoll: (rollId: string) => void;
-  onCreateRollFromTabs: () => void;
-  onToggleScanningSession: () => void;
-  onOpenContactSheet: (payload: {
-    entries: BatchJobEntry[];
-    sharedSettings: ConversionSettings;
-    sharedProfile: FilmProfile;
-    sharedLabStyle: LabStyleProfile | null;
-    sharedColorManagement: ColorManagementSettings;
-    sharedLightSourceBias: [number, number, number] | null;
-  }) => void;
   defaultExportOptions: WorkspaceDocument['exportOptions'];
   onSettingsChange: (newSettings: Partial<ConversionSettings>) => void;
   onDustRemovalChange: (dustRemoval: ConversionSettings['dustRemoval']) => void;
@@ -219,7 +225,6 @@ type AppShellProps = {
   onDeleteQuickExportPreset: (presetId: string) => void;
   onOpenBatchExport: () => void;
   onSidebarScrollTopChange: (scrollTop: number) => void;
-  onSidebarTabChange: (tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => void;
   onCropTabChange: (tab: CropTab) => void;
   onRedetectFrame: () => void;
   onCropDone: () => void;
@@ -236,6 +241,11 @@ type AppShellProps = {
   onAutoAdjust: () => void;
   onAutoWhiteBalance: () => void;
   onProfileChange: (profile: FilmProfile) => void;
+  onProfilePreview: (profile: FilmProfile) => void;
+  onProfilePreviewEnd: () => void;
+  // The hovered profile shown on the image, if any.
+  previewProfile: FilmProfile | null;
+  previewLabStyle: LabStyleProfile | null;
   onSavePreset: (name: string, metadata?: {
     filmStock?: string;
     scannerType?: ScannerType | null;
@@ -324,7 +334,6 @@ export function AppShell({
   cropTab,
   comparisonMode,
   isLeftPaneOpen,
-  isRightPaneOpen,
   isPickingFilmBase,
   activePointPicker,
   isAdjustingLevel,
@@ -334,7 +343,6 @@ export function AppShell({
   isDragActive,
   showSettingsModal,
   showBatchModal,
-  showContactSheetModal,
   showTabSwitchOverlay,
   tabSwitchOverlayKey,
   showMagnifier,
@@ -362,6 +370,9 @@ export function AppShell({
   defaultExportPath,
   batchOutputPath,
   contactSheetOutputPath,
+  contactSheet,
+  filmstripCollapsed,
+  onToggleFilmstrip,
   customPresetCount,
   presetFolderCount,
   quickExportPresets,
@@ -372,8 +383,6 @@ export function AppShell({
   updateError,
   isCheckingForUpdates,
   activeRoll,
-  rolls,
-  filmstripTabs,
   getRollById,
   profilesById,
   lightSourceProfilesById,
@@ -384,44 +393,43 @@ export function AppShell({
   previewTransformAngle,
   logicalPreviewSize,
   cropImageSize,
-  contactSheetEntries,
-  contactSheetSharedSettings,
-  contactSheetSharedProfile,
-  contactSheetSharedLabStyle,
-  contactSheetSharedColorManagement,
-  contactSheetSharedLightSourceBias,
   onSetIsPanDragging,
   onSetIsDragActive,
   onSetComparisonMode,
   onSetIsCropOverlayVisible,
   onSetShowSettingsModal,
   onSetShowBatchModal,
-  onSetShowContactSheetModal,
   onSetSuggestionNotice,
   onSetTransientNotice,
   onSetError,
   onOpenImage,
+  onOpenFolder,
+  folderInputRef,
   onCloseImage,
   onUndo,
   onRedo,
-  onToggleLeftPane,
-  onToggleRightPane,
+  onSelectTool,
+  filmstripSelectedIds,
+  filmstripThumbnails,
+  isFilmstripBusy,
+  onFilmstripFrameClick,
+  onClearFilmstripSelection,
+  onSyncSettingsToFrames,
+  onStabilizeSelectedCrops,
+  onExportFrames,
+  frameExportProgress,
+  onExportFramesInScope,
+  onCancelFrameExport,
   onReset,
   onOpenInEditor,
   onDownload,
   onFileChange,
   onRecentImport,
-  onSelectTab,
   onReorderTabs,
   onSyncRollSettings,
-  onStabilizeRollCrops,
   onApplyRollFilmBase,
   onRemoveFromRoll,
   onOpenRollInfo,
-  onDeleteRoll,
-  onCreateRollFromTabs,
-  onToggleScanningSession,
-  onOpenContactSheet,
   defaultExportOptions,
   onSettingsChange,
   onDustRemovalChange,
@@ -442,7 +450,6 @@ export function AppShell({
   onDeleteQuickExportPreset,
   onOpenBatchExport,
   onSidebarScrollTopChange,
-  onSidebarTabChange,
   onCropTabChange,
   onRedetectFrame,
   onCropDone,
@@ -459,6 +466,10 @@ export function AppShell({
   onAutoAdjust,
   onAutoWhiteBalance,
   onProfileChange,
+  onProfilePreview,
+  onProfilePreviewEnd,
+  previewProfile,
+  previewLabStyle,
   onSavePreset,
   onImportPreset,
   onDeletePreset,
@@ -506,6 +517,7 @@ export function AppShell({
   setZoomLevel,
 }: AppShellProps) {
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
+  const activeFrameIndex = tabs.findIndex((tab) => tab.id === activeTabId);
   void isAdjustingCrop;
   void profilesById;
   void lightSourceProfilesById;
@@ -565,6 +577,23 @@ export function AppShell({
     };
   }, [effectiveZoom, logicalPreviewSize.height, logicalPreviewSize.width, pan, viewportRef]);
 
+  // Without an open frame only Film profiles (presets, LUT import) has
+  // anything to show, so the other panels stay closed and the drop zone gets
+  // the whole window.
+  const inspectorVisible = isLeftPaneOpen && (Boolean(documentState) || sidebarTab === 'profiles');
+
+  // The Contact sheet tool swaps the image for a live preview of the sheet.
+  const showContactSheetPreview = inspectorVisible && sidebarTab === 'contact' && Boolean(documentState);
+  const contactSheetCells = useMemo(() => contactSheet.cells.map((cell) => ({
+    ...cell,
+    thumbnailUrl: cell.thumbnailUrl ?? filmstripThumbnails[cell.id]?.url ?? null,
+  })), [contactSheet.cells, filmstripThumbnails]);
+
+  const headerMeta = [
+    activeFrameIndex >= 0 && tabs.length > 1 ? `${activeFrameIndex + 1} / ${tabs.length}` : null,
+    activeRoll?.name ?? null,
+  ].filter(Boolean).join(' · ');
+
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-zinc-950 font-sans text-zinc-100">
       {usesNativeFileDialogs && (
@@ -576,96 +605,138 @@ export function AppShell({
       )}
 
       <div className={`flex min-h-0 w-full flex-1 ${usesNativeFileDialogs ? 'pt-8' : ''}`}>
-        <AnimatePresence initial={false}>
-          {isLeftPaneOpen && (
-            <motion.div
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 320, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
-              className="h-full shrink-0 overflow-hidden border-r border-zinc-800"
-            >
+        <ToolRail
+          activeTool={sidebarTab}
+          panelOpen={inspectorVisible}
+          disabledTools={documentState ? undefined : TOOLS_NEEDING_A_FRAME}
+          onSelect={onSelectTool}
+          onOpenSettings={onOpenSettingsModal}
+        />
+        {/* The panel takes its width at once and only its contents animate
+            (opacity and transform, which stay on the compositor). Animating
+            the width relaid out and refit the preview on every frame. */}
+        {inspectorVisible && (
+          <motion.div
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            className="flex h-full w-80 shrink-0 flex-col overflow-hidden border-r border-zinc-800"
+          >
+            <InspectorHeader tool={sidebarTab} onCollapse={() => onSelectTool(sidebarTab)} />
+            <div className="min-h-0 w-80 flex-1">
               <ErrorBoundary>
-                <Sidebar
-                  settings={documentState?.settings ?? fallbackProfile.defaultSettings}
-                  exportOptions={documentState?.exportOptions ?? defaultExportOptions}
-                  quickExportPresets={quickExportPresets}
-                  colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
-                  sourceMetadata={documentState?.source ?? null}
-                  cropImageWidth={cropImageSize.width}
-                  cropImageHeight={cropImageSize.height}
-                  onLevelInteractionChange={onLevelInteractionChange}
-                  straightenActive={straightenActive}
-                  onStraightenActiveChange={onStraightenActiveChange}
-                  onSettingsChange={onSettingsChange}
-                  onExportOptionsChange={onExportOptionsChange}
-                  onColorManagementChange={onColorManagementChange}
-                  onInteractionStart={onInteractionStart}
-                  onInteractionEnd={onInteractionEnd}
-                  activeProfile={documentState ? activeProfile : null}
-                  activeLabStyleId={documentState?.labStyleId ?? null}
-                  labStyleProfiles={labStyleProfiles}
-                  estimatedFlare={documentState?.estimatedFlare ?? null}
-                  lightSourceId={documentState?.lightSourceId ?? null}
-                  cropSource={documentState?.cropSource ?? null}
-                  lightSourceProfiles={lightSourceProfiles}
-                  histogramData={documentState?.histogram ?? null}
-                  isPickingFilmBase={isPickingFilmBase}
-                  isReanalyzingFilmBase={isReanalyzingFilmBase}
-                  estimatedFilmBase={documentState?.estimatedFilmBase ?? null}
-                  filmBaseSampleSource={documentState?.settings.filmBaseSampleSource ?? null}
-                  onTogglePicker={onToggleFilmBasePicker}
-                  onReanalyzeFilmBase={onReanalyzeFilmBase}
-                  onExport={onExportClick}
-                  onQuickExport={onQuickExport}
-                  onSaveQuickExportPreset={onSaveQuickExportPreset}
-                  onDeleteQuickExportPreset={onDeleteQuickExportPreset}
-                  onOpenBatchExport={onOpenBatchExport}
-                  isExporting={isExporting}
-                  contentScrollTop={activeTab?.sidebarScrollTop ?? 0}
-                  onContentScrollTopChange={onSidebarScrollTopChange}
-                  activeTab={sidebarTab}
-                  onTabChange={onSidebarTabChange}
-                  cropTab={cropTab}
-                  onCropTabChange={onCropTabChange}
-                  onRedetectFrame={onRedetectFrame}
-                  onCropDone={onCropDone}
-                  onResetCrop={onResetCrop}
-                  onDustRemovalChange={onDustRemovalChange}
-                  onDetectDust={onDetectDust}
-                  isDetectingDust={isDetectingDust}
-                  dustBrushActive={dustBrushActive}
-                  onDustBrushActiveChange={onDustBrushActiveChange}
-                  activePointPicker={activePointPicker}
-                  onSetPointPicker={onSetActivePointPicker}
-                  onOpenSettings={onOpenSettingsModal}
-                  onLightSourceChange={onLightSourceChange}
-                  onLabStyleChange={onLabStyleChange}
-                  onAutoAdjust={onAutoAdjust}
-                  onAutoWhiteBalance={onAutoWhiteBalance}
-                />
+                {sidebarTab === 'contact' ? (
+                  <ContactSheetPane sheet={contactSheet} />
+                ) : sidebarTab === 'profiles' ? (
+                  <PresetsPane
+                    activeStockId={documentState?.profileId ?? fallbackProfile.id}
+                    onStockChange={onProfileChange}
+                    onStockPreview={documentState ? onProfilePreview : undefined}
+                    onStockPreviewEnd={onProfilePreviewEnd}
+                    builtinProfiles={builtinProfiles}
+                    customPresets={customPresets}
+                    presetFolders={presetFolders}
+                    canSavePreset={Boolean(documentState)}
+                    saveTags={savePresetTags}
+                    onSavePreset={onSavePreset}
+                    onImportPreset={onImportPreset}
+                    onDeletePreset={onDeletePreset}
+                    onCreateFolder={onCreateFolder}
+                    onRenameFolder={onRenameFolder}
+                    onDeleteFolder={onDeleteFolder}
+                    onMovePresetToFolder={onMovePresetToFolder}
+                    onError={onSetError}
+                  />
+                ) : (
+                  <Sidebar
+                    settings={documentState?.settings ?? fallbackProfile.defaultSettings}
+                    exportOptions={documentState?.exportOptions ?? defaultExportOptions}
+                    quickExportPresets={quickExportPresets}
+                    colorManagement={documentState?.colorManagement ?? DEFAULT_COLOR_MANAGEMENT}
+                    sourceMetadata={documentState?.source ?? null}
+                    cropImageWidth={cropImageSize.width}
+                    cropImageHeight={cropImageSize.height}
+                    onLevelInteractionChange={onLevelInteractionChange}
+                    straightenActive={straightenActive}
+                    onStraightenActiveChange={onStraightenActiveChange}
+                    onSettingsChange={onSettingsChange}
+                    onExportOptionsChange={onExportOptionsChange}
+                    onColorManagementChange={onColorManagementChange}
+                    onInteractionStart={onInteractionStart}
+                    onInteractionEnd={onInteractionEnd}
+                    activeProfile={documentState ? activeProfile : null}
+                    activeLabStyleId={documentState?.labStyleId ?? null}
+                    labStyleProfiles={labStyleProfiles}
+                    estimatedFlare={documentState?.estimatedFlare ?? null}
+                    lightSourceId={documentState?.lightSourceId ?? null}
+                    cropSource={documentState?.cropSource ?? null}
+                    lightSourceProfiles={lightSourceProfiles}
+                    histogramData={documentState?.histogram ?? null}
+                    isPickingFilmBase={isPickingFilmBase}
+                    isReanalyzingFilmBase={isReanalyzingFilmBase}
+                    estimatedFilmBase={documentState?.estimatedFilmBase ?? null}
+                    filmBaseSampleSource={documentState?.settings.filmBaseSampleSource ?? null}
+                    onTogglePicker={onToggleFilmBasePicker}
+                    onReanalyzeFilmBase={onReanalyzeFilmBase}
+                    onExport={onExportClick}
+                    onQuickExport={onQuickExport}
+                    onSaveQuickExportPreset={onSaveQuickExportPreset}
+                    onDeleteQuickExportPreset={onDeleteQuickExportPreset}
+                    onOpenBatchExport={onOpenBatchExport}
+                    frameSelectionCount={filmstripSelectedIds.length}
+                    frameCount={tabs.length}
+                    frameExportProgress={frameExportProgress}
+                    onExportFrames={onExportFramesInScope}
+                    onCancelFrameExport={onCancelFrameExport}
+                    isExporting={isExporting}
+                    contentScrollTop={activeTab?.sidebarScrollTop ?? 0}
+                    onContentScrollTopChange={onSidebarScrollTopChange}
+                    activeTab={sidebarTab}
+                    cropTab={cropTab}
+                    onCropTabChange={onCropTabChange}
+                    onRedetectFrame={onRedetectFrame}
+                    onCropDone={onCropDone}
+                    onResetCrop={onResetCrop}
+                    onDustRemovalChange={onDustRemovalChange}
+                    onDetectDust={onDetectDust}
+                    isDetectingDust={isDetectingDust}
+                    dustBrushActive={dustBrushActive}
+                    onDustBrushActiveChange={onDustBrushActiveChange}
+                    activePointPicker={activePointPicker}
+                    onSetPointPicker={onSetActivePointPicker}
+                    onLightSourceChange={onLightSourceChange}
+                    onLabStyleChange={onLabStyleChange}
+                    onAutoAdjust={onAutoAdjust}
+                    onAutoWhiteBalance={onAutoWhiteBalance}
+                  />
+                )}
               </ErrorBoundary>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
 
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-zinc-900/30">
-          <header className="z-20 flex h-14 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950/50 px-4 backdrop-blur-xl">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={onToggleLeftPane}
-                aria-label={isLeftPaneOpen ? 'Hide adjustments panel' : 'Show adjustments panel'}
-                className="rounded-md p-1.5 text-zinc-500 transition-all hover:bg-zinc-800 hover:text-zinc-200"
-                data-tip="Toggle Adjustments"
-              >
-                {isLeftPaneOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
-              </button>
+          <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-4 border-b border-zinc-800 bg-zinc-950/50 px-4 backdrop-blur-xl">
+            <div className="flex min-w-0 flex-1 items-center gap-4">
               <h1 className="ml-2 text-sm font-bold tracking-tight text-zinc-100">
                 Dark<span className="font-medium text-zinc-500">Slide</span>
               </h1>
+              {documentState && (
+                <div className="ml-2 hidden min-w-0 items-baseline gap-3 border-l border-zinc-800 pl-4 md:flex">
+                  <span className="min-w-0 max-w-[420px] truncate text-sm font-medium text-zinc-200" title={documentState.source.name}>
+                    {documentState.source.name}
+                  </span>
+                  <span className="hidden min-w-0 max-w-[240px] shrink-0 truncate whitespace-nowrap font-mono text-[11px] text-zinc-500 xl:block" title={headerMeta || undefined}>
+                    {headerMeta}
+                    <span className="hidden 2xl:inline">
+                      {`${headerMeta ? ' · ' : ''}${documentState.source.width.toLocaleString()} × ${documentState.source.height.toLocaleString()} px`}
+                    </span>
+                  </span>
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex shrink-0 items-center gap-3">
               {documentState && (
                 <>
                   <div className="mr-2 flex items-center gap-1">
@@ -701,22 +772,6 @@ export function AppShell({
                   >
                     <RotateCcw size={18} />
                   </button>
-                  <button
-                    onClick={() => onSetComparisonMode((current) => current === 'processed' ? 'original' : 'processed')}
-                    aria-label={comparisonMode === 'original' ? 'Return to processed view' : 'Toggle before and after'}
-                    className={`rounded-lg p-2 transition-all ${comparisonMode === 'original' ? 'bg-zinc-100 text-zinc-950' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200'}`}
-                    data-tip={comparisonMode === 'original' ? 'Showing Original — click to return' : 'Toggle Before/After'}
-                  >
-                    <SplitSquareVertical size={18} />
-                  </button>
-                  <button
-                    onClick={() => onSetIsCropOverlayVisible((current) => !current)}
-                    aria-label={isCropOverlayVisible ? 'Hide crop overlay' : 'Show crop overlay'}
-                    className={`rounded-lg p-2 transition-all ${isCropOverlayVisible ? 'bg-zinc-100 text-zinc-950' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200'}`}
-                    data-tip="Toggle Crop Overlay"
-                  >
-                    <Crop size={18} />
-                  </button>
                   {usesNativeFileDialogs && (
                     <button
                       onClick={onOpenInEditor}
@@ -732,7 +787,7 @@ export function AppShell({
                   <button
                     onClick={onDownload}
                     disabled={Boolean(isExporting)}
-                    className="grid min-w-[8.75rem] grid-cols-[1rem_auto] items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-1.5 text-sm font-medium text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:opacity-50"
+                    className={`${HEADER_BUTTON} border-zinc-100 bg-zinc-100 text-zinc-950 shadow-lg shadow-black/20 hover:bg-white disabled:opacity-50`}
                     aria-busy={isExporting}
                   >
                     {isExporting ? <Loader2 size={16} className="shrink-0 animate-spin" /> : <Download size={16} className="shrink-0" />}
@@ -742,56 +797,55 @@ export function AppShell({
                   </button>
                 </>
               )}
-              <button
-                onClick={() => void onOpenImage()}
-                className="flex items-center gap-2 rounded-lg border border-zinc-700/50 bg-zinc-800 px-4 py-1.5 text-sm font-medium text-zinc-200 transition-all hover:bg-zinc-700"
-              >
-                <Upload size={16} /> Import
-              </button>
+              <div className="inline-flex h-9 min-w-[8.5rem] items-stretch overflow-hidden rounded-lg border border-zinc-700/60 bg-zinc-800 text-sm font-medium text-zinc-200">
+                <button
+                  type="button"
+                  onClick={() => void onOpenImage()}
+                  data-tip="Import scans, several at once (⌘O)"
+                  className="flex flex-1 items-center justify-center gap-2 pl-4 pr-3 transition-colors hover:bg-zinc-700"
+                >
+                  <Upload size={16} className="shrink-0" />
+                  <span className="whitespace-nowrap">Import</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onOpenFolder()}
+                  aria-label="Import a folder"
+                  data-tip="Import a folder"
+                  className="flex w-9 items-center justify-center border-l border-zinc-700/60 text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+                >
+                  <FolderOpen size={15} />
+                </button>
+              </div>
               {!usesNativeFileDialogs && (
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={(event) => { void onFileChange(event); }}
-                  accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff"
-                  className="hidden"
-                />
+                <>
+                  <input
+                    type="file"
+                    multiple
+                    ref={fileInputRef}
+                    onChange={(event) => { void onFileChange(event); }}
+                    accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff"
+                    className="hidden"
+                  />
+                  <input
+                    type="file"
+                    multiple
+                    ref={folderInputRef}
+                    onChange={(event) => { void onFileChange(event); }}
+                    className="hidden"
+                    {...{ webkitdirectory: '' }}
+                  />
+                </>
               )}
-              <div className="mx-1 h-4 w-px bg-zinc-800" />
-              <button
-                onClick={onToggleRightPane}
-                aria-label={isRightPaneOpen ? 'Hide presets panel' : 'Show presets panel'}
-                className="rounded-md p-1.5 text-zinc-500 transition-all hover:bg-zinc-800 hover:text-zinc-200"
-                data-tip="Toggle Profiles"
-              >
-                {isRightPaneOpen ? <PanelRightClose size={18} /> : <PanelRight size={18} />}
-              </button>
             </div>
           </header>
 
-          {tabs.length > 0 && (
-            <ErrorBoundary>
-              <TabBar
-                tabs={tabs}
-                activeTabId={activeTabId}
-                getRollById={getRollById}
-                onSelectTab={onSelectTab}
-                onCloseTab={(tabId) => void onCloseImage(tabId)}
-                onCreateTab={() => void onOpenImage()}
-                onReorderTabs={onReorderTabs}
-                onSyncRollSettings={onSyncRollSettings}
-                onApplyRollFilmBase={onApplyRollFilmBase}
-                onRemoveFromRoll={onRemoveFromRoll}
-                onOpenRollInfo={onOpenRollInfo}
-              />
-            </ErrorBoundary>
-          )}
 
           <ErrorBoundary>
             <div
               data-testid="image-drop-zone"
               ref={viewportRef}
-              className={`relative flex flex-1 items-center justify-center overflow-hidden p-8 ${isDragActive ? 'bg-zinc-900/60' : ''}`}
+              className={`relative flex flex-1 items-center justify-center overflow-hidden ${documentState ? 'px-4 pb-3 pt-4' : 'p-8'} ${isDragActive ? 'bg-zinc-900/60' : ''}`}
               onDragOver={(event) => {
                 event.preventDefault();
                 onSetIsDragActive(true);
@@ -838,12 +892,21 @@ export function AppShell({
                     </div>
                     <h2 className="mb-3 text-2xl font-semibold tracking-tight text-zinc-200">Drop your negatives here</h2>
                     <p className="mb-8 text-sm leading-relaxed text-zinc-500">Import TIFF, JPEG, or PNG scans, plus RAW files in the desktop app.</p>
-                    <button
-                      onClick={() => void onOpenImage()}
-                      className="rounded-2xl bg-zinc-100 px-8 py-3 font-semibold text-zinc-950 shadow-xl shadow-black/40 transition-all hover:bg-white"
-                    >
-                      Select Files
-                    </button>
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        onClick={() => void onOpenImage()}
+                        className="rounded-2xl bg-zinc-100 px-8 py-3 font-semibold text-zinc-950 shadow-xl shadow-black/40 transition-all hover:bg-white"
+                      >
+                        Select Files
+                      </button>
+                      <button
+                        onClick={() => void onOpenFolder()}
+                        className="flex items-center gap-2 rounded-2xl border border-zinc-700/70 bg-zinc-900 px-6 py-3 font-semibold text-zinc-200 transition-all hover:border-zinc-600 hover:bg-zinc-800"
+                      >
+                        <FolderOpen size={17} />
+                        Select Folder
+                      </button>
+                    </div>
                     <RecentFilesList
                       onImport={(file, path, size) => void onRecentImport(file, path, size)}
                       onOpenPicker={() => void onOpenImage()}
@@ -854,11 +917,11 @@ export function AppShell({
                     key="editor"
                     initial={{ opacity: 0, scale: 0.98 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    className="relative flex h-full w-full flex-col items-center justify-center gap-2"
+                    className="relative flex h-full w-full flex-col items-center justify-center gap-3"
                   >
                     <div
                       ref={previewContainerRef}
-                      className="relative w-full flex-1 overflow-hidden border border-zinc-800 bg-black"
+                      className="relative w-full flex-1 overflow-hidden rounded-lg border border-zinc-800/70 bg-black"
                       onMouseDown={(event) => {
                         const canPan = (zoom !== 'fit' || isSpaceHeld)
                           && !isPickingFilmBase
@@ -897,17 +960,6 @@ export function AppShell({
                       }}
                       style={{ cursor: isPanDragging ? 'grabbing' : (zoom !== 'fit' && !isPickingFilmBase && !activePointPicker && !dustBrushActive ? 'grab' : undefined) }}
                     >
-                      <div className="absolute right-4 top-4 z-20">
-                        <ZoomBar
-                          zoom={zoom}
-                          fitScale={fitScale}
-                          onZoomToFit={zoomToFit}
-                          onZoomTo100={zoomTo100}
-                          onZoomIn={zoomIn}
-                          onZoomOut={zoomOut}
-                          onSetZoom={setZoomLevel}
-                        />
-                      </div>
 
                       <AnimatePresence initial={false}>
                         {showTabSwitchOverlay && (
@@ -966,6 +1018,7 @@ export function AppShell({
                               imageHeight={cropImageSize.height}
                               levelAngle={documentState.settings.levelAngle}
                               straightenActive={straightenActive}
+                              displayScale={effectiveZoom}
                               onLevelAngleChange={onLevelAngleChange}
                               onInteractionStart={onCropInteractionStart}
                               onInteractionEnd={onCropInteractionEnd}
@@ -991,28 +1044,28 @@ export function AppShell({
                       </div>
                     </div>
 
-<div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 shadow-2xl backdrop-blur-md">
-                        <span className="px-2 text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                          {activeProfile.name}{activeProfile.lut ? ' (LUT)' : ''}
-                        </span>
-                        <div className="mx-1 h-4 w-px bg-zinc-800" />
-                        <span className="px-2 text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                          {documentState.source.width.toLocaleString()} × {documentState.source.height.toLocaleString()} px
-                        </span>
-                      </div>
-                      {activeLabStyle && (
-                        <div className="flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 shadow-2xl backdrop-blur-md">
-                          <Building2 size={14} className="text-zinc-500" />
-                          <span className="px-2 text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                            {activeLabStyle.name}
-                          </span>
-                        </div>
-                      )}
-                      </div>
-
-                      <div className="flex flex-wrap items-center justify-end gap-3">
+                  <div className="relative flex w-full shrink-0 items-center justify-center">
+                    <CanvasToolbar
+                      profileName={`${(previewProfile ?? activeProfile).name}${(previewProfile ?? activeProfile).lut ? ' (LUT)' : ''}`}
+                      labStyleName={(previewProfile ? previewLabStyle : activeLabStyle)?.name ?? null}
+                      isProfilePreview={previewProfile !== null}
+                      comparisonMode={comparisonMode}
+                      isCropOverlayVisible={isCropOverlayVisible}
+                      zoom={zoom}
+                      fitScale={fitScale}
+                      onSetComparisonMode={(mode) => onSetComparisonMode(mode)}
+                      onRotateClockwise={() => onSettingsChange({
+                        rotation: (documentState.settings.rotation + 90) % 360,
+                        crop: rotateCropClockwise(documentState.settings.crop),
+                      })}
+                      onToggleCrop={() => onSetIsCropOverlayVisible((current) => !current)}
+                      onZoomToFit={zoomToFit}
+                      onZoomTo100={zoomTo100}
+                      onZoomIn={zoomIn}
+                      onZoomOut={zoomOut}
+                      onSetZoom={setZoomLevel}
+                    />
+                      <div className="pointer-events-none absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-3">
                         <AnimatePresence initial={false}>
                           {isRenderIndicatorVisible && (
                             <motion.div
@@ -1027,20 +1080,17 @@ export function AppShell({
                             </motion.div>
                           )}
                         </AnimatePresence>
-                        <button
-                          onClick={() => void onCloseImage()}
-                          aria-label="Close image"
-                          className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-zinc-400 shadow-xl transition-all hover:bg-red-500/20 hover:text-red-400 backdrop-blur-md"
-                          data-tip="Close Image"
-                        >
-                          <X size={16} />
-                          <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Close</span>
-                        </button>
                       </div>
                     </div>
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {showContactSheetPreview && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center bg-zinc-950 px-8 pb-6 pt-8">
+                  <ContactSheetPreview cells={contactSheetCells} layout={contactSheet.layout} />
+                </div>
+              )}
 
               {overlayContent && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-zinc-950/55 backdrop-blur-sm">
@@ -1061,29 +1111,26 @@ export function AppShell({
 
               <div
                 data-testid="notification-stack"
-                className="pointer-events-none absolute bottom-8 right-8 z-50 flex w-[min(28rem,calc(100%-4rem))] flex-col items-stretch gap-3"
+                className="pointer-events-none absolute inset-x-4 top-4 z-50 flex flex-col items-center gap-2"
               >
                 <AnimatePresence initial={false}>
                   {transientNotice && (
                     <motion.div
                       key="transient-notice"
                       layout
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 12 }}
-                      className={`pointer-events-auto flex items-center gap-3 rounded-xl px-4 py-3 text-sm shadow-2xl backdrop-blur-xl ${
-                        transientNotice.tone === 'success'
-                          ? 'border border-emerald-800/60 bg-emerald-950/55 text-emerald-100'
-                          : transientNotice.tone === 'info'
-                            ? 'border border-zinc-700/70 bg-zinc-900/90 text-zinc-200'
-                            : 'border border-amber-800/60 bg-amber-950/55 text-amber-100'
-                      }`}
+                      {...NOTICE_MOTION}
+                      role={transientNotice.tone === 'warning' ? 'alert' : 'status'}
+                      className={NOTICE_CARD}
                     >
                       {transientNotice.tone === 'info'
-                        ? <Info size={18} className="shrink-0 text-zinc-400" />
-                        : <FileWarning size={18} className={`shrink-0 ${transientNotice.tone === 'success' ? 'text-emerald-300' : 'text-amber-300'}`} />}
-                      <span className="min-w-0 flex-1">{transientNotice.message}</span>
-                      <button type="button" onClick={() => onSetTransientNotice(null)} aria-label="Dismiss notification" className="shrink-0 opacity-50 hover:opacity-100">✕</button>
+                        ? <Info size={16} className="shrink-0 text-zinc-400" />
+                        : transientNotice.tone === 'success'
+                          ? <CheckCircle2 size={16} className="shrink-0 text-emerald-400" />
+                          : <AlertTriangle size={16} className="shrink-0 text-amber-400" />}
+                      <span className="min-w-0 flex-1 leading-snug">{transientNotice.message}</span>
+                      <button type="button" onClick={() => onSetTransientNotice(null)} aria-label="Dismiss notification" className={NOTICE_DISMISS}>
+                        <X size={14} />
+                      </button>
                     </motion.div>
                   )}
 
@@ -1091,14 +1138,15 @@ export function AppShell({
                     <motion.div
                       key="error-notice"
                       layout
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 12 }}
-                      className="pointer-events-auto flex items-center gap-3 rounded-xl border border-red-900/50 bg-red-950/50 px-4 py-3 text-sm text-red-200 shadow-2xl backdrop-blur-xl"
+                      {...NOTICE_MOTION}
+                      role="alert"
+                      className={`${NOTICE_CARD} border-red-900/60`}
                     >
-                      <FileWarning size={18} className="shrink-0 text-red-400" />
-                      <span className="min-w-0 flex-1">{error}</span>
-                      <button type="button" onClick={() => onSetError(null)} aria-label="Dismiss error" className="shrink-0 opacity-50 hover:opacity-100">✕</button>
+                      <AlertTriangle size={16} className="shrink-0 text-red-400" />
+                      <span className="min-w-0 flex-1 leading-snug">{error}</span>
+                      <button type="button" onClick={() => onSetError(null)} aria-label="Dismiss error" className={NOTICE_DISMISS}>
+                        <X size={14} />
+                      </button>
                     </motion.div>
                   )}
 
@@ -1106,31 +1154,28 @@ export function AppShell({
                     <motion.div
                       key="suggestion-notice"
                       layout
-                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                      transition={{ type: 'spring', bounce: 0.2, duration: 0.35 }}
-                      className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-zinc-700/70 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-200 shadow-2xl shadow-black/50 backdrop-blur-xl"
+                      {...NOTICE_MOTION}
+                      className={NOTICE_CARD}
                     >
-                      <ImageIcon size={16} className="shrink-0 text-zinc-400" />
-                      <span className="min-w-0 flex-1 leading-snug text-zinc-300">{suggestionNotice.message}</span>
+                      <ImageIcon size={16} className="shrink-0 text-accent-400" />
+                      <span className="min-w-0 flex-1 leading-snug">{suggestionNotice.message}</span>
                       <button
                         type="button"
                         onClick={() => {
                           suggestionNotice.onAction();
                           onSetSuggestionNotice(null);
                         }}
-                        className="shrink-0 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
+                        className="shrink-0 rounded-md bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
                       >
                         {suggestionNotice.actionLabel}
                       </button>
                       <button
                         type="button"
                         onClick={() => onSetSuggestionNotice(null)}
-                        className="shrink-0 text-zinc-600 transition-colors hover:text-zinc-300"
+                        className={NOTICE_DISMISS}
                         aria-label="Dismiss suggestion"
                       >
-                        <X size={13} />
+                        <X size={14} />
                       </button>
                     </motion.div>
                   )}
@@ -1138,53 +1183,35 @@ export function AppShell({
               </div>
             </div>
           </ErrorBoundary>
+
+          {tabs.length > 0 && (
+            <ErrorBoundary>
+              <Filmstrip
+                tabs={tabs}
+                activeTabId={activeTabId}
+                selectedIds={filmstripSelectedIds}
+                thumbnails={filmstripThumbnails}
+                getRollById={getRollById}
+                isBusy={isFilmstripBusy || Boolean(isExporting)}
+                onFrameClick={onFilmstripFrameClick}
+                onCloseTab={(tabId) => void onCloseImage(tabId)}
+                onAddImages={() => void onOpenImage()}
+                onReorderTabs={onReorderTabs}
+                onSyncSettings={onSyncSettingsToFrames}
+                onStabilizeCrops={(tabIds) => void onStabilizeSelectedCrops(tabIds)}
+                onExportFrames={(tabIds) => void onExportFrames(tabIds)}
+                onClearSelection={onClearFilmstripSelection}
+                onSyncRollSettings={onSyncRollSettings}
+                onApplyRollFilmBase={onApplyRollFilmBase}
+                onRemoveFromRoll={onRemoveFromRoll}
+                onOpenRollInfo={onOpenRollInfo}
+                collapsed={filmstripCollapsed}
+                onToggleCollapsed={onToggleFilmstrip}
+              />
+            </ErrorBoundary>
+          )}
         </main>
 
-        <AnimatePresence initial={false}>
-          {isRightPaneOpen && (
-            <motion.div
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 320, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
-              className="h-full shrink-0 overflow-hidden border-l border-zinc-800"
-            >
-              <ErrorBoundary>
-                <PresetsPane
-                  activeStockId={documentState?.profileId ?? fallbackProfile.id}
-                  onStockChange={onProfileChange}
-                  builtinProfiles={builtinProfiles}
-                  customPresets={customPresets}
-                  presetFolders={presetFolders}
-                  canSavePreset={Boolean(documentState)}
-                  saveTags={savePresetTags}
-                  onSavePreset={onSavePreset}
-                  onImportPreset={onImportPreset}
-                  onDeletePreset={onDeletePreset}
-                  onCreateFolder={onCreateFolder}
-                  onRenameFolder={onRenameFolder}
-                  onDeleteFolder={onDeleteFolder}
-                  onMovePresetToFolder={onMovePresetToFolder}
-                  onError={onSetError}
-                  rolls={rolls}
-                  activeRoll={activeRoll}
-                  activeTabId={activeTabId}
-                  filmstripTabs={filmstripTabs}
-                  onSelectTab={onSelectTab}
-                  onOpenRollInfo={onOpenRollInfo}
-                  onSyncRollSettings={onSyncRollSettings}
-                  onStabilizeRollCrops={onStabilizeRollCrops}
-                  onRemoveFromRoll={onRemoveFromRoll}
-                  onDeleteRoll={onDeleteRoll}
-                  onCreateRollFromTabs={onCreateRollFromTabs}
-                  onToggleScanningSession={onToggleScanningSession}
-                  usesNativeFileDialogs={usesNativeFileDialogs}
-                  tabs={tabs}
-                />
-              </ErrorBoundary>
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {showMagnifier && (
           <MagnifierLoupe
@@ -1261,10 +1288,6 @@ export function AppShell({
         <BatchModal
           isOpen={showBatchModal}
           onClose={() => onSetShowBatchModal(false)}
-          onOpenContactSheet={(payload) => {
-            flushSync(() => onSetShowBatchModal(false));
-            onOpenContactSheet(payload);
-          }}
           workerClient={workerClient}
           currentSettings={documentState?.settings ?? null}
           currentProfile={documentState ? activeProfile : null}
@@ -1276,21 +1299,6 @@ export function AppShell({
           customProfiles={customPresets}
           openTabs={tabs}
           defaultOutputPath={batchOutputPath}
-        />
-      </ErrorBoundary>
-      <ErrorBoundary>
-        <ContactSheetModal
-          isOpen={showContactSheetModal}
-          onClose={() => onSetShowContactSheetModal(false)}
-          entries={contactSheetEntries}
-          sharedSettings={contactSheetSharedSettings}
-          sharedProfile={contactSheetSharedProfile}
-          sharedLabStyle={contactSheetSharedLabStyle}
-          sharedColorManagement={contactSheetSharedColorManagement}
-          sharedLightSourceBias={contactSheetSharedLightSourceBias}
-          notificationSettings={notificationSettings}
-          workerClient={workerClient}
-          defaultOutputPath={contactSheetOutputPath}
         />
       </ErrorBoundary>
       <ToastHost />

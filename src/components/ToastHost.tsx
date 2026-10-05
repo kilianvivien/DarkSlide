@@ -6,16 +6,16 @@ import { dismissToast, getToasts, subscribeToasts, Toast, ToastLevel } from '../
 const LEVEL_STYLES: Record<ToastLevel, { container: string; iconColor: string; Icon: typeof Info }> = {
   info: {
     container: 'border-zinc-700 bg-zinc-900/95 text-zinc-100',
-    iconColor: 'text-sky-400',
+    iconColor: 'text-zinc-400',
     Icon: Info,
   },
   success: {
-    container: 'border-emerald-800/70 bg-zinc-900/95 text-zinc-100',
+    container: 'border-zinc-700 bg-zinc-900/95 text-zinc-100',
     iconColor: 'text-emerald-400',
     Icon: CheckCircle2,
   },
   warning: {
-    container: 'border-amber-800/70 bg-zinc-900/95 text-zinc-100',
+    container: 'border-zinc-700 bg-zinc-900/95 text-zinc-100',
     iconColor: 'text-amber-400',
     Icon: AlertTriangle,
   },
@@ -48,7 +48,7 @@ function ToastCard({ toast }: { toast: Toast }) {
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: 16, scale: 0.97 }}
+      initial={{ opacity: 0, y: -10, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, x: 12, transition: { duration: 0.15 } }}
       transition={{ type: 'spring', stiffness: 320, damping: 28 }}
@@ -96,7 +96,7 @@ export function ToastHost() {
   }
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex flex-col items-end gap-2">
+    <div className="pointer-events-none fixed right-4 top-[4.25rem] z-[60] flex flex-col items-end gap-2">
       <AnimatePresence initial={false}>
         {toasts.map((toast) => (
           <ToastCard key={toast.id} toast={toast} />

@@ -9,7 +9,8 @@ import {
   confirmDiscard,
   isDesktopShell,
   openDirectory,
-  openImageFile,
+  openImageFolder,
+  openMultipleImageFiles,
   openInExternalEditor,
   saveExportBlob,
   saveExportBlobDetailed,
@@ -24,12 +25,9 @@ import { clamp } from '../utils/math';
 import { computeHighlightDensity, resolveDensityInversionParams } from '../utils/imagePipeline';
 import { getAutoFrameCrop } from '../utils/frameDetection';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
-import { buildProfileSettingsForDocument, createPresetRecipe } from '../utils/presetRecipe';
+import { buildProfileSettingsForDocument, createPresetRecipe, resolveProfileApplication } from '../utils/presetRecipe';
 import { neutralWhiteBalance } from '../utils/autoAnalysis';
 import { rendersMonochrome, usesColorChannelPipeline } from '../utils/pipelineIntent';
-import {
-  BatchJobEntry,
-} from '../utils/batchProcessor';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import {
   ColorManagementSettings,
@@ -38,7 +36,6 @@ import {
   DocumentHistoryEntry,
   DocumentTab,
   FilmProfile,
-  LabStyleProfile,
   LightSourceProfile,
   NotificationSettings,
   PointPickerMode,
@@ -48,6 +45,7 @@ import {
   WorkspaceDocument,
   QuickExportPreset,
   Roll,
+  EditorTool,
 } from '../types';
 import { buildSidecarFile, getSidecarPathForExport, serializeSidecar } from '../utils/sidecarSettings';
 import { sanitizeFilenameBase } from '../utils/imagePipeline';
@@ -119,7 +117,7 @@ type UseWorkspaceCommandsOptions = {
   savePresetTags: string[];
   notificationSettings: NotificationSettings;
   renderBackendDiagnostics: RenderBackendDiagnostics;
-  setSidebarTab: SetState<'adjust' | 'curves' | 'crop' | 'dust' | 'export'>;
+  setSidebarTab: SetState<EditorTool>;
   setCropTab: SetState<CropTab>;
   isPickingFilmBase: boolean;
   activePointPicker: PointPickerMode | null;
@@ -143,6 +141,7 @@ type UseWorkspaceCommandsOptions = {
   tauriWindowRef: MutableRefObject<TauriWindowHandle | null>;
   displayCanvasRef: MutableRefObject<HTMLCanvasElement | null>;
   fileInputRef: MutableRefObject<HTMLInputElement | null>;
+  folderInputRef: MutableRefObject<HTMLInputElement | null>;
   transientNoticeTimeoutRef: MutableRefObject<number | null>;
   tabSwitchOverlayTimeoutRef: MutableRefObject<number | null>;
   openDocument: (document: WorkspaceDocument, options?: { activate?: boolean }) => void;
@@ -180,13 +179,6 @@ type UseWorkspaceCommandsOptions = {
   setIsAdjustingCrop: SetState<boolean>;
   setShowSettingsModal: SetState<boolean>;
   setShowBatchModal: SetState<boolean>;
-  setShowContactSheetModal: SetState<boolean>;
-  setContactSheetEntries: SetState<BatchJobEntry[]>;
-  setContactSheetSharedSettings: SetState<ConversionSettings | null>;
-  setContactSheetSharedProfile: SetState<FilmProfile | null>;
-  setContactSheetSharedLabStyle: SetState<LabStyleProfile | null>;
-  setContactSheetSharedColorManagement: SetState<ColorManagementSettings | null>;
-  setContactSheetSharedLightSourceBias: SetState<[number, number, number] | null>;
   setGPURenderingEnabled: SetState<boolean>;
   setUltraSmoothDragEnabled: SetState<boolean>;
   setNotificationSettings: SetState<NotificationSettings>;
@@ -248,6 +240,7 @@ export function useWorkspaceCommands({
   tauriWindowRef,
   displayCanvasRef,
   fileInputRef,
+  folderInputRef,
   transientNoticeTimeoutRef,
   tabSwitchOverlayTimeoutRef,
   openDocument,
@@ -281,13 +274,6 @@ export function useWorkspaceCommands({
   setIsAdjustingCrop,
   setShowSettingsModal,
   setShowBatchModal,
-  setShowContactSheetModal,
-  setContactSheetEntries,
-  setContactSheetSharedSettings,
-  setContactSheetSharedProfile,
-  setContactSheetSharedLabStyle,
-  setContactSheetSharedColorManagement,
-  setContactSheetSharedLightSourceBias,
   setGPURenderingEnabled,
   setUltraSmoothDragEnabled,
   setNotificationSettings,
@@ -453,17 +439,21 @@ export function useWorkspaceCommands({
     }));
   }, [updateDocument]);
 
-  const handleSidebarTabChange = useCallback((tab: 'adjust' | 'curves' | 'crop' | 'dust' | 'export') => {
+  const handleSidebarTabChange = useCallback((tab: EditorTool) => {
     setSidebarTab(tab);
     setIsCropOverlayVisible((current) => {
-      if (tab !== 'crop' && current) {
+      // The crop tool shows its overlay; leaving it hides the overlay.
+      if (tab === 'crop') {
+        return Boolean(documentState) || current;
+      }
+      if (current) {
         setIsAdjustingCrop(false);
         return false;
       }
       return current;
     });
     savePreferences({ ...prefsSnapshotRef.current, sidebarTab: tab });
-  }, [prefsSnapshotRef, setIsAdjustingCrop, setIsCropOverlayVisible, setSidebarTab]);
+  }, [documentState, prefsSnapshotRef, setIsAdjustingCrop, setIsCropOverlayVisible, setSidebarTab]);
 
   const handleCropDone = useCallback(() => {
     setSidebarTab('adjust');
@@ -745,71 +735,87 @@ export function useWorkspaceCommands({
     zoomToFit,
   ]);
 
-  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    await importFile(file, getNativePathFromFile(file));
-  }, [importFile]);
-
-  const handleOpenImage = useCallback(async () => {
-    if (!usesNativeFileDialogs) {
-      fileInputRef.current?.click();
+  // Opens several scans in a row, up to the number of frames DarkSlide keeps
+  // open, and lands on the first one so a roll reads from its start.
+  const importFiles = useCallback(async (entries: Array<{ file: File; path?: string | null; size?: number }>) => {
+    if (entries.length === 0) {
+      setBlockingOverlay(null);
+      return;
+    }
+    if (entries.length === 1) {
+      const [entry] = entries;
+      await importFile(entry.file, entry.path ?? null, entry.size);
       return;
     }
 
+    const batch = entries.slice(0, MAX_OPEN_TABS);
+    let firstId: string | null = null;
+    for (const entry of batch) {
+      const documentId = await importFile(entry.file, entry.path ?? null, entry.size);
+      firstId ??= documentId;
+    }
+    if (firstId) setActiveTabId(firstId);
+    if (entries.length > batch.length) {
+      // A toast, so frame notices raised by the imports do not replace it.
+      pushToast({
+        level: 'info',
+        title: `Opened the first ${batch.length} of ${entries.length} scans`,
+        message: `DarkSlide keeps ${MAX_OPEN_TABS} frames open at a time. Convert Files and the Contact sheet can take the whole folder.`,
+      });
+    }
+  }, [importFile, setActiveTabId, setBlockingOverlay]);
+
+  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    // A folder pick lists every file in it; keep the scans, in name order.
+    const scans = files.length > 1
+      ? files
+        .filter((file) => isSupportedFile(file) || isRawFile(file))
+        .sort((left, right) => (left.webkitRelativePath || left.name).localeCompare(right.webkitRelativePath || right.name))
+      : files;
+    await importFiles(scans.map((file) => ({ file, path: getNativePathFromFile(file) })));
+  }, [importFiles, isRawFile, isSupportedFile]);
+
+  const openFromDialog = useCallback(async (pick: () => Promise<Array<{ file: File; path: string; size: number }>>) => {
     try {
       flushSync(() => {
         setBlockingOverlay({
           title: 'Preparing import',
-          detail: 'Waiting for the selected file to open.',
+          detail: 'Waiting for the selected scans to open.',
         });
       });
       await waitForNextPaint();
 
-      const result = await openImageFile();
-      if (!result) {
-        setBlockingOverlay(null);
-        return;
-      }
-
-      await importFile(result.file, result.path, result.size);
+      const picked = await pick();
+      await importFiles(picked.map((entry) => ({ file: entry.file, path: entry.path, size: entry.size })));
     } catch (openError) {
       setBlockingOverlay(null);
       const message = formatError(openError);
       appendDiagnostic({ level: 'error', code: 'OPEN_DIALOG_FAILED', message });
       setError(`Could not open file. ${message}`);
     }
-  }, [fileInputRef, formatError, importFile, setBlockingOverlay, setError, usesNativeFileDialogs]);
+  }, [formatError, importFiles, setBlockingOverlay, setError]);
+
+  const handleOpenImage = useCallback(async () => {
+    if (!usesNativeFileDialogs) {
+      fileInputRef.current?.click();
+      return;
+    }
+    await openFromDialog(openMultipleImageFiles);
+  }, [fileInputRef, openFromDialog, usesNativeFileDialogs]);
+
+  const handleOpenFolder = useCallback(async () => {
+    if (!usesNativeFileDialogs) {
+      folderInputRef.current?.click();
+      return;
+    }
+    await openFromDialog(openImageFolder);
+  }, [folderInputRef, openFromDialog, usesNativeFileDialogs]);
 
   const handleOpenBatchExport = useCallback(() => {
     setShowBatchModal(true);
   }, [setShowBatchModal]);
-
-  const handleOpenContactSheet = useCallback((payload: {
-    entries: BatchJobEntry[];
-    sharedSettings: ConversionSettings;
-    sharedProfile: FilmProfile;
-    sharedLabStyle: LabStyleProfile | null;
-    sharedColorManagement: ColorManagementSettings;
-    sharedLightSourceBias: [number, number, number] | null;
-  }) => {
-    setContactSheetEntries(payload.entries);
-    setContactSheetSharedSettings(payload.sharedSettings);
-    setContactSheetSharedProfile(payload.sharedProfile);
-    setContactSheetSharedLabStyle(payload.sharedLabStyle);
-    setContactSheetSharedColorManagement(payload.sharedColorManagement);
-    setContactSheetSharedLightSourceBias(payload.sharedLightSourceBias);
-    setShowContactSheetModal(true);
-  }, [
-    setContactSheetEntries,
-    setContactSheetSharedColorManagement,
-    setContactSheetSharedLabStyle,
-    setContactSheetSharedLightSourceBias,
-    setContactSheetSharedProfile,
-    setContactSheetSharedSettings,
-    setShowContactSheetModal,
-  ]);
 
   const handleGPURenderingChange = useCallback((enabled: boolean) => {
     setGPURenderingEnabled(enabled);
@@ -834,15 +840,7 @@ export function useWorkspaceCommands({
   }, [activeTabId, refreshRenderBackendDiagnostics, setMaxResidentDocs, workerClientRef]);
 
   const handleProfileChange = useCallback((profile: FilmProfile) => {
-    const nextLightSourceId = Object.prototype.hasOwnProperty.call(profile, 'lightSourceId')
-      ? (profile.lightSourceId ?? null)
-      : undefined;
-
-    const nextLabStyleId = Object.prototype.hasOwnProperty.call(profile, 'labStyleId')
-      ? (profile.labStyleId ?? null)
-      : undefined;
-
-    const nextSettings = buildProfileSettingsForDocument(profile, documentState);
+    const { settings: nextSettings, lightSourceId, labStyleId } = resolveProfileApplication(profile, documentState);
     appendDiagnostic({
       level: 'info',
       code: 'PRESET_APPLIED',
@@ -861,15 +859,12 @@ export function useWorkspaceCommands({
     updateDocument((current) => ({
       ...current,
       profileId: profile.id,
-      lightSourceId: nextLightSourceId !== undefined
-        ? nextLightSourceId
-        : resolveLightSourceIdForProfile(profile, current.lightSourceId),
+      lightSourceId,
       settings: nextSettings,
-      ...(nextLabStyleId !== undefined ? { labStyleId: nextLabStyleId } : {}),
+      labStyleId,
       dirty: true,
     }));
-    const resolvedLabStyleId = nextLabStyleId !== undefined ? nextLabStyleId : (documentState?.labStyleId ?? null);
-    resetHistory(createHistoryEntry(nextSettings, resolvedLabStyleId));
+    resetHistory(createHistoryEntry(nextSettings, labStyleId));
     savePreferences({ ...prefsSnapshotRef.current, lastProfileId: profile.id });
   }, [documentState, prefsSnapshotRef, resetHistory, updateDocument]);
 
@@ -1404,7 +1399,11 @@ export function useWorkspaceCommands({
           const luminance = Math.round(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b);
           handleSettingsChange({ whitePoint: clamp(luminance, 180, 255) });
         } else if (activePointPicker === 'grey') {
-          handleSettingsChange(neutralWhiteBalance(sample, activeLabStyle?.temperatureBias ?? 0));
+          handleSettingsChange(neutralWhiteBalance(
+            sample,
+            activeLabStyle?.temperatureBias ?? 0,
+            documentState.colorManagement.outputProfileId,
+          ));
         }
 
         setActivePointPicker(null);
@@ -1513,10 +1512,8 @@ export function useWorkspaceCommands({
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const files = Array.from(event.dataTransfer.files ?? []);
-    for (const file of files) {
-      await importFile(file, getNativePathFromFile(file));
-    }
-  }, [importFile]);
+    await importFiles(files.map((file) => ({ file, path: getNativePathFromFile(file) })));
+  }, [importFiles]);
 
   const handleSelectTab = useCallback((tabId: string) => {
     setActiveTabId(tabId);
@@ -1555,8 +1552,8 @@ export function useWorkspaceCommands({
     handleCloseImage,
     handleFileChange,
     handleOpenImage,
+    handleOpenFolder,
     handleOpenBatchExport,
-    handleOpenContactSheet,
     handleGPURenderingChange,
     handleUltraSmoothDragChange,
     handleMaxResidentDocsChange,
