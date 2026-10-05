@@ -9,7 +9,8 @@ import {
   confirmDiscard,
   isDesktopShell,
   openDirectory,
-  openImageFile,
+  openImageFolder,
+  openMultipleImageFiles,
   openInExternalEditor,
   saveExportBlob,
   saveExportBlobDetailed,
@@ -140,6 +141,7 @@ type UseWorkspaceCommandsOptions = {
   tauriWindowRef: MutableRefObject<TauriWindowHandle | null>;
   displayCanvasRef: MutableRefObject<HTMLCanvasElement | null>;
   fileInputRef: MutableRefObject<HTMLInputElement | null>;
+  folderInputRef: MutableRefObject<HTMLInputElement | null>;
   transientNoticeTimeoutRef: MutableRefObject<number | null>;
   tabSwitchOverlayTimeoutRef: MutableRefObject<number | null>;
   openDocument: (document: WorkspaceDocument, options?: { activate?: boolean }) => void;
@@ -238,6 +240,7 @@ export function useWorkspaceCommands({
   tauriWindowRef,
   displayCanvasRef,
   fileInputRef,
+  folderInputRef,
   transientNoticeTimeoutRef,
   tabSwitchOverlayTimeoutRef,
   openDocument,
@@ -732,42 +735,83 @@ export function useWorkspaceCommands({
     zoomToFit,
   ]);
 
-  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    await importFile(file, getNativePathFromFile(file));
-  }, [importFile]);
-
-  const handleOpenImage = useCallback(async () => {
-    if (!usesNativeFileDialogs) {
-      fileInputRef.current?.click();
+  // Opens several scans in a row, up to the number of frames DarkSlide keeps
+  // open, and lands on the first one so a roll reads from its start.
+  const importFiles = useCallback(async (entries: Array<{ file: File; path?: string | null; size?: number }>) => {
+    if (entries.length === 0) {
+      setBlockingOverlay(null);
+      return;
+    }
+    if (entries.length === 1) {
+      const [entry] = entries;
+      await importFile(entry.file, entry.path ?? null, entry.size);
       return;
     }
 
+    const batch = entries.slice(0, MAX_OPEN_TABS);
+    let firstId: string | null = null;
+    for (const entry of batch) {
+      const documentId = await importFile(entry.file, entry.path ?? null, entry.size);
+      firstId ??= documentId;
+    }
+    if (firstId) setActiveTabId(firstId);
+    if (entries.length > batch.length) {
+      // A toast, so frame notices raised by the imports do not replace it.
+      pushToast({
+        level: 'info',
+        title: `Opened the first ${batch.length} of ${entries.length} scans`,
+        message: `DarkSlide keeps ${MAX_OPEN_TABS} frames open at a time. Convert Files and the Contact sheet can take the whole folder.`,
+      });
+    }
+  }, [importFile, setActiveTabId, setBlockingOverlay]);
+
+  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    // A folder pick lists every file in it; keep the scans, in name order.
+    const scans = files.length > 1
+      ? files
+        .filter((file) => isSupportedFile(file) || isRawFile(file))
+        .sort((left, right) => (left.webkitRelativePath || left.name).localeCompare(right.webkitRelativePath || right.name))
+      : files;
+    await importFiles(scans.map((file) => ({ file, path: getNativePathFromFile(file) })));
+  }, [importFiles, isRawFile, isSupportedFile]);
+
+  const openFromDialog = useCallback(async (pick: () => Promise<Array<{ file: File; path: string; size: number }>>) => {
     try {
       flushSync(() => {
         setBlockingOverlay({
           title: 'Preparing import',
-          detail: 'Waiting for the selected file to open.',
+          detail: 'Waiting for the selected scans to open.',
         });
       });
       await waitForNextPaint();
 
-      const result = await openImageFile();
-      if (!result) {
-        setBlockingOverlay(null);
-        return;
-      }
-
-      await importFile(result.file, result.path, result.size);
+      const picked = await pick();
+      await importFiles(picked.map((entry) => ({ file: entry.file, path: entry.path, size: entry.size })));
     } catch (openError) {
       setBlockingOverlay(null);
       const message = formatError(openError);
       appendDiagnostic({ level: 'error', code: 'OPEN_DIALOG_FAILED', message });
       setError(`Could not open file. ${message}`);
     }
-  }, [fileInputRef, formatError, importFile, setBlockingOverlay, setError, usesNativeFileDialogs]);
+  }, [formatError, importFiles, setBlockingOverlay, setError]);
+
+  const handleOpenImage = useCallback(async () => {
+    if (!usesNativeFileDialogs) {
+      fileInputRef.current?.click();
+      return;
+    }
+    await openFromDialog(openMultipleImageFiles);
+  }, [fileInputRef, openFromDialog, usesNativeFileDialogs]);
+
+  const handleOpenFolder = useCallback(async () => {
+    if (!usesNativeFileDialogs) {
+      folderInputRef.current?.click();
+      return;
+    }
+    await openFromDialog(openImageFolder);
+  }, [folderInputRef, openFromDialog, usesNativeFileDialogs]);
 
   const handleOpenBatchExport = useCallback(() => {
     setShowBatchModal(true);
@@ -1468,10 +1512,8 @@ export function useWorkspaceCommands({
   const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const files = Array.from(event.dataTransfer.files ?? []);
-    for (const file of files) {
-      await importFile(file, getNativePathFromFile(file));
-    }
-  }, [importFile]);
+    await importFiles(files.map((file) => ({ file, path: getNativePathFromFile(file) })));
+  }, [importFiles]);
 
   const handleSelectTab = useCallback((tabId: string) => {
     setActiveTabId(tabId);
@@ -1510,6 +1552,7 @@ export function useWorkspaceCommands({
     handleCloseImage,
     handleFileChange,
     handleOpenImage,
+    handleOpenFolder,
     handleOpenBatchExport,
     handleGPURenderingChange,
     handleUltraSmoothDragChange,

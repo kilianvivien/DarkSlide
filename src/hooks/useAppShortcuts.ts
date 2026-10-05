@@ -17,6 +17,7 @@ type UseAppShortcutsOptions = {
   onUndo: () => void;
   onRedo: () => void;
   onOpenImage: () => Promise<void>;
+  onOpenFolder: () => Promise<void>;
   onOpenRecentFile: (file: File, path: string, size?: number) => Promise<string | null>;
   onOpenFilesByPath: (paths: string[]) => Promise<void>;
   onOpenInEditor: () => Promise<void>;
@@ -61,6 +62,7 @@ export function useAppShortcuts({
   onUndo,
   onRedo,
   onOpenImage,
+  onOpenFolder,
   onOpenRecentFile,
   onOpenFilesByPath,
   onOpenInEditor,
@@ -174,6 +176,9 @@ previousTab: {
       switch (action) {
         case 'open':
           void onOpenImage();
+          break;
+        case 'open-folder':
+          void onOpenFolder();
           break;
         case 'export':
           void onDownload();

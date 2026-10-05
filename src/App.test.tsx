@@ -727,6 +727,12 @@ describe('App import and preview pipeline', () => {
     fileBridgeState.openImageFileByPath.mockReset();
     fileBridgeState.openImageFolder.mockReset();
     fileBridgeState.openMultipleImageFiles.mockReset();
+    // Import opens the multi-select dialog; most tests script a single pick
+    // through openImageFile.
+    fileBridgeState.openMultipleImageFiles.mockImplementation(async () => {
+      const picked = await fileBridgeState.openImageFile();
+      return picked ? [picked] : [];
+    });
     fileBridgeState.openPresetBackupFile.mockReset();
     fileBridgeState.openDirectory.mockReset();
     fileBridgeState.openInExternalEditor.mockReset();
@@ -4094,6 +4100,74 @@ describe('App import and preview pipeline', () => {
     expect(drawImage).toHaveBeenCalledTimes(1);
     expect((drawImage.mock.calls[0]?.[0] as { width: number }).width).toBe(80);
     expect((drawImage.mock.calls[0]?.[0] as { height: number }).height).toBe(60);
+  });
+
+  it('imports several scans from one pick and lands on the first', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openMultipleImageFiles.mockResolvedValue([
+      { file: createFile('roll-01.tiff', 'image/tiff'), path: '/scans/roll-01.tiff', size: 12 },
+      { file: createFile('roll-02.tiff', 'image/tiff'), path: '/scans/roll-02.tiff', size: 12 },
+    ]);
+    workerState.decode
+      .mockResolvedValueOnce(createDecodedImage(640, 480))
+      .mockResolvedValueOnce(createDecodedImage(320, 240));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    render(<App />);
+    await act(async () => {
+      fireEvent.click(screen.getByText('Import'));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.decode).toHaveBeenCalledTimes(2);
+    const frames = screen.getAllByRole('button', { name: /^Frame \d+:/ });
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('imports a folder up to the open-frame limit and says what was left out', async () => {
+    fileBridgeState.isDesktopShell.mockReturnValue(true);
+    fileBridgeState.openImageFolder.mockResolvedValue(Array.from({ length: 10 }, (_, index) => ({
+      file: createFile(`frame-${String(index + 1).padStart(2, '0')}.tiff`, 'image/tiff'),
+      path: `/scans/frame-${index + 1}.tiff`,
+      size: 12,
+    })));
+    workerState.decode.mockResolvedValue(createDecodedImage(64, 48));
+    workerState.render.mockImplementation(async (payload: { documentId: string; revision: number }) => (
+      createRenderResult(payload.documentId, payload.revision, 64, 48)
+    ));
+
+    const { subscribeToasts } = await import('./utils/toastStore');
+    const toastTitles = new Set<string>();
+    const unsubscribe = subscribeToasts((toasts) => toasts.forEach((toast) => toastTitles.add(toast.title)));
+
+    render(<App />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Import a folder' }));
+    });
+    await flushMicrotasks();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    await flushMicrotasks();
+
+    expect(workerState.decode).toHaveBeenCalledTimes(8);
+    expect(screen.getAllByRole('button', { name: /^Frame \d+:/ })).toHaveLength(8);
+    // The last import settles after its first render.
+    for (let step = 0; step < 5; step += 1) {
+      await act(async () => {
+        vi.runOnlyPendingTimers();
+      });
+      await flushMicrotasks();
+    }
+    unsubscribe();
+    expect(toastTitles).toContain('Opened the first 8 of 10 scans');
   });
 
   it('opens files through the native dialog when running in the desktop shell', async () => {

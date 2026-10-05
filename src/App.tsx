@@ -202,6 +202,7 @@ export default function App() {
   const [defaultImportPresetId, setDefaultImportPresetId] = useState<string | null>(() => initialPreferences?.autoApplyPresetId ?? null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const workerClientRef = useRef<ImageWorkerClient | null>(null);
@@ -1855,6 +1856,7 @@ export default function App() {
     handleCloseImage,
     handleFileChange,
     handleOpenImage,
+    handleOpenFolder,
     handleOpenBatchExport,
     handleGPURenderingChange,
     handleUltraSmoothDragChange,
@@ -1924,6 +1926,7 @@ export default function App() {
     tauriWindowRef,
     displayCanvasRef,
     fileInputRef,
+    folderInputRef,
     transientNoticeTimeoutRef,
     tabSwitchOverlayTimeoutRef,
     openDocument,
@@ -3265,6 +3268,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onUndo: handleUndo,
     onRedo: handleRedo,
     onOpenImage: handleOpenImage,
+    onOpenFolder: handleOpenFolder,
     onOpenRecentFile: importFile,
     onOpenFilesByPath: handleOpenFilesByPath,
     onOpenInEditor: async () => { await handleOpenInEditor(); },
@@ -3404,6 +3408,8 @@ onToggleScanningSession: toggleScanningWindow,
       onSetTransientNotice={setTransientNotice}
       onSetError={setError}
       onOpenImage={handleOpenImage}
+      onOpenFolder={handleOpenFolder}
+      folderInputRef={folderInputRef}
       onCloseImage={handleCloseImage}
       onUndo={handleUndo}
       onRedo={handleRedo}

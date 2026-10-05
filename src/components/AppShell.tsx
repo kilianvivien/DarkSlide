@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Download,
   ExternalLink,
+  FolderOpen,
   Image as ImageIcon,
   Info,
   Loader2,
@@ -179,6 +180,8 @@ type AppShellProps = {
   onSetTransientNotice: React.Dispatch<React.SetStateAction<TransientNoticeState | null>>;
   onSetError: React.Dispatch<React.SetStateAction<string | null>>;
   onOpenImage: () => Promise<void>;
+  onOpenFolder: () => Promise<void>;
+  folderInputRef: React.RefObject<HTMLInputElement | null>;
   onCloseImage: (requestedTabId?: string | null) => Promise<void>;
   onUndo: () => void;
   onRedo: () => void;
@@ -409,6 +412,8 @@ export function AppShell({
   onSetTransientNotice,
   onSetError,
   onOpenImage,
+  onOpenFolder,
+  folderInputRef,
   onCloseImage,
   onUndo,
   onRedo,
@@ -814,21 +819,45 @@ export function AppShell({
                   </button>
                 </>
               )}
-              <button
-                onClick={() => void onOpenImage()}
-                className={`${HEADER_BUTTON} border-zinc-700/60 bg-zinc-800 text-zinc-200 hover:border-zinc-600 hover:bg-zinc-700`}
-              >
-                <Upload size={16} className="shrink-0" />
-                <span className="whitespace-nowrap">Import</span>
-              </button>
+              <div className="inline-flex h-9 min-w-[8.5rem] items-stretch overflow-hidden rounded-lg border border-zinc-700/60 bg-zinc-800 text-sm font-medium text-zinc-200">
+                <button
+                  type="button"
+                  onClick={() => void onOpenImage()}
+                  data-tip="Import scans, several at once (⌘O)"
+                  className="flex flex-1 items-center justify-center gap-2 pl-4 pr-3 transition-colors hover:bg-zinc-700"
+                >
+                  <Upload size={16} className="shrink-0" />
+                  <span className="whitespace-nowrap">Import</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onOpenFolder()}
+                  aria-label="Import a folder"
+                  data-tip="Import a folder"
+                  className="flex w-9 items-center justify-center border-l border-zinc-700/60 text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+                >
+                  <FolderOpen size={15} />
+                </button>
+              </div>
               {!usesNativeFileDialogs && (
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={(event) => { void onFileChange(event); }}
-                  accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff"
-                  className="hidden"
-                />
+                <>
+                  <input
+                    type="file"
+                    multiple
+                    ref={fileInputRef}
+                    onChange={(event) => { void onFileChange(event); }}
+                    accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff"
+                    className="hidden"
+                  />
+                  <input
+                    type="file"
+                    multiple
+                    ref={folderInputRef}
+                    onChange={(event) => { void onFileChange(event); }}
+                    className="hidden"
+                    {...{ webkitdirectory: '' }}
+                  />
+                </>
               )}
             </div>
           </header>
@@ -885,12 +914,21 @@ export function AppShell({
                     </div>
                     <h2 className="mb-3 text-2xl font-semibold tracking-tight text-zinc-200">Drop your negatives here</h2>
                     <p className="mb-8 text-sm leading-relaxed text-zinc-500">Import TIFF, JPEG, or PNG scans, plus RAW files in the desktop app.</p>
-                    <button
-                      onClick={() => void onOpenImage()}
-                      className="rounded-2xl bg-zinc-100 px-8 py-3 font-semibold text-zinc-950 shadow-xl shadow-black/40 transition-all hover:bg-white"
-                    >
-                      Select Files
-                    </button>
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        onClick={() => void onOpenImage()}
+                        className="rounded-2xl bg-zinc-100 px-8 py-3 font-semibold text-zinc-950 shadow-xl shadow-black/40 transition-all hover:bg-white"
+                      >
+                        Select Files
+                      </button>
+                      <button
+                        onClick={() => void onOpenFolder()}
+                        className="flex items-center gap-2 rounded-2xl border border-zinc-700/70 bg-zinc-900 px-6 py-3 font-semibold text-zinc-200 transition-all hover:border-zinc-600 hover:bg-zinc-800"
+                      >
+                        <FolderOpen size={17} />
+                        Select Folder
+                      </button>
+                    </div>
                     <RecentFilesList
                       onImport={(file, path, size) => void onRecentImport(file, path, size)}
                       onOpenPicker={() => void onOpenImage()}

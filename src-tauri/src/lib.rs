@@ -698,6 +698,8 @@ pub fn run() {
             let import_item = MenuItemBuilder::with_id("open", "Import...")
                 .accelerator("CmdOrCtrl+O")
                 .build(app)?;
+            let import_folder_item =
+                MenuItemBuilder::with_id("open-folder", "Import Folder...").build(app)?;
             let export_item = MenuItemBuilder::with_id("export", "Export...")
                 .accelerator("CmdOrCtrl+E")
                 .build(app)?;
@@ -771,6 +773,7 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
 
             let file_menu = SubmenuBuilder::new(app, "File")
                 .item(&import_item)
+                .item(&import_folder_item)
                 .item(&recent_submenu)
                 .separator()
                 .item(&export_item)
