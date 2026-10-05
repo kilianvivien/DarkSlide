@@ -106,6 +106,13 @@ body {
 
 .custom-scrollbar::-webkit-scrollbar {
   width: 4px;
+  /* height sizes horizontal scrollbars (the filmstrip); without it they
+     fall back to the platform's thick default. */
+  height: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
