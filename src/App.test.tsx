@@ -1385,9 +1385,10 @@ describe('App import and preview pipeline', () => {
     };
     expect(latestRenderCall.settings.filmBaseSample).toBeNull();
     expect(latestRenderCall.settings.exposure).toBe(0);
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12);
+    // Built-in profiles' channel gains are dropped for camera-native RAW.
+    expect(latestRenderCall.settings.redBalance).toBe(1);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9);
+    expect(latestRenderCall.settings.blueBalance).toBe(1);
     expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
@@ -1496,9 +1497,10 @@ describe('App import and preview pipeline', () => {
     // The flat {76,73,68} frame is a dim negative whose luminance is below the
     // clear-base plausibility floor, so the estimator refuses it and startup
     // keeps neutral stock white balance instead of a distrusted border tilt.
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12);
+    // Built-in profiles' channel gains are dropped for camera-native RAW.
+    expect(latestRenderCall.settings.redBalance).toBe(1);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9);
+    expect(latestRenderCall.settings.blueBalance).toBe(1);
     expect(latestRenderCall.settings.rotation).toBe(90);
   });
 
@@ -1675,8 +1677,8 @@ describe('App import and preview pipeline', () => {
     // {89,105,55} is a dim flat frame below the clear-base plausibility floor,
     // so the low-confidence estimate does not seed white balance; the roll's
     // stock profile balances are preserved neutral.
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.16);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.86);
+    expect(latestRenderCall.settings.redBalance).toBe(1);
+    expect(latestRenderCall.settings.blueBalance).toBe(1);
   });
 
   it('keeps the first RAW preset switch self-consistent while the import preview render is still in flight', async () => {
@@ -1758,8 +1760,8 @@ describe('App import and preview pipeline', () => {
       saturation: 108,
       temperature: 1,
       tint: -1,
-      redBalance: 1.1,
-      blueBalance: 0.96,
+      redBalance: 1,
+      blueBalance: 1,
       blackPoint: 7,
       highlightProtection: 38,
       filmBaseSample: null,
@@ -1847,9 +1849,10 @@ describe('App import and preview pipeline', () => {
     // The flat {76,73,68} frame is a dim negative whose luminance is below the
     // clear-base plausibility floor, so the estimator refuses it and startup
     // keeps neutral stock white balance instead of a distrusted border tilt.
-    expect(latestRenderCall.settings.redBalance).toBeCloseTo(1.12);
+    // Built-in profiles' channel gains are dropped for camera-native RAW.
+    expect(latestRenderCall.settings.redBalance).toBe(1);
     expect(latestRenderCall.settings.greenBalance).toBe(1);
-    expect(latestRenderCall.settings.blueBalance).toBeCloseTo(0.9);
+    expect(latestRenderCall.settings.blueBalance).toBe(1);
     expect(latestRenderCall.settings.blackPoint).toBe(8);
     expect(latestRenderCall.settings.whitePoint).toBe(245);
     expect(latestRenderCall.settings.temperature).toBe(0);
@@ -2055,8 +2058,8 @@ describe('App import and preview pipeline', () => {
       saturation: 108,
       temperature: 1,
       tint: -1,
-      redBalance: 1.1,
-      blueBalance: 0.96,
+      redBalance: 1,
+      blueBalance: 1,
       blackPoint: 7,
       highlightProtection: 38,
       filmBaseSample: null,

@@ -1,4 +1,4 @@
-import { createDefaultSettings, FILM_STOCK_DENSITY_PRESETS, resolveLightSourceIdForProfile } from '../constants';
+import { createDefaultSettings, FILM_PROFILES, FILM_STOCK_DENSITY_PRESETS, resolveLightSourceIdForProfile } from '../constants';
 import type { ConversionSettings, FilmProfile, ScannerType, WorkspaceDocument } from '../types';
 import { isRawWorkspaceDocument } from './pipelineIntent';
 
@@ -12,12 +12,27 @@ export function preserveProfileCalibration(settings: ConversionSettings, profile
   };
 }
 
+const BUILTIN_PROFILE_IDS = new Set(FILM_PROFILES.map((profile) => profile.id));
+
+// The built-in profiles' red/green/blue balances were tuned on RAW decoded
+// through the camera matrix with a fixed stock density preset. A RAW is now
+// inverted in camera-native RGB with a density balance measured on the scan,
+// and stacking those gains on top of it tinted every frame warm. A preset the
+// user saved keeps the balances they chose.
+export function withCameraRawChannelGains(settings: ConversionSettings, profile: Pick<FilmProfile, 'id'>): ConversionSettings {
+  if (!BUILTIN_PROFILE_IDS.has(profile.id)) {
+    return settings;
+  }
+  return { ...settings, redBalance: 1, greenBalance: 1, blueBalance: 1 };
+}
+
 export function buildProfileSettingsForDocument(profile: FilmProfile, document: WorkspaceDocument | null) {
   const rawProfile = document?.rawImportProfile;
   const isRawStartup = Boolean(rawProfile && profile.id === rawProfile.id);
-  const next = createDefaultSettings(structuredClone(isRawStartup ? rawProfile!.defaultSettings : profile.defaultSettings));
+  let next = createDefaultSettings(structuredClone(isRawStartup ? rawProfile!.defaultSettings : profile.defaultSettings));
 
   if (document && isRawWorkspaceDocument(document) && !isRawStartup) {
+    next = withCameraRawChannelGains(next, profile);
     // An automatic estimate stays in worker analysis, with its confidence.
     // Only an explicitly picked/shared reference can be carried forward.
     if ((profile.filmType ?? 'negative') === 'negative') {

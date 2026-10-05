@@ -35,6 +35,7 @@ const DENSITY_BALANCE_CLAMP_HIGH = 2;
 const DENSITY_BALANCE_MAX_TRANSMITTANCE_RATIO = 10 ** -3;
 const DENSITY_BALANCE_MIN_LINEAR = 1e-5;
 const DENSITY_BALANCE_MIN_SPREAD = 0.05;
+const CAMERA_MEASURED_MAX_OFFSET = 0.05;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -221,6 +222,29 @@ export function selectPreviewLevel(levels: PreviewLevel[], targetMaxDimension: n
 function applyWhiteBlackPoint(value: number, blackPoint: number, whitePoint: number) {
   const range = Math.max(1 / 255, whitePoint - blackPoint);
   return (value - blackPoint) / range;
+}
+
+// A RAW decoded in camera-native RGB carries its camera -> sRGB matrix, which
+// runs on the inverted positive before the profile's own matrix: P * C.
+export function composeCameraColorMatrix(
+  profileMatrix: ColorMatrix | undefined,
+  cameraMatrix: ColorMatrix | null | undefined,
+): ColorMatrix | undefined {
+  if (!cameraMatrix) {
+    return profileMatrix;
+  }
+  if (!profileMatrix) {
+    return cameraMatrix;
+  }
+  const result = new Array<number>(9);
+  for (let row = 0; row < 3; row += 1) {
+    for (let column = 0; column < 3; column += 1) {
+      result[row * 3 + column] = profileMatrix[row * 3] * cameraMatrix[column]
+        + profileMatrix[row * 3 + 1] * cameraMatrix[3 + column]
+        + profileMatrix[row * 3 + 2] * cameraMatrix[6 + column];
+    }
+  }
+  return result as ColorMatrix;
 }
 
 function applyColorMatrix(
@@ -572,6 +596,31 @@ function sampleChannelToDensity(
   return -Math.log10(clamp(decodeProfileChannel(outputProfileId, corrected), DENSITY_EPSILON, 1));
 }
 
+// Apply a camera-measured balance's thin-end offsets by moving each channel's
+// density zero point: (D - base) * scale + offset == (D - (base - offset /
+// scale)) * scale, so preview, GPU and export all pick it up through the base
+// density. The offsets were measured against the estimated base; when the
+// user picked another base they are re-referenced to it. Damped to a small
+// range because a frame dominated by one colour (a sky) biases them.
+function applyCameraMeasuredOffsets(
+  baseDensity: [number, number, number],
+  balance: DensityBalance,
+  estimateBaseDensity: [number, number, number] | null,
+) {
+  const scales = [balance.scaleR, balance.scaleG, balance.scaleB];
+  const offsets = [balance.offsetR, 0, balance.offsetB];
+  for (const channel of [0, 2]) {
+    let offset = offsets[channel];
+    if (offset === undefined || !Number.isFinite(offset)) continue;
+    if (estimateBaseDensity) {
+      offset += scales[channel] * (baseDensity[channel] - estimateBaseDensity[channel])
+        - (baseDensity[1] - estimateBaseDensity[1]);
+    }
+    offset = clamp(offset, -CAMERA_MEASURED_MAX_OFFSET, CAMERA_MEASURED_MAX_OFFSET);
+    baseDensity[channel] -= offset / Math.max(scales[channel], DENSITY_EPSILON);
+  }
+}
+
 export function resolveDensityInversionParams(
   settings: Pick<ConversionSettings, 'filmBaseSample' | 'filmBaseSampleSource' | 'flareCorrection'>
     & Partial<Pick<ConversionSettings, 'blackAndWhite' | 'densityBalance' | 'filmBaseSampleProfileId'>>,
@@ -641,6 +690,19 @@ export function resolveDensityInversionParams(
   // A monochrome render has no dye-layer contrast mismatch to normalize —
   // per-channel density scales only tilt the channels feeding the B&W mix.
   const densityBalance = resolveDensityBalance(isColor && !monochrome, profileId, estimatedDensityBalance, settings.densityBalance);
+  if (densityBalance.source === 'camera-measured' && convertedEstimate && resolvedSample) {
+    applyCameraMeasuredOffsets(
+      baseDensity,
+      densityBalance,
+      resolvedSample === convertedEstimate
+        ? null
+        : [
+          sampleChannelToDensity(convertedEstimate.r, outputProfileId, flareFloorNormalized[0], flareStrength, lightSourceBias[0]),
+          sampleChannelToDensity(convertedEstimate.g, outputProfileId, flareFloorNormalized[1], flareStrength, lightSourceBias[1]),
+          sampleChannelToDensity(convertedEstimate.b, outputProfileId, flareFloorNormalized[2], flareStrength, lightSourceBias[2]),
+        ],
+    );
+  }
   const densityScaleLowConfidence = isColor && !monochrome && densityBalance.source === 'clamp-rejected';
 
   // Below the reject gate (or an explicitly refused estimate) the evidence is
@@ -880,11 +942,21 @@ function computeRasterDensityBalance(
     return { scaleR: 1, scaleG: 1, scaleB: 1, source: 'clamp-rejected' };
   }
 
+  const scaleR = clamp(rawScaleR, DENSITY_BALANCE_CLAMP_LOW, DENSITY_BALANCE_CLAMP_HIGH);
+  const scaleB = clamp(rawScaleB, DENSITY_BALANCE_CLAMP_LOW, DENSITY_BALANCE_CLAMP_HIGH);
+  // Scaling around the base leaves whatever constant density the channels
+  // disagree by at the thin end (a per-channel toe or a base estimate a little
+  // off per channel). Record the offset that lines the thin band up with
+  // green after scaling; it is relative to `filmBaseSample` and only applied,
+  // damped, to camera-measured balances (see resolveDensityInversionParams).
+  const lowG = bandMean(densitiesG, 0.05, 0.25);
   return {
-    scaleR: clamp(rawScaleR, DENSITY_BALANCE_CLAMP_LOW, DENSITY_BALANCE_CLAMP_HIGH),
+    scaleR,
     scaleG: 1,
-    scaleB: clamp(rawScaleB, DENSITY_BALANCE_CLAMP_LOW, DENSITY_BALANCE_CLAMP_HIGH),
+    scaleB,
     source: 'auto-histogram',
+    offsetR: lowG - scaleR * bandMean(densitiesR, 0.05, 0.25),
+    offsetB: lowG - scaleB * bandMean(densitiesB, 0.05, 0.25),
   };
 }
 

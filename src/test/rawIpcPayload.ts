@@ -7,25 +7,29 @@ export function rawIpcPayload({
   data,
   bitDepth,
   orientation,
+  cameraColorMatrix,
 }: {
   width: number;
   height: number;
   data: ArrayLike<number>;
   bitDepth?: number;
   orientation?: number | null;
+  cameraColorMatrix?: number[] | null;
   [key: string]: unknown;
 }): ArrayBuffer {
-  const header = 32;
+  const header = 68;
   const buffer = new ArrayBuffer(header + data.length * 2);
   const bytes = new Uint8Array(buffer);
   bytes.set(Array.from('DSRIPC01', (char) => char.charCodeAt(0)), 0);
   const view = new DataView(buffer);
-  view.setUint16(8, 1, true);
+  view.setUint16(8, 2, true);
   view.setUint16(10, 16, true);
   view.setUint32(12, width, true);
   view.setUint32(16, height, true);
   view.setUint16(20, orientation ?? 0, true);
+  view.setUint8(23, cameraColorMatrix ? 1 : 0);
   view.setBigUint64(24, BigInt(data.length), true);
+  cameraColorMatrix?.forEach((value, index) => view.setFloat32(32 + index * 4, value, true));
   const scale = bitDepth === 16 ? 1 : 257;
   for (let index = 0; index < data.length; index += 1) {
     view.setUint16(header + index * 2, Math.min(65535, Math.round(data[index] * scale)), true);

@@ -21,6 +21,7 @@ import { appendDiagnostic } from '../utils/diagnostics';
 import { pushToast } from '../utils/toastStore';
 import { addRecentFile } from '../utils/recentFilesStore';
 import { getFileExtension, sanitizeFilenameBase } from '../utils/imagePipeline';
+import { withCameraRawChannelGains } from '../utils/presetRecipe';
 import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences } from '../utils/preferenceStore';
 import { confirmRestoreSidecar, isDesktopShell, readTextFileByPath } from '../utils/fileBridge';
 import {
@@ -337,16 +338,19 @@ export function useFileImport({
           const estimatedFilmBase = estimatedFilmBaseEstimate?.sample
             ?? decodeRequest.precomputedFilmBaseSample
             ?? null;
-          const rawStartupSettings = createDefaultSettings(buildRawInitialSettings(
+          const rawStartupSettings = withCameraRawChannelGains(createDefaultSettings(buildRawInitialSettings(
             rawStartupProfile.defaultSettings,
             rawResult.data,
             rawResult.width,
             rawResult.height,
             rawResult.orientation,
             estimatedFilmBaseEstimate ?? estimatedFilmBase,
-          ));
+          )), rawStartupProfile);
           if (preferredImportProfile) {
-            const preferredSettings = createDefaultSettings(structuredClone(activeImportProfile.defaultSettings));
+            const preferredSettings = withCameraRawChannelGains(
+              createDefaultSettings(structuredClone(activeImportProfile.defaultSettings)),
+              activeImportProfile,
+            );
             initialSettings = {
               ...preferredSettings,
               rotation: rotationFromExifOrientation(rawResult.orientation),

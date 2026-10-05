@@ -1,5 +1,5 @@
 import { FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
-import { ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
+import { ColorMatrix, ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
 import { getColorProfileIdFromName } from './colorProfiles';
 import { clamp } from './math';
 import { preserveProfileCalibration } from './presetRecipe';
@@ -76,8 +76,10 @@ export function rgb16ToRgba8(rgb: ArrayLike<number>, width: number, height: numb
 
 // Binary RAW transport; keep in sync with decode_raw_binary in src-tauri/src/lib.rs.
 const RAW_IPC_MAGIC = 'DSRIPC01';
-const RAW_IPC_VERSION = 1;
-const RAW_IPC_HEADER_BYTES = 32;
+const RAW_IPC_VERSION = 2;
+const RAW_IPC_HEADER_BYTES = 68;
+const RAW_IPC_COLOR_SPACE_SRGB = 0;
+const RAW_IPC_COLOR_SPACE_CAMERA = 1;
 // Refuse to allocate for anything larger than any real sensor produces.
 export const MAX_RAW_IPC_PIXELS = 400_000_000;
 
@@ -117,7 +119,8 @@ export function decodeRawIpcPayload(payload: unknown): RawDecodeResult {
   const colorSpace = view.getUint8(23);
   const sampleCount = Number(view.getBigUint64(24, true));
 
-  if (bitDepth !== 16 || transfer !== 0 || colorSpace !== 0) {
+  if (bitDepth !== 16 || transfer !== 0
+    || (colorSpace !== RAW_IPC_COLOR_SPACE_SRGB && colorSpace !== RAW_IPC_COLOR_SPACE_CAMERA)) {
     throw new Error('RAW decode payload uses an unsupported sample format.');
   }
   if (width === 0 || height === 0 || width * height > MAX_RAW_IPC_PIXELS) {
@@ -128,6 +131,15 @@ export function decodeRawIpcPayload(payload: unknown): RawDecodeResult {
   }
   if (bytes.byteLength !== RAW_IPC_HEADER_BYTES + sampleCount * 2) {
     throw new Error('RAW decode payload length does not match its header.');
+  }
+
+  let cameraColorMatrix: ColorMatrix | null = null;
+  if (colorSpace === RAW_IPC_COLOR_SPACE_CAMERA) {
+    const matrix = Array.from({ length: 9 }, (_, index) => view.getFloat32(32 + index * 4, true));
+    if (!matrix.every(Number.isFinite)) {
+      throw new Error('RAW decode payload has an invalid camera matrix.');
+    }
+    cameraColorMatrix = matrix as ColorMatrix;
   }
 
   const dataOffset = bytes.byteOffset + RAW_IPC_HEADER_BYTES;
@@ -149,6 +161,7 @@ export function decodeRawIpcPayload(payload: unknown): RawDecodeResult {
     bitDepth: 16,
     transfer: 'srgb',
     orientation: orientation === 0 ? null : orientation,
+    cameraColorMatrix,
   };
 }
 
@@ -203,6 +216,7 @@ export function createWorkerDecodeRequestFromRaw(
     declaredColorProfileName: rawResult.color_space,
     declaredColorProfileId: getColorProfileIdFromName(rawResult.color_space),
     mirrorHorizontal: mirrorFromExifOrientation(rawResult.orientation),
+    cameraColorMatrix: rawResult.cameraColorMatrix ?? null,
   };
 }
 

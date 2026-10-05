@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
-import { FilmBaseEstimate } from '../types';
+import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, composeCameraColorMatrix, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { ColorMatrix, FilmBaseEstimate } from '../types';
 import { decodeProfileChannel, encodeProfileChannel } from './colorProfiles';
 
 function createPixel(r: number, g: number, b: number) {
@@ -285,6 +285,20 @@ describe('buildProcessingUniforms', () => {
 
 });
 
+describe('composeCameraColorMatrix', () => {
+  const camera = [1.6, -0.4, -0.2, -0.1, 1.5, -0.4, 0, -0.4, 1.4] as ColorMatrix;
+
+  it('uses the camera matrix alone when the profile has none', () => {
+    expect(composeCameraColorMatrix(undefined, camera)).toBe(camera);
+    expect(composeCameraColorMatrix(camera, null)).toBe(camera);
+  });
+
+  it('runs the camera matrix first, then the profile matrix', () => {
+    const profile = [2, 0, 0, 0, 1, 0, 0, 0, 0.5] as ColorMatrix;
+    expect(composeCameraColorMatrix(profile, camera)).toEqual([3.2, -0.8, -0.4, -0.1, 1.5, -0.4, 0, -0.2, 0.7]);
+  });
+});
+
 describe('density balance precedence on RAW scans', () => {
   const measured = { scaleR: 1.08, scaleG: 1, scaleB: 0.86, source: 'camera-measured' as const };
   const base = { r: 109, g: 99, b: 42 };
@@ -306,6 +320,22 @@ describe('density balance precedence on RAW scans', () => {
     const settings = createDefaultSettings({ filmBaseSample: base, densityBalance: { scaleR: 1, scaleG: 1, scaleB: 0.7, source: 'manual' } });
     const params = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', null, measured);
     expect(params.densityScale).toEqual([1, 1, 0.7]);
+  });
+
+  it('lines up the thin end with a damped offset, re-referenced to a picked base', () => {
+    const estimate = { sample: base, source: 'in-frame' as const, confidence: 0.4, rejectedCandidates: 0, clamped: false };
+    const withOffsets = { ...measured, offsetR: -0.03, offsetB: 0.2 };
+    const settings = createDefaultSettings({ filmBaseSample: null, densityBalance: null });
+    const plain = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', estimate, measured, 'srgb', 'srgb', null, 0);
+    const shifted = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', estimate, withOffsets, 'srgb', 'srgb', null, 0);
+    // (D - base) * s + o  ==  (D - (base - o / s)) * s; blue is damped to 0.05.
+    expect(shifted.baseDensity[0]).toBeCloseTo(plain.baseDensity[0] + 0.03 / 1.08, 6);
+    expect(shifted.baseDensity[1]).toBeCloseTo(plain.baseDensity[1], 6);
+    expect(shifted.baseDensity[2]).toBeCloseTo(plain.baseDensity[2] - 0.05 / 0.86, 6);
+
+    // The same base picked by hand gives the same result as the estimate.
+    const picked = resolveDensityInversionParams({ ...settings, filmBaseSample: { ...base } }, true, 'negative', 'gold-200', estimate, withOffsets, 'srgb', 'srgb', null, 0);
+    picked.baseDensity.forEach((value, channel) => expect(value).toBeCloseTo(shifted.baseDensity[channel], 6));
   });
 
   it('keeps the stock preset when the measurement is only an ordinary estimate', () => {
@@ -338,6 +368,28 @@ describe('computeDensityBalance', () => {
     expect(balance.source).toBe('auto-histogram');
     expect(balance.scaleR).toBeCloseTo(expected[0], 1);
     expect(balance.scaleB).toBeCloseTo(expected[2], 1);
+  });
+
+  it('records the thin-end offset that lines each channel up with green', () => {
+    const base = { r: 200, g: 180, b: 150 };
+    const bases = [base.r, base.g, base.b];
+    const scales = [1.25, 1, 0.8];
+    const offsets = [-0.04, 0, 0.03];
+    const data = new Uint8ClampedArray(64 * 64 * 4);
+    for (let pixel = 0; pixel < 64 * 64; pixel += 1) {
+      const green = 0.15 + (pixel % 64) / 90;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const density = (green - offsets[channel]) / scales[channel];
+        const linear = decodeProfileChannel('srgb', bases[channel] / 255) * 10 ** -density;
+        data[pixel * 4 + channel] = Math.round(encodeProfileChannel('srgb', linear) * 255);
+      }
+      data[pixel * 4 + 3] = 255;
+    }
+
+    const balance = computeDensityBalance(new ImageData(data, 64, 64), base);
+
+    expect(balance.offsetR).toBeCloseTo(offsets[0], 2);
+    expect(balance.offsetB).toBeCloseTo(offsets[2], 2);
   });
 
   it('does not let a base-estimate offset tilt the measured scales', () => {
