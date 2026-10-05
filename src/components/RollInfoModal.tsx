@@ -95,7 +95,7 @@ export function RollInfoModal({
 
               <div className="grid gap-4 px-5 py-5 md:grid-cols-2">
                 <label className="space-y-2">
-                  <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Name</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Name</span>
                   <input
                     value={draft.name ?? ''}
                     onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
@@ -103,7 +103,7 @@ export function RollInfoModal({
                   />
                 </label>
                 <label className="space-y-2">
-                  <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Film Stock</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Film Stock</span>
                   <input
                     list="roll-film-stock-suggestions"
                     value={draft.filmStock ?? ''}
@@ -118,7 +118,7 @@ export function RollInfoModal({
                   </datalist>
                 </label>
                 <label className="space-y-2">
-                  <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Camera</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Camera</span>
                   <input
                     value={draft.camera ?? ''}
                     onChange={(event) => setDraft((current) => ({ ...current, camera: event.target.value || null }))}
@@ -127,7 +127,7 @@ export function RollInfoModal({
                   />
                 </label>
                 <label className="space-y-2">
-                  <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Date</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Date</span>
                   <input
                     type="date"
                     value={draft.date ?? ''}
@@ -136,7 +136,7 @@ export function RollInfoModal({
                   />
                 </label>
                 <label className="space-y-2 md:col-span-2">
-                  <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Notes</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes</span>
                   <textarea
                     value={draft.notes ?? ''}
                     onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
@@ -153,7 +153,7 @@ export function RollInfoModal({
                     onClick={() => onSyncSettings(roll.id)}
                     className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 transition-colors hover:bg-zinc-800"
                   >
-                    Sync To Roll
+                    Sync to Roll
                   </button>
                   <button
                     type="button"

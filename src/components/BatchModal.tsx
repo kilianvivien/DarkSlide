@@ -626,7 +626,7 @@ export function BatchModal({
                       <h3 className={SECTION_TITLE}><StepNumber>1</StepNumber> Recipe</h3>
                       <div role="radiogroup" aria-label="Settings source" className={`${SEGMENT_TRACK} grid-cols-3`}>
                         {([
-                          { value: 'current', label: 'Current Doc', disabled: !currentSettings || !currentProfile },
+                          { value: 'current', label: 'This frame', disabled: !currentSettings || !currentProfile },
                           { value: 'builtin', label: 'Built-in', disabled: false },
                           { value: 'custom', label: 'Custom', disabled: customProfiles.length === 0 },
                         ] as const).map((opt) => (
@@ -721,14 +721,14 @@ export function BatchModal({
                               }))}
                               className={`${segmentItem(exportOptions.format === format)} uppercase`}
                             >
-                              {format === 'image/jpeg' ? 'jpg' : format.split('/')[1]}
+                              {format === 'image/jpeg' ? 'jpeg' : format.split('/')[1]}
                             </button>
                           ))}
                         </div>
 
                         {isPngOrTiff ? (
                           <div className="flex items-center justify-between gap-3">
-                            <span className={FIELD_LABEL}>Bit depth</span>
+                            <span className={FIELD_LABEL}>Bit Depth</span>
                             <div role="radiogroup" aria-label="Bit depth" className={`${SEGMENT_TRACK} w-36 grid-cols-2`}>
                               {([8, 16] as const).map((bitDepth) => (
                                 <button
@@ -756,7 +756,7 @@ export function BatchModal({
                         )}
 
                         <div>
-                          <label className={`${FIELD_LABEL} mb-1.5 block`} htmlFor={`${titleId}-naming`}>File name</label>
+                          <label className={`${FIELD_LABEL} mb-1.5 block`} htmlFor={`${titleId}-naming`}>Filename</label>
                           <input
                             id={`${titleId}-naming`}
                             type="text"
@@ -820,7 +820,7 @@ export function BatchModal({
                           {colorMgmtExpanded && (
                             <div className="space-y-4 border-t border-zinc-800/80 px-3 pb-3 pt-3">
                               <div className="space-y-2">
-                                <p className={FIELD_LABEL}>Input profile</p>
+                                <p className={FIELD_LABEL}>Input Profile</p>
                                 <select
                                   value={colorManagement.inputMode}
                                   onChange={(event) => setColorManagement((current) => ({ ...current, inputMode: event.target.value as ColorManagementSettings['inputMode'] }))}
@@ -846,7 +846,7 @@ export function BatchModal({
                                 <p className="text-[11px] text-zinc-500">Auto uses each file&apos;s embedded or decoder-reported profile.</p>
                               </div>
                               <div className="space-y-2">
-                                <p className={FIELD_LABEL}>Output profile</p>
+                                <p className={FIELD_LABEL}>Output Profile</p>
                                 {(['srgb', 'display-p3', 'adobe-rgb', 'linear'] as ColorProfileId[]).map((profileId) => (
                                   <RadioOption
                                     key={profileId}
@@ -919,7 +919,7 @@ export function BatchModal({
                   type="button"
                   onClick={() => void handleStart()}
                   disabled={isRunning || runnableCount === 0}
-                  className="inline-flex items-center gap-2 rounded-lg bg-accent-400 px-4 py-2 text-[13px] font-semibold text-zinc-950 transition-colors hover:bg-accent-300 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-[13px] font-semibold text-zinc-950 shadow-lg shadow-black/20 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isRunning ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                   {isRunning ? 'Converting…' : startLabel}

@@ -905,9 +905,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                         <div className={`space-y-2 transition-opacity duration-150 ${notificationSettings.enabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
                           {[
-                            { key: 'exportComplete' as const, label: 'Single exports', description: 'Notify when a single image is saved.' },
-                            { key: 'batchComplete' as const, label: 'Batch exports', description: 'Notify when a batch run completes.' },
-                            { key: 'contactSheetComplete' as const, label: 'Contact sheets', description: 'Notify when a contact sheet is saved.' },
+                            { key: 'exportComplete' as const, label: 'Single Exports', description: 'Notify when a single image is saved.' },
+                            { key: 'batchComplete' as const, label: 'Batch Exports', description: 'Notify when a batch run completes.' },
+                            { key: 'contactSheetComplete' as const, label: 'Contact Sheets', description: 'Notify when a contact sheet is saved.' },
                           ].map((item) => (
                             <div key={item.key} className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3">
                               <div className="flex items-center justify-between gap-4">
@@ -972,7 +972,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <div>
                             <p className="text-[13px] font-semibold text-zinc-100">Default Light Source</p>
                             <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
-                              New imports start with this light source selected. You can still override it per image in the sidebar.
+                              New imports start with this light source selected. You can still override it per image in Develop.
                             </p>
                           </div>
 
@@ -991,7 +991,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <div>
                             <p className="text-[13px] font-semibold text-zinc-100">Default Lab Style</p>
                             <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
-                              New imports start with this lab style selected. You can still override it per image in the sidebar.
+                              New imports start with this lab style selected. You can still override it per image in Develop.
                             </p>
                           </div>
 
@@ -1009,7 +1009,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
                           <div>
-                            <p className="text-[13px] font-semibold text-zinc-100">Auto-Apply Preset On Import</p>
+                            <p className="text-[13px] font-semibold text-zinc-100">Auto-Apply Preset on Import</p>
                             <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
                               Start new imports with a specific built-in or custom preset. If a sidecar is restored, those saved settings still win.
                             </p>
@@ -1276,9 +1276,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 type="button"
                                 disabled={!updaterEnabled}
                                 onClick={() => onUpdateChannelChange(option.id)}
-                                className={`rounded-xl border px-4 py-2 text-sm transition-colors ${
+                                className={`rounded-lg border px-3 py-2 text-[13px] transition-colors ${
                                   updateChannel === option.id
-                                    ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+                                    ? 'border-accent-400/50 bg-accent-400/10 text-accent-100'
                                     : 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900'
                                 } disabled:cursor-not-allowed disabled:opacity-40`}
                               >
@@ -1298,7 +1298,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               type="button"
                               onClick={onCheckForUpdates}
                               disabled={!updaterEnabled || isCheckingForUpdates}
-                              className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2 text-sm text-zinc-200 transition-colors hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                              className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 transition-colors hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {isCheckingForUpdates ? 'Checking…' : 'Check Now'}
                             </button>
@@ -1307,12 +1307,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             Last checked: {lastUpdateCheckAt ? new Date(lastUpdateCheckAt).toLocaleString() : 'Not checked yet'}
                           </p>
                           {updateError && (
-                            <div className="rounded-xl border border-amber-900/60 bg-amber-950/35 px-3 py-2 text-[12px] text-amber-100">
+                            <div className="rounded-lg border border-amber-900/60 bg-amber-950/35 px-3 py-2 text-[12px] text-amber-100">
                               {updateError}
                             </div>
                           )}
                           {updaterDisabledReason && (
-                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-[12px] text-zinc-400">
+                            <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-[12px] text-zinc-400">
                               {updaterDisabledReason}
                             </div>
                           )}
@@ -1431,10 +1431,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </p>
                         <button
                           onClick={handleCopy}
-                          className={`flex shrink-0 items-center gap-2 px-4 py-2 rounded-xl border text-[13px] font-medium transition-all ${
+                          className={`flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-[13px] font-medium transition-all ${
                             copied
                               ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
-                              : 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                              : 'border-zinc-800 bg-zinc-950 text-zinc-200 hover:bg-zinc-900'
                           }`}
                         >
                           {copied ? <Check size={13} /> : <Copy size={13} />}

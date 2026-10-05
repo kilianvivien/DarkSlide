@@ -189,7 +189,7 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
     expect(screen.getByRole('switch', { name: 'Notifications Enabled' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Batch exports' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Batch Exports' }));
     expect(onNotificationSettingsChange).toHaveBeenCalledWith({ batchComplete: false });
   });
 

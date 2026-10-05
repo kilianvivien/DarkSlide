@@ -2,6 +2,7 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from '
 import { RotateCcw } from 'lucide-react';
 import { CurvePoint, Curves } from '../types';
 import { clamp } from '../utils/math';
+import { SEGMENT_TRACK, segmentItem } from './ui';
 
 interface CurvesControlProps {
   curves: Curves;
@@ -465,7 +466,7 @@ export const CurvesControl = memo(function CurvesControl({
 
   return (
     <div className={`flex flex-col ${compact ? 'gap-1.5' : 'gap-3'}`}>
-      <div className={`flex gap-1 ${compact ? '' : 'rounded-lg border border-zinc-800 bg-zinc-900/40 p-1'}`}>
+      <div className={compact ? 'flex gap-1' : `${SEGMENT_TRACK} grid-flow-col auto-cols-fr`}>
         {CHANNELS.map((channel) => {
           if (!isColor && channel !== 'rgb') return null;
           const active = activeChannel === channel;
@@ -478,12 +479,10 @@ export const CurvesControl = memo(function CurvesControl({
                 setActiveChannel(channel);
                 setSelectedPoint(null);
               }}
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md ${compact ? 'py-1' : 'py-1.5'} text-[10px] uppercase tracking-widest transition-colors duration-150 ${
-                active ? (compact ? 'bg-accent-400 text-zinc-950' : 'bg-zinc-100 text-zinc-950') : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
-              }`}
+              className={`flex flex-1 items-center justify-center gap-1.5 ${segmentItem(active)}`}
             >
               {channel !== 'rgb' && <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: CHANNEL_COLORS[channel] }} />}
-              {channel}
+              {CHANNEL_LABELS[channel]}
             </button>
           );
         })}

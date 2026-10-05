@@ -266,8 +266,8 @@ export const Filmstrip = memo(function Filmstrip({
               </p>
             </div>
             {([
-              ['Sync Settings To Roll', <RefreshCw key="sync" size={14} />, () => onSyncRollSettings(contextMenu.tabId, contextMenu.rollId)],
-              ['Apply Film Base To Roll', <Pipette key="base" size={14} />, () => onApplyRollFilmBase(contextMenu.rollId)],
+              ['Sync Settings to Roll', <RefreshCw key="sync" size={14} />, () => onSyncRollSettings(contextMenu.tabId, contextMenu.rollId)],
+              ['Apply Film Base to Roll', <Pipette key="base" size={14} />, () => onApplyRollFilmBase(contextMenu.rollId)],
               ['Remove From Roll', <Unlink2 key="remove" size={14} />, () => onRemoveFromRoll(contextMenu.tabId)],
               ['Roll Info…', <Info key="info" size={14} />, () => onOpenRollInfo(contextMenu.rollId)],
             ] as Array<[string, React.ReactNode, () => void]>).map(([label, icon, run]) => (

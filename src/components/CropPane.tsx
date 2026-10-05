@@ -18,7 +18,7 @@ import { CropSettings, CropTab } from '../types';
 import { formatAspectRatio } from '../utils/aspectRatio';
 import { createCenteredAspectCrop, rotateCropClockwise } from '../utils/imagePipeline';
 import { Slider } from './Slider';
-import { ARMED, SECTION_TITLE } from './ui';
+import { ARMED, SECTION_TITLE, SEGMENT_TRACK, segmentItem } from './ui';
 
 type Orientation = 'landscape' | 'portrait';
 
@@ -286,7 +286,7 @@ export const CropPane = memo(function CropPane({
           <span className="opacity-60">{getIcon(group.iconEntry)}</span>
           <div className="flex flex-col items-start leading-tight">
             <span className="font-medium">{group.label}</span>
-            <span className={`text-[9px] uppercase tracking-wider opacity-50 ${selected ? 'text-zinc-700' : 'text-zinc-500'}`}>
+            <span className={`text-[10px] capitalize opacity-60 ${selected ? 'text-zinc-700' : 'text-zinc-500'}`}>
               {orientation}
             </span>
           </div>
@@ -395,7 +395,7 @@ export const CropPane = memo(function CropPane({
             <span className="opacity-60"><CropIcon size={14} /></span>
             <div className="flex flex-col items-start leading-tight">
               <span className="font-medium">Free</span>
-              <span className={`text-[9px] uppercase tracking-wider opacity-50 ${isFreeSelected ? 'text-zinc-700' : 'text-zinc-500'}`}>
+              <span className={`text-[10px] opacity-60 ${isFreeSelected ? 'text-zinc-700' : 'text-zinc-500'}`}>
                 Unlocked
               </span>
             </div>
@@ -409,21 +409,20 @@ export const CropPane = memo(function CropPane({
               <ScanLine size={14} className="shrink-0 opacity-60" />
               <div className="flex flex-col items-start leading-tight">
                 <span className="font-medium">Auto Crop</span>
-                <span className="text-[9px] uppercase tracking-wider opacity-50 text-zinc-500">Detect</span>
+                <span className="text-[10px] opacity-60 text-zinc-500">Detect</span>
               </div>
             </button>
           )}
         </div>
 
-        <div className="flex gap-4 border-b border-zinc-800">
+        <div className={`${SEGMENT_TRACK} grid-cols-4`}>
           {CROP_TABS.map((tab) => (
             <button
               key={tab}
               type="button"
+              aria-pressed={cropTab === tab}
               onClick={() => onCropTabChange(tab)}
-              className={`pb-2 text-[11px] font-semibold uppercase tracking-widest border-b-2 transition-all ${
-                cropTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
-              }`}
+              className={segmentItem(cropTab === tab)}
             >
               {tab}
             </button>

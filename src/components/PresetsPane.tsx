@@ -8,6 +8,7 @@ import { bakePresetToCubeLut, createProfileFromCubeLut, cubeLutPerformsInversion
 import { encodeProfileForTransport, validateDarkslideFile } from '../utils/presetStore';
 import { RAW_IMPORT_PROFILE_ID } from '../utils/rawImport';
 import { DarkslidePresetFile, FilmProfile, FilmProfileCategory, PresetFolder, ScannerType } from '../types';
+import { SEGMENT_TRACK, segmentItem } from './ui';
 
 const GENERIC_IDS = new Set(['generic-bw', 'generic-color']);
 
@@ -832,20 +833,22 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         }}
       />
 
-      <div className={`px-5 pt-3 ${isSearching ? 'pb-4' : 'pb-0'} border-b border-zinc-800 shrink-0`}>
-        <div className="flex items-end gap-4">
-          {(['builtin', 'custom'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setPresetTab(tab)}
-              className={`pb-2 text-[11px] uppercase tracking-widest font-semibold border-b-2 transition-all ${
-                presetTab === tab ? 'border-zinc-200 text-zinc-200' : 'border-transparent text-zinc-600 hover:text-zinc-400'
-              }`}
-            >
-              {tab === 'builtin' ? 'Built-in' : 'Custom'}
-            </button>
-          ))}
-          <div className="ml-auto flex items-center gap-1 pb-1">
+      <div className={`px-5 pt-3 ${isSearching ? 'pb-3' : 'pb-0'} border-b border-zinc-800 shrink-0`}>
+        <div className="flex items-center gap-2 pb-3">
+          <div className={`${SEGMENT_TRACK} flex-1 grid-cols-2`}>
+            {(['builtin', 'custom'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                aria-pressed={presetTab === tab}
+                onClick={() => setPresetTab(tab)}
+                className={segmentItem(presetTab === tab)}
+              >
+                {tab === 'builtin' ? 'Built-in' : 'Custom'}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
             <button
               onClick={() => {
                 setImportConflict(null);
@@ -880,7 +883,7 @@ export const PresetsPane: React.FC<PresetsPaneProps> = ({
         </div>
 
         {isSearching && (
-          <div className="mt-3 mb-1 relative">
+          <div className="relative">
             <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
             <input
               ref={searchInputRef}

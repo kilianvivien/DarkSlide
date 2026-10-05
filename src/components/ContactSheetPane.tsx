@@ -184,7 +184,7 @@ export const ContactSheetPane = memo(function ContactSheetPane({ sheet }: Contac
                 </button>
               </div>
             </div>
-            <p className={`mb-1.5 ${FIELD_LABEL}`}>Cell size</p>
+            <p className={`mb-1.5 ${FIELD_LABEL}`}>Cell Size</p>
             <div role="radiogroup" aria-label="Cell size" className={`${SEGMENT_TRACK} mb-3 grid-cols-3`}>
               {CELL_SIZES.map((option) => (
                 <button
@@ -245,7 +245,7 @@ export const ContactSheetPane = memo(function ContactSheetPane({ sheet }: Contac
               Show file names
             </label>
             {layout.showCaptions && (
-              <Slider label="Caption size" value={layout.captionFontSize} min={12} max={24} unit="px" onChange={(captionFontSize) => setLayout({ captionFontSize })} />
+              <Slider label="Caption Size" value={layout.captionFontSize} min={12} max={24} unit="px" onChange={(captionFontSize) => setLayout({ captionFontSize })} />
             )}
           </section>
 
@@ -278,7 +278,7 @@ export const ContactSheetPane = memo(function ContactSheetPane({ sheet }: Contac
               />
             )}
             <div className="mb-3 grid grid-cols-[5.5rem_1fr] items-center gap-x-3 gap-y-2">
-              <label htmlFor="contact-sheet-filename" className={FIELD_LABEL}>File name</label>
+              <label htmlFor="contact-sheet-filename" className={FIELD_LABEL}>Filename</label>
               <input
                 id="contact-sheet-filename"
                 type="text"
@@ -286,7 +286,7 @@ export const ContactSheetPane = memo(function ContactSheetPane({ sheet }: Contac
                 onChange={(event) => setLayout({ filenameBase: event.target.value })}
                 className={`${SELECT_INPUT} py-1.5`}
               />
-              <label htmlFor="contact-sheet-profile" className={FIELD_LABEL}>Color profile</label>
+              <label htmlFor="contact-sheet-profile" className={FIELD_LABEL}>Output Profile</label>
               <select
                 id="contact-sheet-profile"
                 value={layout.outputProfileId}
