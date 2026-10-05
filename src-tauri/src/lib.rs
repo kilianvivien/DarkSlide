@@ -229,47 +229,6 @@ async fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
     .await
 }
 
-// sRGB primaries to XYZ (D65), as rawler uses for its own calibration.
-const SRGB_TO_XYZ_D65: [[f32; 3]; 3] = [
-    [0.4124564, 0.3575761, 0.1804375],
-    [0.2126729, 0.7151522, 0.0721750],
-    [0.0193339, 0.1191920, 0.9503041],
-];
-
-// Per-channel gains that make a D65-white object neutral in camera space,
-// derived from the camera's colour matrix and scaled so the largest gain is 1
-// (pure attenuation: nothing that was below sensor clipping can clip here).
-fn camera_neutral_gains(raw_image: &rawler::RawImage) -> Option<[f32; 3]> {
-    use rawler::imgop::xyz::Illuminant;
-
-    let matrix = raw_image
-        .color_matrix
-        .get(&Illuminant::D65)
-        .or_else(|| raw_image.color_matrix.values().next())?;
-    neutral_gains_from_xyz_to_camera(matrix)
-}
-
-fn neutral_gains_from_xyz_to_camera(matrix: &[f32]) -> Option<[f32; 3]> {
-    if matrix.len() != 9 {
-        return None;
-    }
-    // Camera response to sRGB white: the row sums of xyz2cam * sRGB->XYZ.
-    let mut neutral = [0.0f32; 3];
-    for (row, value) in neutral.iter_mut().enumerate() {
-        for column in 0..3 {
-            *value += (0..3)
-                .map(|k| matrix[row * 3 + k] * SRGB_TO_XYZ_D65[k][column])
-                .sum::<f32>();
-        }
-    }
-    if neutral.iter().any(|value| !value.is_finite() || *value <= 0.0) {
-        return None;
-    }
-    let gains = neutral.map(|value| 1.0 / value);
-    let max_gain = gains.iter().copied().fold(0.0f32, f32::max);
-    Some(gains.map(|gain| gain / max_gain))
-}
-
 fn srgb_encode(value: f32) -> f32 {
     let value = value.clamp(0.0, 1.0);
     if value <= 0.003_130_8 {
@@ -279,11 +238,11 @@ fn srgb_encode(value: f32) -> f32 {
     }
 }
 
-fn camera_native_to_srgb_u16(pixels: &[[f32; 3]], gains: [f32; 3]) -> Vec<u16> {
+fn camera_native_to_srgb_u16(pixels: &[[f32; 3]]) -> Vec<u16> {
     let mut data = Vec::with_capacity(pixels.len() * 3);
     for pixel in pixels {
-        for channel in 0..3 {
-            data.push((srgb_encode(pixel[channel] * gains[channel]) * 65535.0).round() as u16);
+        for value in pixel {
+            data.push((srgb_encode(*value) * 65535.0).round() as u16);
         }
     }
     data
@@ -315,36 +274,34 @@ fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
     let raw_image = rawler::decode_file(path).map_err(|error| error.to_string())?;
 
     // Film is inverted in the sensor's own RGB. The camera colour matrix is
-    // built for scene light, not for light through an orange mask: without
-    // white balance it subtracts a large share of the (bright) green from the
-    // (dim) blue, drives the blue of yellow-dense areas below zero and rawler
-    // clips it to black. Those pixels then read as maximum blue density and
-    // invert to flat, saturated blue skies and highlights. Neutral D65 gains
-    // keep the mask orange for the film-base estimator; any per-channel gain
-    // cancels out against the film base in the density inversion.
-    // Camera white balance is still never applied: it is tuned for the
-    // photographed scene, not for an orange film negative.
-    let native = match camera_neutral_gains(&raw_image) {
-        Some(gains) => RawDevelop {
-            steps: vec![
-                ProcessingStep::Rescale,
-                ProcessingStep::Demosaic,
-                ProcessingStep::CropActiveArea,
-                ProcessingStep::CropDefault,
-            ],
-        }
-            .develop_intermediate(&raw_image)
-            .ok()
-            .and_then(|intermediate| match intermediate {
-                Intermediate::ThreeColor(pixels) => Some((
-                    pixels.width as u32,
-                    pixels.height as u32,
-                    camera_native_to_srgb_u16(&pixels.data, gains),
-                )),
-                _ => None,
-            }),
-        None => None,
-    };
+    // built for white-balanced scene light, not for light through a film
+    // base: applied to an orange mask without white balance it subtracts a
+    // large share of the bright green from the dim blue, drives the blue of
+    // yellow-dense areas below zero and rawler clips it to black. Those pixels
+    // then read as maximum blue density and invert to flat, saturated blue.
+    // No gains either: any per-channel gain cancels against the film base in
+    // the density inversion (and in slide base normalization), while unity
+    // keeps every sample below sensor clipping whatever the scan exposure,
+    // light source or camera. Camera white balance is never applied: it is
+    // tuned for the photographed scene, not for film.
+    let native = RawDevelop {
+        steps: vec![
+            ProcessingStep::Rescale,
+            ProcessingStep::Demosaic,
+            ProcessingStep::CropActiveArea,
+            ProcessingStep::CropDefault,
+        ],
+    }
+        .develop_intermediate(&raw_image)
+        .ok()
+        .and_then(|intermediate| match intermediate {
+            Intermediate::ThreeColor(pixels) => Some((
+                pixels.width as u32,
+                pixels.height as u32,
+                camera_native_to_srgb_u16(&pixels.data),
+            )),
+            _ => None,
+        });
     // Monochrome and four-colour sensors keep the calibrated development.
     let (width, height, data) = match native {
         Some(result) => result,
@@ -963,22 +920,11 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
 #[cfg(test)]
 mod tests {
     #[test]
-    fn neutral_gains_balance_a_d65_white_without_boosting_any_channel() {
-        // Nikon Z 6 D65 matrix from rawler's camera data.
-        let matrix = [0.9943, -0.3269, -0.0839, -0.5323, 1.3269, 0.2259, -0.1198, 0.2083, 0.7557];
-        let gains = neutral_gains_from_xyz_to_camera(&matrix).expect("gains");
-        assert!((gains[0] - 1.0).abs() < 1e-6);
-        assert!((gains[1] - 0.4937).abs() < 1e-3);
-        assert!((gains[2] - 0.5743).abs() < 1e-3);
-        assert!(neutral_gains_from_xyz_to_camera(&matrix[..6]).is_none());
-    }
-
-    #[test]
-    fn camera_native_pixels_never_go_negative_or_clip_below_white() {
-        let data = camera_native_to_srgb_u16(&[[0.0, 0.5, 1.0], [-0.1, 0.002, 2.0]], [1.0, 0.5, 0.5]);
+    fn camera_native_pixels_are_encoded_without_gains_or_negatives() {
+        let data = camera_native_to_srgb_u16(&[[0.0, 0.25, 1.0], [-0.1, 0.001, 2.0]]);
         assert_eq!(data[0], 0);
         assert_eq!(data[1], (srgb_encode(0.25) * 65535.0).round() as u16);
-        assert_eq!(data[2], (srgb_encode(0.5) * 65535.0).round() as u16);
+        assert_eq!(data[2], 65535);
         assert_eq!(data[3], 0);
         assert_eq!(data[4], (0.001 * 12.92 * 65535.0f32).round() as u16);
         assert_eq!(data[5], 65535);
@@ -986,7 +932,7 @@ mod tests {
 
     use super::{
         camera_native_to_srgb_u16, candidate_filename, encode_raw_ipc_payload,
-        neutral_gains_from_xyz_to_camera, next_available_file_path, save_blob_to_directory_inner,
+        next_available_file_path, save_blob_to_directory_inner,
         srgb_encode, DecodeLimiter, DecodedRaw, RAW_IPC_HEADER_BYTES,
     };
     use std::sync::Arc;
