@@ -3,7 +3,7 @@ import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS
 import type { FilmProfile, WorkspaceDocument } from '../types';
 import { processFloatRaster, resolveDensityInversionParams } from './imagePipeline';
 import { createRawImportProfile } from './rawImport';
-import { buildProfileSettingsForDocument, createPresetRecipe, resolveDocumentProfile, resolveProfileApplication } from './presetRecipe';
+import { buildProfileSettingsForDocument, createPresetRecipe, resolveDocumentProfile, resolveProfileApplication, withCameraRawChannelGains } from './presetRecipe';
 import { encodeProfileForTransport, validateDarkslideFile } from './presetStore';
 
 function makeDocument(profile: FilmProfile): WorkspaceDocument {
@@ -109,6 +109,20 @@ describe('preset conversion recipes', () => {
     const map = new Map([[first.profileId, second.rawImportProfile]]);
     expect(resolveDocumentProfile(first, map, gold)).toBe(first.rawImportProfile);
     expect(resolveDocumentProfile(second, map, gold)).toBe(second.rawImportProfile);
+  });
+});
+
+describe('withCameraRawChannelGains', () => {
+  const gold = FILM_PROFILES.find((profile) => profile.id === 'gold-200')!;
+
+  it('drops a built-in profile\'s channel gains on a RAW document', () => {
+    const settings = buildProfileSettingsForDocument(gold, makeDocument(gold));
+    expect([settings.redBalance, settings.greenBalance, settings.blueBalance]).toEqual([1, 1, 1]);
+  });
+
+  it('keeps the gains of a preset the user saved', () => {
+    const saved = { ...gold, id: 'my-gold', defaultSettings: { ...gold.defaultSettings, redBalance: 1.2 } };
+    expect(withCameraRawChannelGains(createDefaultSettings(saved.defaultSettings), saved).redBalance).toBe(1.2);
   });
 });
 

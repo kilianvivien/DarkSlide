@@ -160,7 +160,14 @@ export interface DensityBalance {
   scaleR: number;
   scaleG: number;
   scaleB: number;
-  source: 'auto-histogram' | 'film-stock-preset' | 'manual' | 'clamp-rejected';
+  // 'camera-measured': measured on a RAW camera scan, which is inverted in the
+  // sensor's native RGB where the stock presets (tuned on matrixed RGB) over-
+  // correct. A trustworthy one takes precedence over a stock preset.
+  source: 'auto-histogram' | 'camera-measured' | 'film-stock-preset' | 'manual' | 'clamp-rejected';
+  // Measured only: density offsets (red, blue) that line each channel's thin
+  // end up with green after scaling, relative to the base it was measured on.
+  offsetR?: number;
+  offsetB?: number;
 }
 
 export type PointPickerMode = 'black' | 'white' | 'grey';
@@ -465,6 +472,9 @@ export interface RawDecodeResult {
   bitDepth?: ExportBitDepth;
   transfer?: 'srgb';
   orientation?: number | null;
+  // Set when `data` is camera-native RGB: camera -> sRGB, applied after
+  // inversion (see decode_raw_pixels in src-tauri/src/lib.rs).
+  cameraColorMatrix?: ColorMatrix | null;
 }
 
 export interface WorkspaceDocument {
@@ -523,6 +533,7 @@ export interface DecodeRequest {
   declaredColorProfileName?: string | null;
   declaredColorProfileId?: ColorProfileId | null;
   mirrorHorizontal?: boolean;
+  cameraColorMatrix?: ColorMatrix | null;
 }
 
 export interface RenderRequest {

@@ -53,7 +53,7 @@ function isValidProfile(value: unknown): value is FilmProfile {
         && Number.isFinite(densityBalance[key])
         && densityBalance[key] > 0
       ))
-      && ['auto-histogram', 'film-stock-preset', 'manual', 'clamp-rejected'].includes(String(densityBalance.source))
+      && ['auto-histogram', 'camera-measured', 'film-stock-preset', 'manual', 'clamp-rejected'].includes(String(densityBalance.source))
     ))
   );
 }

@@ -51,6 +51,8 @@ import {
   assertSupportedDimensions,
   buildEmptyHistogram,
   computeResidualBaseOffset,
+  asCameraMeasuredBalance,
+  composeCameraColorMatrix,
   computeDensityBalance,
   computeRawDensityBalance,
   computeHighlightDensity,
@@ -119,6 +121,8 @@ interface StoredDocument {
   estimatedFilmBaseSample: FilmBaseSample | null;
   estimatedFilmBase: FilmBaseEstimate | null;
   estimatedDensityBalance: DensityBalance | null;
+  // Camera -> sRGB for a camera-native RAW, applied after inversion.
+  cameraColorMatrix: ColorMatrix | null;
   // Pinned conversion analysis (audit Phase C): memoized so preview, tiles,
   // dust detection, and export all consume identical numbers.
   residualBaseCache: Map<string, [number, number, number] | null>;
@@ -1333,7 +1337,11 @@ async function handleDecode(payload: DecodeRequest) {
     const guarded = guardFilmBaseAgainstCrush(rawEstimate, previewStore, priorDensityBalance, sourceProfile);
     const estimatedFilmBase = guarded.estimate;
     const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
-    const estimatedDensityBalance = guarded.densityBalance;
+    // Only a camera-native decode (it carries its camera matrix) is measured
+    // in the space where a measurement should beat the stock presets.
+    const estimatedDensityBalance = payload.cameraColorMatrix
+      ? asCameraMeasuredBalance(guarded.densityBalance)
+      : guarded.densityBalance;
     const metadata: SourceMetadata = {
       id: payload.documentId,
       name: payload.fileName,
@@ -1358,6 +1366,7 @@ async function handleDecode(payload: DecodeRequest) {
       estimatedFilmBaseSample,
       estimatedFilmBase,
       estimatedDensityBalance,
+      cameraColorMatrix: payload.cameraColorMatrix ?? null,
       lastAccessedAt: Date.now(),
     });
 
@@ -1466,6 +1475,7 @@ async function handleDecode(payload: DecodeRequest) {
     estimatedFilmBaseSample,
     estimatedFilmBase,
     estimatedDensityBalance,
+    cameraColorMatrix: null,
     lastAccessedAt: Date.now(),
   });
 
@@ -1920,7 +1930,9 @@ function handleReestimateFilmBase(payload: ReestimateFilmBaseRequest): Reestimat
     type: 'reestimate-film-base',
     estimatedFilmBaseSample: guarded.estimate?.sample ?? null,
     estimatedFilmBase: guarded.estimate,
-    estimatedDensityBalance: guarded.densityBalance,
+    estimatedDensityBalance: document.cameraColorMatrix
+      ? asCameraMeasuredBalance(guarded.densityBalance)
+      : guarded.densityBalance,
   } satisfies ReestimateFilmBaseResult;
 }
 
@@ -2128,7 +2140,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       lightSourceBias: payload.lightSourceBiasPerCell?.[index] ?? [1, 1, 1] as [number, number, number],
       flareFloor: payload.flareFloorPerCell?.[index] ?? null,
       maskTuning: profile.maskTuning,
-      colorMatrix: profile.colorMatrix,
+      colorMatrix: composeCameraColorMatrix(profile.colorMatrix, document.cameraColorMatrix),
       tonalCharacter: profile.tonalCharacter,
       cubeLut: profile.lut ?? null,
       labStyleToneCurve: payload.labStyleToneCurvePerCell?.[index],
@@ -2155,7 +2167,7 @@ async function handleContactSheet(payload: ContactSheetRequest) {
       cellAnalysisArgs.isColor,
       'processed',
       profile.maskTuning,
-      profile.colorMatrix,
+      cellAnalysisArgs.colorMatrix,
       profile.tonalCharacter,
       payload.labStyleToneCurvePerCell?.[index],
       payload.labStyleChannelCurvesPerCell?.[index],

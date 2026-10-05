@@ -2,6 +2,7 @@ import {
   AutoAnalyzeRequest,
   AutoAnalyzeResult,
   ApplyFilmBaseEstimateRequest,
+  ColorMatrix,
   ColorProfileId,
   ContactSheetRequest,
   ContactSheetResult,
@@ -44,7 +45,7 @@ import {
 } from '../types';
 import { appendDiagnostic } from './diagnostics';
 import { pushToast } from './toastStore';
-import { accumulateHistogram, buildEmptyHistogram, computeHighlightDensity, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
+import { accumulateHistogram, buildEmptyHistogram, composeCameraColorMatrix, computeHighlightDensity, getExtensionFromFormat, sanitizeFilenameBase } from './imagePipeline';
 import { getBlobUrlDiagnostics } from './blobUrlTracker';
 import { convertImageDataColorProfile, getInputProfileLabel, getPreferredPreviewDisplayProfile } from './colorProfiles';
 import { WebGPUPipeline } from './gpu/WebGPUPipeline';
@@ -273,6 +274,8 @@ export class ImageWorkerClient {
   // the document's full lifetime so evicting the potentially huge source
   // buffer after DECODE_CACHE_TTL_MS cannot silently change GPU conversion.
   private documentCalibration = new Map<string, DocumentCalibration>();
+
+  private cameraColorMatrices = new Map<string, ColorMatrix>();
 
   private documentRecovery = new Map<string, Promise<void>>();
 
@@ -1267,6 +1270,11 @@ export class ImageWorkerClient {
       workerEpoch: this.workerEpoch,
       evictionTimeout: null,
     });
+    if (payload.cameraColorMatrix) {
+      this.cameraColorMatrices.set(payload.documentId, payload.cameraColorMatrix);
+    } else {
+      this.cameraColorMatrices.delete(payload.documentId);
+    }
     this.documentCalibration.set(payload.documentId, {
       estimatedFilmBaseSample: decoded.estimatedFilmBaseSample ?? null,
       estimatedFilmBase: decoded.estimatedFilmBase ?? null,
@@ -1276,9 +1284,18 @@ export class ImageWorkerClient {
     return decoded;
   }
 
+  // Every conversion entry point (preview, export, auto analysis) runs the
+  // camera matrix of a camera-native RAW after inversion, on CPU and GPU alike.
+  private withCameraColorMatrix<T extends { documentId: string; colorMatrix?: ColorMatrix }>(payload: T): T {
+    const cameraMatrix = this.cameraColorMatrices.get(payload.documentId);
+    return cameraMatrix
+      ? { ...payload, colorMatrix: composeCameraColorMatrix(payload.colorMatrix, cameraMatrix) }
+      : payload;
+  }
+
   async render(payload: RenderRequest) {
     await this.ensureDocumentLoaded(payload.documentId);
-    return this.renderInternal(payload, true);
+    return this.renderInternal(this.withCameraColorMatrix(payload), true);
   }
 
   async preparePreviewBitmap(
@@ -1681,7 +1698,7 @@ export class ImageWorkerClient {
     await this.ensureDocumentLoaded(payload.documentId);
     return this.requestWithDocumentRecovery(
       payload.documentId,
-      () => this.request<AutoAnalyzeResult>('auto-analyze', payload),
+      () => this.request<AutoAnalyzeResult>('auto-analyze', this.withCameraColorMatrix(payload)),
       true,
     );
   }
@@ -1745,7 +1762,7 @@ export class ImageWorkerClient {
     this.noteExportStateChange(1);
     try {
       await this.ensureDocumentLoaded(payload.documentId);
-      const result = await this.exportInternal(payload, true);
+      const result = await this.exportInternal(this.withCameraColorMatrix(payload), true);
       return finalizeExportBlob(result, payload.options, payload.sourceExif);
     } finally {
       this.noteExportStateChange(-1);
@@ -1979,6 +1996,7 @@ export class ImageWorkerClient {
     }
     this.decodeCache.delete(documentId);
     this.documentCalibration.delete(documentId);
+    this.cameraColorMatrices.delete(documentId);
     this.documentRecovery.delete(documentId);
     this.activePreviewJobIds.delete(documentId);
     return this.request<{ disposed: true }>('dispose', { documentId });

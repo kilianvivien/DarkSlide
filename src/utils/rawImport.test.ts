@@ -585,6 +585,15 @@ describe('decodeRawIpcPayload', () => {
     expect(Array.from(result.data)).toEqual(sample.data);
   });
 
+  it('carries the camera matrix of a camera-native decode', () => {
+    const matrix = [1.5, -0.25, -0.25, 0, 1, 0, 0, 0, 1];
+    expect(decodeRawIpcPayload(rawIpcPayload({ ...sample, cameraColorMatrix: matrix })).cameraColorMatrix).toEqual(matrix);
+    expect(decodeRawIpcPayload(rawIpcPayload(sample)).cameraColorMatrix).toBeNull();
+    const request = createWorkerDecodeRequestFromRaw('doc', 'scan.nef', 1,
+      decodeRawIpcPayload(rawIpcPayload({ ...sample, cameraColorMatrix: matrix })));
+    expect(request.cameraColorMatrix).toEqual(matrix);
+  });
+
   it('reports a missing orientation as null', () => {
     expect(decodeRawIpcPayload(rawIpcPayload({ ...sample, orientation: null })).orientation).toBeNull();
   });

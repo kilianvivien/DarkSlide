@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::{Condvar, Mutex, OnceLock};
 
 use rawler::analyze::{analyze_metadata, AnalyzerData};
-use rawler::imgop::develop::{ProcessingStep, RawDevelop};
+use rawler::imgop::develop::{Intermediate, ProcessingStep, RawDevelop};
 use serde::{Deserialize, Serialize};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
@@ -27,12 +27,14 @@ const GITHUB_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 // 16..20  height (u32)
 // 20..22  EXIF orientation (u16, 0 = none)
 // 22      transfer (u8, 0 = sRGB)
-// 23      colour space (u8, 0 = sRGB)
+// 23      colour space (u8, 0 = sRGB, 1 = camera-native RGB, sRGB-encoded)
 // 24..32  sample count (u64, width * height * 3)
-// 32..    RGB samples (u16 little-endian)
+// 32..68  camera RGB -> linear sRGB matrix (9 x f32, row-major; zero when
+//         the samples are already sRGB), applied after inversion
+// 68..    RGB samples (u16 little-endian)
 const RAW_IPC_MAGIC: &[u8; 8] = b"DSRIPC01";
-const RAW_IPC_VERSION: u16 = 1;
-const RAW_IPC_HEADER_BYTES: usize = 32;
+const RAW_IPC_VERSION: u16 = 2;
+const RAW_IPC_HEADER_BYTES: usize = 68;
 // Full-size RAW buffers are large; bound how many are developed at once.
 const RAW_DECODE_CONCURRENCY: usize = 2;
 
@@ -118,6 +120,8 @@ struct DecodedRaw {
     height: u32,
     data: Vec<u16>,
     orientation: Option<u16>,
+    // Set when `data` is camera-native RGB: the matrix that maps it to sRGB.
+    camera_to_srgb: Option<[f32; 9]>,
 }
 
 struct DecodeLimiter {
@@ -184,8 +188,11 @@ fn encode_raw_ipc_payload(decoded: &DecodedRaw) -> Result<Vec<u8>, String> {
     bytes.extend_from_slice(&decoded.height.to_le_bytes());
     bytes.extend_from_slice(&decoded.orientation.unwrap_or(0).to_le_bytes());
     bytes.push(0);
-    bytes.push(0);
+    bytes.push(u8::from(decoded.camera_to_srgb.is_some()));
     bytes.extend_from_slice(&expected_samples.to_le_bytes());
+    for value in decoded.camera_to_srgb.unwrap_or([0.0; 9]) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
     debug_assert_eq!(bytes.len(), RAW_IPC_HEADER_BYTES);
     for sample in &decoded.data {
         bytes.extend_from_slice(&sample.to_le_bytes());
@@ -229,12 +236,84 @@ async fn decode_raw(path: String) -> Result<RawDecodeResult, String> {
     .await
 }
 
-fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
-    let raw_image = rawler::decode_file(path).map_err(|error| error.to_string())?;
+// sRGB primaries to XYZ (D65), as rawler uses for its own calibration.
+const SRGB_TO_XYZ_D65: [[f32; 3]; 3] = [
+    [0.4124564, 0.3575761, 0.1804375],
+    [0.2126729, 0.7151522, 0.0721750],
+    [0.0193339, 0.1191920, 0.9503041],
+];
+
+// Camera RGB -> sRGB for white-balanced camera data, built the way rawler's
+// calibration builds it: rows of (XYZ->camera x sRGB->XYZ) normalized so a
+// neutral stays neutral, then inverted. DarkSlide applies it to the inverted
+// positive, whose channels the film base has already balanced, so it can
+// restore colour separation without ever pushing a negative's channels below
+// zero.
+fn camera_to_srgb_matrix(raw_image: &rawler::RawImage) -> Option<[f32; 9]> {
+    use rawler::imgop::xyz::Illuminant;
+
+    let matrix = raw_image
+        .color_matrix
+        .get(&Illuminant::D65)
+        .or_else(|| raw_image.color_matrix.values().next())?;
+    camera_to_srgb_from_xyz_to_camera(matrix)
+}
+
+fn camera_to_srgb_from_xyz_to_camera(matrix: &[f32]) -> Option<[f32; 9]> {
+    if matrix.len() != 9 {
+        return None;
+    }
+    let mut rgb_to_camera = [[0.0f32; 3]; 3];
+    for (row, values) in rgb_to_camera.iter_mut().enumerate() {
+        for (column, value) in values.iter_mut().enumerate() {
+            *value = (0..3).map(|k| matrix[row * 3 + k] * SRGB_TO_XYZ_D65[k][column]).sum();
+        }
+        let sum: f32 = values.iter().sum();
+        if !sum.is_finite() || sum.abs() < 1e-6 {
+            return None;
+        }
+        values.iter_mut().for_each(|value| *value /= sum);
+    }
+    let [[a, b, c], [d, e, f], [g, h, i]] = rgb_to_camera;
+    let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if !determinant.is_finite() || determinant.abs() < 1e-6 {
+        return None;
+    }
+    let inverse = [
+        (e * i - f * h) / determinant,
+        (c * h - b * i) / determinant,
+        (b * f - c * e) / determinant,
+        (f * g - d * i) / determinant,
+        (a * i - c * g) / determinant,
+        (c * d - a * f) / determinant,
+        (d * h - e * g) / determinant,
+        (b * g - a * h) / determinant,
+        (a * e - b * d) / determinant,
+    ];
+    inverse.iter().all(|value| value.is_finite()).then_some(inverse)
+}
+
+fn srgb_encode(value: f32) -> f32 {
+    let value = value.clamp(0.0, 1.0);
+    if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+fn camera_native_to_srgb_u16(pixels: &[[f32; 3]]) -> Vec<u16> {
+    let mut data = Vec::with_capacity(pixels.len() * 3);
+    for pixel in pixels {
+        for value in pixel {
+            data.push((srgb_encode(*value) * 65535.0).round() as u16);
+        }
+    }
+    data
+}
+
+fn develop_calibrated_rgb16(raw_image: &rawler::RawImage) -> Result<(u32, u32, Vec<u16>), String> {
     let developed = RawDevelop {
-        // Camera white balance is tuned for the photographed scene, not for an
-        // orange film negative. Applying it here makes DarkSlide's own negative
-        // conversion start from an already-skewed source.
         steps: vec![
             ProcessingStep::Rescale,
             ProcessingStep::Demosaic,
@@ -244,7 +323,7 @@ fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
             ProcessingStep::SRgb,
         ],
     }
-        .develop_intermediate(&raw_image)
+        .develop_intermediate(raw_image)
         .and_then(|intermediate| {
             intermediate
                 .to_dynamic_image()
@@ -252,6 +331,49 @@ fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
         })
         .map_err(|error| error.to_string())?;
     let rgb = developed.to_rgb16();
+    Ok((rgb.width(), rgb.height(), rgb.into_raw()))
+}
+
+fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
+    let raw_image = rawler::decode_file(path).map_err(|error| error.to_string())?;
+
+    // Film is inverted in the sensor's own RGB. The camera colour matrix is
+    // built for white-balanced scene light, not for light through a film
+    // base: applied to an orange mask without white balance it subtracts a
+    // large share of the bright green from the dim blue, drives the blue of
+    // yellow-dense areas below zero and rawler clips it to black. Those pixels
+    // then read as maximum blue density and invert to flat, saturated blue.
+    // No gains either: any per-channel gain cancels against the film base in
+    // the density inversion (and in slide base normalization), while unity
+    // keeps every sample below sensor clipping whatever the scan exposure,
+    // light source or camera. Camera white balance is never applied: it is
+    // tuned for the photographed scene, not for film.
+    let native = RawDevelop {
+        steps: vec![
+            ProcessingStep::Rescale,
+            ProcessingStep::Demosaic,
+            ProcessingStep::CropActiveArea,
+            ProcessingStep::CropDefault,
+        ],
+    }
+        .develop_intermediate(&raw_image)
+        .ok()
+        .and_then(|intermediate| match intermediate {
+            Intermediate::ThreeColor(pixels) => Some((
+                pixels.width as u32,
+                pixels.height as u32,
+                camera_native_to_srgb_u16(&pixels.data),
+            )),
+            _ => None,
+        });
+    // Monochrome and four-colour sensors keep the calibrated development.
+    let (width, height, data, camera_to_srgb) = match native {
+        Some((width, height, data)) => (width, height, data, camera_to_srgb_matrix(&raw_image)),
+        None => {
+            let (width, height, data) = develop_calibrated_rgb16(&raw_image)?;
+            (width, height, data, None)
+        }
+    };
 
     let orientation = analyze_metadata(path)
         .ok()
@@ -261,10 +383,11 @@ fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
         });
 
     Ok(DecodedRaw {
-        width: rgb.width(),
-        height: rgb.height(),
-        data: rgb.into_raw(),
+        width,
+        height,
+        data,
         orientation,
+        camera_to_srgb,
     })
 }
 
@@ -864,9 +987,34 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn camera_matrix_keeps_neutrals_neutral() {
+        // Nikon Z 6 D65 matrix from rawler's camera data.
+        let matrix = [0.9943, -0.3269, -0.0839, -0.5323, 1.3269, 0.2259, -0.1198, 0.2083, 0.7557];
+        let m = camera_to_srgb_from_xyz_to_camera(&matrix).expect("matrix");
+        for row in 0..3 {
+            let sum: f32 = m[row * 3..row * 3 + 3].iter().sum();
+            assert!((sum - 1.0).abs() < 1e-4, "row {row} sums to {sum}");
+        }
+        assert!((m[0] - 1.597).abs() < 1e-2 && (m[8] - 1.392).abs() < 1e-2);
+        assert!(camera_to_srgb_from_xyz_to_camera(&matrix[..6]).is_none());
+    }
+
+    #[test]
+    fn camera_native_pixels_are_encoded_without_gains_or_negatives() {
+        let data = camera_native_to_srgb_u16(&[[0.0, 0.25, 1.0], [-0.1, 0.001, 2.0]]);
+        assert_eq!(data[0], 0);
+        assert_eq!(data[1], (srgb_encode(0.25) * 65535.0).round() as u16);
+        assert_eq!(data[2], 65535);
+        assert_eq!(data[3], 0);
+        assert_eq!(data[4], (0.001 * 12.92 * 65535.0f32).round() as u16);
+        assert_eq!(data[5], 65535);
+    }
+
     use super::{
-        candidate_filename, encode_raw_ipc_payload, next_available_file_path,
-        save_blob_to_directory_inner, DecodeLimiter, DecodedRaw, RAW_IPC_HEADER_BYTES,
+        camera_native_to_srgb_u16, camera_to_srgb_from_xyz_to_camera, candidate_filename, encode_raw_ipc_payload,
+        next_available_file_path, save_blob_to_directory_inner,
+        srgb_encode, DecodeLimiter, DecodedRaw, RAW_IPC_HEADER_BYTES,
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -880,16 +1028,20 @@ mod tests {
             height: 1,
             data: vec![0, 1, 0xABCD, 65535, 256, 2],
             orientation: Some(6),
+            camera_to_srgb: Some([1.5, -0.25, -0.25, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
         };
         let bytes = encode_raw_ipc_payload(&decoded).expect("payload");
 
         assert_eq!(&bytes[0..8], b"DSRIPC01");
-        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 1);
+        assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 2);
         assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 16);
         assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 2);
         assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 1);
         assert_eq!(u16::from_le_bytes([bytes[20], bytes[21]]), 6);
+        assert_eq!(bytes[23], 1);
         assert_eq!(u64::from_le_bytes(bytes[24..32].try_into().unwrap()), 6);
+        assert_eq!(f32::from_le_bytes(bytes[32..36].try_into().unwrap()), 1.5);
+        assert_eq!(f32::from_le_bytes(bytes[36..40].try_into().unwrap()), -0.25);
         assert_eq!(bytes.len(), RAW_IPC_HEADER_BYTES + 12);
         let samples: Vec<u16> = bytes[RAW_IPC_HEADER_BYTES..]
             .chunks_exact(2)
@@ -900,7 +1052,7 @@ mod tests {
 
     #[test]
     fn rejects_raw_payloads_whose_sample_count_does_not_match() {
-        let decoded = DecodedRaw { width: 2, height: 2, data: vec![0; 5], orientation: None };
+        let decoded = DecodedRaw { width: 2, height: 2, data: vec![0; 5], orientation: None, camera_to_srgb: None };
         assert!(encode_raw_ipc_payload(&decoded).is_err());
     }
 
