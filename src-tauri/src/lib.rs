@@ -1,4 +1,3 @@
-mod watcher;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -480,8 +479,6 @@ struct RecentMenuState {
     submenu: std::sync::Mutex<tauri::menu::Submenu<tauri::Wry>>,
 }
 
-struct WatcherState(Mutex<Option<watcher::FolderWatcher>>);
-
 #[tauri::command]
 fn update_recent_files_menu(
     app: tauri::AppHandle,
@@ -518,36 +515,6 @@ fn update_recent_files_menu(
     submenu.append(&clear_item).map_err(|error| error.to_string())?;
 
     Ok(())
-}
-
-#[tauri::command]
-async fn start_watching(
-    path: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, WatcherState>,
-) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|error| error.to_string())?;
-    if let Some(existing) = guard.take() {
-        existing.stop()?;
-    }
-
-    let watcher = watcher::FolderWatcher::start(app, path)?;
-    *guard = Some(watcher);
-    Ok(())
-}
-
-#[tauri::command]
-async fn stop_watching(state: tauri::State<'_, WatcherState>) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|error| error.to_string())?;
-    if let Some(existing) = guard.take() {
-        existing.stop()?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn is_watching(state: tauri::State<'_, WatcherState>) -> bool {
-    state.0.lock().map(|guard| guard.is_some()).unwrap_or(false)
 }
 
 #[cfg(target_os = "macos")]
@@ -685,16 +652,12 @@ pub fn run() {
             write_text_file_by_path,
             drain_opened_files,
             update_recent_files_menu,
-            start_watching,
-            stop_watching,
-            is_watching,
             get_updater_status,
             check_for_update,
             install_update_and_restart
         ])
         .setup(|app| {
             app.manage(PendingUpdate::default());
-            app.manage(WatcherState(Mutex::new(None)));
             let import_item = MenuItemBuilder::with_id("open", "Import...")
                 .accelerator("CmdOrCtrl+O")
                 .build(app)?;
@@ -744,10 +707,6 @@ pub fn run() {
                 MenuItemBuilder::with_id("toggle-profiles-pane", "Film Profiles")
                     .accelerator("CmdOrCtrl+Shift+\\")
                     .build(app)?;
-            let scan_session_item =
-                MenuItemBuilder::with_id("scan-session-toggle", "Scanning Session")
-                    .accelerator("CmdOrCtrl+Shift+W")
-                    .build(app)?;
 let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
                 .accelerator("CmdOrCtrl+0")
                 .build(app)?;
@@ -782,8 +741,6 @@ let zoom_fit_item = MenuItemBuilder::with_id("zoom-fit", "Zoom to Fit")
                 .item(&batch_export_item)
                 .item(&convert_files_item)
                 .item(&open_in_editor_item)
-                .separator()
-                .item(&scan_session_item)
                 .separator()
                 .item(&close_image_item)
                 .build()?;

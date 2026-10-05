@@ -3,7 +3,6 @@ import { Analytics } from '@vercel/analytics/react';
 import { DEFAULT_DUST_REMOVAL, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS, FILM_PROFILES, LAB_STYLE_PROFILES, LAB_STYLE_PROFILES_MAP, LIGHT_SOURCE_PROFILES, resolveDustRemovalSettings } from './constants';
 import { AppShell } from './components/AppShell';
 import { RollInfoModal } from './components/RollInfoModal';
-import { useScanningSessionWindow } from './hooks/useScanningSessionWindow';
 import { UpdateBanner } from './components/UpdateBanner';
 import { ColorMatrix, ConversionSettings, CropTab, DocumentHistoryEntry, EditorTool, ExportOptions, FilmProfile, HistogramMode, InputProfileSpec, InteractionQuality, MaskTuning, NotificationSettings, PointPickerMode, RenderBackendDiagnostics, Roll, TonalCharacter, UpdateChannel, WorkspaceDocument } from './types';
 import { useCustomPresets } from './hooks/useCustomPresets';
@@ -15,7 +14,6 @@ import { useWorkspaceCommands } from './hooks/useWorkspaceCommands';
 import { useCustomLightSources } from './hooks/useCustomLightSources';
 import { useViewportZoom, WheelZoomOptions } from './hooks/useViewportZoom';
 import { useRolls } from './hooks/useRolls';
-import { useScanningSession } from './hooks/useScanningSession';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { appendDiagnostic } from './utils/diagnostics';
 import { confirmDeleteRoll, confirmFilmBaseReanalysis, confirmIncludeManualCrops, confirmOverwriteAutoAdjust, confirmReplacePresetLibrary, confirmSyncFilmBase, confirmSyncSettings, isDesktopShell, openDirectory, openImageFileByPath, openPresetBackupFile, promptText, registerBeforeUnloadGuard, savePresetBackupFile, saveExportBlob, saveToDirectory } from './utils/fileBridge';
@@ -23,7 +21,6 @@ import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences, savePreferences, UserPrefer
 import { ImageWorkerClient } from './utils/imageWorkerClient';
 import { cubeLutSignature } from './utils/cubeLut';
 import { computeHighlightDensity, getTransformedDimensions } from './utils/imagePipeline';
-import { getAutoFrameCrop } from './utils/frameDetection';
 import { applyStabilizedFrameToTab, planRollFrames, RollFrameMeasurement } from './utils/rollCropStabilization';
 import { captureThumbnail, FilmstripThumbnail, getThumbnailKey } from './utils/filmstripThumbnails';
 import { applySelectionClick, FilmstripSelection, reconcileSelection } from './utils/filmstripSelection';
@@ -138,9 +135,6 @@ export default function App() {
   const [defaultExportPath, setDefaultExportPath] = useState<string | null>(() => initialPreferences?.defaultExportPath ?? null);
   const [batchOutputPath, setBatchOutputPath] = useState<string | null>(() => initialPreferences?.batchOutputPath ?? null);
   const [contactSheetOutputPath, setContactSheetOutputPath] = useState<string | null>(() => initialPreferences?.contactSheetOutputPath ?? null);
-  const [scanningWatchPath, setScanningWatchPath] = useState<string | null>(() => initialPreferences?.scanningWatchPath ?? null);
-  const [scanningAutoExport, setScanningAutoExport] = useState(() => initialPreferences?.scanningAutoExport ?? false);
-  const [scanningAutoExportPath, setScanningAutoExportPath] = useState<string | null>(() => initialPreferences?.scanningAutoExportPath ?? null);
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => initialPreferences?.updateChannel ?? 'stable');
   const [defaultExportOptions, setDefaultExportOptions] = useState<ExportOptions>(() => initialPreferences?.exportOptions ?? DEFAULT_EXPORT_OPTIONS);
   const [quickExportPresets, setQuickExportPresets] = useState(() => loadQuickExportPresets());
@@ -480,9 +474,6 @@ export default function App() {
     defaultExportPath: initialPreferences?.defaultExportPath ?? null,
     batchOutputPath: initialPreferences?.batchOutputPath ?? null,
     contactSheetOutputPath: initialPreferences?.contactSheetOutputPath ?? null,
-    scanningWatchPath: initialPreferences?.scanningWatchPath ?? null,
-    scanningAutoExport: initialPreferences?.scanningAutoExport ?? false,
-    scanningAutoExportPath: initialPreferences?.scanningAutoExportPath ?? null,
     updateChannel: initialPreferences?.updateChannel ?? 'stable',
   });
   prefsSnapshotRef.current = {
@@ -504,9 +495,6 @@ export default function App() {
     defaultExportPath,
     batchOutputPath,
     contactSheetOutputPath,
-    scanningWatchPath,
-    scanningAutoExport,
-    scanningAutoExportPath,
     updateChannel,
   };
 
@@ -1879,7 +1867,6 @@ export default function App() {
     handleCanvasClick,
     handleCopyDebugInfo,
     handleDrop,
-    handleSelectTab,
     handleReorderTabs,
     handleSidebarScrollTopChange,
     handleTitleBarMouseDown,
@@ -2890,119 +2877,6 @@ export default function App() {
     setActiveRollInfoId(null);
   }, [assignToRoll, deleteRoll, getDocumentsInRoll, rolls]);
 
-const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
-    const worker = workerClientRef.current;
-    const tab = tabsRef.current.find((candidate) => candidate.id === documentId) ?? null;
-    if (!worker || !tab) {
-      return;
-    }
-
-    const profile = resolveDocumentProfile(tab.document, profilesById, fallbackProfile);
-    const labStyle = tab.document.labStyleId ? LAB_STYLE_PROFILES_MAP[tab.document.labStyleId] ?? null : null;
-    const outputProfileId = tab.document.colorManagement.outputProfileId ?? DEFAULT_EXPORT_OPTIONS.outputProfileId;
-    const lightSourceBias = lightSourceProfilesById.get(tab.document.lightSourceId ?? 'auto')?.spectralBias ?? [1, 1, 1];
-    const result = await worker.autoAnalyze({
-      documentId,
-      settings: tab.document.settings,
-      isColor: usesColorChannelPipeline(profile),
-      profileId: profile.id,
-      filmType: profile.filmType,
-      inputProfileId: getResolvedInputProfileId(tab.document.source, tab.document.colorManagement),
-      outputProfileId,
-      targetMaxDimension: Math.min(targetMaxDimension, 1024),
-      maskTuning: profile.maskTuning,
-      colorMatrix: profile.colorMatrix,
-      tonalCharacter: profile.tonalCharacter,
-      cubeLut: profile.lut ?? null,
-      labStyleToneCurve: labStyle?.toneCurve,
-      labStyleChannelCurves: labStyle?.channelCurves,
-      labTonalCharacterOverride: labStyle?.tonalCharacterOverride,
-      labSaturationBias: labStyle?.saturationBias ?? 0,
-      labTemperatureBias: labStyle?.temperatureBias ?? 0,
-      highlightDensityEstimate: tab.document.histogram ? computeHighlightDensity(tab.document.histogram) : 0,
-      flareFloor: tab.document.estimatedFlare,
-      lightSourceBias,
-    });
-
-    updateTabById(documentId, (currentTab) => {
-      if (currentTab.document.settings !== tab.document.settings
-        || currentTab.document.profileId !== tab.document.profileId
-        || currentTab.document.labStyleId !== tab.document.labStyleId
-        || currentTab.document.lightSourceId !== tab.document.lightSourceId
-        || currentTab.document.colorManagement !== tab.document.colorManagement) return currentTab;
-      const curveOverrides: Partial<ConversionSettings> = {};
-      if (result.suggestedCurves || result.midtoneBoostPoint) {
-        const currentCurves = currentTab.document.settings.curves;
-        curveOverrides.curves = {
-          ...currentCurves,
-          rgb: result.midtoneBoostPoint
-            ? [{ x: 0, y: 0 }, result.midtoneBoostPoint, { x: 255, y: 255 }]
-            : currentCurves.rgb,
-          red: result.suggestedCurves?.redFloor !== null && result.suggestedCurves?.redFloor !== undefined
-            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.redFloor, y: 0 }, { x: 255, y: 255 }]
-            : currentCurves.red,
-          green: result.suggestedCurves?.greenFloor !== null && result.suggestedCurves?.greenFloor !== undefined
-            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.greenFloor, y: 0 }, { x: 255, y: 255 }]
-            : currentCurves.green,
-          blue: result.suggestedCurves?.blueFloor !== null && result.suggestedCurves?.blueFloor !== undefined
-            ? [{ x: 0, y: 0 }, { x: result.suggestedCurves.blueFloor, y: 0 }, { x: 255, y: 255 }]
-            : currentCurves.blue,
-        };
-      }
-      return {
-        ...currentTab,
-        document: {
-          ...currentTab.document,
-          settings: {
-            ...currentTab.document.settings,
-            exposure: result.exposure,
-            blackPoint: result.blackPoint,
-            whitePoint: result.whitePoint,
-            temperature: result.temperature ?? currentTab.document.settings.temperature,
-            tint: result.tint ?? currentTab.document.settings.tint,
-            ...(result.contrast !== null ? { contrast: result.contrast } : {}),
-            ...curveOverrides,
-          },
-          dirty: true,
-        },
-      };
-    });
-  }, [fallbackProfile, lightSourceProfilesById, profilesById, tabsRef, targetMaxDimension, updateTabById]);
-
-  const runAutoCropForDocument = useCallback(async (documentId: string) => {
-    const worker = workerClientRef.current;
-    if (!worker) {
-      return;
-    }
-
-    const detected = await worker.detectFrame(documentId);
-    if (!detected) {
-      return;
-    }
-
-    updateTabById(documentId, (currentTab) => ({
-      ...currentTab,
-      document: {
-        ...currentTab.document,
-        settings: {
-          ...currentTab.document.settings,
-          // Measured on the unrotated source: map into the displayed
-          // orientation. The detected tilt is not applied automatically, and
-          // a manual level angle is preserved.
-          crop: getAutoFrameCrop(
-            detected,
-            currentTab.document.settings.rotation,
-            currentTab.document.settings.levelAngle,
-            currentTab.document.source.width,
-            currentTab.document.source.height,
-          ),
-        },
-        cropSource: 'auto',
-        dirty: true,
-      },
-    }));
-  }, [updateTabById]);
-
   // Exports one open frame with its own settings and profile. `optionsOverride`
   // applies shared output settings (format, size, colour) while the frame
   // keeps its own file name.
@@ -3043,13 +2917,6 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     });
     return { result, worker, tab };
   }, [fallbackProfile, lightSourceProfilesById, profilesById, tabsRef]);
-
-  const exportDocumentToDirectory = useCallback(async (documentId: string, outputPath: string) => {
-    const rendered = await renderDocumentExport(documentId);
-    if (!rendered) return;
-    await saveToDirectory(rendered.result.blob, rendered.result.filename, outputPath);
-    await rendered.worker.evictPreviews(documentId).catch(() => undefined);
-  }, [renderDocumentExport]);
 
   // Exports several frames, each with its own look, using the output settings
   // of the frame being edited (the Export panel). Unlike Convert Files, no
@@ -3136,86 +3003,7 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onSaved: handleContactSheetSaved,
   });
 
-  const processScannedFile = useCallback(async (path: string, options: { autoExport: boolean; autoExportPath: string | null }) => {
-    const result = await openImageFileByPath(path);
-    if (!result) {
-      throw new Error('Could not open scanned file.');
-    }
-
-    const documentId = await importFile(result.file, result.path, result.size);
-    if (!documentId) {
-      throw new Error('Could not import scanned file.');
-    }
-
-    await runAutoCropForDocument(documentId).catch(() => undefined);
-    await runAutoAdjustForDocument(documentId).catch(() => undefined);
-
-    if (options.autoExport && options.autoExportPath) {
-      await exportDocumentToDirectory(documentId, options.autoExportPath);
-      return { documentId, exported: true };
-    }
-
-    return { documentId, exported: false };
-  }, [exportDocumentToDirectory, importFile, runAutoAdjustForDocument, runAutoCropForDocument]);
-
-  const { session: scanningSession, startWatching, stopWatching, setAutoExport: configureScanningAutoExport, setWatchPath: setScanningSessionWatchPath, setAutoExportPath: setScanningSessionAutoExportPath, clearQueue: clearScanningQueue } = useScanningSession({
-    initialWatchPath: scanningWatchPath,
-    initialAutoExport: scanningAutoExport,
-    initialAutoExportPath: scanningAutoExportPath,
-    processScan: processScannedFile,
-  });
-
   const { state: updateState, checkNow: checkForUpdatesNow, startDownload: downloadUpdateNow, dismiss: dismissUpdate } = useAutoUpdate(updateChannel);
-
-  const handleChooseScanningWatchPath = useCallback(async () => {
-    const selected = await openDirectory();
-    if (!selected) {
-      return;
-    }
-    setScanningWatchPath(selected);
-    setScanningSessionWatchPath(selected);
-    savePreferences({ ...prefsSnapshotRef.current, scanningWatchPath: selected });
-  }, [setScanningSessionWatchPath]);
-
-  const handleChooseScanningAutoExportPath = useCallback(async () => {
-    const selected = await openDirectory();
-    if (!selected) {
-      return;
-    }
-    setScanningAutoExportPath(selected);
-    setScanningSessionAutoExportPath(selected);
-    savePreferences({ ...prefsSnapshotRef.current, scanningAutoExportPath: selected });
-  }, [setScanningSessionAutoExportPath]);
-
-  const handleToggleScanningWatcher = useCallback(async () => {
-    if (scanningSession.isWatching) {
-      await stopWatching();
-      return;
-    }
-
-    if (!scanningSession.watchPath) {
-      await handleChooseScanningWatchPath();
-      return;
-    }
-
-    await startWatching(scanningSession.watchPath);
-  }, [handleChooseScanningWatchPath, scanningSession.isWatching, scanningSession.watchPath, startWatching, stopWatching]);
-
-  const handleScanningAutoExportChange = useCallback((enabled: boolean) => {
-    setScanningAutoExport(enabled);
-    configureScanningAutoExport(enabled, scanningAutoExportPath);
-    savePreferences({ ...prefsSnapshotRef.current, scanningAutoExport: enabled });
-  }, [configureScanningAutoExport, scanningAutoExportPath]);
-
-  const { toggleScanningWindow } = useScanningSessionWindow({
-    session: scanningSession,
-    onPickWatchPath: () => { void handleChooseScanningWatchPath(); },
-    onToggleWatching: () => { void handleToggleScanningWatcher(); },
-    onToggleAutoExport: handleScanningAutoExportChange,
-    onPickAutoExportPath: () => { void handleChooseScanningAutoExportPath(); },
-    onSelectTab: handleSelectTab,
-    onClearQueue: clearScanningQueue,
-  });
 
   const handleUpdateChannelChange = useCallback((channel: UpdateChannel) => {
     setUpdateChannel(channel);
@@ -3280,7 +3068,6 @@ const runAutoAdjustForDocument = useCallback(async (documentId: string) => {
     onSelectTool: handleSelectTool,
     hasFrameSelection: filmstripSelection.ids.length > 1,
     onClearFrameSelection: handleClearFilmstripSelection,
-onToggleScanningSession: toggleScanningWindow,
     onCheckForUpdates: () => { void checkForUpdatesNow(); },
     zoomToFit: zoomToFitWithDraft,
     zoomTo100: zoomTo100WithDraft,

@@ -1890,9 +1890,6 @@ describe('App import and preview pipeline', () => {
       defaultExportPath: null,
       batchOutputPath: null,
       contactSheetOutputPath: null,
-      scanningWatchPath: null,
-      scanningAutoExport: false,
-      scanningAutoExportPath: null,
       updateChannel: 'stable',
     }));
     fileBridgeState.isDesktopShell.mockReturnValue(true);
@@ -2001,9 +1998,6 @@ describe('App import and preview pipeline', () => {
       defaultExportPath: null,
       batchOutputPath: null,
       contactSheetOutputPath: null,
-      scanningWatchPath: null,
-      scanningAutoExport: false,
-      scanningAutoExportPath: null,
       updateChannel: 'stable',
     }));
     fileBridgeState.isDesktopShell.mockReturnValue(true);
@@ -2619,9 +2613,6 @@ describe('App import and preview pipeline', () => {
       defaultExportPath: null,
       batchOutputPath: null,
       contactSheetOutputPath: null,
-      scanningWatchPath: null,
-      scanningAutoExport: false,
-      scanningAutoExportPath: null,
       updateChannel: 'stable',
     }));
 
@@ -2685,9 +2676,6 @@ describe('App import and preview pipeline', () => {
       defaultExportPath: null,
       batchOutputPath: null,
       contactSheetOutputPath: null,
-      scanningWatchPath: null,
-      scanningAutoExport: false,
-      scanningAutoExportPath: null,
       updateChannel: 'stable',
     }));
 

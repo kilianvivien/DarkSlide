@@ -35,9 +35,6 @@ const VALID_PREFS: UserPreferences = {
   defaultExportPath: null,
   batchOutputPath: null,
   contactSheetOutputPath: null,
-  scanningWatchPath: null,
-  scanningAutoExport: false,
-  scanningAutoExportPath: null,
   updateChannel: 'stable',
 };
 

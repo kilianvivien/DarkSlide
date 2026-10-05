@@ -42,7 +42,6 @@ type UseAppShortcutsOptions = {
   onSelectTool: (tool: EditorTool) => void;
   hasFrameSelection: boolean;
   onClearFrameSelection: () => void;
-  onToggleScanningSession: () => void;
   onCheckForUpdates: () => void;
   zoomToFit: () => void;
   zoomTo100: () => void;
@@ -88,7 +87,6 @@ export function useAppShortcuts({
   onSelectTool,
   hasFrameSelection,
   onClearFrameSelection,
-  onToggleScanningSession,
   onCheckForUpdates,
   zoomToFit,
   zoomTo100,
@@ -121,7 +119,6 @@ export function useAppShortcuts({
       clearFrameSelection: { key: 'escape', when: () => !dustBrushActive && hasFrameSelection, handler: onClearFrameSelection },
       // Multi-frame export lives in the Export panel; Convert Files opens from there.
       exportFrames: { key: 'e', meta: true, shift: true, handler: () => onSelectTool('export') },
-      toggleScanningSession: { key: 'w', meta: true, shift: true, when: () => usesNativeFileDialogs, handler: onToggleScanningSession },
 previousTab: {
         key: '[',
         meta: true,
@@ -229,9 +226,6 @@ previousTab: {
           break;
         case 'show-settings':
           setShowSettingsModal(true);
-          break;
-        case 'scan-session-toggle':
-          onToggleScanningSession();
           break;
 case 'check-for-updates':
           onCheckForUpdates();

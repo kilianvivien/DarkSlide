@@ -36,7 +36,6 @@ export const SHORTCUTS: ShortcutReference[] = [
   { action: 'Export several frames', keys: [SHORTCUT_MODIFIER, '⇧', 'E'] },
   { action: 'Quick export presets', keys: [SHORTCUT_MODIFIER, '⇧', '1–4'] },
   { action: 'Open in editor', keys: [SHORTCUT_MODIFIER, '⇧', 'O'] },
-  { action: 'Scanning session', keys: [SHORTCUT_MODIFIER, '⇧', 'W'] },
   { action: 'Fit to window', keys: [SHORTCUT_MODIFIER, '0'] },
   { action: 'Zoom to 100%', keys: [SHORTCUT_MODIFIER, '1'] },
   { action: 'Zoom in / out', keys: [SHORTCUT_MODIFIER, '=', '−'] },

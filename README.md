@@ -128,7 +128,6 @@ See the [v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/release
 
 ### Organize & Export
 - **Roll management** — group frames into rolls with film stock metadata, sync settings or the film base across a roll, and stabilize crops
-- **Scanning sessions** — live folder watch that imports frames as your scanner writes them (desktop only)
 - **Filmstrip** — all open frames with status at a glance; select several to sync their look, stabilize crops or export them together
 - **Export frames** — export the current frame, a selection or every open frame, each with its own edits
 - **Convert files** — apply one shared recipe to scans you haven't opened
@@ -160,7 +159,7 @@ See the [v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/release
 
 **Windows & Linux** experimental builds are available starting with v0.6.0. Unsigned and not yet production-tested — feedback welcome.
 
-> DarkSlide also works entirely in the browser — no install needed. The desktop app adds RAW support, scanning sessions, and native OS integration.
+> DarkSlide also works entirely in the browser — no install needed. The desktop app adds RAW support and native OS integration.
 
 ## macOS Installation Note
 

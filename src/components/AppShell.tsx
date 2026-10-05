@@ -577,7 +577,7 @@ export function AppShell({
     };
   }, [effectiveZoom, logicalPreviewSize.height, logicalPreviewSize.width, pan, viewportRef]);
 
-  // Without an open frame only Film profiles (rolls, scanning sessions) has
+  // Without an open frame only Film profiles (presets, LUT import) has
   // anything to show, so the other panels stay closed and the drop zone gets
   // the whole window.
   const inspectorVisible = isLeftPaneOpen && (Boolean(documentState) || sidebarTab === 'profiles');
