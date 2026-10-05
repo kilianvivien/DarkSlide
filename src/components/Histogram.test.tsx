@@ -63,12 +63,13 @@ describe('Histogram', () => {
     expect(screen.getByRole('button', { name: 'Show red histogram' })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('makes the logarithmic scale explicit', () => {
+  it('defaults to the logarithmic scale and makes it explicit', () => {
     render(<Histogram data={saturatedRedHistogram()} />);
     const log = screen.getByRole('button', { name: 'Logarithmic histogram scale' });
-    expect(log).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(log);
     expect(log).toHaveAttribute('aria-pressed', 'true');
     expect(log.getAttribute('data-tip')).toMatch(/Logarithmic/);
+    fireEvent.click(log);
+    expect(log).toHaveAttribute('aria-pressed', 'false');
+    expect(log.getAttribute('data-tip')).toMatch(/Linear/);
   });
 });

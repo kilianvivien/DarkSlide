@@ -44,7 +44,7 @@ function describeClipping(stats: ClippingStats, endpoint: 0 | 255, neutral: bool
 
 export const Histogram = memo(function Histogram({ data, variant = 'color' }: HistogramProps) {
   const [hiddenChannels, setHiddenChannels] = useState<ReadonlySet<HistogramChannel>>(() => new Set());
-  const [scale, setScale] = useState<'linear' | 'log'>('linear');
+  const [scale, setScale] = useState<'linear' | 'log'>('log');
 
   const neutral = variant === 'neutral';
   const availableChannels = useMemo(
