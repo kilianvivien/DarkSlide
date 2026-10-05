@@ -589,6 +589,11 @@ export function AppShell({
     thumbnailUrl: cell.thumbnailUrl ?? filmstripThumbnails[cell.id]?.url ?? null,
   })), [contactSheet.cells, filmstripThumbnails]);
 
+  const headerMeta = [
+    activeFrameIndex >= 0 && tabs.length > 1 ? `${activeFrameIndex + 1} / ${tabs.length}` : null,
+    activeRoll?.name ?? null,
+  ].filter(Boolean).join(' · ');
+
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-zinc-950 font-sans text-zinc-100">
       {usesNativeFileDialogs && (
@@ -718,13 +723,14 @@ export function AppShell({
               </h1>
               {documentState && (
                 <div className="ml-2 hidden min-w-0 items-baseline gap-3 border-l border-zinc-800 pl-4 md:flex">
-                  <span className="min-w-0 max-w-[260px] truncate text-sm font-medium text-zinc-200" title={documentState.source.name}>
+                  <span className="min-w-0 max-w-[420px] truncate text-sm font-medium text-zinc-200" title={documentState.source.name}>
                     {documentState.source.name}
                   </span>
-                  <span className="hidden whitespace-nowrap font-mono text-[11px] text-zinc-500 xl:inline">
-                    {activeFrameIndex >= 0 && tabs.length > 1 ? `${activeFrameIndex + 1} / ${tabs.length} · ` : ''}
-                    {`${documentState.source.width.toLocaleString()} × ${documentState.source.height.toLocaleString()} px`}
-                    {activeRoll ? ` · ${activeRoll.name}` : ''}
+                  <span className="hidden min-w-0 max-w-[240px] shrink-0 truncate whitespace-nowrap font-mono text-[11px] text-zinc-500 xl:block" title={headerMeta || undefined}>
+                    {headerMeta}
+                    <span className="hidden 2xl:inline">
+                      {`${headerMeta ? ' · ' : ''}${documentState.source.width.toLocaleString()} × ${documentState.source.height.toLocaleString()} px`}
+                    </span>
                   </span>
                 </div>
               )}

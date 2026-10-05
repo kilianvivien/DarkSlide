@@ -645,8 +645,8 @@ export function BatchModal({
                       </div>
                       <div className="mt-2.5">
                         {settingsSource === 'current' && currentProfile && (
-                          <p className="truncate rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-400">
-                            Look of the frame you are editing · <span className="text-zinc-200">{currentProfile.name}</span>
+                          <p className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs leading-relaxed text-zinc-400">
+                            Look of the frame you are editing · <span className="whitespace-nowrap text-zinc-200">{currentProfile.name}</span>
                           </p>
                         )}
                         {settingsSource === 'builtin' && (

@@ -648,7 +648,7 @@ export const CurvesControl = memo(function CurvesControl({
               className="w-12 rounded-md border border-zinc-800 bg-zinc-900/60 px-1.5 py-1 text-right font-mono tabular-nums text-zinc-200 outline-none transition-colors focus:border-zinc-500 disabled:text-zinc-500"
             />
           </label>
-          <span className="min-w-0 flex-1 truncate text-[10px] text-zinc-600">
+          <span className="min-w-0 flex-1 text-[10px] leading-tight text-zinc-600">
             {selectedPoint !== null ? 'Arrows nudge, ⇧ ×10' : 'Click a point to edit it'}
           </span>
           <button
