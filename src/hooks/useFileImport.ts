@@ -26,6 +26,7 @@ import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences } from '../utils/preferenceS
 import { confirmRestoreSidecar, isDesktopShell, readTextFileByPath } from '../utils/fileBridge';
 import {
   buildRawInitialSettings,
+  estimateRawStartupExposure,
   createRawImportProfile,
   decodeDesktopRawForWorker,
   rotationFromExifOrientation,
@@ -346,6 +347,15 @@ export function useFileImport({
             rawResult.orientation,
             estimatedFilmBaseEstimate ?? estimatedFilmBase,
           )), rawStartupProfile);
+          if ((rawStartupProfile.filmType ?? 'negative') === 'negative') {
+            rawStartupSettings.exposure += estimateRawStartupExposure(
+              rawResult.data,
+              rawResult.width,
+              rawResult.height,
+              (rawResult.bitDepth ?? 8) === 16 ? 65535 : 255,
+              estimatedFilmBaseEstimate ?? estimatedFilmBase,
+            );
+          }
           if (preferredImportProfile) {
             const preferredSettings = withCameraRawChannelGains(
               createDefaultSettings(structuredClone(activeImportProfile.defaultSettings)),

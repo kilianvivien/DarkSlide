@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_BASE_CONFIDENCE } from '../constants';
 import { processImageData } from './imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { buildRawInitialSettings, createRawImportProfile, estimateRawStartupExposure, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 import { rawIpcPayload } from '../test/rawIpcPayload';
 
 // Build an RGB Uint8Array by evaluating a per-pixel function. Pixel coordinates
@@ -255,6 +255,54 @@ describe('rawImport', () => {
       redBalance: (255 - 151) / (255 - 168),
       greenBalance: 1,
       blueBalance: (255 - 151) / (255 - 134),
+    });
+  });
+
+  describe('estimateRawStartupExposure', () => {
+    const base = { r: 134, g: 149, b: 120 };
+    const encode = (linear: number) => (linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1 / 2.4) - 0.055);
+    const decode = (encoded: number) => (encoded <= 0.04045 ? encoded / 12.92 : ((encoded + 0.055) / 1.055) ** 2.4);
+    // A 16-bit negative whose frame spans green densities 0..maxDensity above
+    // the base, inside a clear rebate (at the base) and a black holder edge.
+    const createScene = (maxDensity: number, width = 120, height = 80) => {
+      const data = new Uint16Array(width * height * 3);
+      const baseLinear = decode(base.g / 255);
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const index = (y * width + x) * 3;
+          const edge = x < 6 || x >= width - 6;
+          const rebate = y < 8 || y >= height - 8;
+          const density = maxDensity * ((x + y * width) % 97) / 96;
+          const green = edge ? 0.0005 : rebate ? baseLinear : baseLinear * 10 ** -density;
+          const value = Math.round(encode(green) * 65535);
+          data[index] = value;
+          data[index + 1] = value;
+          data[index + 2] = value;
+        }
+      }
+      return { data, width, height };
+    };
+    const estimate = (maxDensity: number, film: Parameters<typeof estimateRawStartupExposure>[4] = base) => {
+      const scene = createScene(maxDensity);
+      return estimateRawStartupExposure(scene.data, scene.width, scene.height, 65535, film);
+    };
+
+    it('brightens a thin negative toward the target, ignoring rebate and holder', () => {
+      // Green density p99 ~0.92 (a dim 400D frame): positive 0.62 -> 195/255.
+      const exposure = estimate(0.93);
+      expect(exposure).toBeGreaterThanOrEqual(15);
+      expect(exposure).toBeLessThanOrEqual(19);
+    });
+
+    it('caps the lift and leaves a well-exposed negative alone', () => {
+      expect(estimate(0.3)).toBe(20);
+      expect(estimate(1.6)).toBe(0);
+    });
+
+    it('stays neutral without a trusted base', () => {
+      expect(estimate(0.6, null)).toBe(0);
+      expect(estimate(0.6, { sample: base, source: 'low-confidence', confidence: 0, rejectedCandidates: 3, clamped: true })).toBe(0);
+      expect(estimate(0.6, { sample: base, source: 'frame-rebate', confidence: 0.7, rejectedCandidates: 0, clamped: false })).toBeGreaterThan(0);
     });
   });
 

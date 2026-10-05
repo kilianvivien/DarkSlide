@@ -324,14 +324,15 @@ describe('density balance precedence on RAW scans', () => {
 
   it('lines up the thin end with a damped offset, re-referenced to a picked base', () => {
     const estimate = { sample: base, source: 'in-frame' as const, confidence: 0.4, rejectedCandidates: 0, clamped: false };
-    const withOffsets = { ...measured, offsetR: -0.03, offsetB: 0.3 };
+    const withOffsets = { ...measured, offsetR: -0.3, offsetB: 0.3 };
     const settings = createDefaultSettings({ filmBaseSample: null, densityBalance: null });
     const plain = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', estimate, measured, 'srgb', 'srgb', null, 0);
     const shifted = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', estimate, withOffsets, 'srgb', 'srgb', null, 0);
-    // (D - base) * s + o  ==  (D - (base - o / s)) * s; blue is damped to 0.12.
-    expect(shifted.baseDensity[0]).toBeCloseTo(plain.baseDensity[0] + 0.03 / 1.08, 6);
+    // (D - base) * s + o  ==  (D - (base - o / s)) * s; red is damped to
+    // 0.12, blue more tightly to 0.06.
+    expect(shifted.baseDensity[0]).toBeCloseTo(plain.baseDensity[0] + 0.12 / 1.08, 6);
     expect(shifted.baseDensity[1]).toBeCloseTo(plain.baseDensity[1], 6);
-    expect(shifted.baseDensity[2]).toBeCloseTo(plain.baseDensity[2] - 0.12 / 0.86, 6);
+    expect(shifted.baseDensity[2]).toBeCloseTo(plain.baseDensity[2] - 0.06 / 0.86, 6);
 
     // The same base picked by hand gives the same result as the estimate.
     const picked = resolveDensityInversionParams({ ...settings, filmBaseSample: { ...base } }, true, 'negative', 'gold-200', estimate, withOffsets, 'srgb', 'srgb', null, 0);

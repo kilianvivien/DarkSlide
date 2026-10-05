@@ -1,8 +1,9 @@
-import { FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
+import { DENSITY_TO_POSITIVE_GAMMA, FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
 import { ColorMatrix, ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
-import { getColorProfileIdFromName } from './colorProfiles';
+import { decodeProfileChannel, getColorProfileIdFromName } from './colorProfiles';
 import { clamp } from './math';
 import { preserveProfileCalibration } from './presetRecipe';
+import { EXPOSURE_UNITS_PER_STOP } from './whiteBalance';
 
 export const RAW_IMPORT_PROFILE_ID = 'raw-import-result';
 
@@ -796,6 +797,57 @@ export function buildRawInitialSettings(
     filmBaseSample: null,
     rotation: rotationFromExifOrientation(orientation),
   } satisfies ConversionSettings;
+}
+
+// Where the 99th percentile of the frame's green positive should land
+// before the tone stage (about 205/255 after the default levels and
+// contrast), and how far the starting exposure may move to get there.
+const RAW_STARTUP_EXPOSURE_TARGET = 195 / 255;
+const RAW_STARTUP_EXPOSURE_MAX = 20;
+const RAW_STARTUP_EXPOSURE_MARGIN = 0.15;
+const RAW_STARTUP_EXPOSURE_SAMPLES = 40_000;
+
+// The positive's brightness follows the negative's density range, so a thin
+// negative starts dim (real NEFs rendered their highlights at 133-169/255).
+// Suggest the exposure that puts the frame's bright end near the target,
+// measured on the green density the inversion builds the positive from
+// (green carries most of the luminance and no per-channel balance). The
+// central region keeps the rebate and holder out of the percentile. Only
+// ever brightens, and stays at 0 without a trusted base.
+export function estimateRawStartupExposure(
+  rgb: ArrayLike<number>,
+  width: number,
+  height: number,
+  channelMax: number,
+  estimatedFilmBase: FilmBaseSample | FilmBaseEstimate | null,
+) {
+  if (!estimatedFilmBase || width <= 0 || height <= 0) return 0;
+  const estimate = 'sample' in estimatedFilmBase ? estimatedFilmBase : null;
+  if (estimate && (estimate.source === 'low-confidence' || estimate.confidence < FILM_BASE_CONFIDENCE.reject)) return 0;
+  const sample = estimate ? estimate.sample : estimatedFilmBase as FilmBaseSample;
+  const baseG = clamp(decodeProfileChannel('srgb', sample.g / 255), 1e-6, 1);
+  const floorG = baseG * 1e-3;
+
+  const x0 = Math.floor(width * RAW_STARTUP_EXPOSURE_MARGIN);
+  const x1 = Math.ceil(width * (1 - RAW_STARTUP_EXPOSURE_MARGIN));
+  const y0 = Math.floor(height * RAW_STARTUP_EXPOSURE_MARGIN);
+  const y1 = Math.ceil(height * (1 - RAW_STARTUP_EXPOSURE_MARGIN));
+  const step = Math.max(1, Math.round(Math.sqrt(((x1 - x0) * (y1 - y0)) / RAW_STARTUP_EXPOSURE_SAMPLES)));
+  const densities: number[] = [];
+  for (let y = y0; y < y1; y += step) {
+    for (let x = x0; x < x1; x += step) {
+      const g = decodeProfileChannel('srgb', (rgb[(y * width + x) * 3 + 1] ?? 0) / channelMax);
+      if (g < floorG) continue;
+      densities.push(Math.max(0, -Math.log10(g / baseG)));
+    }
+  }
+  if (densities.length < 100) return 0;
+  densities.sort((left, right) => left - right);
+  const highDensity = densities[Math.min(densities.length - 1, Math.floor(densities.length * 0.99))];
+  const positive = 1 - 10 ** (-highDensity / DENSITY_TO_POSITIVE_GAMMA);
+  if (positive <= 0) return 0;
+  const gain = decodeProfileChannel('srgb', RAW_STARTUP_EXPOSURE_TARGET) / decodeProfileChannel('srgb', positive);
+  return clamp(Math.round(EXPOSURE_UNITS_PER_STOP * Math.log2(gain)), 0, RAW_STARTUP_EXPOSURE_MAX);
 }
 
 export function createRawImportProfile(baseProfile: FilmProfile, settings: ConversionSettings): FilmProfile {

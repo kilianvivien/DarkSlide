@@ -35,7 +35,8 @@ const DENSITY_BALANCE_CLAMP_HIGH = 2;
 const DENSITY_BALANCE_MAX_TRANSMITTANCE_RATIO = 10 ** -3;
 const DENSITY_BALANCE_MIN_LINEAR = 1e-5;
 const DENSITY_BALANCE_MIN_SPREAD = 0.05;
-const CAMERA_MEASURED_MAX_OFFSET = 0.12;
+const CAMERA_MEASURED_MAX_OFFSET_RED = 0.12;
+const CAMERA_MEASURED_MAX_OFFSET_BLUE = 0.06;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -602,8 +603,11 @@ function sampleChannelToDensity(
 // density. The offsets were measured against the estimated base; when the
 // user picked another base they are re-referenced to it. Damped to a small
 // range because a frame dominated by one colour (a sky) biases them. Tuned
-// on real NEFs (Kodak Gold, CineStill 400D): +-0.05 left a 400D frame's blue
-// ~25% low, +-0.12 rendered sky, clouds and stone neutral on all of them.
+// on real NEFs (Kodak Gold, CineStill 400D): red needs up to +-0.12 (at
+// +-0.05 the 400D frame's shadows went red). Blue is capped tighter: its thin
+// band is the one a warm-shadowed, sky-heavy frame skews most, and a 400D
+// frame measuring +0.12 rendered its shadows blue where +0.06 matched the
+// photographer's own correction. Gold frames measure under 0.04 in blue.
 function applyCameraMeasuredOffsets(
   baseDensity: [number, number, number],
   balance: DensityBalance,
@@ -611,6 +615,7 @@ function applyCameraMeasuredOffsets(
 ) {
   const scales = [balance.scaleR, balance.scaleG, balance.scaleB];
   const offsets = [balance.offsetR, 0, balance.offsetB];
+  const maxOffsets = [CAMERA_MEASURED_MAX_OFFSET_RED, 0, CAMERA_MEASURED_MAX_OFFSET_BLUE];
   for (const channel of [0, 2]) {
     let offset = offsets[channel];
     if (offset === undefined || !Number.isFinite(offset)) continue;
@@ -618,7 +623,7 @@ function applyCameraMeasuredOffsets(
       offset += scales[channel] * (baseDensity[channel] - estimateBaseDensity[channel])
         - (baseDensity[1] - estimateBaseDensity[1]);
     }
-    offset = clamp(offset, -CAMERA_MEASURED_MAX_OFFSET, CAMERA_MEASURED_MAX_OFFSET);
+    offset = clamp(offset, -maxOffsets[channel], maxOffsets[channel]);
     baseDensity[channel] -= offset / Math.max(scales[channel], DENSITY_EPSILON);
   }
 }
