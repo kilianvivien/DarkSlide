@@ -51,6 +51,7 @@ import {
   assertSupportedDimensions,
   buildEmptyHistogram,
   computeResidualBaseOffset,
+  asCameraMeasuredBalance,
   computeDensityBalance,
   computeRawDensityBalance,
   computeHighlightDensity,
@@ -1333,7 +1334,7 @@ async function handleDecode(payload: DecodeRequest) {
     const guarded = guardFilmBaseAgainstCrush(rawEstimate, previewStore, priorDensityBalance, sourceProfile);
     const estimatedFilmBase = guarded.estimate;
     const estimatedFilmBaseSample = estimatedFilmBase?.sample ?? null;
-    const estimatedDensityBalance = guarded.densityBalance;
+    const estimatedDensityBalance = asCameraMeasuredBalance(guarded.densityBalance);
     const metadata: SourceMetadata = {
       id: payload.documentId,
       name: payload.fileName,
@@ -1920,7 +1921,9 @@ function handleReestimateFilmBase(payload: ReestimateFilmBaseRequest): Reestimat
     type: 'reestimate-film-base',
     estimatedFilmBaseSample: guarded.estimate?.sample ?? null,
     estimatedFilmBase: guarded.estimate,
-    estimatedDensityBalance: guarded.densityBalance,
+    estimatedDensityBalance: document.metadata.mime === 'image/x-raw-rgba'
+      ? asCameraMeasuredBalance(guarded.densityBalance)
+      : guarded.densityBalance,
   } satisfies ReestimateFilmBaseResult;
 }
 

@@ -160,7 +160,10 @@ export interface DensityBalance {
   scaleR: number;
   scaleG: number;
   scaleB: number;
-  source: 'auto-histogram' | 'film-stock-preset' | 'manual' | 'clamp-rejected';
+  // 'camera-measured': measured on a RAW camera scan, which is inverted in the
+  // sensor's native RGB where the stock presets (tuned on matrixed RGB) over-
+  // correct. A trustworthy one takes precedence over a stock preset.
+  source: 'auto-histogram' | 'camera-measured' | 'film-stock-preset' | 'manual' | 'clamp-rejected';
 }
 
 export type PointPickerMode = 'black' | 'white' | 'grey';

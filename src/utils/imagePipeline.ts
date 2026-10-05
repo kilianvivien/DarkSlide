@@ -31,6 +31,10 @@ const DENSITY_EPSILON = 1e-6;
 // outside this band is treated as a failed measurement, not clamped into it.
 const DENSITY_BALANCE_CLAMP_LOW = 0.4;
 const DENSITY_BALANCE_CLAMP_HIGH = 2;
+// Samples more than 3.0 density above the base are sensor noise or clipped.
+const DENSITY_BALANCE_MAX_TRANSMITTANCE_RATIO = 10 ** -3;
+const DENSITY_BALANCE_MIN_LINEAR = 1e-5;
+const DENSITY_BALANCE_MIN_SPREAD = 0.05;
 let scratchUint8: Uint8ClampedArray | null = null;
 let scratchFloat32: Float32Array | null = null;
 let scratchSize = 0;
@@ -508,9 +512,17 @@ function resolveDensityBalance(
     return { scaleR: 1, scaleG: 1, scaleB: 1, source: 'film-stock-preset' };
   }
 
+  // A balance measured on this RAW scan beats a stock preset, including one
+  // carried in the settings, but never a balance the user set themselves.
+  const cameraMeasured = estimatedDensityBalance?.source === 'camera-measured' ? estimatedDensityBalance : null;
   if (explicitBalance && [explicitBalance.scaleR, explicitBalance.scaleG, explicitBalance.scaleB]
-    .every((scale) => Number.isFinite(scale) && scale > 0)) {
+    .every((scale) => Number.isFinite(scale) && scale > 0)
+    && !(cameraMeasured && explicitBalance.source === 'film-stock-preset')) {
     return explicitBalance;
+  }
+
+  if (cameraMeasured) {
+    return cameraMeasured;
   }
 
   const preset = profileId ? FILM_STOCK_DENSITY_PRESETS[profileId] : undefined;
@@ -748,14 +760,10 @@ export function applyCrushGuard(
   return { estimate: demoted, densityBalance: computeDensityBalance(imageData, conservativeSample, outputProfileId) };
 }
 
-function mean(values: number[], start: number, end: number) {
-  const safeStart = clamp(start, 0, values.length);
-  const safeEnd = clamp(end, safeStart + 1, values.length);
-  let sum = 0;
-  for (let index = safeStart; index < safeEnd; index += 1) {
-    sum += values[index];
-  }
-  return sum / Math.max(1, safeEnd - safeStart);
+// RAW scans are inverted in camera-native RGB, so a trustworthy measurement
+// there is labelled for precedence over the stock presets.
+export function asCameraMeasuredBalance(balance: DensityBalance | null): DensityBalance | null {
+  return balance?.source === 'auto-histogram' ? { ...balance, source: 'camera-measured' } : balance;
 }
 
 export function computeDensityBalance(
@@ -789,6 +797,9 @@ function computeRasterDensityBalance(
   const baseR = clamp(decodeProfileChannel(profileId, filmBaseSample.r / 255), DENSITY_EPSILON, 1);
   const baseG = clamp(decodeProfileChannel(profileId, filmBaseSample.g / 255), DENSITY_EPSILON, 1);
   const baseB = clamp(decodeProfileChannel(profileId, filmBaseSample.b / 255), DENSITY_EPSILON, 1);
+  const floorR = Math.max(DENSITY_BALANCE_MIN_LINEAR, baseR * DENSITY_BALANCE_MAX_TRANSMITTANCE_RATIO);
+  const floorG = Math.max(DENSITY_BALANCE_MIN_LINEAR, baseG * DENSITY_BALANCE_MAX_TRANSMITTANCE_RATIO);
+  const floorB = Math.max(DENSITY_BALANCE_MIN_LINEAR, baseB * DENSITY_BALANCE_MAX_TRANSMITTANCE_RATIO);
   const densitiesR: number[] = [];
   const densitiesG: number[] = [];
   const densitiesB: number[] = [];
@@ -800,7 +811,10 @@ function computeRasterDensityBalance(
     const g = decodeProfileChannel(profileId, data[index + 1] / channelMax);
     const b = decodeProfileChannel(profileId, data[index + 2] / channelMax);
 
-    if (r < 0.02 || g < 0.02 || b < 0.02) continue;
+    // The noise floor is relative to the base: a camera scan through an
+    // orange mask puts the whole blue channel below 2% linear, and an absolute
+    // floor there rejected every pixel and silently fell back to neutral.
+    if (r < floorR || g < floorG || b < floorB) continue;
     if (r > 0.98 && g > 0.98 && b > 0.98) continue;
 
     const dR = -Math.log10(Math.max(r / baseR, DENSITY_EPSILON));
@@ -829,14 +843,29 @@ function computeRasterDensityBalance(
   densitiesG.sort((left, right) => left - right);
   densitiesB.sort((left, right) => left - right);
 
-  const lo = Math.floor(densitiesR.length * 0.2);
-  const hi = Math.max(lo + 1, Math.floor(densitiesR.length * 0.8));
-  const meanR = mean(densitiesR, lo, hi);
-  const meanG = mean(densitiesG, lo, hi);
-  const meanB = mean(densitiesB, lo, hi);
+  // Dye contrast is the density *range* each channel spans, not its mean:
+  // a mean above the base shifts with every base-estimate error (an auto base
+  // a few points off the clear film changed the blue scale by ~15%), while a
+  // percentile spread is independent of where density zero sits.
+  const bandMean = (sorted: number[], from: number, to: number) => {
+    const start = Math.floor(sorted.length * from);
+    const end = Math.max(start + 1, Math.floor(sorted.length * to));
+    let sum = 0;
+    for (let index = start; index < end; index += 1) sum += sorted[index];
+    return sum / (end - start);
+  };
+  const spread = (sorted: number[]) => bandMean(sorted, 0.75, 0.95) - bandMean(sorted, 0.05, 0.25);
+  const spreadR = spread(densitiesR);
+  const spreadG = spread(densitiesG);
+  const spreadB = spread(densitiesB);
 
-  const rawScaleR = meanG / Math.max(meanR, DENSITY_EPSILON);
-  const rawScaleB = meanG / Math.max(meanB, DENSITY_EPSILON);
+  if (spreadG < DENSITY_BALANCE_MIN_SPREAD) {
+    // A near-flat frame (fog, a blank rebate) carries no contrast to compare.
+    return { scaleR: 1, scaleG: 1, scaleB: 1, source: 'clamp-rejected' };
+  }
+
+  const rawScaleR = spreadG / Math.max(spreadR, DENSITY_EPSILON);
+  const rawScaleB = spreadG / Math.max(spreadB, DENSITY_EPSILON);
 
   // A scale that only survives by hitting a clamp boundary is not a measured
   // correction — it is the estimator failing on dim/expired film (diagnosis

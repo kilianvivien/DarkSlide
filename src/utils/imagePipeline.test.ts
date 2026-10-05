@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
 import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, computeDensityBalance, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { FilmBaseEstimate } from '../types';
+import { decodeProfileChannel, encodeProfileChannel } from './colorProfiles';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -284,7 +285,78 @@ describe('buildProcessingUniforms', () => {
 
 });
 
+describe('density balance precedence on RAW scans', () => {
+  const measured = { scaleR: 1.08, scaleG: 1, scaleB: 0.86, source: 'camera-measured' as const };
+  const base = { r: 109, g: 99, b: 42 };
+
+  it('prefers a camera measurement over the stock preset carried in the settings', () => {
+    const settings = createDefaultSettings({ filmBaseSample: base, densityBalance: { scaleR: 1, scaleG: 1, scaleB: 0.6, source: 'film-stock-preset' } });
+    const params = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', null, measured);
+    expect(params.densityScale).toEqual([1.08, 1, 0.86]);
+    expect(params.densityScaleSource).toBe('camera-measured');
+  });
+
+  it('prefers a camera measurement over the profile preset', () => {
+    const settings = createDefaultSettings({ filmBaseSample: base, densityBalance: null });
+    const params = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', null, measured);
+    expect(params.densityScale).toEqual([1.08, 1, 0.86]);
+  });
+
+  it('keeps a balance the user set by hand', () => {
+    const settings = createDefaultSettings({ filmBaseSample: base, densityBalance: { scaleR: 1, scaleG: 1, scaleB: 0.7, source: 'manual' } });
+    const params = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', null, measured);
+    expect(params.densityScale).toEqual([1, 1, 0.7]);
+  });
+
+  it('keeps the stock preset when the measurement is only an ordinary estimate', () => {
+    const settings = createDefaultSettings({ filmBaseSample: base, densityBalance: null });
+    const params = resolveDensityInversionParams(settings, true, 'negative', 'gold-200', null, { ...measured, source: 'auto-histogram' });
+    expect(params.densityScale).toEqual([1, 1, 0.6]);
+  });
+});
+
 describe('computeDensityBalance', () => {
+  it('measures a camera scan whose blue channel sits below 2% linear', () => {
+    // Img2637 (Kodak Gold, CS-Lite, NEF): clear base ~109/99/42, so every
+    // image pixel's blue is under 2% linear. An absolute floor used to reject
+    // them all and silently return a neutral 1/1/1.
+    const base = { r: 109, g: 99, b: 42 };
+    const expected = [1.1, 1, 0.8];
+    const bases = [base.r, base.g, base.b];
+    const data = new Uint8ClampedArray(64 * 64 * 4);
+    for (let pixel = 0; pixel < 64 * 64; pixel += 1) {
+      const density = 0.1 + (pixel % 64) / 80;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const linear = decodeProfileChannel('srgb', bases[channel] / 255) * 10 ** (-density / expected[channel]);
+        data[pixel * 4 + channel] = Math.round(encodeProfileChannel('srgb', linear) * 255);
+      }
+      data[pixel * 4 + 3] = 255;
+    }
+
+    const balance = computeDensityBalance(new ImageData(data, 64, 64), base);
+
+    expect(balance.source).toBe('auto-histogram');
+    expect(balance.scaleR).toBeCloseTo(expected[0], 1);
+    expect(balance.scaleB).toBeCloseTo(expected[2], 1);
+  });
+
+  it('does not let a base-estimate offset tilt the measured scales', () => {
+    const imageData = createGrid(40, [
+      [210, 180, 120],
+      [195, 170, 115],
+      [180, 160, 110],
+      [165, 150, 105],
+      [150, 140, 100],
+      [135, 128, 96],
+    ]);
+
+    const clear = computeDensityBalance(imageData, { r: 240, g: 210, b: 150 });
+    const dimmer = computeDensityBalance(imageData, { r: 225, g: 200, b: 140 });
+
+    expect(dimmer.scaleR).toBeCloseTo(clear.scaleR, 6);
+    expect(dimmer.scaleB).toBeCloseTo(clear.scaleB, 6);
+  });
+
   it('computes per-channel scales from midtone densities', () => {
     // 40×40 so there are well over 1000 usable midtone samples — a normal
     // color-negative fixture that measures a trustworthy (non-clamped) balance.
@@ -310,13 +382,13 @@ describe('computeDensityBalance', () => {
   });
 
   it('rejects a clamp-boundary blue scale as untrustworthy (Img2188 shape)', () => {
-    // A dim/expired-negative shape where the blue channel density dwarfs green,
-    // so the raw blue scale falls below the 0.4 clamp boundary.
+    // A dim/expired-negative shape where the blue channel's density range
+    // dwarfs green's, so the raw blue scale falls below the 0.4 clamp boundary.
     const imageData = createGrid(40, [
-      [185, 178, 52],
-      [180, 172, 50],
-      [175, 168, 55],
-      [182, 175, 48],
+      [185, 178, 60],
+      [180, 172, 45],
+      [175, 168, 30],
+      [182, 175, 52],
     ]);
 
     const balance = computeDensityBalance(imageData, { r: 205, g: 200, b: 128 });
