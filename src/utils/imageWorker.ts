@@ -1220,18 +1220,33 @@ function applyAnalysisInversionStage(
   return output;
 }
 
+// Dust is found on a 3072 px rendering: fine enough to resolve specks a few
+// source pixels wide on a 24 MP camera scan, small enough to stay quick.
+const DUST_DETECTION_MAX_DIMENSION = 3072;
+// The "Maximum Defect Width" slider is in pixels of the 2048 px preview that
+// detection used to run on; it is rescaled so it keeps covering the same area.
+const DUST_RADIUS_REFERENCE_DIMENSION = 2048;
+
 function handleDustDetect(payload: DustDetectRequest) {
   const document = getStoredDocument(payload.documentId);
-  const analysisTargetDimension = 1600;
-  const level = selectPreviewLevel(document.previews.map((preview) => preview.level), analysisTargetDimension);
+  const sourceMax = Math.max(document.sourceCanvas.width, document.sourceCanvas.height);
+  const level = selectPreviewLevel(document.previews.map((preview) => preview.level), DUST_DETECTION_MAX_DIMENSION);
   const preview = document.previews.find((candidate) => candidate.level.id === level.id) ?? document.previews[document.previews.length - 1];
-  const transformed = renderTransformedCanvas(preview.canvas, payload.settings);
+  const needsResize = preview.level.maxDimension > DUST_DETECTION_MAX_DIMENSION;
+  const detectionCanvas = needsResize
+    ? buildPreviewCanvas(preview.canvas, DUST_DETECTION_MAX_DIMENSION)
+    : preview.canvas;
+  const detectionMax = Math.max(detectionCanvas.width, detectionCanvas.height);
+  const transformed = renderTransformedCanvas(detectionCanvas, payload.settings);
   const context = transformed.canvas.getContext('2d', { willReadFrequently: true });
   if (!context) {
     throw new Error('Could not read transformed image for dust detection.');
   }
 
   const imageData = context.getImageData(0, 0, transformed.width, transformed.height);
+  if (needsResize) {
+    releaseCanvas(detectionCanvas);
+  }
   const residualBaseOffset = getPinnedResidualBaseOffset(
     document,
     payload.settings,
@@ -1251,7 +1266,15 @@ function handleDustDetect(payload: DustDetectRequest) {
     document,
     residualBaseOffset,
   );
-  const detectedMarks = detectDustMarks(imageData, payload.sensitivity, payload.maxRadius, payload.mode)
+  const radiusScale = detectionMax / Math.min(DUST_RADIUS_REFERENCE_DIMENSION, sourceMax);
+  const detectedMarks = detectDustMarks(
+    imageData,
+    payload.sensitivity,
+    payload.maxRadius * radiusScale,
+    payload.mode,
+    // Dust blocks light: bright in a converted negative, dark on a slide.
+    { polarity: payload.filmType === 'slide' ? 'dark' : 'bright' },
+  )
     .map((mark) => projectDustMarkFromTransformedSpace(
       mark,
       payload.settings,

@@ -140,7 +140,7 @@ See the [v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/release
 
 ### Dust & Scratch Removal
 - **Manual repair** — paint over dust spots, hairs, and scratches; DarkSlide fills them in using surrounding pixels
-- **Auto-detect mode** — automatically marks likely defects across the image so you can review and remove them in one step *(experimental — results may vary depending on scan quality and film type)*
+- **Auto-detect mode** — automatically marks likely defects across the image so you can review and remove them in one step *(beta — review the marks before exporting)*
 
 ### Crop & Compose
 - **Non-destructive crop** with common film format ratios (3:2, 4:5, 1:1, 6x7, etc.), edge and corner handles, and ratio lock
