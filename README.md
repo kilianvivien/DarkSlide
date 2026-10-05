@@ -13,14 +13,31 @@ DarkSlide is a free, open-source tool for converting scanned film negatives into
 
 ## What's New in v1.3.0
 
-A redesigned editor built around rolls of film, using ideas from Durieux's ([@tdurieux](https://github.com/tdurieux)) fork.
+DarkSlide 1.3.0 is the biggest update so far: a redesigned editor built around rolls of film, more faithful conversions, and RAW camera scans without colour casts. The redesign builds on ideas from Durieux's ([@tdurieux](https://github.com/tdurieux)) fork.
 
-- **Tool rail and one inspector** — Develop, Curves, Film profiles, Crop, Dust and Export open in a single panel from a rail on the left (shortcuts 1–6); film profiles no longer need their own side panel
-- **Filmstrip** — open frames appear as numbered thumbnails with film-base, crop and unsaved-edit status; use ← and → to move between them
-- **Multi-frame selection** — ⌘/Ctrl- or Shift-click frames to sync the current look to them (each keeps its own crop and repairs), stabilize their crops, or export them
-- **Export frames with their own edits** — the Export panel exports this frame, the selection or every open frame, each with its own look and file name
+#### A redesigned editor
+
+- **Tool rail and one inspector** — Develop, Curves, Film profiles, Crop, Dust, Export and Contact sheet open in a single panel from a rail on the left (shortcuts 1–7); choose the open tool again to give the image the full width
+- **Filmstrip instead of tabs** — open frames appear as numbered thumbnails with film-base, crop and unsaved-edit status; ← and → move between them, and the strip can be hidden to its header row
+- **Work on several frames at once** — ⌘/Ctrl- or Shift-click frames to sync the current look to them (each keeps its own crop and repairs), stabilize their crops, or export them, each with its own edits
+- **Import several scans or a whole folder** — from the Import button or File → Import Folder…
+- **Accent colors** — pick one of nine accent colors in Settings → Appearance; sliders, buttons and focus rings were refreshed across every panel
+- **Preview film profiles on hover** — see a profile on your image before applying it
 - **Switchable adjustment groups** — turn Tone, Range, White Balance or Color off to compare, without losing their values
-- **Image toolbar** — converted/negative comparison, rotate, crop and zoom in one floating toolbar
+- **Finer curves** — drag the curve to add a point, hold ⌥ for fine moves, nudge with the arrow keys or type exact In/Out values
+- **Sharper histogram** — smoothed channel curves, clipping at both ends, a readout under the pointer, and a logarithmic scale by default
+- **Contact sheets as a tool** — build a sheet from open frames or unopened files and watch it take shape in the canvas
+- **Convert Files** — the batch converter, now in the File menu, was redesigned around three steps: recipe, corrections, output
+- **Easier cropping** — crop handles keep the same on-screen size on any scan, and Draw line straightens without opening the crop overlay first
+
+#### Better conversions
+
+- **RAW negatives without colour casts** — RAW camera scans are inverted in the sensor's own RGB and the colour matrix runs on the positive, fixing the blue casts and clipped skies some colour negatives showed; RAW frames also open with a starting exposure that puts highlights where they belong
+- **Exposure and white balance in linear light** — exposure moves in real stops, and temperature and tint act like a change of illuminant, so blacks stay neutral
+- **Highlights keep their hue** and deep shadows keep separation when you raise contrast
+- **Rebuilt dust detection, now in beta** — about 9 in 10 automatic marks are real defects (up from fewer than 4 in 10) and about three times as many specks are found
+
+Scanning sessions and the Rolls tab were removed to keep the new layout simple; frames are still grouped by folder in the filmstrip, whose context menu keeps Roll Info, syncing and the roll's film base.
 
 See the [full v1.3.0 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.3.0).
 
@@ -121,17 +138,19 @@ See the [v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/release
 - **Instant negative-to-positive conversion** with real-time preview
 - **Film stock profiles** — 40+ built-in color and black & white stocks to match the look of popular films
 - **Convert with a `.cube` LUT** — import a 3D LUT and it handles the negative-to-positive conversion in place of DarkSlide's own inversion, with every slider still available on top
-- **Full editing controls** — exposure, contrast, saturation, temperature, tint, curves, black & white points, and highlight protection
+- **Full editing controls** — exposure in real stops, contrast, saturation, temperature, tint, curves, black & white points, and highlight protection
 - **Auto White Balance** — neutralize color casts in one click while retaining full control over temperature and tint
 - **Black & white mode** with per-channel luminance mixing for fine-tuned tonal control
 - **Sharpening & noise reduction** to clean up your scans
+- **Accent colors** — make the interface yours with nine accent colors
 
 ### Organize & Export
-- **Roll management** — group frames into rolls with film stock metadata, sync settings or the film base across a roll, and stabilize crops
 - **Filmstrip** — all open frames with status at a glance; select several to sync their look, stabilize crops or export them together
+- **Rolls** — frames are grouped by folder; add film stock metadata, sync the film base across a roll, and stabilize crops from the filmstrip
+- **Import a folder** — open several scans or a whole folder at once
 - **Export frames** — export the current frame, a selection or every open frame, each with its own edits
 - **Convert files** — apply one shared recipe to scans you haven't opened
-- **Contact sheet generation** — create a grid overview of your scans
+- **Contact sheets** — build a grid overview of open frames or unopened files with a live preview
 - **High-bit-depth output** — export 16-bit PNG or TIFF files with float precision preserved through curves, sharpening, and noise reduction
 - **Save and share presets** — create custom looks with film-stock calibration, light-source settings, and lab style; organize them in folders and export/import as `.darkslide` files
 - **3D LUT interchange** — import `.cube` LUTs as presets and bake any preset back out to `.cube`
@@ -147,10 +166,10 @@ See the [v1.2.3 release notes](https://github.com/kilianvivien/DarkSlide/release
 - **Straighten** with a level slider or by drawing along a reference line
 - **Zoom & pan** anchored to the cursor for checking fine details
 - **Before/after comparison** to see your edits side by side
-- **Live histogram** with channel toggles, percentiles, and clipping warnings
+- **Live histogram** with channel toggles, percentiles, clipping warnings, and a logarithmic scale
 
 ### Desktop App
-- **RAW file support** — open DNG, CR3, NEF, ARW, RAF, and RW2 files directly (desktop only)
+- **RAW file support** — open DNG, CR3, NEF, ARW, RAF, and RW2 files directly, inverted in the camera's own colour space (desktop only)
 - **Native file dialogs** for a smoother experience
 - **Open in external editor** — send your image to Photoshop, Affinity Photo, or any other app
 - **Auto-update notifications** — get notified when a new version is available
@@ -231,7 +250,7 @@ DarkSlide is built on top of some amazing open-source projects:
 | [UTIF.js](https://github.com/photopea/UTIF.js) | MIT | Fast TIFF decoder |
 | [rawler](https://github.com/dnglab/dnglab) | LGPL-2.1 | Pure-Rust RAW image decoder |
 
-Thanks to [tdurieux](https://github.com/tdurieux), whose DarkSlide fork contributed the ideas and much of the code behind 1.2.4's frame detection, crop and straighten tools, fine adjustment buttons, histogram analysis, cursor-anchored zoom, render cancellation, lazy imports, binary RAW transport, and color-accuracy evaluator.
+Thanks to [tdurieux](https://github.com/tdurieux), whose DarkSlide fork contributed the tool rail and filmstrip direction, adjustment group toggles, coalesced curve edits and film profile hover previews in 1.3.0, and the ideas and much of the code behind 1.2.4's frame detection, crop and straighten tools, fine adjustment buttons, histogram analysis, cursor-anchored zoom, render cancellation, lazy imports, binary RAW transport, and color-accuracy evaluator.
 
 The 126-format test image in [`evaluation/online-samples`](./evaluation/online-samples/README.md) is derived from a Wikimedia Commons photograph by Bigbear213 and is licensed under CC BY-SA 4.0, separately from DarkSlide's MIT license.
 
