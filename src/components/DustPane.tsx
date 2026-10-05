@@ -88,12 +88,12 @@ export const DustPane = memo(function DustPane({
         )}
       </section>
 
-      {/* ── Auto Detection (Experimental) ── */}
+      {/* ── Auto Detection (Beta) ── */}
       <section>
         <h2 className={SECTION_TITLE}>
           <Sparkles size={12} /> Auto Detection
           <span className="ml-auto flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400">
-            <FlaskConical size={8} /> Experimental
+            <FlaskConical size={8} /> Beta
           </span>
         </h2>
 
