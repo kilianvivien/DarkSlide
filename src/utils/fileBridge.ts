@@ -381,10 +381,11 @@ export async function getDesktopDownloadsDirectory(): Promise<string | null> {
 export async function saveToDirectory(blob: Blob, filename: string, dirPath: string): Promise<string> {
   if (isDesktopShell()) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
-    const result = await invoke<SaveBlobToDirectoryResult>('save_blob_to_directory', {
-      bytes: Array.from(bytes),
-      filename,
-      destinationDirectory: dirPath,
+    const result = await invoke<SaveBlobToDirectoryResult>('save_blob_to_directory_binary', bytes, {
+      headers: {
+        'x-darkslide-filename': encodeURIComponent(filename),
+        'x-darkslide-directory': encodeURIComponent(dirPath),
+      },
     });
     return result.savedPath;
   }

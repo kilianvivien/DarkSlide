@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_BASE_CONFIDENCE } from '../constants';
 import { processImageData } from './imagePipeline';
-import { applyFlatFieldToRawResult, isFilmBaseClipped, buildRawInitialSettings, createRawImportProfile, estimateRawStartupExposure, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { applyFlatFieldToRawResult, isFilmBaseClipped, buildRawInitialSettings, createRawImportProfile, estimateRawStartupExposure, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, normalizeRawIpcBuffer, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 import { rawIpcPayload } from '../test/rawIpcPayload';
 
 // Build an RGB Uint8Array by evaluating a per-pixel function. Pixel coordinates
@@ -97,6 +97,31 @@ function meanInnerChannels(imageData: ImageData, margin = 8) {
 }
 
 describe('rawImport', () => {
+  it('normalizes native binary response variants into transferable buffers without losing the header', () => {
+    const payload = rawIpcPayload({ width: 1, height: 1, bitDepth: 16, data: [123, 456, 789] });
+    expect(normalizeRawIpcBuffer(payload)).toBe(payload);
+    expect(normalizeRawIpcBuffer(new Uint8Array(payload))).toBe(payload);
+    const padded = new Uint8Array(payload.byteLength + 4);
+    padded.set(new Uint8Array(payload), 2);
+    for (const variant of [padded.subarray(2, -2), Array.from(new Uint8Array(payload))]) {
+      const normalized = normalizeRawIpcBuffer(variant);
+      expect(normalized.byteLength).toBe(payload.byteLength);
+      expect(Array.from(decodeRawIpcPayload(normalized).data)).toEqual([123, 456, 789]);
+    }
+  });
+
+  it('hands worker-owned RAW samples over without copying their IPC header buffer', () => {
+    const payload = rawIpcPayload({ width: 2, height: 1, bitDepth: 16, data: [123, 456, 789, 1024, 32768, 65535] });
+    const raw = decodeRawIpcPayload(payload);
+    const request = createWorkerDecodeRequestFromRaw('owned', 'scan.nef', payload.byteLength, raw, true);
+    expect(request.highDepthRawBuffer).toBe((raw.data as Uint16Array).buffer);
+    expect(request.highDepthRawByteOffset).toBe(68);
+    expect(Array.from(new Uint16Array(request.highDepthRawBuffer!, request.highDepthRawByteOffset, 6))).toEqual(Array.from(raw.data));
+    const copied = createWorkerDecodeRequestFromRaw('copied', 'scan.nef', payload.byteLength, raw);
+    expect(copied.highDepthRawBuffer).not.toBe((raw.data as Uint16Array).buffer);
+    expect(copied.highDepthRawByteOffset).toBeUndefined();
+  });
+
   it('estimates the film base from bright border pixels', () => {
     const rgb = createRawRgb(64, 48, [168, 151, 134], [40, 60, 120]);
 

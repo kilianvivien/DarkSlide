@@ -1,3 +1,5 @@
+import { getImageKernels } from './imageKernels';
+
 // Flat-field correction for camera scans. A frame of the bare light source,
 // shot with the same camera, lens and light as the roll, records how much
 // light reaches each part of the sensor (lens vignetting, an uneven panel).
@@ -353,6 +355,11 @@ export function applyFlatField(data: Uint16Array, width: number, height: number,
   const encodeScale = encode.length - 1;
   const { gridWidth, gridHeight } = profile;
   const { padded, paddedWidth } = padGains(profile.gains, gridWidth, gridHeight);
+  const kernels = getImageKernels();
+  if (kernels) {
+    kernels.flatField(data, width, height, gridWidth, gridHeight, padded, decode, encode);
+    return true;
+  }
   const columns = buildAxisWeights(width, gridWidth);
   const rows = buildAxisWeights(height, gridHeight);
   const rowGains = new Float32Array(paddedWidth * 3);

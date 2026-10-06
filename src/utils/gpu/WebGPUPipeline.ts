@@ -151,6 +151,8 @@ export class WebGPUPipeline {
 
   private readonly effectUniformBuffer: GPUBuffer;
 
+  private uploadedSourceKey: string | null = null;
+
   private sourceTexture: GPUTexture | null = null;
 
   private sourceTextureView: GPUTextureView | null = null;
@@ -320,6 +322,7 @@ export class WebGPUPipeline {
       return;
     }
 
+    this.uploadedSourceKey = null;
     this.sourceTexture?.destroy();
     this.workTextureA?.destroy();
     this.workTextureB?.destroy();
@@ -521,6 +524,7 @@ export class WebGPUPipeline {
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
     cubeLut: CubeLut | null = null,
+    sourceKey?: string,
   ) {
     this.assertUsable();
 
@@ -546,6 +550,7 @@ export class WebGPUPipeline {
       this.readbackBuffer.unmap();
     }
 
+    if (!sourceKey || sourceKey !== this.uploadedSourceKey) {
     this.device.queue.writeTexture(
       { texture: this.sourceTexture },
       imageData.data,
@@ -560,6 +565,8 @@ export class WebGPUPipeline {
         depthOrArrayLayers: 1,
       },
     );
+      this.uploadedSourceKey = sourceKey ?? null;
+    }
 
     const processingUniforms = buildProcessingUniforms(
       settings,
@@ -731,6 +738,7 @@ export class WebGPUPipeline {
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
     cubeLut: CubeLut | null = null,
+    sourceKey?: string,
   ) {
     if (comparisonMode === 'original') {
       return copyWholeImage(imageData.data, imageData.width, imageData.height);
@@ -760,6 +768,7 @@ export class WebGPUPipeline {
       flareFloor,
       lightSourceBias,
       cubeLut,
+      sourceKey,
     );
   }
 
@@ -787,6 +796,7 @@ export class WebGPUPipeline {
     flareFloor: [number, number, number] | null = null,
     lightSourceBias: [number, number, number] = [1, 1, 1],
     cubeLut: CubeLut | null = null,
+    sourceKey?: string,
   ) {
     return this.processImageData(
       imageData,
@@ -812,6 +822,7 @@ export class WebGPUPipeline {
       flareFloor,
       lightSourceBias,
       cubeLut,
+      sourceKey,
     );
   }
 
@@ -948,6 +959,7 @@ export class WebGPUPipeline {
     }
 
     this.destroyed = true;
+    this.uploadedSourceKey = null;
     this.sourceTexture?.destroy();
     this.workTextureA?.destroy();
     this.workTextureB?.destroy();

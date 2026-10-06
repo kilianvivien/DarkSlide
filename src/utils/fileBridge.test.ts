@@ -359,10 +359,11 @@ describe('fileBridge', () => {
       savedPath: '/Users/tester/Downloads/scan.jpg',
       destinationDirectory: '/Users/tester/Downloads',
     });
-    expect(coreState.invoke).toHaveBeenNthCalledWith(1, 'save_blob_to_directory', {
-      bytes: [1, 2, 3],
-      filename: 'scan.jpg',
-      destinationDirectory: '/Users/tester/Downloads',
+    expect(coreState.invoke).toHaveBeenNthCalledWith(1, 'save_blob_to_directory_binary', new Uint8Array([1, 2, 3]), {
+      headers: {
+        'x-darkslide-filename': encodeURIComponent('scan.jpg'),
+        'x-darkslide-directory': encodeURIComponent('/Users/tester/Downloads'),
+      },
     });
     expect(coreState.invoke).toHaveBeenNthCalledWith(2, 'open_saved_file_in_editor', {
       path: '/Users/tester/Downloads/scan.jpg',
@@ -387,10 +388,11 @@ describe('fileBridge', () => {
       savedPath: '/Users/tester/Pictures/DarkSlide/scan.jpg',
       destinationDirectory: '/Users/tester/Pictures/DarkSlide',
     });
-    expect(coreState.invoke).toHaveBeenNthCalledWith(1, 'save_blob_to_directory', {
-      bytes: [1, 2, 3],
-      filename: 'scan.jpg',
-      destinationDirectory: '/Users/tester/Pictures/DarkSlide',
+    expect(coreState.invoke).toHaveBeenNthCalledWith(1, 'save_blob_to_directory_binary', new Uint8Array([1, 2, 3]), {
+      headers: {
+        'x-darkslide-filename': encodeURIComponent('scan.jpg'),
+        'x-darkslide-directory': encodeURIComponent('/Users/tester/Pictures/DarkSlide'),
+      },
     });
     expect(coreState.invoke).toHaveBeenNthCalledWith(2, 'open_saved_file_in_editor', {
       path: '/Users/tester/Pictures/DarkSlide/scan.jpg',
@@ -409,10 +411,11 @@ describe('fileBridge', () => {
     );
 
     expect(savedPath).toBe('/Users/tester/Downloads/scan-2.jpg');
-    expect(coreState.invoke).toHaveBeenCalledWith('save_blob_to_directory', {
-      bytes: [1, 2, 3],
-      filename: 'scan.jpg',
-      destinationDirectory: '/Users/tester/Downloads',
+    expect(coreState.invoke).toHaveBeenCalledWith('save_blob_to_directory_binary', new Uint8Array([1, 2, 3]), {
+      headers: {
+        'x-darkslide-filename': encodeURIComponent('scan.jpg'),
+        'x-darkslide-directory': encodeURIComponent('/Users/tester/Downloads'),
+      },
     });
   });
 

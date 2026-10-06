@@ -275,6 +275,55 @@ export function encodePng(raster: ExportRaster, bitDepth: ExportBitDepth, iccPro
   ]);
 }
 
+// Quantize in bounded strips, in the destination byte order. Neither encoder
+// needs a second full-image RGB buffer or a concatenated output allocation.
+function rgbStrip(raster: ExportRaster, firstRow: number, rows: number, bitDepth: ExportBitDepth, littleEndian = false) {
+  const bytes = new Uint8Array(raster.width * rows * 3 * (bitDepth === 16 ? 2 : 1));
+  let offset = 0;
+  for (let y = firstRow; y < firstRow + rows; y++) {
+    for (let x = 0; x < raster.width; x++) {
+      for (let c = 0; c < 3; c++) {
+        const sample = isImageDataRaster(raster) ? raster.data[(y * raster.width + x) * 4 + c] / 255 : getRasterSample(raster, x, y, c);
+        if (bitDepth === 16) {
+          (littleEndian ? writeUint16Le : writeUint16Be)(bytes, offset, toUint16Sample(sample));
+          offset += 2;
+        } else { bytes[offset++] = toUint8Sample(sample); }
+      }
+    }
+  }
+  return bytes;
+}
+
+export async function encodePngBlob(raster: ExportRaster, bitDepth: ExportBitDepth, iccProfile?: Uint8Array | null, profileName?: string | null) {
+  if (typeof CompressionStream === 'undefined') {
+    return new Blob([encodePng(raster, bitDepth, iccProfile, profileName)], { type: 'image/png' });
+  }
+  const ihdr = new Uint8Array(13);
+  writeUint32Be(ihdr, 0, raster.width); writeUint32Be(ihdr, 4, raster.height);
+  ihdr[8] = bitDepth; ihdr[9] = 2;
+  const parts: BlobPart[] = [PNG_SIGNATURE, buildPngChunk('IHDR', ihdr)];
+  if (iccProfile) parts.push(createIccPngChunk(iccProfile, profileName ?? undefined));
+  let y = 0;
+  const input = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    pull(controller) {
+      if (y >= raster.height) { controller.close(); return; }
+      const bytes = rgbStrip(raster, y++, 1, bitDepth);
+      const row = new Uint8Array(bytes.length + 1); row.set(bytes, 1);
+      controller.enqueue(row);
+    },
+  });
+  const reader = input.pipeThrough(new CompressionStream('deflate')).getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(buildPngChunk('IDAT', value));
+    }
+  } finally { reader.releaseLock(); }
+  parts.push(buildPngChunk('IEND', new Uint8Array()));
+  return new Blob(parts, { type: 'image/png' });
+}
+
 const TIFF_TYPE_BYTE = 1;
 const TIFF_TYPE_ASCII = 2;
 const TIFF_TYPE_SHORT = 3;
@@ -335,6 +384,11 @@ export function encodeTiff(raster: ExportRaster, bitDepth: ExportBitDepth, iccPr
   }
 
   const rgb = rasterToTiffRgbBytes(raster, bitDepth);
+  const header = encodeTiffHeader(raster, bitDepth, rgb.length, iccProfile);
+  return concatUint8Arrays([header, rgb]);
+}
+
+function encodeTiffHeader(raster: Pick<ExportRaster, 'width' | 'height'>, bitDepth: ExportBitDepth, rgbLength: number, iccProfile?: Uint8Array | null) {
   const entries: TiffEntry[] = [
     { tag: 256, type: TIFF_TYPE_LONG, count: 1, value: raster.width },
     { tag: 257, type: TIFF_TYPE_LONG, count: 1, value: raster.height },
@@ -344,7 +398,7 @@ export function encodeTiff(raster: ExportRaster, bitDepth: ExportBitDepth, iccPr
     { tag: 273, type: TIFF_TYPE_LONG, count: 1, value: 0 },
     { tag: 277, type: TIFF_TYPE_SHORT, count: 1, value: 3 },
     { tag: 278, type: TIFF_TYPE_LONG, count: 1, value: raster.height },
-    { tag: 279, type: TIFF_TYPE_LONG, count: 1, value: rgb.length },
+    { tag: 279, type: TIFF_TYPE_LONG, count: 1, value: rgbLength },
     { tag: 282, type: TIFF_TYPE_RATIONAL, count: 1, data: createRational(72, 1) },
     { tag: 283, type: TIFF_TYPE_RATIONAL, count: 1, data: createRational(72, 1) },
     { tag: 284, type: TIFF_TYPE_SHORT, count: 1, value: 1 },
@@ -370,8 +424,7 @@ export function encodeTiff(raster: ExportRaster, bitDepth: ExportBitDepth, iccPr
   });
 
   const stripOffset = dataOffset;
-  const totalLength = stripOffset + rgb.length;
-  const bytes = new Uint8Array(totalLength);
+  const bytes = new Uint8Array(stripOffset);
   bytes[0] = 0x49;
   bytes[1] = 0x49;
   writeUint16Le(bytes, 2, 42);
@@ -396,8 +449,18 @@ export function encodeTiff(raster: ExportRaster, bitDepth: ExportBitDepth, iccPr
   for (const part of extraData) {
     bytes.set(part.data, part.offset);
   }
-  bytes.set(rgb, stripOffset);
   return bytes;
+}
+
+export function encodeTiffBlob(raster: ExportRaster, bitDepth: ExportBitDepth, iccProfile?: Uint8Array | null) {
+  if (bitDepth === 16 && isImageDataRaster(raster)) throw new HighBitDepthExportUnavailableError('image/tiff');
+  const length = raster.width * raster.height * 3 * (bitDepth === 16 ? 2 : 1);
+  const parts: BlobPart[] = [encodeTiffHeader(raster, bitDepth, length, iccProfile)];
+  const rowsPerStrip = Math.max(1, Math.floor(1024 * 1024 / (raster.width * 3 * (bitDepth === 16 ? 2 : 1))));
+  for (let y = 0; y < raster.height; y += rowsPerStrip) {
+    parts.push(rgbStrip(raster, y, Math.min(rowsPerStrip, raster.height - y), bitDepth, true));
+  }
+  return new Blob(parts, { type: 'image/tiff' });
 }
 
 export interface EncodedExport {
@@ -434,12 +497,12 @@ export async function encodeExportRaster(raster: ExportRaster, options: ExportOp
       const blob = await canvasToBlob(canvas, { type: 'image/png' });
       return { blob, bitDepth, bitDepthDowngraded };
     }
-    const blob = new Blob([encodePng(prepared, bitDepth, iccProfile, profileName)], { type: 'image/png' });
+    const blob = await encodePngBlob(prepared, bitDepth, iccProfile, profileName);
     return { blob, bitDepth, bitDepthDowngraded };
   }
 
   if (options.format === 'image/tiff') {
-    const blob = new Blob([encodeTiff(prepared, bitDepth, iccProfile)], { type: 'image/tiff' });
+    const blob = encodeTiffBlob(prepared, bitDepth, iccProfile);
     return { blob, bitDepth, bitDepthDowngraded };
   }
 

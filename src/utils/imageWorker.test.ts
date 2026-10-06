@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDefaultSettings } from '../constants';
+import { createDefaultSettings, DEFAULT_DUST_REMOVAL } from '../constants';
 import type { AutoAnalyzeResult, ColorProfileId, ConversionAnalysisRequest, ConversionAnalysisResult, DecodedImage, FilmBaseSample, PreparedTileJobResult, RenderResult } from '../types';
+import { rawIpcPayload } from '../test/rawIpcPayload';
+import { applyFlatFieldToRawResult, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, estimateRawStartupExposure } from './rawImport';
+import { applyDustRemoval } from './dustRemoval';
 import { neutralWhiteBalance } from './autoAnalysis';
 import type { WorkerMessage, WorkerResponse } from './workerProtocol';
 import { computeResidualBaseOffset } from './imagePipeline';
@@ -8,6 +11,11 @@ import { computeResidualBaseOffset } from './imagePipeline';
 vi.mock('./imagePipeline', async (importOriginal) => {
   const original = await importOriginal<typeof import('./imagePipeline')>();
   return { ...original, computeResidualBaseOffset: vi.fn(original.computeResidualBaseOffset) };
+});
+
+vi.mock('./dustRemoval', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./dustRemoval')>();
+  return { ...original, applyDustRemoval: vi.fn(original.applyDustRemoval) };
 });
 
 // These tests exercise worker requests with uniform pixels. Geometry is neutral;
@@ -68,8 +76,38 @@ describe('worker conversion analysis consistency', () => {
     await import(workerModulePath);
     receive = scope.onmessage as unknown as typeof receive;
     vi.mocked(computeResidualBaseOffset).mockClear();
+    vi.mocked(applyDustRemoval).mockClear();
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it('prepares binary RAW samples in the worker after flat-field correction', async () => {
+    const size = 16;
+    const buffer = rawIpcPayload({ width: size, height: size, bitDepth: 16, data: new Array(size * size * 3).fill(18000) });
+    const flatField = { version: 1 as const, name: 'reference', width: size, height: size, gridWidth: 4, gridHeight: 4, maxCorrectionStops: 1, createdAt: 0, gains: new Array(48).fill(1.1) };
+    const reference = decodeRawIpcPayload(buffer.slice(0));
+    applyFlatFieldToRawResult(reference, flatField);
+    const prepared = createWorkerDecodeRequestFromRaw('binary', 'scan.nef', 100, reference);
+    const decoded = await request<DecodedImage>({ type: 'decode', payload: { documentId: 'binary', buffer, fileName: 'scan.nef', mime: 'image/x-raw-ipc', size: 100, rawFlatField: flatField, rawNativeMs: 10 } });
+    expect(decoded.rawImport).toMatchObject({ flatField: 'applied', filmBase: prepared.precomputedFilmBase, timings: { nativeMs: 10 } });
+    expect(decoded.rawImport!.startupExposure).toBe(estimateRawStartupExposure(reference.data, size, size, 65535, prepared.precomputedFilmBase ?? null));
+    const sampled = await request<FilmBaseSample>({ type: 'sample-film-base', payload: { documentId: 'binary', settings: createDefaultSettings(), targetMaxDimension: 1024, x: 0.5, y: 0.5 } });
+    expect(sampled.r).toBe(Math.round(reference.data[0] / 257));
+    expect(buffer.byteLength).toBe(68 + size * size * 6);
+  });
+
+  it('reuses dust repair across tone changes and invalidates it when marks change', async () => {
+    await decode('dust', [120, 130, 140]);
+    const settings = createDefaultSettings({ dustRemoval: { ...DEFAULT_DUST_REMOVAL, marks: [{ id: 'spot', kind: 'spot', source: 'manual', cx: 0.5, cy: 0.5, radius: 0.05 }] } });
+    const prepare = (jobId: string, next = settings) => request<PreparedTileJobResult>({ type: 'prepare-tile-job', payload: { documentId: 'dust', jobId, sourceKind: 'source', comparisonMode: 'processed', settings: next } });
+    const first = await prepare('one');
+    const second = await prepare('two', { ...settings, exposure: 10 });
+    expect(applyDustRemoval).toHaveBeenCalledTimes(1);
+    expect(second.sourceKey).toBe(first.sourceKey);
+    const changed = { ...settings, dustRemoval: { ...settings.dustRemoval!, marks: [{ ...settings.dustRemoval!.marks[0], radius: 0.08 }] } };
+    const third = await prepare('three', changed);
+    expect(applyDustRemoval).toHaveBeenCalledTimes(2);
+    expect(third.sourceKey).not.toBe(first.sourceKey);
+  });
 
   it('recomputes residual analysis when color is switched to monochrome and reuses identical requests', async () => {
     await decode('frame', [120, 160, 190]);

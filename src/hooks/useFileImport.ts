@@ -1,3 +1,4 @@
+import { decodeDesktopRawForWorker } from '../utils/desktopRaw';
 import { MutableRefObject, useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import {
@@ -27,9 +28,7 @@ import { AUTO_APPLY_NONE_PRESET_ID, loadPreferences } from '../utils/preferenceS
 import { confirmRestoreSidecar, isDesktopShell, readTextFileByPath } from '../utils/fileBridge';
 import {
   buildRawInitialSettings,
-  estimateRawStartupExposure,
   createRawImportProfile,
-  decodeDesktopRawForWorker,
   isFilmBaseClipped,
   type FlatFieldDecodeStatus,
   rotationFromExifOrientation,
@@ -358,33 +357,28 @@ export function useFileImport({
 
       if (rawImport) {
         try {
-          const { rawResult, decodeRequest, flatField } = await decodeDesktopRawForWorker({
+          const { rawResult, decodeRequest } = await decodeDesktopRawForWorker({
             documentId,
             fileName: file.name,
             path: nativePath!,
             size: sourceFileSize,
           });
-          notifyRawCaptureIssues(file.name, flatField, decodeRequest.precomputedFilmBase ?? null);
-          const estimatedFilmBaseEstimate = decodeRequest.precomputedFilmBase ?? null;
+          decoded = await worker.decode({ ...decodeRequest, displayScaleFactor });
+          const estimatedFilmBaseEstimate = decoded.rawImport?.filmBase ?? decoded.estimatedFilmBase ?? null;
+          notifyRawCaptureIssues(file.name, decoded.rawImport?.flatField ?? 'off', estimatedFilmBaseEstimate);
           const estimatedFilmBase = estimatedFilmBaseEstimate?.sample
-            ?? decodeRequest.precomputedFilmBaseSample
+            ?? decoded.estimatedFilmBaseSample
             ?? null;
           const rawStartupSettings = withCameraRawChannelGains(createDefaultSettings(buildRawInitialSettings(
             rawStartupProfile.defaultSettings,
-            rawResult.data,
+            [],
             rawResult.width,
             rawResult.height,
             rawResult.orientation,
             estimatedFilmBaseEstimate ?? estimatedFilmBase,
           )), rawStartupProfile);
           if ((rawStartupProfile.filmType ?? 'negative') === 'negative') {
-            rawStartupSettings.exposure += estimateRawStartupExposure(
-              rawResult.data,
-              rawResult.width,
-              rawResult.height,
-              (rawResult.bitDepth ?? 8) === 16 ? 65535 : 255,
-              estimatedFilmBaseEstimate ?? estimatedFilmBase,
-            );
+            rawStartupSettings.exposure += decoded.rawImport?.startupExposure ?? 0;
           }
           if (preferredImportProfile) {
             const preferredSettings = withCameraRawChannelGains(
@@ -429,6 +423,12 @@ export function useFileImport({
             message: `RAW decoded via Tauri: ${file.name} (${rawResult.width}×${rawResult.height}, ${rawResult.color_space})`,
             context: {
               colorSpace: rawResult.color_space,
+              ...(decoded.rawImport?.timings ? {
+                nativeDecodeMs: decoded.rawImport.timings.nativeMs,
+                flatFieldMs: decoded.rawImport.timings.flatFieldMs,
+                rawPreparationMs: decoded.rawImport.timings.preparationMs,
+                workerDecodeMs: decoded.rawImport.timings.workerDecodeMs,
+              } : {}),
               documentId,
               fileName: file.name,
               height: rawResult.height,
@@ -437,10 +437,6 @@ export function useFileImport({
             },
           });
 
-          decoded = await worker.decode({
-            ...decodeRequest,
-            displayScaleFactor,
-          });
         } catch (rawError) {
           const message = formatError(rawError);
           appendDiagnostic({

@@ -20,6 +20,9 @@ const gpuState = vi.hoisted(() => ({
   },
 }));
 
+const nativeState = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeState.invoke }));
+
 const diagnosticsState = vi.hoisted(() => ({
   appendDiagnostic: vi.fn(),
 }));
@@ -167,6 +170,7 @@ describe('ImageWorkerClient', () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.resetModules();
+    nativeState.invoke.mockReset();
     MockWorker.instances = [];
     gpuState.create.mockReset();
     gpuState.create.mockResolvedValue(null);
@@ -183,6 +187,55 @@ describe('ImageWorkerClient', () => {
     gpuState.instance.getLostInfo.mockReturnValue(null);
     diagnosticsState.appendDiagnostic.mockReset();
     Reflect.deleteProperty(navigator, 'gpu');
+  });
+
+  it('falls back to cloning a native IPC buffer when WebKit cannot transfer it', async () => {
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const worker = MockWorker.instances[0];
+    const originalPost = worker.postMessage.bind(worker);
+    const post = vi.spyOn(worker, 'postMessage').mockImplementationOnce(() => { throw new DOMException('Cannot detach IPC storage', 'DataCloneError'); }).mockImplementation(originalPost);
+    const buffer = new ArrayBuffer(74);
+    const pending = client.decode({ documentId: 'raw', buffer, mime: 'image/x-raw-ipc', nativeRawPath: '/scan.nef', fileName: 'scan.nef', size: 74 });
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[1]).toHaveLength(1);
+    const message = worker.postedMessages[0];
+    worker.onmessage?.({ data: { id: message.id, ok: true, payload: { metadata: { id: 'raw' }, previewLevels: [] } } } as MessageEvent);
+    await expect(pending).resolves.toMatchObject({ metadata: { id: 'raw' } });
+    client.terminate();
+  });
+
+  it('reopens a native RAW once after a restart, retaining its correction snapshot beyond the pixel-cache TTL', async () => {
+    vi.useFakeTimers();
+    const { ImageWorkerClient } = await import('./imageWorkerClient');
+    const client = new ImageWorkerClient();
+    const first = MockWorker.instances[0];
+    const flatField = { version: 1 as const, name: 'reference', width: 1, height: 1, gridWidth: 4, gridHeight: 4, maxCorrectionStops: 1, createdAt: 0, gains: new Array(48).fill(1.1) };
+    const initial = client.decode({ documentId: 'raw-doc', buffer: new ArrayBuffer(74), fileName: 'scan.nef', mime: 'image/x-raw-ipc', nativeRawPath: '/scan.nef', rawFlatField: flatField, size: 74 });
+    const decodedPayload = { metadata: { id: 'raw-doc', name: 'scan.nef', width: 1, height: 1 }, previewLevels: [] };
+    first.onmessage?.({ data: { id: first.postedMessages[0].id, ok: true, payload: decodedPayload } } as MessageEvent);
+    await initial;
+    vi.advanceTimersByTime(60_001);
+    first.onmessageerror?.({} as MessageEvent);
+    const replacement = MockWorker.instances[1];
+    const nativeBuffer = new ArrayBuffer(74);
+    nativeState.invoke.mockResolvedValue(nativeBuffer);
+    const request = { ...createRenderPayload(), documentId: 'raw-doc' };
+    const one = client.render(request);
+    const two = client.render({ ...request, revision: 2 });
+    await flushAsyncWork(30);
+    expect(nativeState.invoke).toHaveBeenCalledExactlyOnceWith('decode_raw_binary', { path: '/scan.nef' });
+    expect(replacement.postedMessages).toHaveLength(1);
+    const recovered = replacement.postedMessages[0];
+    expect(recovered).toMatchObject({ type: 'decode', payload: { buffer: nativeBuffer, rawFlatField: flatField, mime: 'image/x-raw-ipc' } });
+    replacement.onmessage?.({ data: { id: recovered.id, ok: true, payload: decodedPayload } } as MessageEvent);
+    await flushAsyncWork(30);
+    const renders = replacement.postedMessages.filter(message => message.type === 'render');
+    expect(renders).toHaveLength(2);
+    for (const message of renders) replacement.onmessage?.({ data: { id: message.id, ok: true, payload: { documentId: 'raw-doc', revision: (message.payload as { revision: number }).revision } } } as MessageEvent);
+    await expect(one).resolves.toMatchObject({ revision: 1 });
+    await expect(two).resolves.toMatchObject({ revision: 2 });
+    client.terminate();
   });
 
   it('rejects pending requests on worker crash and recreates the worker', async () => {

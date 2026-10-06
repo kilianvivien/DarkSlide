@@ -6,7 +6,7 @@ authors = ["Kilian Vivien"]
 license = "MIT"
 repository = "https://github.com/kilianvivien/DarkSlide"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.90"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -15,14 +15,17 @@ name = "darkslide_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.5.6", features = [] }
+tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
-tauri = { version = "2.10.3", features = [] }
-tauri-plugin-dialog = "2.6.0"
-tauri-plugin-fs = "2.4.5"
-tauri-plugin-notification = "2.3.3"
+tauri = { version = "2.12.1", features = [] }
+tauri-plugin-dialog = "2.8.1"
+tauri-plugin-fs = "2.6.0"
+tauri-plugin-notification = "2.5.1"
 tauri-plugin-updater = "2"
-rawler = "0.7"
+rawler = "0.8"
+rayon = "1.12"
+bytemuck = "1.25"
+percent-encoding = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

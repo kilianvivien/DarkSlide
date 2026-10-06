@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_PROFILES } from '../constants';
-import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, composeCameraColorMatrix, computeDensityBalance, computeResidualBaseOffset, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
+import { applyContrast, applyCrushGuard, applyToneStage, buildFloatCurveTables, buildProcessingUniforms, composeCameraColorMatrix, computeDensityBalance, computeResidualBaseOffset, createCenteredAspectCrop, createCurveLut, FLOAT_CURVE_TABLE_SIZE, FloatRgbRaster, getCropPixelBounds, getRotatedDimensions, getTransformedDimensions, getInversionWorkingProfile, processFloatRaster, processImageData, resolveDensityInversionParams, resolveEffectiveSettings, resolveToneStageParams, rotateCropClockwise, wouldBaseCrushImage } from './imagePipeline';
 import { ColorMatrix, FilmBaseEstimate } from '../types';
-import { decodeProfileChannel, encodeProfileChannel } from './colorProfiles';
+import { convertRgbBetweenProfiles, decodeProfileChannel, encodeProfileChannel } from './colorProfiles';
 
 function createPixel(r: number, g: number, b: number) {
   return new ImageData(new Uint8ClampedArray([r, g, b, 255]), 1, 1);
@@ -1330,5 +1330,43 @@ describe('tone stage', () => {
     const [r, g, b] = applyToneStage(1.2, 1.2, 1.2, params);
     expect(r).toBeCloseTo(g, 6);
     expect(g).toBeCloseTo(b, 6);
+  });
+});
+
+
+describe('Display P3 negative conversion', () => {
+  it('inverts an orange mask before the smaller output gamut can clip its blue channel', () => {
+    const settings = { ...neutralSettings, flareCorrection: 0, filmBaseSample: { r: 222, g: 160, b: 72 }, filmBaseSampleProfileId: 'display-p3' as const };
+    const source = Float32Array.from([176 / 255, 85 / 255, 24 / 255]);
+    const run = (data: Float32Array, input: 'display-p3' | 'srgb', output: 'display-p3' | 'srgb') => processFloatRaster(
+      { width: 1, height: 1, data }, settings, true, 'processed', undefined, undefined, undefined,
+      undefined, undefined, undefined, 0, 0, 0, input, output,
+    ).data;
+    const invertedP3 = run(source.slice(), 'display-p3', 'display-p3');
+    const expected = convertRgbBetweenProfiles(...Array.from(invertedP3) as [number, number, number], 'display-p3', 'srgb');
+    const actual = run(source.slice(), 'display-p3', 'srgb');
+    actual.forEach((value, channel) => expect(value).toBeCloseTo(expected[channel], 6));
+    const earlyConversion = convertRgbBetweenProfiles(...Array.from(source) as [number, number, number], 'display-p3', 'srgb');
+    expect(earlyConversion[2]).toBe(0);
+    const formerlyClipped = run(Float32Array.from(earlyConversion), 'srgb', 'srgb');
+    expect(Math.abs(actual[2] - formerlyClipped[2])).toBeGreaterThan(0.05);
+  });
+
+  it('keeps sRGB, slides, and monochrome in their existing working profile', () => {
+    expect(getInversionWorkingProfile('display-p3', 'srgb', 'negative', true)).toBe('display-p3');
+    expect(getInversionWorkingProfile('srgb', 'srgb', 'negative', true)).toBe('srgb');
+    expect(getInversionWorkingProfile('display-p3', 'srgb', 'slide', true)).toBe('srgb');
+    expect(getInversionWorkingProfile('display-p3', 'srgb', 'negative', false)).toBe('srgb');
+  });
+
+  it('rejects an automatic P3 base that crushes two channels while red hides the failure', () => {
+    const image = createGrid(16, [[100, 135, 100], [110, 145, 110]]);
+    const estimate: FilmBaseEstimate = { sample: { r: 149, g: 111, b: 71 }, source: 'frame-rebate', confidence: 0.68, rejectedCandidates: 0, clamped: false };
+    const conservative = { r: 210, g: 190, b: 170 };
+    const p3 = applyCrushGuard(estimate, image, conservative, null, 'display-p3');
+    expect(p3.estimate).toMatchObject({ sample: conservative, source: 'low-confidence', confidence: 0, clamped: true });
+    expect(applyCrushGuard(estimate, image, conservative, null, 'srgb').estimate).toBe(estimate);
+    const valid = { ...estimate, sample: conservative };
+    expect(applyCrushGuard(valid, image, conservative, null, 'display-p3').estimate).toBe(valid);
   });
 });

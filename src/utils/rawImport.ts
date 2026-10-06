@@ -1,20 +1,12 @@
 import { DENSITY_TO_POSITIVE_GAMMA, FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
 import { ColorMatrix, ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
 import { decodeProfileChannel, getColorProfileIdFromName } from './colorProfiles';
-import { applyFlatField, buildFlatFieldProfile, type FlatFieldBuildResult, type FlatFieldProfile } from './flatField';
-import { getActiveFlatFieldProfile } from './flatFieldStore';
+import { applyFlatField, type FlatFieldProfile } from './flatField';
 import { clamp } from './math';
 import { preserveProfileCalibration } from './presetRecipe';
 import { EXPOSURE_UNITS_PER_STOP } from './whiteBalance';
 
 export const RAW_IMPORT_PROFILE_ID = 'raw-import-result';
-
-export interface DesktopRawDecodeForWorkerOptions {
-  documentId: string;
-  fileName: string;
-  path: string;
-  size: number;
-}
 
 export function isRawExtension(extension: string) {
   return RAW_EXTENSIONS.includes(extension as typeof RAW_EXTENSIONS[number]);
@@ -95,6 +87,14 @@ function toRawIpcBytes(payload: unknown): Uint8Array {
   throw new Error('RAW decode returned an unexpected payload.');
 }
 
+// Tauri transports may expose bytes as an ArrayBuffer, a view, or JSON bytes.
+// Worker transfer lists always need the backing ArrayBuffer, not a typed view.
+export function normalizeRawIpcBuffer(payload: unknown): ArrayBuffer {
+  const bytes = toRawIpcBytes(payload);
+  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer) return bytes.buffer;
+  return bytes.slice().buffer;
+}
+
 /**
  * Validates and unpacks a binary RAW payload. Every field is checked before
  * any allocation so a truncated or corrupted payload fails cleanly.
@@ -168,7 +168,7 @@ export function decodeRawIpcPayload(payload: unknown): RawDecodeResult {
   };
 }
 
-function normalizeRawHighDepthBuffer(rawResult: RawDecodeResult) {
+function normalizeRawHighDepthBuffer(rawResult: RawDecodeResult, takeOwnership = false) {
   if (rawResult.width * rawResult.height > MAX_HIGH_DEPTH_RAW_PIXELS) {
     return undefined;
   }
@@ -179,7 +179,7 @@ function normalizeRawHighDepthBuffer(rawResult: RawDecodeResult) {
   }
   // Copy: the worker takes ownership of this buffer when it is transferred.
   return rawResult.data instanceof Uint16Array
-    ? rawResult.data.slice().buffer
+    ? (takeOwnership ? rawResult.data.buffer as ArrayBuffer : rawResult.data.slice().buffer)
     : Uint16Array.from(rawResult.data).buffer;
 }
 
@@ -188,11 +188,12 @@ export function createWorkerDecodeRequestFromRaw(
   fileName: string,
   size: number,
   rawResult: RawDecodeResult,
+  takeOwnership = false,
 ): DecodeRequest {
   const previewRgba = (rawResult.bitDepth ?? 8) === 16
     ? rgb16ToRgba8(rawResult.data, rawResult.width, rawResult.height).buffer
     : rgbToRgba(rawResult.data, rawResult.width, rawResult.height).buffer;
-  const highDepthRawBuffer = normalizeRawHighDepthBuffer(rawResult);
+  const highDepthRawBuffer = normalizeRawHighDepthBuffer(rawResult, takeOwnership);
   // Estimate the clear base from the highest-fidelity data available: the
   // full-resolution 16-bit RGB buffer when present (independent of whether it
   // survived the high-depth size cap), otherwise the 8-bit RGB. The 8-bit
@@ -212,6 +213,7 @@ export function createWorkerDecodeRequestFromRaw(
       height: rawResult.height,
     },
     highDepthRawBuffer,
+    highDepthRawByteOffset: takeOwnership && rawResult.data instanceof Uint16Array ? rawResult.data.byteOffset : undefined,
     highDepthRawBitDepth: highDepthRawBuffer ? 16 : undefined,
     highDepthRawTransfer: highDepthRawBuffer ? (rawResult.transfer ?? 'srgb') : undefined,
     precomputedFilmBase,
@@ -249,31 +251,6 @@ export function isFilmBaseClipped(estimate: FilmBaseEstimate | null | undefined)
   }
   const { r, g, b } = estimate.sample;
   return Math.max(r, g, b) >= CLIPPED_FILM_BASE_LEVEL;
-}
-
-// Decodes a frame of the bare light source exactly like a scan (camera-native,
-// no gains) and turns it into a flat-field map.
-export async function buildFlatFieldFromRawPath(path: string, name: string): Promise<FlatFieldBuildResult> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  const rawResult = decodeRawIpcPayload(await invoke<ArrayBuffer>('decode_raw_binary', { path }));
-  return buildFlatFieldProfile(rawResult.data, rawResult.width, rawResult.height, name);
-}
-
-export async function decodeDesktopRawForWorker(options: DesktopRawDecodeForWorkerOptions) {
-  const { invoke } = await import('@tauri-apps/api/core');
-  const rawResult = decodeRawIpcPayload(await invoke<ArrayBuffer>('decode_raw_binary', { path: options.path }));
-  const flatField = applyFlatFieldToRawResult(rawResult, getActiveFlatFieldProfile());
-
-  return {
-    rawResult,
-    flatField,
-    decodeRequest: createWorkerDecodeRequestFromRaw(
-      options.documentId,
-      options.fileName,
-      options.size,
-      rawResult,
-    ),
-  };
 }
 
 const ANALYSIS_GRID_TARGET = 200;      // max cells per axis

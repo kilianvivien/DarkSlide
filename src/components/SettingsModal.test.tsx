@@ -30,7 +30,7 @@ vi.mock('../utils/fileBridge', () => ({
   pickRawFilePath: () => pickRawFilePath(),
 }));
 
-vi.mock('../utils/rawImport', () => ({
+vi.mock('../utils/desktopRaw', () => ({
   buildFlatFieldFromRawPath: (path: string, name: string) => buildFlatFieldFromRawPath(path, name),
 }));
 

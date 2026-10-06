@@ -32,6 +32,7 @@ describe('GPU spatial filter submission', () => {
     type Binding = { buffer: Buffer; offset?: number };
     type Pass = { name: string; entries: Array<{ binding: number; resource: Binding }> };
     const submitted: Array<{ name: string; radius?: number; direction?: number; factor?: number }> = [];
+    const writes = vi.fn();
     const device = {
       destroy() {},
       limits: { maxStorageBufferBindingSize: 128 * 1024 * 1024, maxBufferSize: 256 * 1024 * 1024 },
@@ -58,7 +59,7 @@ describe('GPU spatial filter submission', () => {
         };
       },
       queue: {
-        writeTexture() {},
+        writeTexture: writes,
         writeBuffer: (buffer: Buffer, offset: number, data: ArrayBufferView) => {
           new Uint8Array(buffer.bytes).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), offset);
         },
@@ -86,9 +87,13 @@ describe('GPU spatial filter submission', () => {
     vi.stubGlobal('navigator', { gpu: { requestAdapter: async () => ({ requestDevice: async () => device, info: {} }) } });
     const pipeline = await WebGPUPipeline.create();
     expect(pipeline).not.toBeNull();
-    await pipeline!.processPreviewImage(new ImageData(new Uint8ClampedArray([128, 128, 128, 255]), 1, 1),
+    const args: Parameters<WebGPUPipeline['processPreviewImage']> = [
+      new ImageData(new Uint8ClampedArray([128, 128, 128, 255]), 1, 1),
       createDefaultSettings({ noiseReduction: { enabled: denoise, luminanceStrength: 25 }, sharpen: { enabled: true, radius: 3, amount: 150 } }),
-      true, 'processed');
+      true, 'processed',
+    ];
+    args[23] = 'document-a|geometry-1';
+    await pipeline!.processPreviewImage(...args);
     expect(submitted).toEqual([
       ...(denoise ? [
         { name: 'blurFragment', radius: 2, direction: 0 },
@@ -99,6 +104,13 @@ describe('GPU spatial filter submission', () => {
       { name: 'blurFragment', radius: 3, direction: 1 },
       { name: 'sharpenFragment', factor: 1.5 },
     ]);
+    expect(writes).toHaveBeenCalledTimes(1);
+    args[1] = createDefaultSettings({ exposure: 20 });
+    await pipeline!.processPreviewImage(...args);
+    expect(writes).toHaveBeenCalledTimes(1);
+    args[23] = 'document-b|geometry-1';
+    await pipeline!.processPreviewImage(...args);
+    expect(writes).toHaveBeenCalledTimes(2);
     pipeline!.destroy();
   });
 });

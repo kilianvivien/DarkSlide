@@ -462,6 +462,12 @@ export interface DecodedImage {
   estimatedFilmBaseSample?: FilmBaseSample | null;
   estimatedFilmBase?: FilmBaseEstimate | null;
   estimatedDensityBalance?: DensityBalance | null;
+  rawImport?: {
+    flatField: 'off' | 'applied' | 'camera-mismatch';
+    filmBase: FilmBaseEstimate | null;
+    startupExposure: number;
+    timings?: { nativeMs: number; flatFieldMs: number; preparationMs: number; workerDecodeMs: number };
+  };
 }
 
 export interface RawDecodeResult {
@@ -526,6 +532,7 @@ export interface DecodeRequest {
   displayScaleFactor?: number;
   rawDimensions?: { width: number; height: number };
   highDepthRawBuffer?: ArrayBuffer;
+  highDepthRawByteOffset?: number;
   highDepthRawBitDepth?: ExportBitDepth;
   highDepthRawTransfer?: 'srgb';
   precomputedFilmBaseSample?: FilmBaseSample | null;
@@ -534,6 +541,9 @@ export interface DecodeRequest {
   declaredColorProfileId?: ColorProfileId | null;
   mirrorHorizontal?: boolean;
   cameraColorMatrix?: ColorMatrix | null;
+  nativeRawPath?: string;
+  rawNativeMs?: number;
+  rawFlatField?: import('./utils/flatField').FlatFieldProfile | null;
 }
 
 export interface RenderRequest {
@@ -702,6 +712,7 @@ export interface PreparedTileJobResult {
   tileSize: number;
   halo: number;
   geometryCacheHit: boolean;
+  sourceKey?: string;
 }
 
 export interface ReadTileRequest {

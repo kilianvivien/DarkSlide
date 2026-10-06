@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Condvar, Mutex, OnceLock};
 
-use rawler::analyze::{analyze_metadata, AnalyzerData};
+use rawler::decoders::RawDecodeParams;
+use rawler::rawsource::RawSource;
 use rawler::imgop::develop::{Intermediate, ProcessingStep, RawDevelop};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
@@ -194,6 +196,9 @@ fn encode_raw_ipc_payload(decoded: &DecodedRaw) -> Result<Vec<u8>, String> {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     debug_assert_eq!(bytes.len(), RAW_IPC_HEADER_BYTES);
+    #[cfg(target_endian = "little")]
+    bytes.extend_from_slice(bytemuck::cast_slice(&decoded.data));
+    #[cfg(target_endian = "big")]
     for sample in &decoded.data {
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
@@ -303,12 +308,12 @@ fn srgb_encode(value: f32) -> f32 {
 }
 
 fn camera_native_to_srgb_u16(pixels: &[[f32; 3]]) -> Vec<u16> {
-    let mut data = Vec::with_capacity(pixels.len() * 3);
-    for pixel in pixels {
-        for value in pixel {
-            data.push((srgb_encode(*value) * 65535.0).round() as u16);
+    let mut data = vec![0; pixels.len() * 3];
+    data.par_chunks_mut(3).zip(pixels.par_iter()).for_each(|(output, pixel)| {
+        for (sample, value) in output.iter_mut().zip(pixel) {
+            *sample = (srgb_encode(*value) * 65535.0).round() as u16;
         }
-    }
+    });
     data
 }
 
@@ -335,7 +340,61 @@ fn develop_calibrated_rgb16(raw_image: &rawler::RawImage) -> Result<(u32, u32, V
 }
 
 fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
-    let raw_image = rawler::decode_file(path).map_err(|error| error.to_string())?;
+    decode_raw_pixels_timed(path, &mut RawDecodeTimings::default())
+}
+
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawDecodeTimings {
+    source_ms: f64,
+    decode_ms: f64,
+    metadata_ms: f64,
+    develop_ms: f64,
+    pack_ms: f64,
+    total_ms: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawPerformanceReport {
+    width: u32,
+    height: u32,
+    orientation: Option<u16>,
+    payload_bytes: usize,
+    timings: RawDecodeTimings,
+}
+
+/// Release-build benchmark entry point; optionally saves the exact binary
+/// handoff for end-to-end/browser parity tests using real camera files.
+pub fn benchmark_raw(path: &str, output: Option<&str>) -> Result<RawPerformanceReport, String> {
+    let start = std::time::Instant::now();
+    let mut timings = RawDecodeTimings::default();
+    let decoded = decode_raw_pixels_timed(path, &mut timings)?;
+    let pack = std::time::Instant::now();
+    let bytes = encode_raw_ipc_payload(&decoded)?;
+    timings.pack_ms = pack.elapsed().as_secs_f64() * 1000.0;
+    timings.total_ms = start.elapsed().as_secs_f64() * 1000.0;
+    if let Some(output) = output { fs::write(output, &bytes).map_err(|error| error.to_string())?; }
+    Ok(RawPerformanceReport { width: decoded.width, height: decoded.height,
+        orientation: decoded.orientation, payload_bytes: bytes.len(), timings })
+}
+
+fn decode_raw_pixels_timed(path: &str, timings: &mut RawDecodeTimings) -> Result<DecodedRaw, String> {
+    let start = std::time::Instant::now();
+    let raw_source = RawSource::new(Path::new(path)).map_err(|error| error.to_string())?;
+    let decoder = rawler::get_decoder(&raw_source).map_err(|error| error.to_string())?;
+    timings.source_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let params = RawDecodeParams::default();
+    let start = std::time::Instant::now();
+    let raw_image = decoder.raw_image(&raw_source, &params, false).map_err(|error| error.to_string())?;
+    timings.decode_ms = start.elapsed().as_secs_f64() * 1000.0;
+    // Reuse the parser and mapped source. analyze_metadata also decodes a
+    // dummy image and hashes the whole file, neither needed for orientation.
+    let start = std::time::Instant::now();
+    let orientation = decoder.raw_metadata(&raw_source, &params).ok()
+        .and_then(|metadata| metadata.exif.orientation);
+    timings.metadata_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let start = std::time::Instant::now();
 
     // Film is inverted in the sensor's own RGB. The camera colour matrix is
     // built for white-balanced scene light, not for light through a film
@@ -375,13 +434,7 @@ fn decode_raw_pixels(path: &str) -> Result<DecodedRaw, String> {
         }
     };
 
-    let orientation = analyze_metadata(path)
-        .ok()
-        .and_then(|analysis| match analysis.data {
-            Some(AnalyzerData::Metadata(metadata)) => metadata.raw_metadata.exif.orientation,
-            _ => None,
-        });
-
+    timings.develop_ms = start.elapsed().as_secs_f64() * 1000.0;
     Ok(DecodedRaw {
         width,
         height,
@@ -465,6 +518,26 @@ fn save_blob_to_directory(
 ) -> Result<SavedFileResult, String> {
     let saved_path = save_blob_to_directory_inner(&bytes, &filename, &destination_directory)?;
     Ok(SavedFileResult { saved_path })
+}
+
+#[tauri::command]
+async fn save_blob_to_directory_binary(request: tauri::ipc::Request<'_>) -> Result<SavedFileResult, String> {
+    let header = |name: &str| -> Result<String, String> {
+        let value = request.headers().get(name).and_then(|value| value.to_str().ok())
+            .ok_or_else(|| format!("Missing export header: {name}"))?;
+        percent_encoding::percent_decode_str(value).decode_utf8()
+            .map(|value| value.into_owned()).map_err(|error| error.to_string())
+    };
+    let filename = header("x-darkslide-filename")?;
+    let directory = header("x-darkslide-directory")?;
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        _ => return Err("Export requires a binary request body.".into()),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        save_blob_to_directory_inner(&bytes, &filename, &directory)
+            .map(|saved_path| SavedFileResult { saved_path })
+    }).await.map_err(|error| error.to_string())?
 }
 
 #[cfg(target_os = "macos")]
@@ -768,6 +841,7 @@ pub fn run() {
             decode_raw,
             decode_raw_binary,
             save_blob_to_directory,
+            save_blob_to_directory_binary,
             open_saved_file_in_editor,
             read_file_by_path,
             read_text_file_by_path,

@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertTriangle,
@@ -19,13 +19,14 @@ import { Sidebar } from './Sidebar';
 import { PresetsPane } from './PresetsPane';
 import { CropOverlay } from './CropOverlay';
 import { DustOverlay } from './DustOverlay';
-import { SettingsModal } from './SettingsModal';
-import { BatchModal } from './BatchModal';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { RecentFilesList } from './RecentFilesList';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ToastHost } from './ToastHost';
 import { DEFAULT_COLOR_MANAGEMENT } from '../constants';
+
+const SettingsModal = lazy(() => import('./SettingsModal').then((module) => ({ default: module.SettingsModal })));
+const BatchModal = lazy(() => import('./BatchModal').then((module) => ({ default: module.BatchModal })));
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import {
   BlockingOverlayState,
@@ -516,6 +517,10 @@ export function AppShell({
   zoomOut,
   setZoomLevel,
 }: AppShellProps) {
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [batchLoaded, setBatchLoaded] = useState(false);
+  useEffect(() => { if (showSettingsModal) setSettingsLoaded(true); }, [showSettingsModal]);
+  useEffect(() => { if (showBatchModal) setBatchLoaded(true); }, [showBatchModal]);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const activeFrameIndex = tabs.findIndex((tab) => tab.id === activeTabId);
   void isAdjustingCrop;
@@ -1224,7 +1229,8 @@ export function AppShell({
       </div>
 
       <ErrorBoundary>
-        <SettingsModal
+        <Suspense fallback={null}>
+        {(settingsLoaded || showSettingsModal) && <SettingsModal
           isOpen={showSettingsModal}
           onClose={() => onSetShowSettingsModal(false)}
           onCopyDebugInfo={onCopyDebugInfo}
@@ -1282,10 +1288,12 @@ export function AppShell({
           updaterDisabledReason={updaterDisabledReason}
           onUpdateChannelChange={onUpdateChannelChange}
           onCheckForUpdates={onCheckForUpdates}
-        />
+        />}
+        </Suspense>
       </ErrorBoundary>
       <ErrorBoundary>
-        <BatchModal
+        <Suspense fallback={null}>
+        {(batchLoaded || showBatchModal) && <BatchModal
           isOpen={showBatchModal}
           onClose={() => onSetShowBatchModal(false)}
           workerClient={workerClient}
@@ -1299,7 +1307,8 @@ export function AppShell({
           customProfiles={customPresets}
           openTabs={tabs}
           defaultOutputPath={batchOutputPath}
-        />
+        />}
+        </Suspense>
       </ErrorBoundary>
       <ToastHost />
     </div>

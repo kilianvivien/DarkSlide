@@ -4,13 +4,15 @@
     "lib": [
       "ES2022",
       "WebWorker"
-    ]
+    ],
+    "types": []
   },
   "include": [
     "src/utils/imageWorker.ts",
     "src/piexifjs.d.ts",
     "src/webgpu.d.ts",
-    "src/wgsl.d.ts"
+    "src/wgsl.d.ts",
+    "src/utils/calibrationWorker.ts"
   ],
   "exclude": [
     "dist",

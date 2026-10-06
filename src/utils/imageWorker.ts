@@ -1,3 +1,4 @@
+import { getImageKernels, loadImageKernels, recycleImageKernels } from './imageKernels';
 /// <reference lib="webworker" />
 
 import { cubeLutSignature } from './cubeLut';
@@ -58,6 +59,7 @@ import {
   computeHighlightDensity,
   getExtensionFromFormat,
   getFilmBaseBalance,
+  getInversionWorkingProfile,
   getFileExtension,
   getCropPixelBounds,
   getTransformedDimensions,
@@ -86,7 +88,7 @@ import {
 } from './workerGeometryCache';
 import { sampleCubeLut } from './cubeLut';
 import { clamp } from './math';
-import { computeBrightPercentileSample, estimateFilmBase, mirrorFromExifOrientation } from './rawImport';
+import { applyFlatFieldToRawResult, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, estimateRawStartupExposure, computeBrightPercentileSample, estimateFilmBase, mirrorFromExifOrientation } from './rawImport';
 import { usesColorChannelPipeline } from './pipelineIntent';
 import { encodeExportRaster } from './exportEncoder';
 import {
@@ -128,6 +130,16 @@ interface StoredDocument {
   residualBaseCache: Map<string, [number, number, number] | null>;
   highlightDensityCache: Map<string, number>;
   lastAccessedAt: number;
+}
+
+// Canvas identity survives job cancellation but changes on source/geometry
+// replacement, allowing the client to reuse immutable preview pixels safely.
+const canvasIdentities = new WeakMap<OffscreenCanvas, number>();
+let nextCanvasIdentity = 0;
+function canvasIdentity(canvas: OffscreenCanvas) {
+  let id = canvasIdentities.get(canvas);
+  if (id === undefined) { id = ++nextCanvasIdentity; canvasIdentities.set(canvas, id); }
+  return id;
 }
 
 const ANALYSIS_CACHE_LIMIT = 16;
@@ -471,7 +483,7 @@ function renderTransformedCanvas(sourceCanvas: OffscreenCanvas, settings: Conver
 
 function rememberAnalysisResult<T>(cache: Map<string, T>, key: string, value: T) {
   if (cache.size >= ANALYSIS_CACHE_LIMIT) {
-    cache.clear();
+    cache.delete(cache.keys().next().value!);
   }
   cache.set(key, value);
   return value;
@@ -636,7 +648,8 @@ function buildConversionParametersDebug(
     document.estimatedFilmBase,
     document.estimatedDensityBalance,
     payload.inputProfileId ?? 'srgb',
-    payload.outputProfileId ?? 'srgb',
+    getInversionWorkingProfile(payload.inputProfileId ?? 'srgb', payload.outputProfileId ?? 'srgb',
+      payload.filmType ?? 'negative', payload.isColor, payload.cubeLut ?? null),
     payload.flareFloor ?? null,
     (payload.settings.flareCorrection ?? 50) / 100,
     payload.lightSourceBias ?? [1, 1, 1],
@@ -723,12 +736,17 @@ function transformHighDepthRawSource(source: HighDepthRawSource, settings: Conve
     rotation,
   );
   const cropBounds = getCropPixelBounds(normalizeCrop(settings), rotatedWidth, rotatedHeight);
-  const data = new Float32Array(cropBounds.width * cropBounds.height * 3);
+
   const radians = (rotation * Math.PI) / 180;
   const cosine = Math.cos(radians);
   const sine = Math.sin(radians);
 
-  for (let y = 0; y < cropBounds.height; y += 1) {
+  const kernels = getImageKernels();
+  const data = kernels
+    ? kernels.transform(source.data, source.width, source.height, cropBounds.width, cropBounds.height,
+      [cropBounds.x, cropBounds.y, rotatedWidth, rotatedHeight, cosine, sine, 0])
+    : new Float32Array(cropBounds.width * cropBounds.height * 3);
+  for (let y = 0; !kernels && y < cropBounds.height; y += 1) {
     for (let x = 0; x < cropBounds.width; x += 1) {
       const rotatedX = cropBounds.x + x + 0.5 - rotatedWidth / 2;
       const rotatedY = cropBounds.y + y + 0.5 - rotatedHeight / 2;
@@ -1166,6 +1184,7 @@ function applyAnalysisInversionStage(
   const flareFloorNormalized: [number, number, number] = options.flareFloor
     ? [options.flareFloor[0] / 255, options.flareFloor[1] / 255, options.flareFloor[2] / 255]
     : [0, 0, 0];
+  const inversionProfile = getInversionWorkingProfile(inputProfileId, outputProfileId, filmType, options.isColor, options.cubeLut ?? null);
   const densityInversion = resolveDensityInversionParams(
     options.settings,
     options.isColor,
@@ -1174,7 +1193,7 @@ function applyAnalysisInversionStage(
     document.estimatedFilmBase,
     document.estimatedDensityBalance,
     inputProfileId,
-    outputProfileId,
+    inversionProfile,
     options.flareFloor ?? null,
     flareStrength,
     lightSourceBias,
@@ -1186,7 +1205,7 @@ function applyAnalysisInversionStage(
     let r = data[index] / 255;
     let g = data[index + 1] / 255;
     let b = data[index + 2] / 255;
-    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
+    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, inversionProfile);
 
     // Keep analysis in step with rendering: a profile LUT replaces the whole
     // inversion stage there, so it must replace it here too.
@@ -1197,7 +1216,7 @@ function applyAnalysisInversionStage(
         g,
         b,
         filmType,
-        outputProfileId,
+        inversionProfile,
         filmBaseBalance,
         densityInversion,
         flareFloorNormalized,
@@ -1206,6 +1225,7 @@ function applyAnalysisInversionStage(
         residualBaseOffset,
       );
 
+    if (inversionProfile !== outputProfileId) [r, g, b] = convertRgbBetweenProfiles(r, g, b, inversionProfile, outputProfileId);
     if (options.colorMatrix) {
       const m = options.colorMatrix;
       [r, g, b] = [m[0] * r + m[1] * g + m[2] * b, m[3] * r + m[4] * g + m[5] * b, m[6] * r + m[7] * g + m[8] * b];
@@ -1292,7 +1312,20 @@ function handleDustDetect(payload: DustDetectRequest) {
   } as const;
 }
 
-async function handleDecode(payload: DecodeRequest) {
+async function handleDecode(payload: DecodeRequest): Promise<DecodedImage> {
+  if (payload.mime === 'image/x-raw-ipc') {
+    await loadImageKernels();
+    const startedAt = performance.now();
+    const raw = decodeRawIpcPayload(payload.buffer);
+    const flatField = applyFlatFieldToRawResult(raw, payload.rawFlatField ?? null);
+    const flatFieldMs = performance.now() - startedAt;
+    const prepared = createWorkerDecodeRequestFromRaw(payload.documentId, payload.fileName, payload.size, raw, true);
+    const startupExposure = estimateRawStartupExposure(raw.data, raw.width, raw.height, 65535, prepared.precomputedFilmBase ?? null);
+    const preparedAt = performance.now();
+    const decoded = await handleDecode({ ...prepared, displayScaleFactor: payload.displayScaleFactor });
+    return { ...decoded, rawImport: { flatField, filmBase: prepared.precomputedFilmBase ?? null, startupExposure,
+      timings: { nativeMs: payload.rawNativeMs ?? 0, flatFieldMs, preparationMs: preparedAt - startedAt - flatFieldMs, workerDecodeMs: performance.now() - preparedAt } } } satisfies DecodedImage;
+  }
   if (payload.mime === 'image/x-raw-rgba') {
     if (!payload.rawDimensions) {
       throw createError('RAW_INVALID', 'RAW decode payload is missing dimensions.');
@@ -1309,7 +1342,7 @@ async function handleDecode(payload: DecodeRequest) {
       ? {
         width,
         height,
-        data: new Uint16Array(payload.highDepthRawBuffer),
+        data: new Uint16Array(payload.highDepthRawBuffer, payload.highDepthRawByteOffset ?? 0, width * height * 3),
         bitDepth: 16,
         transfer: payload.highDepthRawTransfer ?? 'srgb',
       }
@@ -1498,43 +1531,22 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
   const hasDustRemoval = payload.comparisonMode === 'processed'
     && resolveDustRemovalSettings(payload.settings.dustRemoval).marks.length > 0;
 
-  if (hasDustRemoval) {
-    const dustCleanedCanvas = createDustRemovedCanvas(source.canvas, payload.settings);
-    const rotatedCanvas = renderRotatedCanvasForJob(dustCleanedCanvas, payload.settings);
-    const transformed = renderCroppedCanvasForJob(rotatedCanvas, payload.settings);
-    releaseCanvas(dustCleanedCanvas);
-    releaseCanvas(rotatedCanvas);
-    tileJobs.set(payload.jobId, {
-      documentId: payload.documentId,
-      sourceKind: payload.sourceKind,
-      previewLevelId: source.previewLevelId,
-      transformedCanvas: transformed.canvas,
-      width: transformed.width,
-      height: transformed.height,
-      halo: getHalo(payload.settings, payload.comparisonMode),
-      comparisonMode: payload.comparisonMode,
-    });
-
-    return {
-      documentId: payload.documentId,
-      jobId: payload.jobId,
-      sourceKind: payload.sourceKind,
-      width: transformed.width,
-      height: transformed.height,
-      previewLevelId: source.previewLevelId,
-      tileSize: TILE_SIZE,
-      halo: getHalo(payload.settings, payload.comparisonMode),
-      geometryCacheHit: false,
-    } satisfies PreparedTileJobResult;
-  }
+  const geometrySourceId = hasDustRemoval
+    ? `${source.previewLevelId ?? ''}|dust|${JSON.stringify(resolveDustRemovalSettings(payload.settings.dustRemoval))}`
+    : source.previewLevelId;
 
   const prepared = prepareGeometryCacheEntry({
     rotationCache: document.rotationCache,
     cropCache: document.cropCache,
     sourceKind: payload.sourceKind,
-    previewLevelId: source.previewLevelId,
+    previewLevelId: geometrySourceId,
     settings: payload.settings,
-    createRotation: () => renderRotatedCanvasForJob(source.canvas, payload.settings),
+    createRotation: () => {
+      const cleaned = hasDustRemoval ? createDustRemovedCanvas(source.canvas, payload.settings) : source.canvas;
+      const rotated = renderRotatedCanvasForJob(cleaned, payload.settings);
+      if (cleaned !== source.canvas) releaseCanvas(cleaned);
+      return rotated;
+    },
     createCrop: (rotationCanvas) => {
       const transformed = renderCroppedCanvasForJob(rotationCanvas, payload.settings);
       return {
@@ -1568,6 +1580,7 @@ function handlePrepareTileJob(payload: PrepareTileJobRequest) {
     tileSize: TILE_SIZE,
     halo,
     geometryCacheHit: prepared.geometryCacheHit,
+    sourceKey: `${payload.documentId}|${canvasIdentity(prepared.cropJob.transformedCanvas)}`,
   } satisfies PreparedTileJobResult;
 }
 
@@ -1961,6 +1974,7 @@ function canUseHighDepthRawExport(document: StoredDocument, payload: ExportReque
 }
 
 async function handleExport(payload: ExportRequest) {
+  await loadImageKernels();
   const document = getStoredDocument(payload.documentId);
   const filename = `${sanitizeFilenameBase(payload.options.filenameBase)}.${getExtensionFromFormat(payload.options.format)}`;
 
@@ -2286,7 +2300,8 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
         reply(request, handleDustDetect(request.payload));
         return;
       case 'export':
-        reply(request, await handleExport(request.payload));
+        try { reply(request, await handleExport(request.payload)); }
+        finally { recycleImageKernels(); }
         return;
       case 'contact-sheet':
         reply(request, await handleContactSheet(request.payload));

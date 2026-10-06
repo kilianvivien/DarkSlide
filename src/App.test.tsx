@@ -1,6 +1,7 @@
+import { decodeRawIpcPayload } from './utils/rawImport';
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSettings, DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, MAX_FILE_SIZE_BYTES } from './constants';
 import type { ConversionSettings } from './types';
 
@@ -682,6 +683,8 @@ async function flushMicrotasks() {
   });
 }
 
+beforeAll(async () => { await import('./components/SettingsModal'); });
+
 describe('App import and preview pipeline', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -1130,7 +1133,7 @@ describe('App import and preview pipeline', () => {
     expect(screen.getByText(/File is too large/)).toBeInTheDocument();
   });
 
-  it('routes desktop RAW imports through the Tauri decode command before handing RGBA to the worker', async () => {
+  it('transfers desktop RAW pixels to the worker without main-thread conversion', async () => {
     fileBridgeState.isDesktopShell.mockReturnValue(true);
     const rawFile = createFile('scan.dng', 'application/octet-stream');
     fileBridgeState.openImageFile.mockResolvedValue({
@@ -1168,17 +1171,11 @@ describe('App import and preview pipeline', () => {
 
     expect(coreState.invoke).toHaveBeenCalledWith('decode_raw_binary', { path: '/Users/tester/Desktop/scan.dng' });
     expect(workerState.decode).toHaveBeenCalledWith(expect.objectContaining({
-      fileName: 'scan.dng',
-      mime: 'image/x-raw-rgba',
-      rawDimensions: { width: 2, height: 1 },
-      highDepthRawBitDepth: 16,
-      highDepthRawTransfer: 'srgb',
-      size: 12_345_678,
+      fileName: 'scan.dng', mime: 'image/x-raw-ipc',
+      nativeRawPath: '/Users/tester/Desktop/scan.dng', size: 12_345_678,
     }));
-
-    const rawDecodeRequest = workerState.decode.mock.calls[0]?.[0] as { buffer: ArrayBuffer; highDepthRawBuffer: ArrayBuffer };
-    expect(Array.from(new Uint8Array(rawDecodeRequest.buffer))).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
-    expect(Array.from(new Uint16Array(rawDecodeRequest.highDepthRawBuffer))).toEqual([2570, 5140, 7710, 10280, 12850, 15420]);
+    const request = workerState.decode.mock.calls[0]?.[0] as { buffer: ArrayBuffer };
+    expect(decodeRawIpcPayload(request.buffer).data).toEqual(new Uint16Array([2570, 5140, 7710, 10280, 12850, 15420]));
     expect(screen.getByText(/2 × 1 px/)).toBeInTheDocument();
 
     const diagnostics = JSON.parse(localStorage.getItem('darkslide_diagnostics_v1') ?? '[]') as Array<{ code: string; message: string }>;

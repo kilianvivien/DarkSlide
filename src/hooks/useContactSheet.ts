@@ -1,3 +1,4 @@
+import { decodeDesktopRawForWorker } from '../utils/desktopRaw';
 import { MutableRefObject, useCallback, useEffect, useMemo, useState } from 'react';
 import { DEFAULT_COLOR_MANAGEMENT, LAB_STYLE_PROFILES_MAP, MAX_FILE_SIZE_BYTES } from '../constants';
 import { ContactSheetRequest, DocumentTab, FilmProfile, LightSourceProfile, NotificationSettings } from '../types';
@@ -14,7 +15,7 @@ import { isDesktopShell, openImageFolder, openMultipleImageFiles, saveExportBlob
 import { getFileExtension } from '../utils/imagePipeline';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
 import { resolveDocumentProfile } from '../utils/presetRecipe';
-import { decodeDesktopRawForWorker, isRawExtension } from '../utils/rawImport';
+import { isRawExtension } from '../utils/rawImport';
 
 export type ContactSheetSource = 'frames' | 'files';
 export type ContactSheetScope = 'selected' | 'all';

@@ -1,3 +1,4 @@
+import { buildFlatFieldFromRawPath } from '../utils/desktopRaw';
 import React, { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Paintbrush, Keyboard, Activity, Download, RefreshCw, Grid3x3, Trash2, Upload } from 'lucide-react';
@@ -7,7 +8,6 @@ import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription, getInputProfileLabel } from '../utils/colorProfiles';
 import { isDesktopShell, pickRawFilePath } from '../utils/fileBridge';
 import { clearFlatField, getFlatFieldState, setFlatFieldEnabled, setFlatFieldProfile, subscribeFlatField } from '../utils/flatFieldStore';
-import { buildFlatFieldFromRawPath } from '../utils/rawImport';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useModalA11y } from '../hooks/useModalA11y';
 import { SHORTCUTS } from '../utils/shortcutHelp';

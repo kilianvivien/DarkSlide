@@ -1,8 +1,9 @@
+import { decodeDesktopRawForWorker } from './desktopRaw';
 import { BatchProgressEvent, ColorManagementSettings, ColorProfileId, ConversionSettings, ExportOptions, FilmProfile, HistogramData, InputProfileSpec, LabStyleProfile, SourceMetadata } from '../types';
 import { ImageWorkerClient } from './imageWorkerClient';
 import { computeHighlightDensity, getExtensionFromFormat, getFileExtension, sanitizeFilenameBase } from './imagePipeline';
 import { usesColorChannelPipeline } from './pipelineIntent';
-import { decodeDesktopRawForWorker, isRawExtension } from './rawImport';
+import { isRawExtension } from './rawImport';
 import { getAutoFrameCrop } from './frameDetection';
 import { isDesktopShell, saveExportBlob, saveToDirectory } from './fileBridge';
 import type { AutoAnalyzeResult } from '../types';

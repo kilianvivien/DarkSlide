@@ -22,7 +22,7 @@ import { savePreferences, UserPreferences } from '../utils/preferenceStore';
 import { saveMaxResidentDocs, MaxResidentDocs } from '../utils/residentDocsStore';
 import { notifyExportFinished, primeExportNotificationsPermission } from '../utils/exportNotifications';
 import { clamp } from '../utils/math';
-import { computeHighlightDensity, resolveDensityInversionParams } from '../utils/imagePipeline';
+import { computeHighlightDensity, getInversionWorkingProfile, resolveDensityInversionParams } from '../utils/imagePipeline';
 import { getAutoFrameCrop } from '../utils/frameDetection';
 import { getFilmBaseCorrectionSettings } from '../utils/rawImport';
 import { buildProfileSettingsForDocument, createPresetRecipe, resolveProfileApplication } from '../utils/presetRecipe';
@@ -1331,11 +1331,13 @@ export function useWorkspaceCommands({
     if (isPickingFilmBase) {
       try {
         const inputProfileId = getResolvedInputProfileId(documentState.source, documentState.colorManagement);
+        const sampleProfileId = getInversionWorkingProfile(inputProfileId, documentState.colorManagement.outputProfileId,
+          activeProfile.filmType ?? 'negative', usesColorChannelPipeline(activeProfile), activeProfile.lut ?? null);
         const sample = await workerClientRef.current.sampleFilmBase({
           documentId: documentState.id,
           settings: displaySettings,
           inputProfileId,
-          outputProfileId: documentState.colorManagement.outputProfileId,
+          outputProfileId: sampleProfileId,
           targetMaxDimension,
           x,
           y,
@@ -1350,7 +1352,7 @@ export function useWorkspaceCommands({
           handleSettingsChange({
             filmBaseSample: sample,
             filmBaseSampleSource: 'manual',
-            filmBaseSampleProfileId: documentState.colorManagement.outputProfileId,
+            filmBaseSampleProfileId: sampleProfileId,
           });
         } else {
           handleSettingsChange(getFilmBaseCorrectionSettings(sample));

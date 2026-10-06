@@ -82,13 +82,13 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.os == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.os == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin,wasm32-unknown-unknown' || 'wasm32-unknown-unknown' }}
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -109,6 +109,12 @@ jobs:
 
       - name: Install npm dependencies
         run: npm ci
+
+      - name: Build and verify image kernels
+        run: |
+          npm run build:kernels
+          npm run typecheck
+          npm run test
 
       - name: Build Tauri app
         run: npm run tauri:build${{ matrix.os == 'macos' && ' -- --target universal-apple-darwin' || '' }}

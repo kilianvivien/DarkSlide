@@ -1,3 +1,4 @@
+import { normalizeRawIpcBuffer } from './rawImport';
 import {
   AutoAnalyzeRequest,
   AutoAnalyzeResult,
@@ -268,6 +269,8 @@ export class ImageWorkerClient {
 
   private pending = new Map<string, PendingResolver>();
 
+  private cachedPreviewSource: { key: string; tile: ReadTileResult } | null = null;
+
   private decodeCache = new Map<string, CachedDecodeRequest>();
 
   // Calibration is tiny document state, not decode-recovery data. Keep it for
@@ -384,6 +387,7 @@ export class ImageWorkerClient {
   }
 
   private createWorker() {
+    this.cachedPreviewSource = null;
     this.workerEpoch += 1;
     const worker = new Worker(new URL('./imageWorker.ts', import.meta.url), { type: 'module' });
 
@@ -534,12 +538,18 @@ export class ImageWorkerClient {
       });
 
       try {
-        this.worker?.postMessage({
-          id,
-          epoch: this.workerEpoch,
-          type,
-          payload,
-        } as WorkerMessage, transfer);
+        const message = { id, epoch: this.workerEpoch, type, payload } as WorkerMessage;
+        try {
+          this.worker?.postMessage(message, transfer);
+        } catch (error) {
+          // Some WebKit IPC-backed ArrayBuffers cannot be detached. Native
+          // RAW import/recovery still works by cloning into the worker once;
+          // normal browser buffers retain the zero-copy transfer path.
+          if (type === 'decode' && (payload as DecodeRequest).mime === 'image/x-raw-ipc'
+            && error instanceof DOMException && error.name === 'DataCloneError') {
+            this.worker?.postMessage(message);
+          } else throw error;
+        }
       } catch (error) {
         window.clearTimeout(timeoutId);
         this.pending.delete(id);
@@ -563,6 +573,8 @@ export class ImageWorkerClient {
       return;
     }
 
+    if (cached.payload.nativeRawPath) return;
+
     if (cached.evictionTimeout !== null) {
       window.clearTimeout(cached.evictionTimeout);
     }
@@ -578,7 +590,9 @@ export class ImageWorkerClient {
   private cloneDecodeRequest(payload: DecodeRequest): DecodeRequest {
     return {
       ...payload,
-      buffer: payload.buffer.slice(0),
+      // Native RAWs can be reopened after a worker restart. Retain only the
+      // path and the exact correction snapshot instead of a full pixel copy.
+      buffer: payload.nativeRawPath ? new ArrayBuffer(0) : payload.buffer.slice(0),
       // The RAW high-depth buffer can be hundreds of MB. It is transferred to
       // the worker and intentionally not retained in the main-thread recovery
       // cache; after a worker restart the document can recover the preview path
@@ -609,7 +623,14 @@ export class ImageWorkerClient {
       return;
     }
 
-    const recovery = this.request<DecodedImage>('decode', this.cloneDecodeRequest(cached.payload))
+    const recovery = (async () => {
+      const recoveryPayload = this.cloneDecodeRequest(cached.payload);
+      if (recoveryPayload.nativeRawPath) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        recoveryPayload.buffer = normalizeRawIpcBuffer(await invoke<unknown>('decode_raw_binary', { path: recoveryPayload.nativeRawPath }));
+      }
+      return this.request<DecodedImage>('decode', recoveryPayload, [recoveryPayload.buffer]);
+    })()
       .then(() => {
         this.decodeCache.set(documentId, {
           payload: cached.payload,
@@ -1094,14 +1115,13 @@ export class ImageWorkerClient {
     cubeLut?: RenderRequest['cubeLut'],
   ) {
     const phaseTimings = createEmptyPhaseTimings();
-    const rawPreview = await this.readTile({
-      documentId: prepared.documentId,
-      jobId: prepared.jobId,
-      x: 0,
-      y: 0,
-      width: prepared.width,
-      height: prepared.height,
+    const cachedSource = prepared.sourceKey && this.cachedPreviewSource?.key === prepared.sourceKey
+      ? this.cachedPreviewSource.tile : null;
+    const rawPreview = cachedSource ?? await this.readTile({
+      documentId: prepared.documentId, jobId: prepared.jobId,
+      x: 0, y: 0, width: prepared.width, height: prepared.height,
     });
+    this.cachedPreviewSource = prepared.sourceKey ? { key: prepared.sourceKey, tile: rawPreview } : null;
 
     let histogramSourceImageData: ImageData;
     let imageData: ImageData;
@@ -1135,6 +1155,7 @@ export class ImageWorkerClient {
         flareFloor,
         lightSourceBias,
         cubeLut ?? null,
+        prepared.sourceKey ? `${this.workerEpoch}|${prepared.sourceKey}` : undefined,
       );
       phaseTimings.gpuProcessReadbackMs = Math.round(performance.now() - gpuStartedAt);
       histogramSourceImageData = processedImage;
@@ -1259,6 +1280,7 @@ export class ImageWorkerClient {
   }
 
   async decode(payload: DecodeRequest) {
+    this.cachedPreviewSource = null;
     const cachedPayload = this.cloneDecodeRequest(payload);
     const transfer = payload.highDepthRawBuffer ? [payload.buffer, payload.highDepthRawBuffer] : [payload.buffer];
     const decoded = await this.request<DecodedImage>('decode', payload, transfer);
@@ -1789,7 +1811,7 @@ export class ImageWorkerClient {
     // same base as the worker analysis (matches the preview render path).
     const estimatedFilmBaseSample = calibration?.estimatedFilmBase ?? calibration?.estimatedFilmBaseSample ?? null;
     const estimatedDensityBalance = payload.estimatedDensityBalance ?? calibration?.estimatedDensityBalance ?? null;
-    const wantsHighDepthRawExport = cachedDecode?.payload.mime === 'image/x-raw-rgba'
+    const wantsHighDepthRawExport = (cachedDecode?.payload.mime === 'image/x-raw-rgba' || cachedDecode?.payload.mime === 'image/x-raw-ipc')
       && payload.options.bitDepth === 16
       && (payload.options.format === 'image/tiff' || payload.options.format === 'image/png');
     if (wantsHighDepthRawExport) {
@@ -1990,6 +2012,7 @@ export class ImageWorkerClient {
   }
 
   disposeDocument(documentId: string) {
+    this.cachedPreviewSource = null;
     const cached = this.decodeCache.get(documentId);
     if (cached?.evictionTimeout != null) {
       window.clearTimeout(cached.evictionTimeout);
@@ -2003,6 +2026,7 @@ export class ImageWorkerClient {
   }
 
   evictPreviews(documentId: string) {
+    this.cachedPreviewSource = null;
     return this.request<{ evicted: true }>('evict-previews', { documentId });
   }
 
@@ -2014,6 +2038,7 @@ export class ImageWorkerClient {
   }
 
   terminate() {
+    this.cachedPreviewSource = null;
     this.isTerminated = true;
     this.rejectPending(new Error('Image worker terminated.'));
     this.gpuPipeline?.destroy();

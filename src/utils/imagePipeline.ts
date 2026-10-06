@@ -1,3 +1,4 @@
+import { getImageKernels } from './imageKernels';
 import {
   ColorProfileId,
   ColorMatrix,
@@ -775,10 +776,14 @@ export function wouldBaseCrushImage(
   const stride = Math.max(1, Math.floor(totalPixels / CRUSH_GUARD_SAMPLE_TARGET));
   let sampled = 0;
   let crushed = 0;
+  const crushedChannels = [0, 0, 0];
   for (let index = 0; index < data.length; index += 4 * stride) {
     const r = applyDensityInversion(data[index] / 255, outputProfileId, params.baseDensity[0], params.densityScale[0], params.gamma[0]);
     const g = applyDensityInversion(data[index + 1] / 255, outputProfileId, params.baseDensity[1], params.densityScale[1], params.gamma[1]);
     const b = applyDensityInversion(data[index + 2] / 255, outputProfileId, params.baseDensity[2], params.densityScale[2], params.gamma[2]);
+    if (r <= CRUSH_GUARD_BLACK_THRESHOLD) crushedChannels[0] += 1;
+    if (g <= CRUSH_GUARD_BLACK_THRESHOLD) crushedChannels[1] += 1;
+    if (b <= CRUSH_GUARD_BLACK_THRESHOLD) crushedChannels[2] += 1;
     if (Math.max(r, g, b) <= CRUSH_GUARD_BLACK_THRESHOLD) {
       crushed += 1;
     }
@@ -787,7 +792,12 @@ export function wouldBaseCrushImage(
   if (sampled === 0) {
     return false;
   }
-  return crushed / sampled > FILM_BASE_CONFIDENCE.maxCrushedFraction;
+  // In source-primary P3 inversion a rebate chosen darker than most of the
+  // frame can erase two channels while the third hides the failure from the
+  // luminance guard. Clear film cannot be denser than most image content.
+  const lostColorChannels = outputProfileId === 'display-p3'
+    && crushedChannels.filter((count) => count / sampled > 0.5).length >= 2;
+  return crushed / sampled > FILM_BASE_CONFIDENCE.maxCrushedFraction || lostColorChannels;
 }
 
 // Pure core of the decode-time crush guard: if `estimate` would crush the
@@ -1025,6 +1035,14 @@ export function applyInversionStage(
   return [r, g, b];
 }
 
+// Display P3 negatives must stay in their source primaries until inversion:
+// transforming an orange mask into sRGB first can make blue negative and
+// permanently clip it. Slides and LUT-defined conversions keep their order.
+export function getInversionWorkingProfile(input: InputProfileSpec, output: ColorProfileId,
+  filmType: FilmProfileType, isColor: boolean, cubeLut: CubeLut | null = null): ColorProfileId {
+  return input === 'display-p3' && filmType === 'negative' && isColor && !cubeLut ? 'display-p3' : output;
+}
+
 export function computeResidualBaseOffset(
   imageData: ImageData,
   settings: ConversionSettings,
@@ -1048,6 +1066,7 @@ export function computeResidualBaseOffset(
   const flareFloorNormalized: [number, number, number] = flareFloor
     ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
     : [0, 0, 0];
+  const inversionProfile = getInversionWorkingProfile(inputProfileId, outputProfileId, filmType, isColor);
   const densityInversion = resolveDensityInversionParams(
     settings,
     isColor,
@@ -1056,7 +1075,7 @@ export function computeResidualBaseOffset(
     estimatedFilmBaseSample,
     estimatedDensityBalance,
     inputProfileId,
-    outputProfileId,
+    inversionProfile,
     flareFloor,
     flareStrength,
     lightSourceBias,
@@ -1078,13 +1097,13 @@ export function computeResidualBaseOffset(
     let g = data[index + 1] / 255;
     let b = data[index + 2] / 255;
 
-    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
+    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, inversionProfile);
     [r, g, b] = applyInversionStage(
       r,
       g,
       b,
       filmType,
-      outputProfileId,
+      inversionProfile,
       filmBaseBalance,
       densityInversion,
       flareFloorNormalized,
@@ -1243,7 +1262,7 @@ function resolveLinearGains(settings: ConversionSettings, isColor: boolean, labT
   return [red * exposureGain, green * exposureGain, blue * exposureGain];
 }
 
-export function buildProcessingUniforms(
+export function buildProcessingParameters(
   settings: ConversionSettings,
   isColor: boolean,
   comparisonMode: 'processed' | 'original',
@@ -1280,6 +1299,7 @@ export function buildProcessingUniforms(
   const normalizedFlareFloor: [number, number, number] = flareFloor
     ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
     : [0, 0, 0];
+  const inversionProfile = getInversionWorkingProfile(inputProfileId, outputProfileId, filmType, isColor, cubeLut);
   const densityInversion = resolveDensityInversionParams(
     effectiveSettings,
     isColor,
@@ -1288,19 +1308,19 @@ export function buildProcessingUniforms(
     estimatedFilmBaseSample,
     estimatedDensityBalance,
     inputProfileId,
-    outputProfileId,
+    inversionProfile,
     flareFloor,
     flareCorrection / 100,
     lightSourceBias,
   );
 
-  return new Float32Array([
+  return [
     comparisonMode === 'processed' ? 1 : 0,
     isColor ? 1 : 0,
     effectiveSettings.blackAndWhite.enabled ? 1 : 0,
     filmType === 'slide' ? 1 : 0,
 
-    0,
+    inversionProfile !== outputProfileId ? 1 : 0,
     resolveToneStageParams(effectiveSettings, highlightDensityEstimate, effectiveTonalCharacter).contrastFactor,
     clamp((effectiveSettings.saturation + labSaturationBias) / 100, 0, 2),
     linearGains[1],
@@ -1409,7 +1429,11 @@ export function buildProcessingUniforms(
     cubeLut?.domainMax[1] ?? 1,
     cubeLut?.domainMax[2] ?? 1,
     0,
-  ]);
+  ];
+}
+
+export function buildProcessingUniforms(...args: Parameters<typeof buildProcessingParameters>) {
+  return new Float32Array(buildProcessingParameters(...args));
 }
 
 export function buildCurveLutBuffer(
@@ -1692,6 +1716,7 @@ export function processImageData(
   const flareFloorNormalized: [number, number, number] = flareFloor
     ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
     : [0, 0, 0];
+  const inversionProfile = getInversionWorkingProfile(inputProfileId, outputProfileId, filmType, isColor, cubeLut);
   const densityInversion = resolveDensityInversionParams(
     effectiveSettings,
     isColor,
@@ -1700,7 +1725,7 @@ export function processImageData(
     estimatedFilmBaseSample,
     estimatedDensityBalance,
     inputProfileId,
-    outputProfileId,
+    inversionProfile,
     flareFloor,
     flareStrength,
     lightSourceBias,
@@ -1711,7 +1736,7 @@ export function processImageData(
     let g = data[index + 1] / 255;
     let b = data[index + 2] / 255;
 
-    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
+    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, comparisonMode === 'processed' ? inversionProfile : outputProfileId);
 
     if (comparisonMode === 'processed') {
       // A profile LUT performs the negative→positive conversion itself, so it
@@ -1725,7 +1750,7 @@ export function processImageData(
           g,
           b,
           filmType,
-          outputProfileId,
+          inversionProfile,
           filmBaseBalance,
           densityInversion,
           flareFloorNormalized,
@@ -1733,6 +1758,10 @@ export function processImageData(
           lightSourceBias,
           residualBaseOffset,
         );
+
+      if (inversionProfile !== outputProfileId) {
+        [r, g, b] = convertRgbBetweenProfiles(r, g, b, inversionProfile, outputProfileId);
+      }
 
       if (colorMatrix) {
         [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);
@@ -1868,6 +1897,7 @@ export function processFloatRaster(
   const flareFloorNormalized: [number, number, number] = flareFloor
     ? [flareFloor[0] / 255, flareFloor[1] / 255, flareFloor[2] / 255]
     : [0, 0, 0];
+  const inversionProfile = getInversionWorkingProfile(inputProfileId, outputProfileId, filmType, isColor, cubeLut);
   const densityInversion = resolveDensityInversionParams(
     effectiveSettings,
     isColor,
@@ -1876,19 +1906,32 @@ export function processFloatRaster(
     estimatedFilmBaseSample,
     estimatedDensityBalance,
     inputProfileId,
-    outputProfileId,
+    inversionProfile,
     flareFloor,
     flareStrength,
     lightSourceBias,
   );
 
-  for (let pixel = 0; pixel < raster.width * raster.height; pixel += 1) {
+  const kernels = getImageKernels();
+  const useRust = kernels && typeof inputProfileId === 'string' && !cubeLut;
+  if (useRust) {
+    const parameters = new Float64Array([...buildProcessingParameters(settings, isColor, comparisonMode,
+      maskTuning, colorMatrix, tonalCharacter, labTonalCharacterOverride, labSaturationBias, labTemperatureBias,
+      highlightDensityEstimate, inputProfileId, outputProfileId, profileId, filmType, residualBaseOffset,
+      flareFloor, lightSourceBias, estimatedFilmBaseSample, estimatedDensityBalance, null),
+      inputProfileId === outputProfileId ? 0 : 1]);
+    const curves = new Float32Array(curveTables.r.length * 3);
+    curves.set(curveTables.r); curves.set(curveTables.g, curveTables.r.length); curves.set(curveTables.b, curveTables.r.length * 2);
+    kernels.process(data, channels, parameters, curves);
+  }
+
+  for (let pixel = 0; !useRust && pixel < raster.width * raster.height; pixel += 1) {
     const index = pixel * channels;
     let r = data[index] ?? 0;
     let g = data[index + 1] ?? 0;
     let b = data[index + 2] ?? 0;
 
-    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, outputProfileId);
+    [r, g, b] = convertRgbBetweenProfiles(r, g, b, inputProfileId, comparisonMode === 'processed' ? inversionProfile : outputProfileId);
 
     if (comparisonMode === 'processed') {
       // A profile LUT performs the negative→positive conversion itself, so it
@@ -1902,7 +1945,7 @@ export function processFloatRaster(
           g,
           b,
           filmType,
-          outputProfileId,
+          inversionProfile,
           filmBaseBalance,
           densityInversion,
           flareFloorNormalized,
@@ -1910,6 +1953,10 @@ export function processFloatRaster(
           lightSourceBias,
           residualBaseOffset,
         );
+
+      if (inversionProfile !== outputProfileId) {
+        [r, g, b] = convertRgbBetweenProfiles(r, g, b, inversionProfile, outputProfileId);
+      }
 
       if (colorMatrix) {
         [r, g, b] = applyColorMatrix(r, g, b, colorMatrix);

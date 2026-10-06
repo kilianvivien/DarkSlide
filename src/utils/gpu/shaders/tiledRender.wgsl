@@ -8,7 +8,7 @@ struct Uniforms {
   bwEnabled: f32,
   isSlide: f32,
 
-  _pad1: f32,
+  deferProfileConversion: f32,
   contrastFactor: f32,
   saturationFactor: f32,
   // Exposure × white balance, as linear-light gains (see whiteBalance.ts).
@@ -479,7 +479,11 @@ fn lookupCurve(channel: u32, value: f32) -> f32 {
 fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let coord = textureCoord(position);
   let source = textureLoad(inputTexture, coord, 0);
-  let converted = convertInputToOutput(source.x, source.y, source.z, uniforms);
+  var converted = source.xyz;
+  if (uniforms.deferProfileConversion < 0.5) {
+    converted = convertInputToOutput(source.x, source.y, source.z, uniforms);
+  }
+  let inversionTransferMode = select(uniforms.outputTransferMode, uniforms.inputTransferMode, uniforms.deferProfileConversion > 0.5);
   var r = converted.x;
   var g = converted.y;
   var b = converted.z;
@@ -497,14 +501,14 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       g = max(g - uniforms.flareFloorG * uniforms.flareStrength, 0.0);
       b = max(b - uniforms.flareFloorB * uniforms.flareStrength, 0.0);
 
-      r = encodeTransfer(decodeTransfer(r, uniforms.outputTransferMode) / max(uniforms.lightSourceBiasR, 0.05), uniforms.outputTransferMode);
-      g = encodeTransfer(decodeTransfer(g, uniforms.outputTransferMode) / max(uniforms.lightSourceBiasG, 0.05), uniforms.outputTransferMode);
-      b = encodeTransfer(decodeTransfer(b, uniforms.outputTransferMode) / max(uniforms.lightSourceBiasB, 0.05), uniforms.outputTransferMode);
+      r = encodeTransfer(decodeTransfer(r, inversionTransferMode) / max(uniforms.lightSourceBiasR, 0.05), inversionTransferMode);
+      g = encodeTransfer(decodeTransfer(g, inversionTransferMode) / max(uniforms.lightSourceBiasG, 0.05), inversionTransferMode);
+      b = encodeTransfer(decodeTransfer(b, inversionTransferMode) / max(uniforms.lightSourceBiasB, 0.05), inversionTransferMode);
 
       if (uniforms.densityInversionEnabled > 0.5) {
-        r = applyDensityInversion(r, uniforms.outputTransferMode, uniforms.baseDensityR, uniforms.densityScaleR, uniforms.hdGammaR);
-        g = applyDensityInversion(g, uniforms.outputTransferMode, uniforms.baseDensityG, uniforms.densityScaleG, uniforms.hdGammaG);
-        b = applyDensityInversion(b, uniforms.outputTransferMode, uniforms.baseDensityB, uniforms.densityScaleB, uniforms.hdGammaB);
+        r = applyDensityInversion(r, inversionTransferMode, uniforms.baseDensityR, uniforms.densityScaleR, uniforms.hdGammaR);
+        g = applyDensityInversion(g, inversionTransferMode, uniforms.baseDensityG, uniforms.densityScaleG, uniforms.hdGammaG);
+        b = applyDensityInversion(b, inversionTransferMode, uniforms.baseDensityB, uniforms.densityScaleB, uniforms.hdGammaB);
       } else {
         if (uniforms.isSlide <= 0.5) {
           r = 1.0 - r;
@@ -520,6 +524,11 @@ fn conversionFragment(@builtin(position) position: vec4<f32>) -> @location(0) ve
       r = max(0.0, r - uniforms.residualBaseOffsetR);
       g = max(0.0, g - uniforms.residualBaseOffsetG);
       b = max(0.0, b - uniforms.residualBaseOffsetB);
+    }
+
+    if (uniforms.deferProfileConversion > 0.5) {
+      let positive = convertInputToOutput(r, g, b, uniforms);
+      r = positive.x; g = positive.y; b = positive.z;
     }
 
     if (uniforms.hasColorMatrix > 0.5) {
