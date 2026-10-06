@@ -77,20 +77,20 @@ Pre-built macOS binaries are not notarized. To open the app:
 2. Go to **System Settings → Privacy & Security** and click **Open Anyway**.
 3. Confirm the dialog. This only needs to be done once.
 
-## Latest release — v1.3.0
+## Latest release — v1.3.1
 
-The latest release brings a redesigned editor and improvements to conversion and repair:
+This release improves camera-scan calibration, performance, and TIFF conversion:
 
-- **Tool rail, unified inspector, and filmstrip** for moving between tools and working across frames.
-- **Improved RAW negative conversion**, exposure and white balance in linear light, and better highlight color preservation.
-- **Rebuilt automatic dust detection** *(beta)* and live contact sheet previews.
-- **Editing refinements** including film profile hover previews, switchable adjustment groups, finer curves, and nine interface accent colors.
+- **RAW flat-field calibration** corrects uneven illumination and lens vignetting; clipped film-base warnings help catch capture problems.
+- **Faster RAW decode and Rust processing**, with fewer memory copies and reusable previews for smoother editing.
+- **Display P3 TIFF corrections** prevent color clipping before inversion and improve automatic film-base safety.
+- **More efficient exports**, including compressed 16-bit PNG and lower-memory TIFF output.
 
-Read the [full v1.3.0 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.3.0).
+Read the [full v1.3.1 release notes](https://github.com/kilianvivien/DarkSlide/releases/tag/v1.3.1).
 
 ## Run from source
 
-Requires Node.js. Desktop development also requires [Rust & Cargo](https://rustup.rs/).
+Requires Node.js 20.19+ or 22.12+ (CI uses Node 24). Desktop development also requires [Rust & Cargo](https://rustup.rs/), version 1.90 or newer.
 
 ```bash
 git clone https://github.com/kilianvivien/DarkSlide.git
@@ -115,7 +115,7 @@ npm run lint
 npm run test
 ```
 
-**Stack:** React 19, TypeScript, Vite, Tailwind CSS, and Tauri. Image processing runs in Web Workers with WebGPU acceleration and a CPU fallback; UTIF.js and rawler handle TIFF and RAW decoding.
+**Stack:** React 19, TypeScript, Vite, Tailwind CSS, and Tauri. Image processing runs in Web Workers with WebGPU acceleration and Rust WebAssembly kernels, with a TypeScript fallback; UTIF.js and rawler handle TIFF and RAW decoding. See [PERFORMANCE.md](./PERFORMANCE.md) for measurements and kernel build instructions.
 
 ## Acknowledgements
 
