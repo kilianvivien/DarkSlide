@@ -229,6 +229,22 @@ export async function openMultipleImageFiles(): Promise<NativeOpenFileResult[]> 
   return Promise.all(selected.map((path) => openDesktopFileReference(path, fileSystem)));
 }
 
+export async function pickRawFilePath(title: string): Promise<string | null> {
+  if (!isDesktopShell()) {
+    return null;
+  }
+
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const selected = await open({
+    title,
+    directory: false,
+    multiple: false,
+    filters: [{ name: 'RAW Files', extensions: RAW_EXTENSIONS.map((extension) => extension.slice(1)) }],
+  });
+
+  return typeof selected === 'string' ? selected : null;
+}
+
 export async function openImageFolder(): Promise<NativeOpenFileResult[]> {
   if (!isDesktopShell()) {
     return [];

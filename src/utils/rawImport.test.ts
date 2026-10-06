@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultSettings, FILM_BASE_CONFIDENCE } from '../constants';
 import { processImageData } from './imagePipeline';
-import { buildRawInitialSettings, createRawImportProfile, estimateRawStartupExposure, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
+import { applyFlatFieldToRawResult, isFilmBaseClipped, buildRawInitialSettings, createRawImportProfile, estimateRawStartupExposure, createWorkerDecodeRequestFromRaw, decodeRawIpcPayload, estimateFilmBase, estimateFilmBase16, estimateFilmBaseSample, estimateFilmBaseSampleFromRgba, getFilmBaseChannelBalance, getFilmBaseCorrectionSettings, getFilmBaseExposure, mirrorFromExifOrientation, RAW_IMPORT_PROFILE_ID, rgb16ToRgba8, rgbToRgba, rotationFromExifOrientation } from './rawImport';
 import { rawIpcPayload } from '../test/rawIpcPayload';
 
 // Build an RGB Uint8Array by evaluating a per-pixel function. Pixel coordinates
@@ -680,5 +680,62 @@ describe('decodeRawIpcPayload', () => {
     expect(request.mirrorHorizontal).toBe(false);
     // The worker owns the high-depth copy; the decoded samples stay readable.
     expect(request.highDepthRawBuffer).not.toBe((result.data as Uint16Array).buffer);
+  });
+});
+
+describe('RAW capture checks', () => {
+  const sample = (r: number, g: number, b: number) => ({
+    sample: { r, g, b },
+    source: 'frame-rebate' as const,
+    confidence: 0.8,
+    rejectedCandidates: 0,
+    clamped: false,
+  });
+
+  it('flags a film base with a channel at the sensor limit', () => {
+    expect(isFilmBaseClipped(sample(255, 214, 160))).toBe(true);
+    // Real CS-Lite NEF bases sit well below it.
+    expect(isFilmBaseClipped(sample(134, 149, 120))).toBe(false);
+    expect(isFilmBaseClipped(sample(122, 153, 143))).toBe(false);
+  });
+
+  it('does not flag a fallback that is not a measured base', () => {
+    expect(isFilmBaseClipped({ ...sample(255, 255, 250), source: 'low-confidence' })).toBe(false);
+    expect(isFilmBaseClipped({ ...sample(255, 240, 200), source: 'in-frame' })).toBe(false);
+    expect(isFilmBaseClipped(null)).toBe(false);
+  });
+
+  it('applies the flat-field only to a 16-bit decode from the reference camera', () => {
+    const profile = {
+      version: 1 as const,
+      name: 'flat',
+      width: 4,
+      height: 2,
+      gridWidth: 4,
+      gridHeight: 2,
+      gains: new Array(4 * 2 * 3).fill(2),
+      maxCorrectionStops: 1,
+      createdAt: 0,
+    };
+    const decode = (width: number) => ({
+      width,
+      height: 2,
+      data: new Uint16Array(width * 2 * 3).fill(10000),
+      color_space: 'sRGB',
+      bitDepth: 16 as const,
+      transfer: 'srgb' as const,
+    });
+
+    const matching = decode(4);
+    expect(applyFlatFieldToRawResult(matching, profile)).toBe('applied');
+    expect(matching.data[0]).toBeGreaterThan(10000);
+
+    const otherCamera = decode(6);
+    expect(applyFlatFieldToRawResult(otherCamera, profile)).toBe('camera-mismatch');
+    expect(otherCamera.data[0]).toBe(10000);
+
+    const disabled = decode(4);
+    expect(applyFlatFieldToRawResult(disabled, null)).toBe('off');
+    expect(disabled.data[0]).toBe(10000);
   });
 });

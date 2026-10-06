@@ -5,6 +5,7 @@ import {
   ConversionSettings,
   DecodedImage,
   DocumentTab,
+  FilmBaseEstimate,
   FilmProfile,
   Roll,
   WorkspaceDocument,
@@ -29,6 +30,8 @@ import {
   estimateRawStartupExposure,
   createRawImportProfile,
   decodeDesktopRawForWorker,
+  isFilmBaseClipped,
+  type FlatFieldDecodeStatus,
   rotationFromExifOrientation,
 } from '../utils/rawImport';
 import { ImageWorkerClient } from '../utils/imageWorkerClient';
@@ -83,6 +86,32 @@ type UseFileImportOptions = {
 };
 
 const RAW_GENERIC_PROFILE_ID = 'generic-color';
+
+let flatFieldMismatchNoticeShown = false;
+
+// Capture problems DarkSlide cannot correct after the fact, reported once at
+// import so they can be fixed at the next scan.
+function notifyRawCaptureIssues(
+  fileName: string,
+  flatField: FlatFieldDecodeStatus,
+  estimatedFilmBase: FilmBaseEstimate | null,
+) {
+  if (flatField === 'camera-mismatch' && !flatFieldMismatchNoticeShown) {
+    flatFieldMismatchNoticeShown = true;
+    pushToast({
+      level: 'warning',
+      title: 'Flat-field not applied',
+      message: `${fileName} comes from a different camera or crop than the flat-field reference. Choose a new reference in Settings > Calibration.`,
+    });
+  }
+  if (isFilmBaseClipped(estimatedFilmBase)) {
+    pushToast({
+      level: 'warning',
+      title: 'Film base is clipped',
+      message: `${fileName}: the clear film base reaches the sensor's limit, so colours can't be measured accurately. Lower the scan exposure.`,
+    });
+  }
+}
 
 function normalizeProfileLookupValue(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -329,12 +358,13 @@ export function useFileImport({
 
       if (rawImport) {
         try {
-          const { rawResult, decodeRequest } = await decodeDesktopRawForWorker({
+          const { rawResult, decodeRequest, flatField } = await decodeDesktopRawForWorker({
             documentId,
             fileName: file.name,
             path: nativePath!,
             size: sourceFileSize,
           });
+          notifyRawCaptureIssues(file.name, flatField, decodeRequest.precomputedFilmBase ?? null);
           const estimatedFilmBaseEstimate = decodeRequest.precomputedFilmBase ?? null;
           const estimatedFilmBase = estimatedFilmBaseEstimate?.sample
             ?? decodeRequest.precomputedFilmBaseSample

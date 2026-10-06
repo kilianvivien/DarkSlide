@@ -1,8 +1,9 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_COLOR_MANAGEMENT, DEFAULT_EXPORT_OPTIONS, DEFAULT_NOTIFICATION_SETTINGS } from '../constants';
 import { SettingsModal } from './SettingsModal';
+import { getActiveFlatFieldProfile, resetFlatFieldStoreForTests } from '../utils/flatFieldStore';
 
 vi.mock('motion/react', async () => {
   const ReactModule = await import('react');
@@ -21,8 +22,16 @@ vi.mock('motion/react', async () => {
   };
 });
 
+const pickRawFilePath = vi.fn(async (): Promise<string | null> => '/scans/flat.nef');
+const buildFlatFieldFromRawPath = vi.fn();
+
 vi.mock('../utils/fileBridge', () => ({
   isDesktopShell: () => true,
+  pickRawFilePath: () => pickRawFilePath(),
+}));
+
+vi.mock('../utils/rawImport', () => ({
+  buildFlatFieldFromRawPath: (path: string, name: string) => buildFlatFieldFromRawPath(path, name),
 }));
 
 describe('SettingsModal', () => {
@@ -205,6 +214,42 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Calibration' }));
     fireEvent.change(screen.getByDisplayValue('Auto (no correction)'), { target: { value: 'daylight' } });
     expect(onDefaultLightSourceChange).toHaveBeenCalledWith('daylight');
+  });
+
+  it('measures a flat-field reference and lets the user turn it off', async () => {
+    window.localStorage.clear();
+    resetFlatFieldStoreForTests();
+    buildFlatFieldFromRawPath.mockResolvedValueOnce({
+      ok: true,
+      profile: {
+        version: 1, name: 'flat.nef', width: 6048, height: 4032, gridWidth: 2, gridHeight: 2,
+        gains: new Array(12).fill(1.2), maxCorrectionStops: 0.26, createdAt: 1,
+      },
+    });
+    render(<SettingsModal {...createProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Calibration' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Reference RAW…' }));
+
+    await waitFor(() => expect(screen.getByText(/flat\.nef · 6048×4032/)).toBeInTheDocument());
+    expect(buildFlatFieldFromRawPath).toHaveBeenCalledWith('/scans/flat.nef', 'flat.nef');
+    expect(getActiveFlatFieldProfile()?.name).toBe('flat.nef');
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Apply flat-field correction' }));
+    expect(getActiveFlatFieldProfile()).toBeNull();
+  });
+
+  it('explains why a flat-field reference was refused', async () => {
+    window.localStorage.clear();
+    resetFlatFieldStoreForTests();
+    buildFlatFieldFromRawPath.mockResolvedValueOnce({ ok: false, reason: 'not-uniform' });
+    render(<SettingsModal {...createProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Calibration' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Reference RAW…' }));
+
+    await waitFor(() => expect(screen.getByText(/Shoot the bare light source/)).toBeInTheDocument());
+    expect(getActiveFlatFieldProfile()).toBeNull();
   });
 
   it('lets the user choose an auto-apply import preset', () => {
