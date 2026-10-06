@@ -1,6 +1,8 @@
 import { DENSITY_TO_POSITIVE_GAMMA, FILM_BASE_CONFIDENCE, MAX_HIGH_DEPTH_RAW_PIXELS, RAW_EXTENSIONS } from '../constants';
 import { ColorMatrix, ConversionSettings, DecodeRequest, FilmBaseEstimate, FilmBaseSample, FilmProfile, RawDecodeResult } from '../types';
 import { decodeProfileChannel, getColorProfileIdFromName } from './colorProfiles';
+import { applyFlatField, buildFlatFieldProfile, type FlatFieldBuildResult, type FlatFieldProfile } from './flatField';
+import { getActiveFlatFieldProfile } from './flatFieldStore';
 import { clamp } from './math';
 import { preserveProfileCalibration } from './presetRecipe';
 import { EXPOSURE_UNITS_PER_STOP } from './whiteBalance';
@@ -221,12 +223,50 @@ export function createWorkerDecodeRequestFromRaw(
   };
 }
 
+export type FlatFieldDecodeStatus = 'off' | 'applied' | 'camera-mismatch';
+
+// Divides a decoded RAW by the flat-field reference before any analysis, so
+// the film base estimate, the density balance, the startup exposure and every
+// render see evenly lit film.
+export function applyFlatFieldToRawResult(
+  rawResult: RawDecodeResult,
+  profile: FlatFieldProfile | null,
+): FlatFieldDecodeStatus {
+  if (!profile || (rawResult.bitDepth ?? 8) !== 16 || !(rawResult.data instanceof Uint16Array)) {
+    return 'off';
+  }
+  return applyFlatField(rawResult.data, rawResult.width, rawResult.height, profile) ? 'applied' : 'camera-mismatch';
+}
+
+// Above this, a channel of the film base sits at the sensor's clipping point.
+// Every density is measured against the base, so a clipped base shifts the
+// whole frame's colour and no later setting can recover it.
+const CLIPPED_FILM_BASE_LEVEL = 254;
+
+export function isFilmBaseClipped(estimate: FilmBaseEstimate | null | undefined) {
+  if (!estimate || estimate.source === 'low-confidence' || estimate.source === 'in-frame') {
+    return false;
+  }
+  const { r, g, b } = estimate.sample;
+  return Math.max(r, g, b) >= CLIPPED_FILM_BASE_LEVEL;
+}
+
+// Decodes a frame of the bare light source exactly like a scan (camera-native,
+// no gains) and turns it into a flat-field map.
+export async function buildFlatFieldFromRawPath(path: string, name: string): Promise<FlatFieldBuildResult> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const rawResult = decodeRawIpcPayload(await invoke<ArrayBuffer>('decode_raw_binary', { path }));
+  return buildFlatFieldProfile(rawResult.data, rawResult.width, rawResult.height, name);
+}
+
 export async function decodeDesktopRawForWorker(options: DesktopRawDecodeForWorkerOptions) {
   const { invoke } = await import('@tauri-apps/api/core');
   const rawResult = decodeRawIpcPayload(await invoke<ArrayBuffer>('decode_raw_binary', { path: options.path }));
+  const flatField = applyFlatFieldToRawResult(rawResult, getActiveFlatFieldProfile());
 
   return {
     rawResult,
+    flatField,
     decodeRequest: createWorkerDecodeRequestFromRaw(
       options.documentId,
       options.fileName,

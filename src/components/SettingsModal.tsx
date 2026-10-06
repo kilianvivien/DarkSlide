@@ -1,11 +1,13 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Copy, Check, ExternalLink, FolderOpen, Settings2, Bell, Palette, Paintbrush, Keyboard, Activity, Download, RefreshCw, Grid3x3, Trash2, Upload } from 'lucide-react';
 import { ACCENT_COLORS, useAccentColor } from '../utils/accentColor';
 import { ColorManagementSettings, ColorProfileId, ExportOptions, FilmProfile, LabStyleProfile, LightSourceProfile, NotificationSettings, RenderBackendDiagnostics, SourceMetadata, UpdateChannel } from '../types';
 import { APP_VERSION_LABEL } from '../appVersion';
 import { getColorProfileDescription, getInputProfileLabel } from '../utils/colorProfiles';
-import { isDesktopShell } from '../utils/fileBridge';
+import { isDesktopShell, pickRawFilePath } from '../utils/fileBridge';
+import { clearFlatField, getFlatFieldState, setFlatFieldEnabled, setFlatFieldProfile, subscribeFlatField } from '../utils/flatFieldStore';
+import { buildFlatFieldFromRawPath } from '../utils/rawImport';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useModalA11y } from '../hooks/useModalA11y';
 import { SHORTCUTS } from '../utils/shortcutHelp';
@@ -99,6 +101,89 @@ const TABS = [
   { id: 'diagnostics' as const, label: 'Diagnostics', icon: Activity, disabled: false },
   { id: 'update' as const, label: 'Update', icon: RefreshCw, disabled: false },
 ];
+
+const FLAT_FIELD_ERRORS = {
+  'too-dark': 'The reference is too dark. Shoot the light source a little brighter.',
+  clipped: 'The reference is clipped. Lower its exposure so no part reaches pure white.',
+  'not-uniform': 'The reference has detail in it. Shoot the bare light source, with no film or holder in front.',
+  'too-small': 'The reference is too small to measure.',
+} as const;
+
+function FlatFieldCard() {
+  const flatField = useSyncExternalStore(subscribeFlatField, getFlatFieldState, getFlatFieldState);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { profile } = flatField;
+
+  const chooseReference = async () => {
+    setError(null);
+    const path = await pickRawFilePath('Choose Flat-Field Reference');
+    if (!path) return;
+    setBusy(true);
+    try {
+      const name = path.split(/[\\/]/).pop() ?? path;
+      const result = await buildFlatFieldFromRawPath(path, name);
+      if (result.ok) {
+        setFlatFieldProfile(result.profile);
+      } else {
+        setError(FLAT_FIELD_ERRORS[result.reason]);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[13px] font-semibold text-zinc-100">Flat-Field Correction</p>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">
+            Evens out lens vignetting and an unevenly lit light source on RAW scans. Shoot one frame of the bare light source with the same camera, lens, aperture and light as your scans, then choose it here. Applies to RAW files opened afterwards.
+          </p>
+        </div>
+        {profile && (
+          <Toggle checked={flatField.enabled} onChange={setFlatFieldEnabled} label="Apply flat-field correction" />
+        )}
+      </div>
+
+      {profile && (
+        <p className="text-[12px] text-zinc-400">
+          {profile.name} · {profile.width}×{profile.height} · corrects up to {profile.maxCorrectionStops.toFixed(2)} stops
+        </p>
+      )}
+      {error && <p className="text-[12px] text-amber-400">{error}</p>}
+
+      {isDesktopShell() ? (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void chooseReference()}
+            disabled={busy}
+            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[13px] text-zinc-200 hover:bg-zinc-900 transition-all disabled:opacity-50"
+          >
+            <FolderOpen size={13} className="text-zinc-500" />
+            {busy ? 'Measuring…' : (profile ? 'Replace Reference…' : 'Choose Reference RAW…')}
+          </button>
+          {profile && (
+            <button
+              type="button"
+              onClick={() => { setError(null); clearFlatField(); }}
+              aria-label="Remove flat-field reference"
+              className="p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-lg transition-all"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+        </div>
+      ) : (
+        <p className="text-[12px] text-zinc-500">Available in the desktop app.</p>
+      )}
+    </div>
+  );
+}
 
 function getRenderBackendDetail(diagnostics: RenderBackendDiagnostics) {
   if (diagnostics.gpuDisabledReason === 'user') {
@@ -1047,6 +1132,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             <p className="text-[11px] text-zinc-500">No presets match that search.</p>
                           )}
                         </div>
+
+                        <FlatFieldCard />
 
                         {/* Custom Light Sources */}
                         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-3">
