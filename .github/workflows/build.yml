@@ -11,6 +11,16 @@ on:
         description: "Upload artifacts to this existing release tag (e.g. v0.6.0). Leave blank to skip release upload."
         required: false
         type: string
+      build_platform:
+        description: "Platform to build (choose one to preserve other release installers)."
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - windows
+          - macos
+          - linux
 
 permissions:
   contents: write
@@ -20,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.release.outputs.tag }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,6 +46,21 @@ jobs:
           else
             echo "tag=" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Resolve build platforms
+        id: matrix
+        shell: bash
+        env:
+          BUILD_PLATFORM: ${{ inputs.build_platform || 'all' }}
+        run: |
+          case "$BUILD_PLATFORM" in
+            windows) matrix='{"include":[{"platform":"windows-latest","os":"windows"}]}' ;;
+            macos) matrix='{"include":[{"platform":"macos-14","os":"macos"}]}' ;;
+            linux) matrix='{"include":[{"platform":"ubuntu-22.04","os":"linux"}]}' ;;
+            all) matrix='{"include":[{"platform":"macos-14","os":"macos"},{"platform":"ubuntu-22.04","os":"linux"},{"platform":"windows-latest","os":"windows"}]}' ;;
+            *) exit 1 ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
         if: steps.release.outputs.tag != ''
@@ -64,14 +90,7 @@ jobs:
     needs: prepare-release
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: macos-14
-            os: macos
-          - platform: ubuntu-22.04
-            os: linux
-          - platform: windows-latest
-            os: windows
+      matrix: ${{ fromJSON(needs.prepare-release.outputs.matrix) }}
 
     runs-on: ${{ matrix.platform }}
 

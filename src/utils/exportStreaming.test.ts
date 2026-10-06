@@ -21,12 +21,12 @@ describe('streaming lossless exports', () => {
   it('compresses PNG scanlines without changing any 16-bit RGB sample', async () => {
     const expected = encodePng(raster, 16, icc, 'Linear RGB');
     const actual = new Uint8Array(await (await encodePngBlob(raster, 16, icc, 'Linear RGB')).arrayBuffer());
-    expect(pngData(actual)).toEqual(pngData(expected));
+    expect(pngData(actual).equals(pngData(expected))).toBe(true);
     expect(actual.length).toBeLessThan(expected.length / 20);
   });
   it('keeps TIFF bytes identical across multiple bounded RGB strips', async () => {
     const expected = encodeTiff(raster, 16, icc);
     const actual = new Uint8Array(await encodeTiffBlob(raster, 16, icc).arrayBuffer());
-    expect(actual).toEqual(expected);
+    expect(Buffer.from(actual).equals(Buffer.from(expected))).toBe(true);
   });
 });
